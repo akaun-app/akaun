@@ -1,0 +1,31 @@
+# System Files
+.DS_Store
+Thumbs.db
+*.log
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Build and Dependency Directories
+node_modules/
+/build/
+/.svelte-kit/
+/package/
+
+# Local Environment Variables
+.env
+.env.local
+.env.[a-zA-Z0-9]*
+!.env.example
+
+# Playwright/Cypress Testing Artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# IDEs and Editors
+.idea/
+.vscode
