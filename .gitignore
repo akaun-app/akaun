@@ -29,3 +29,6 @@ node_modules/
 # IDEs and Editors
 .idea/
 .vscode
+
+# Data directory (DB + file storage)
+/data/
