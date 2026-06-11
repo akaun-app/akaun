@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { hash } from 'argon2';
 import { db } from '../src/lib/server/db/client.js';
 import { users } from '../src/lib/server/db/schema.js';

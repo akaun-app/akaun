@@ -1,5 +1,7 @@
+import { env } from '$env/dynamic/private';
+
 function requireEnv(key: string): string {
-	const value = process.env[key];
+	const value = env[key];
 	if (!value) throw new Error(`Missing required environment variable: ${key}`);
 	return value;
 }
