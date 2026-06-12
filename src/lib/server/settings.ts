@@ -12,7 +12,8 @@ export const SETTING_KEYS = {
 } as const;
 
 export function getSetting(
-	db: BetterSQLite3Database<Record<string, never>>,
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	db: BetterSQLite3Database<any>,
 	userId: number,
 	key: string
 ): string | null {
@@ -25,7 +26,8 @@ export function getSetting(
 }
 
 export function setSetting(
-	db: BetterSQLite3Database<Record<string, never>>,
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	db: BetterSQLite3Database<any>,
 	userId: number,
 	key: string,
 	value: string

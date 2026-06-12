@@ -3,7 +3,8 @@ import { appSequences } from './db/schema.js';
 import { sql } from 'drizzle-orm';
 
 export function nextNumber(
-	db: BetterSQLite3Database<Record<string, never>>,
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	db: BetterSQLite3Database<any>,
 	prefix: string,
 	date: string,
 	userId: number
