@@ -1,9 +1,10 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
-import { listExpenses, createExpense, getExpense, updateExpense } from '$lib/server/queries/expenses.js';
-import { createClaim } from '$lib/server/queries/claims.js';
+import { listExpenses } from '$lib/server/queries/expenses.js';
+import { createExpense, patchExpense } from '$lib/server/services/expenses.js';
+import { createClaim } from '$lib/server/services/claims.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
-import { fail, redirect } from '@sveltejs/kit';
+import { fail } from '@sveltejs/kit';
 
 const DEFAULT_CATEGORIES = [
 	'Food & Beverage',
@@ -51,6 +52,7 @@ export const actions: Actions = {
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
 		createExpense(db, userId, { itemName, supplier, category, date, amount, reference, remark });
+
 		return { success: true };
 	},
 
@@ -59,7 +61,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const ids = String(data.get('ids') ?? '').split(',').map(Number).filter(Boolean);
 		for (const id of ids) {
-			updateExpense(db, id, userId, { status: 'paid' });
+			patchExpense(db, id, userId, { status: 'paid' });
 		}
 		return { success: true };
 	},

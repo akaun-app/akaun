@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount, onDestroy } from 'svelte';
 	import { Plus, X, ChevronRight, Clock, CheckCircle, FileText, Calendar } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
@@ -11,6 +12,10 @@
 
 	type ClaimRow = (typeof data.claims)[0];
 
+	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	let claims = $state(data.claims);
+	$effect(() => { claims = data.claims; });
+
 	// --- State ---
 	let activeTab = $state<'all' | 'pending' | 'done'>('all');
 	let detailClaim = $state<ClaimRow | null>(null);
@@ -19,27 +24,48 @@
 
 	// --- Derived ---
 	const counts = $derived({
-		all: data.claims.length,
-		pending: data.claims.filter((c) => c.status === 'pending').length,
-		done: data.claims.filter((c) => c.status === 'done').length
+		all: claims.length,
+		pending: claims.filter((c) => c.status === 'pending').length,
+		done: claims.filter((c) => c.status === 'done').length
 	});
 
 	const totals = $derived({
-		pending: data.claims.filter((c) => c.status === 'pending').reduce((s, c) => s + c.total, 0),
-		done: data.claims.filter((c) => c.status === 'done').reduce((s, c) => s + c.total, 0),
-		all: data.claims.reduce((s, c) => s + c.total, 0)
+		pending: claims.filter((c) => c.status === 'pending').reduce((s, c) => s + c.total, 0),
+		done: claims.filter((c) => c.status === 'done').reduce((s, c) => s + c.total, 0),
+		all: claims.reduce((s, c) => s + c.total, 0)
 	});
 
-	const displayed = $derived(
-		activeTab === 'all' ? data.claims : data.claims.filter((c) => c.status === activeTab)
-	);
+	const displayed = $derived.by(() => {
+		const list = activeTab === 'all' ? claims.slice() : claims.filter((c) => c.status === activeTab);
+		return list.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
+	});
 
 	const newSelList = $derived(data.unpaidExpenses.filter((e) => newSelIds.has(e.id)));
 	const newTotal = $derived(newSelList.reduce((s, e) => s + e.amount, 0));
 
+	// SSE — real-time updates from server
+	let _es: EventSource | null = null;
+	onMount(() => {
+		_es = new EventSource('/api/claims/stream');
+		_es.onmessage = (e) => {
+			const msg = JSON.parse(e.data);
+			if (msg.type === 'claim-update') mergeClaims([msg.item]);
+			else if (msg.type === 'claim-delete') claims = claims.filter((c) => c.id !== msg.id);
+		};
+	});
+	onDestroy(() => _es?.close());
+
+	function mergeClaims(incoming: typeof data.claims) {
+		const byId = new Map(incoming.map((c) => [c.id, c]));
+		const existingIds = new Set(claims.map((c) => c.id));
+		claims = claims.map((local) => byId.get(local.id) ?? local);
+		const brandNew = incoming.filter((c) => !existingIds.has(c.id));
+		if (brandNew.length > 0) claims = [...brandNew, ...claims];
+	}
+
 	// --- Actions ---
 	function openDetail(id: number) {
-		detailClaim = data.claims.find((c) => c.id === id) ?? null;
+		detailClaim = claims.find((c) => c.id === id) ?? null;
 	}
 
 	function toggleNewSel(id: number) {

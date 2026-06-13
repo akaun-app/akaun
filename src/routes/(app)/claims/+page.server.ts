@@ -1,7 +1,8 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
-import { listClaims, markClaimDone, createClaim, deleteClaim } from '$lib/server/queries/claims.js';
+import { listClaims } from '$lib/server/queries/claims.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
+import { createClaim, patchClaim, removeClaim } from '$lib/server/services/claims.js';
 import { fail } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -17,8 +18,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
-		const result = markClaimDone(db, id, userId);
+
+		const result = patchClaim(db, id, userId, { status: 'done' });
 		if (!result) return fail(404, { error: 'Claim not found' });
+
 		return { success: true };
 	},
 
@@ -30,7 +33,9 @@ export const actions: Actions = {
 		const expenseIds = idsRaw.split(',').map(Number).filter(Boolean);
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (!expenseIds.length) return fail(400, { error: 'Select at least one expense' });
+
 		createClaim(db, userId, { date, expenseIds });
+
 		return { success: true };
 	},
 
@@ -39,8 +44,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
-		const ok = deleteClaim(db, id, userId);
+
+		const ok = removeClaim(db, id, userId);
 		if (!ok) return fail(404, { error: 'Claim not found' });
+
 		return { success: true };
 	}
 };

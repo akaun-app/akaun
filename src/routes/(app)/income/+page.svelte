@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount, onDestroy } from 'svelte';
 	import {
 		TrendingUp,
 		Plus,
@@ -17,6 +18,10 @@
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	let incomes = $state(data.incomes);
+	$effect(() => { incomes = data.incomes; });
 
 	// Search + filter state
 	let searchRaw = $state('');
@@ -52,7 +57,7 @@
 
 	// Filtered + sorted list
 	const filtered = $derived.by(() => {
-		let list = data.incomes.slice();
+		let list = incomes.slice();
 		if (selectedCats.length) list = list.filter((i) => selectedCats.includes(i.category));
 		const mn = amountMin !== '' ? parseFloat(amountMin) : null;
 		const mx = amountMax !== '' ? parseFloat(amountMax) : null;
@@ -119,6 +124,40 @@
 	}
 
 	const today = new Date().toISOString().slice(0, 10);
+
+	// Stats — derived from local state so they update in real-time
+	const stats = $derived.by(() => {
+		const now = new Date();
+		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+		const qStart = `${now.getFullYear()}-${String(Math.floor(now.getMonth() / 3) * 3 + 1).padStart(2, '0')}-01`;
+		return {
+			thisMonth: incomes.filter((i) => i.date.startsWith(monthKey)).reduce((s, i) => s + i.amount, 0),
+			thisQuarter: incomes.filter((i) => i.date >= qStart).reduce((s, i) => s + i.amount, 0),
+			largest: incomes.length > 0 ? Math.max(...incomes.map((i) => i.amount)) : 0,
+			allTotal: incomes.reduce((s, i) => s + i.amount, 0),
+			count: incomes.length,
+		};
+	});
+
+	// SSE — real-time updates from server
+	let _es: EventSource | null = null;
+	onMount(() => {
+		_es = new EventSource('/api/income/stream');
+		_es.onmessage = (e) => {
+			const msg = JSON.parse(e.data);
+			if (msg.type === 'income-update') mergeIncomes([msg.item]);
+			else if (msg.type === 'income-delete') incomes = incomes.filter((i) => i.id !== msg.id);
+		};
+	});
+	onDestroy(() => _es?.close());
+
+	function mergeIncomes(incoming: typeof data.incomes) {
+		const byId = new Map(incoming.map((i) => [i.id, i]));
+		const existingIds = new Set(incomes.map((i) => i.id));
+		incomes = incomes.map((local) => byId.get(local.id) ?? local);
+		const brandNew = incoming.filter((i) => !existingIds.has(i.id));
+		if (brandNew.length > 0) incomes = [...brandNew, ...incomes];
+	}
 </script>
 
 <div class="screen" style="position:relative;">
@@ -127,7 +166,7 @@
 		<div class="topbar-left">
 			<h1 class="page-title">Income</h1>
 			<p class="page-sub">
-				{data.stats.count} records · <span class="num">+{formatMoneyRM(data.stats.allTotal)}</span> total
+				{stats.count} records · <span class="num">+{formatMoneyRM(stats.allTotal)}</span> total
 			</p>
 		</div>
 		<div class="topbar-right">
@@ -159,19 +198,19 @@
 	<div class="stat-strip">
 		<div class="stat-card tone-green">
 			<div class="stat-label">This month</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(data.stats.thisMonth)}</div>
+			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.thisMonth)}</div>
 		</div>
 		<div class="stat-card">
 			<div class="stat-label">This quarter</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(data.stats.thisQuarter)}</div>
+			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.thisQuarter)}</div>
 		</div>
 		<div class="stat-card">
 			<div class="stat-label">Largest payment</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(data.stats.largest)}</div>
+			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.largest)}</div>
 		</div>
 		<div class="stat-card tone-green">
 			<div class="stat-label">All received</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(data.stats.allTotal)}</div>
+			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.allTotal)}</div>
 		</div>
 	</div>
 
@@ -254,7 +293,7 @@
 
 			<!-- Result meta -->
 			<div class="result-meta">
-				<span>Showing <b>{filtered.length}</b> of {data.stats.count}</span>
+				<span>Showing <b>{filtered.length}</b> of {stats.count}</span>
 				<span class="result-total">Filtered total <b class="num">+{formatMoneyRM(filteredTotal)}</b></span>
 			</div>
 
@@ -324,7 +363,7 @@
 								</td>
 							</tr>
 						{/each}
-						{#if data.stats.count === 0}
+						{#if stats.count === 0}
 							<tr class="empty-row">
 								<td colspan="6">
 									<div class="empty">
@@ -355,7 +394,7 @@
 				</table>
 			</div>
 			<div class="table-foot">
-				<span>{filtered.length} of {data.stats.count} records</span>
+				<span>{filtered.length} of {stats.count} records</span>
 				<span class="muted">Updated just now</span>
 			</div>
 		</div>

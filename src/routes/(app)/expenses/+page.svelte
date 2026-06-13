@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount, onDestroy } from 'svelte';
 	import {
 		Search,
 		Download,
@@ -24,6 +25,10 @@
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	let expenses = $state(data.expenses);
+	$effect(() => { expenses = data.expenses; });
 
 	// --- State ---
 	let searchRaw = $state('');
@@ -53,7 +58,7 @@
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
-		let rows = data.expenses.slice();
+		let rows = expenses.slice();
 		if (statusTab !== 'all') rows = rows.filter((e) => e.status === statusTab);
 		if (selectedCats.length) rows = rows.filter((e) => selectedCats.includes(e.category));
 		const mn = amountMin !== '' ? parseFloat(amountMin) : null;
@@ -93,20 +98,27 @@
 	const selTotal = $derived(selectedList.reduce((s, e) => s + e.amount, 0));
 	const claimable = $derived(selectedList.length > 0 && selectedList.every((e) => e.status === 'unpaid'));
 
-	// Stats
+	const counts = $derived.by(() => ({
+		all: expenses.length,
+		unpaid: expenses.filter((e) => e.status === 'unpaid').length,
+		pending: expenses.filter((e) => e.status === 'pending').length,
+		paid: expenses.filter((e) => e.status === 'paid').length,
+	}));
+
+	// Stats — derived from local state so they update in real-time
 	const stats = $derived.by(() => {
-		const unpaid = data.expenses.filter((e) => e.status === 'unpaid');
-		const pending = data.expenses.filter((e) => e.status === 'pending');
+		const unpaid = expenses.filter((e) => e.status === 'unpaid');
+		const pending = expenses.filter((e) => e.status === 'pending');
 		const now = new Date();
 		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-		const thisMonth = data.expenses.filter((e) => e.date.startsWith(monthKey));
+		const thisMonth = expenses.filter((e) => e.date.startsWith(monthKey));
 		return {
 			outstanding: unpaid.reduce((s, e) => s + e.amount, 0),
 			outstandingCount: unpaid.length,
 			pendingTotal: pending.reduce((s, e) => s + e.amount, 0),
 			monthTotal: thisMonth.reduce((s, e) => s + e.amount, 0),
 			monthCount: thisMonth.length,
-			allTotal: data.expenses.reduce((s, e) => s + e.amount, 0)
+			allTotal: expenses.reduce((s, e) => s + e.amount, 0)
 		};
 	});
 
@@ -156,6 +168,26 @@
 	}
 
 	const today = new Date().toISOString().slice(0, 10);
+
+	// SSE — real-time updates from server
+	let _es: EventSource | null = null;
+	onMount(() => {
+		_es = new EventSource('/api/expenses/stream');
+		_es.onmessage = (e) => {
+			const msg = JSON.parse(e.data);
+			if (msg.type === 'expense-update') mergeExpenses([msg.item]);
+			else if (msg.type === 'expense-delete') expenses = expenses.filter((e) => e.id !== msg.id);
+		};
+	});
+	onDestroy(() => _es?.close());
+
+	function mergeExpenses(incoming: typeof data.expenses) {
+		const byId = new Map(incoming.map((e) => [e.id, e]));
+		const existingIds = new Set(expenses.map((e) => e.id));
+		expenses = expenses.map((local) => byId.get(local.id) ?? local);
+		const brandNew = incoming.filter((e) => !existingIds.has(e.id));
+		if (brandNew.length > 0) expenses = [...brandNew, ...expenses];
+	}
 </script>
 
 <div class="screen" style="position:relative;">
@@ -164,7 +196,7 @@
 		<div class="topbar-left">
 			<h1 class="page-title">Expenses</h1>
 			<p class="page-sub">
-				{data.counts.all} records · <span class="num">{formatMoneyRM(stats.allTotal)}</span> total
+				{counts.all} records · <span class="num">{formatMoneyRM(stats.allTotal)}</span> total
 			</p>
 		</div>
 		<div class="topbar-right">
@@ -218,7 +250,7 @@
 		<div class="stat-card">
 			<div class="stat-label">All recorded</div>
 			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(stats.allTotal)}</div>
-			<div class="stat-sub">{data.counts.all} expenses</div>
+			<div class="stat-sub">{counts.all} expenses</div>
 		</div>
 	</div>
 
@@ -233,7 +265,7 @@
 							class:active={statusTab === id}
 							onclick={() => (statusTab = id)}
 						>
-							{label}<span class="tab-count">{data.counts[id as keyof typeof data.counts]}</span>
+							{label}<span class="tab-count">{counts[id as keyof typeof counts]}</span>
 						</button>
 					{/each}
 				</div>
@@ -308,7 +340,7 @@
 
 			<!-- Result meta -->
 			<div class="result-meta">
-				<span>Showing <b>{filtered.length}</b> of {data.counts.all}</span>
+				<span>Showing <b>{filtered.length}</b> of {counts.all}</span>
 				<span class="result-total">Filtered total <b class="num">{formatMoneyRM(filteredTotal)}</b></span>
 			</div>
 
@@ -384,7 +416,7 @@
 								</td>
 							</tr>
 						{/each}
-						{#if data.counts.all === 0}
+						{#if counts.all === 0}
 							<tr class="empty-row">
 								<td colspan="7">
 									<div class="empty">
@@ -415,7 +447,7 @@
 				</table>
 			</div>
 			<div class="table-foot">
-				<span>{filtered.length} of {data.counts.all} expenses</span>
+				<span>{filtered.length} of {counts.all} expenses</span>
 				<span class="muted">Updated just now</span>
 			</div>
 		</div>

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { onMount, onDestroy } from 'svelte';
 	import {
 		TrendingUp,
 		Wallet,
@@ -31,6 +32,22 @@
 	});
 
 	const periodLabel = $derived(PERIODS.find((p) => p.id === period)?.label ?? '');
+
+	// SSE — push-to-refresh: server signals when any financial data changes
+	let _es: EventSource | null = null;
+	let _debounce: ReturnType<typeof setTimeout> | null = null;
+
+	onMount(() => {
+		_es = new EventSource('/api/dashboard/stream');
+		_es.onmessage = () => {
+			if (_debounce) clearTimeout(_debounce);
+			_debounce = setTimeout(() => invalidateAll(), 500);
+		};
+	});
+	onDestroy(() => {
+		_es?.close();
+		if (_debounce) clearTimeout(_debounce);
+	});
 </script>
 
 <div class="screen">

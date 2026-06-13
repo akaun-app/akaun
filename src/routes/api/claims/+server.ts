@@ -1,6 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
-import { listClaims, createClaim } from '$lib/server/queries/claims.js';
+import { listClaims } from '$lib/server/queries/claims.js';
+import { createClaim } from '$lib/server/services/claims.js';
 
 export const GET: RequestHandler = async ({ locals }) => {
 	const user = locals.user!;

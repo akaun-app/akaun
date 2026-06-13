@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema.js';
 import { claims, claimAttachments, expenses } from '../db/schema.js';
@@ -12,6 +12,7 @@ export function listClaims(db: Db, userId: number) {
 		.select()
 		.from(claims)
 		.where(eq(claims.userId, userId))
+		.orderBy(desc(claims.date))
 		.all();
 
 	return rows.map((claim) => {
@@ -57,8 +58,10 @@ export function getClaim(db: Db, id: number, userId: number) {
 		.all();
 
 	const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
+	const expenseCount = claimExpenses.length;
+	const suppliers = [...new Set(claimExpenses.map((e) => e.supplier).filter(Boolean))];
 
-	return { ...claim, expenses: claimExpenses, attachments, total };
+	return { ...claim, expenses: claimExpenses, attachments, total, expenseCount, suppliers };
 }
 
 export function createClaim(

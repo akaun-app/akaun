@@ -19,5 +19,9 @@ All features that need live UI updates must use **Server-Sent Events (SSE)**, no
 - Do **not** add items to local `$state` optimistically from the upload/create action — let the SSE event be the sole driver. This eliminates race conditions between the fetch response and the SSE event arriving on the same connection.
 - Do **not** store non-plain objects (e.g. `File`, `Blob`) in Svelte 5 `$state` — keep them in a plain `Map` alongside the reactive array
 
+**Snapshot vs. no-snapshot:**
+- Import queue (small, finite set of active jobs): send a full snapshot on connect so reconnects catch up automatically.
+- Paginated lists (income, expenses, claims): **no snapshot**. SSR provides the initial state; SSE provides incremental updates only. If the connection drops briefly, `EventSource` auto-reconnects and the next event re-syncs the affected item. A full page reload re-fetches the correct state.
+
 **Why not polling?**
 Polling was considered and rejected. SSE gives instant updates, no wasted requests, and simpler client code once the pattern is established.

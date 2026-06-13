@@ -1,6 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
-import { listIncomes, createIncome } from '$lib/server/queries/income.js';
+import { listIncomes } from '$lib/server/queries/income.js';
+import { createIncome } from '$lib/server/services/income.js';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	const user = locals.user!;

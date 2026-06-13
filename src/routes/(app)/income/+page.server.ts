@@ -1,6 +1,7 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
-import { listIncomes, createIncome } from '$lib/server/queries/income.js';
+import { listIncomes } from '$lib/server/queries/income.js';
+import { createIncome } from '$lib/server/services/income.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { fail } from '@sveltejs/kit';
 
@@ -52,6 +53,7 @@ export const actions: Actions = {
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
 		createIncome(db, userId, { source, category, date, amount, reference, descriptionText });
+
 		return { success: true };
 	}
 };
