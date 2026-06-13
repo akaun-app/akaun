@@ -20,6 +20,7 @@
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
+	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -237,7 +238,12 @@
 					{/each}
 				</div>
 				<div class="toolbar-filters">
-					<FilterDropdown label="Category" active={selectedCats.length > 0} count={selectedCats.length}>
+					{#if activeFilterCount > 0}
+						<button class="clear-filters" onclick={clearAllFilters}>
+							<X size={13} /> Clear
+						</button>
+					{/if}
+					<FilterDropdown label="Category" active={selectedCats.length > 0}>
 						{#snippet icon()}<Tag size={14} />{/snippet}
 						<div style="padding:5px;">
 							<div style="display:flex; align-items:center; justify-content:space-between; padding:6px 8px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);">
@@ -260,42 +266,43 @@
 						</div>
 					</FilterDropdown>
 
-					<FilterDropdown label="Date" active={!!(dateFrom || dateTo)} count={dateFrom || dateTo ? 1 : 0}>
+					<FilterDropdown label="Date" active={!!(dateFrom || dateTo)}>
 						{#snippet icon()}<Calendar size={14} />{/snippet}
 						<div style="padding:12px 14px;">
-							<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px;">Date range</div>
+							<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+								<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);">Date range</div>
+								{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600; padding:0;">Clear</button>{/if}
+							</div>
 							<div style="display:flex; flex-direction:column; gap:8px;">
 								<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
-								<input type="date" bind:value={dateFrom} style="height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 10px; font-family:inherit; font-size:13px; outline:none;" />
+								<DatePicker bind:value={dateFrom} placeholder="From date" />
 								<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
-								<input type="date" bind:value={dateTo} style="height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 10px; font-family:inherit; font-size:13px; outline:none;" />
+								<DatePicker bind:value={dateTo} placeholder="To date" />
 							</div>
 						</div>
 					</FilterDropdown>
 
-					<FilterDropdown label="Amount" active={!!(amountMin || amountMax)} count={amountMin || amountMax ? 1 : 0} align="right">
+					<FilterDropdown label="Amount" active={!!(amountMin || amountMax)} align="right">
 						{#snippet icon()}<SlidersHorizontal size={14} />{/snippet}
-						<div style="padding:12px 14px; min-width:240px;">
-							<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px;">Amount range</div>
+						<div style="padding:12px 14px; min-width:168px;">
+							<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+								<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);">Amount range</div>
+								{#if amountMin || amountMax}<button onclick={() => { amountMin = ''; amountMax = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600; padding:0;">Clear</button>{/if}
+							</div>
 							<div style="display:flex; align-items:center; gap:8px;">
-								<div class="amount-input" style="flex:1;">
+								<div class="amount-input" style="width:120px;">
 									<span class="amount-prefix">RM</span>
-									<input class="amount-field" inputmode="decimal" placeholder="Min" bind:value={amountMin} />
+									<input class="amount-field" inputmode="decimal" placeholder="Min" bind:value={amountMin} style="width:84px;" />
 								</div>
 								<span style="color:var(--muted-foreground);">–</span>
-								<div class="amount-input" style="flex:1;">
+								<div class="amount-input" style="width:120px;">
 									<span class="amount-prefix">RM</span>
-									<input class="amount-field" inputmode="decimal" placeholder="Max" bind:value={amountMax} />
+									<input class="amount-field" inputmode="decimal" placeholder="Max" bind:value={amountMax} style="width:84px;" />
 								</div>
 							</div>
 						</div>
 					</FilterDropdown>
 
-					{#if activeFilterCount > 0}
-						<button class="clear-filters" onclick={clearAllFilters}>
-							<X size={13} /> Clear
-						</button>
-					{/if}
 				</div>
 			</div>
 
@@ -542,7 +549,7 @@
 				<div class="field-grid field">
 					<div>
 						<label class="field-label" for="date">Date *</label>
-						<input id="date" name="date" type="date" value={today} required style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;" />
+						<DatePicker name="date" defaultToday />
 					</div>
 					<div>
 						<label class="field-label" for="amount">Amount (RM) *</label>

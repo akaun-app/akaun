@@ -35,11 +35,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
 	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
 
+	const autoImportApiKey = getSetting(db, userId, SETTING_KEYS.autoImportApiKey) ?? '';
+	const autoImportModel = getSetting(db, userId, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
+	const autoImportParallelTasks = parseInt(getSetting(db, userId, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
+	const autoImportCategoryHints = (getSetting(db, userId, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
+
 	return {
 		expenseCategories,
 		incomeCategories,
 		currency,
-		username: locals.user!.username
+		username: locals.user!.username,
+		autoImportApiKey,
+		autoImportModel,
+		autoImportParallelTasks,
+		autoImportCategoryHints
 	};
 };
 
@@ -70,5 +79,24 @@ export const actions: Actions = {
 		} catch {
 			return fail(400, { error: 'Invalid categories data' });
 		}
+	},
+
+	saveIntelligence: async ({ locals, request }) => {
+		const userId = locals.user!.id;
+		const data = await request.formData();
+
+		const apiKey = String(data.get('apiKey') ?? '').trim();
+		const model = String(data.get('model') ?? 'anthropic/claude-3.5-sonnet').trim();
+		const parallelTasks = Math.min(10, Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10)));
+		const categoryHints = data.get('categoryHints') === 'true';
+
+		if (!model) return fail(400, { error: 'Model is required' });
+
+		if (apiKey) setSetting(db, userId, SETTING_KEYS.autoImportApiKey, apiKey);
+		setSetting(db, userId, SETTING_KEYS.autoImportModel, model);
+		setSetting(db, userId, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
+		setSetting(db, userId, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
+
+		return { success: true };
 	}
 };

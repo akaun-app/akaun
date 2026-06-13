@@ -4,6 +4,7 @@
 		Wallet,
 		TrendingUp,
 		FileText,
+		Upload,
 		Settings,
 		Sun,
 		Moon,
@@ -29,7 +30,8 @@
 		{ id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: LayoutDashboard },
 		{ id: 'expenses', label: 'Expenses', href: '/expenses', Icon: Wallet, badge: unpaidCount },
 		{ id: 'income', label: 'Income', href: '/income', Icon: TrendingUp },
-		{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText }
+		{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText },
+		{ id: 'import', label: 'Import', href: '/import', Icon: Upload }
 	];
 
 	function isActive(href: string) {

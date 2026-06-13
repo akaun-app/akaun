@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { Plus, X, ChevronRight, Clock, CheckCircle, FileText, Calendar } from '@lucide/svelte';
+	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
@@ -15,7 +16,6 @@
 	let detailClaim = $state<ClaimRow | null>(null);
 	let showNew = $state(false);
 	let newSelIds = $state(new Set<number>());
-	let newDate = $state(new Date().toISOString().slice(0, 10));
 
 	// --- Derived ---
 	const counts = $derived({
@@ -351,14 +351,7 @@
 			>
 				<div class="field">
 					<label class="field-label" for="claimDate">Claim date *</label>
-					<input
-						id="claimDate"
-						name="date"
-						type="date"
-						bind:value={newDate}
-						required
-						style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;"
-					/>
+					<DatePicker name="date" defaultToday />
 				</div>
 
 				<div class="field">

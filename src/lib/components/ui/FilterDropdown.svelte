@@ -6,14 +6,12 @@
 		label,
 		icon,
 		active = false,
-		count = 0,
 		align = 'left',
 		children
 	}: {
 		label: string;
 		icon?: Snippet;
 		active?: boolean;
-		count?: number;
 		align?: 'left' | 'right';
 		children: Snippet;
 	} = $props();
@@ -22,26 +20,38 @@
 	let wrapper = $state<HTMLDivElement | undefined>(undefined);
 
 	function onWindowClick(e: MouseEvent) {
-		if (wrapper && !wrapper.contains(e.target as Node)) open = false;
+		const target = e.target as Element;
+		if (!wrapper || wrapper.contains(target)) return;
+		// Don't close when click lands inside a portal popover (e.g. DatePicker calendar)
+		if (target.closest?.('[data-slot="popover-content"]')) return;
+		open = false;
+	}
+
+	function onOtherFilterOpen(e: Event) {
+		if ((e as CustomEvent).detail !== wrapper) open = false;
+	}
+
+	function toggle(e: MouseEvent) {
+		e.stopPropagation();
+		if (!open) {
+			window.dispatchEvent(new CustomEvent('filter-dropdown-open', { detail: wrapper }));
+		}
+		open = !open;
 	}
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window onclick={onWindowClick} onfilter-dropdown-open={onOtherFilterOpen} />
 
 <div bind:this={wrapper} style="position:relative;">
 	<button
 		class="status-tab"
 		class:active
 		style="background:transparent; border:1px solid {active ? 'var(--primary)' : 'var(--border)'}; color:{active ? 'var(--primary)' : 'var(--muted-foreground)'}; padding:5px 11px;"
-		onclick={(e) => { e.stopPropagation(); open = !open; }}
+		onclick={toggle}
 	>
 		{#if icon}{@render icon()}{/if}
 		{label}
-		{#if count > 0}
-			<span class="filter-count">{count}</span>
-		{:else}
-			<ChevronDown size={13} />
-		{/if}
+		<ChevronDown size={13} />
 	</button>
 	{#if open}
 		<div

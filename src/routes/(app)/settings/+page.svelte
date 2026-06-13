@@ -1,22 +1,43 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Plus, X, Check } from '@lucide/svelte';
+	import { Plus, X } from '@lucide/svelte';
+	import { Slider } from '$lib/components/ui/slider/index.js';
+	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'categories' | 'backup' | 'advanced';
+	type Tab = 'general' | 'intelligence' | 'categories' | 'backup' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Expense categories state
 	let expCats = $state<string[]>([...data.expenseCategories]);
 	let newExpCat = $state('');
-	let expSaved = $state(false);
+
+	// Intelligence settings state
+	let aiApiKey = $state(data.autoImportApiKey);
+	let aiModel = $state(data.autoImportModel);
+	let aiParallelTasks = $state(data.autoImportParallelTasks);
+	let aiCategoryHints = $state(data.autoImportCategoryHints);
+
+	// OpenRouter model fetching
+	type ORModel = { id: string; name: string; isFree: boolean };
+	let orModels = $state<ORModel[]>([]);
+	let orFetching = $state(false);
+	let orError = $state('');
+	let showFreeOnly = $state(false);
+
+	const filteredModels = $derived(showFreeOnly ? orModels.filter((m) => m.isFree) : orModels);
+
+	$effect(() => {
+		if (filteredModels.length > 0 && !filteredModels.find((m) => m.id === aiModel)) {
+			aiModel = filteredModels[0].id;
+		}
+	});
 
 	// Income categories state
 	let incCats = $state<string[]>([...data.incomeCategories]);
 	let newIncCat = $state('');
-	let incSaved = $state(false);
 
 	function addExpCat() {
 		const v = newExpCat.trim();
@@ -50,17 +71,56 @@
 		if (e.key === 'Enter') { e.preventDefault(); addIncCat(); }
 	}
 
+	// Re-sync local AI state after successful save (data is updated by use:enhance's invalidateAll)
 	$effect(() => {
 		if (form?.success) {
-			expSaved = true;
-			incSaved = true;
-			const t = setTimeout(() => { expSaved = false; incSaved = false; }, 2000);
-			return () => clearTimeout(t);
+			aiApiKey = data.autoImportApiKey;
+			aiModel = data.autoImportModel;
+			aiParallelTasks = data.autoImportParallelTasks;
+			aiCategoryHints = data.autoImportCategoryHints;
+			toast.success('Settings saved');
 		}
 	});
 
+	// Fetch OpenRouter models when API key changes (debounced)
+	$effect(() => {
+		const key = aiApiKey;
+		if (!key) { orModels = []; orError = ''; return; }
+		const t = setTimeout(() => fetchModels(key), 600);
+		return () => clearTimeout(t);
+	});
+
+	async function fetchModels(key: string) {
+		orFetching = true;
+		orError = '';
+		try {
+			const res = await fetch('https://openrouter.ai/api/v1/models', {
+				headers: { Authorization: `Bearer ${key}` }
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const json = await res.json();
+			const raw: { id: string; name: string; pricing?: { prompt?: string }; canonical_slug?: string }[] =
+				json.data ?? [];
+			orModels = raw
+				.map((m) => ({
+					id: m.id,
+					name: m.name,
+					isFree: (parseFloat(m.pricing?.prompt ?? '1') === 0)
+				}))
+				.sort((a, b) => a.name.localeCompare(b.name));
+			if (!orModels.find((m) => m.id === aiModel)) {
+				aiModel = orModels[0]?.id ?? aiModel;
+			}
+		} catch (err) {
+			orError = err instanceof Error ? err.message : 'Failed to fetch models';
+		} finally {
+			orFetching = false;
+		}
+	}
+
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
+		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'categories', label: 'Categories' },
 		{ id: 'backup', label: 'Backup' },
 		{ id: 'advanced', label: 'Advanced' }
@@ -111,6 +171,113 @@
 					</div>
 				</div>
 
+			{:else if activeTab === 'intelligence'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Intelligence</h2>
+						<p class="set-section-sub">Auto-import reads receipts with OCR and an LLM to fill fields.</p>
+					</div>
+					<form method="POST" action="?/saveIntelligence" use:enhance={() => ({ update }) => update({ reset: false })}>
+						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
+						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">API key</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">OpenRouter key used for document understanding</div>
+								</div>
+								<input
+									class="form-input"
+									type="password"
+									name="apiKey"
+									placeholder="sk-or-v1-…"
+									value={aiApiKey}
+									oninput={(e) => (aiApiKey = (e.target as HTMLInputElement).value)}
+									style="width:220px; flex-shrink:0;"
+								/>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Model</div>
+									{#if orFetching}
+										<div class="set-row-value" style="font-size:12px; margin-top:2px; display:flex; align-items:center; gap:6px;">
+											<span class="spinner sm"></span> Fetching models…
+										</div>
+									{:else if orError}
+										<div class="set-row-value" style="font-size:12px; margin-top:2px; color:var(--red);">{orError}</div>
+									{:else if aiApiKey && orModels.length === 0}
+										<div class="set-row-value" style="font-size:12px; margin-top:2px;">Enter API key to load models</div>
+									{/if}
+								</div>
+								<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+									<select
+										class="form-input"
+										name="model"
+										bind:value={aiModel}
+										style="width:260px;"
+										disabled={orModels.length === 0}
+									>
+										{#if orModels.length === 0}
+											<option value="">Enter API key to load models</option>
+										{/if}
+										{#each filteredModels as m (m.id)}
+											<option value={m.id}>{m.name}</option>
+										{/each}
+									</select>
+								</div>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Free models only</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Only show models with no usage cost</div>
+								</div>
+								<button
+									type="button"
+									class="toggle-btn"
+									class:on={showFreeOnly}
+									onclick={() => { showFreeOnly = !showFreeOnly; }}
+									aria-pressed={showFreeOnly}
+								>
+									<span class="toggle-thumb"></span>
+								</button>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Parallel tasks</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Process up to {aiParallelTasks} file{aiParallelTasks !== 1 ? 's' : ''} at once</div>
+								</div>
+								<div class="slider-row">
+									<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
+									<Slider
+										min={1}
+										max={10}
+										step={1}
+										value={[aiParallelTasks]}
+										onValueChange={(v) => (aiParallelTasks = v[0])}
+										style="width:140px;"
+									/>
+									<span class="slider-val num">{aiParallelTasks}</span>
+								</div>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Category hints</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Learn from your last 100 categorised items</div>
+								</div>
+								<button
+									type="button"
+									class="toggle-btn"
+									class:on={aiCategoryHints}
+									onclick={() => { aiCategoryHints = !aiCategoryHints; }}
+									aria-pressed={aiCategoryHints}
+								>
+									<span class="toggle-thumb"></span>
+								</button>
+							</div>
+						</div>
+						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+					</form>
+				</div>
+
 			{:else if activeTab === 'categories'}
 				<div class="set-section">
 					<div class="set-section-head">
@@ -150,13 +317,7 @@
 								<Plus size={14} /> Add
 							</button>
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">
-							{#if expSaved}
-								<Check size={14} /> Saved
-							{:else}
-								Save expense categories
-							{/if}
-						</button>
+						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
 					</form>
 				</div>
 
@@ -198,13 +359,7 @@
 								<Plus size={14} /> Add
 							</button>
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">
-							{#if incSaved}
-								<Check size={14} /> Saved
-							{:else}
-								Save income categories
-							{/if}
-						</button>
+						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
 					</form>
 				</div>
 

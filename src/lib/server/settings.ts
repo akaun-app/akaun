@@ -8,6 +8,9 @@ export const SETTING_KEYS = {
 	incomeCategories: 'income.categories',
 	autoImportApiKey: 'autoImport.apiKey',
 	autoImportModel: 'autoImport.model',
+	autoImportEnabled: 'autoImport.enabled',
+	autoImportParallelTasks: 'autoImport.parallelTasks',
+	autoImportCategoryHints: 'autoImport.categoryHints',
 	godModeEnabled: 'godMode.enabled'
 } as const;
 

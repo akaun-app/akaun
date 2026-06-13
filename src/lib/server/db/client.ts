@@ -6,8 +6,11 @@ import { eq } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { DATABASE_PATH } from '../env.js';
+import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
 import { users } from './schema.js';
+
+const log = createLogger('db');
 
 function createDb() {
 	mkdirSync(dirname(DATABASE_PATH), { recursive: true });
@@ -33,6 +36,6 @@ export async function ensureDefaultAdmin(): Promise<void> {
 		db.insert(users)
 			.values({ email: 'admin@localhost', username: 'admin', passwordHash, role: 'owner' })
 			.run();
-		console.log('[akaun] Default admin user created (username: admin, password: admin)');
+		log.info('Default admin user created (username: admin, password: admin)');
 	}
 }
