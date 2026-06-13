@@ -51,9 +51,9 @@ export const actions: Actions = {
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
-		createExpense(db, userId, { itemName, supplier, category, date, amount, reference, remark });
+		const expense = createExpense(db, userId, { itemName, supplier, category, date, amount, reference, remark });
 
-		return { success: true };
+		return { success: true, id: expense.id };
 	},
 
 	markPaid: async ({ locals, request }) => {

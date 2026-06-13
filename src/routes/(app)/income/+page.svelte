@@ -9,7 +9,8 @@
 		Calendar,
 		SlidersHorizontal,
 		X,
-		Paperclip
+		Paperclip,
+		Upload
 	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
@@ -35,8 +36,15 @@
 
 	// UI state
 	let showNew = $state(false);
-	let detailIncome = $state<(typeof data.incomes)[0] | null>(null);
+	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
+	type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
+	let detailIncome = $state<FullIncome | null>(null);
 	let selected = $state(new Set<number>());
+	let incomeDrag = $state(false);
+	let incomeFileInput = $state<HTMLInputElement | null>(null);
+	let newIncomeFiles = $state<File[]>([]);
+	let newIncomeDrag = $state(false);
+	let newIncomeFileInput = $state<HTMLInputElement | null>(null);
 
 	// Debounce search
 	$effect(() => {
@@ -48,6 +56,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
+	$effect(() => { if (!showNew) newIncomeFiles = []; });
 
 	function toggleCat(cat: string) {
 		selectedCats = selectedCats.includes(cat)
@@ -157,6 +166,41 @@
 		incomes = incomes.map((local) => byId.get(local.id) ?? local);
 		const brandNew = incoming.filter((i) => !existingIds.has(i.id));
 		if (brandNew.length > 0) incomes = [...brandNew, ...incomes];
+	}
+
+	async function openIncome(inc: (typeof data.incomes)[0]) {
+		detailIncome = { ...inc, attachments: [] };
+		const res = await fetch(`/api/income/${inc.id}`);
+		if (res.ok) detailIncome = await res.json();
+	}
+
+	async function uploadIncomeFiles(files: FileList) {
+		if (!detailIncome) return;
+		for (const file of Array.from(files)) {
+			const fd = new FormData();
+			fd.append('file', file);
+			const res = await fetch(`/api/income/${detailIncome.id}/attachments`, { method: 'POST', body: fd });
+			if (res.ok) {
+				const att: Attachment = await res.json();
+				detailIncome = { ...detailIncome, attachments: [...detailIncome.attachments, att] };
+			}
+		}
+	}
+
+	async function deleteIncomeAttachment(attachmentId: number) {
+		if (!detailIncome) return;
+		await fetch(`/api/income/${detailIncome.id}/attachments/${attachmentId}`, { method: 'DELETE' });
+		detailIncome = { ...detailIncome, attachments: detailIncome.attachments.filter((a) => a.id !== attachmentId) };
+	}
+
+	function handleIncomeDrop(e: DragEvent) {
+		e.preventDefault(); incomeDrag = false;
+		if (e.dataTransfer?.files) uploadIncomeFiles(e.dataTransfer.files);
+	}
+	function handleIncomeFileInput(e: Event) {
+		const input = e.target as HTMLInputElement;
+		if (input.files) uploadIncomeFiles(input.files);
+		input.value = '';
 	}
 </script>
 
@@ -332,7 +376,7 @@
 							<tr
 								class="exp-row"
 								class:selected={selected.has(inc.id)}
-								onclick={() => (detailIncome = inc)}
+								onclick={() => openIncome(inc)}
 							>
 								<td class="td-check" onclick={(ev) => { ev.stopPropagation(); toggleOne(inc.id); }}>
 									<button
@@ -470,10 +514,42 @@
 							</div>
 						{/if}
 					</div>
-					<div class="detail-section-label">Attachments</div>
-					<div class="attach-empty">
-						<Paperclip size={14} /> No attachments
+					<div class="attach-section-header">
+						<div class="detail-section-label" style="margin:0;">Attachments</div>
+						<button type="button" class="attach-add-btn" onclick={() => incomeFileInput?.click()}>
+							<Plus size={11} /> Add
+						</button>
 					</div>
+					<div
+						class="attach-drop-area"
+						class:drag={incomeDrag}
+						ondragover={(e) => { e.preventDefault(); incomeDrag = true; }}
+						ondragleave={() => (incomeDrag = false)}
+						ondrop={handleIncomeDrop}
+					>
+						{#if detailIncome.attachments.length > 0}
+							<div class="attach-list">
+								{#each detailIncome.attachments as att (att.id)}
+									<div class="attach-item">
+										<div class="attach-thumb"><Paperclip size={14} /></div>
+										<div class="attach-meta">
+											<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
+											<div class="attach-sub">{att.addedDate}</div>
+										</div>
+										<button type="button" class="attach-del" onclick={() => deleteIncomeAttachment(att.id)}>
+											<X size={14} />
+										</button>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<div class="attach-empty attach-empty-drop" onclick={() => incomeFileInput?.click()}>
+								<Paperclip size={14} /> Drop files here or click to add
+							</div>
+						{/if}
+					</div>
+					<input bind:this={incomeFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png"
+						multiple style="display:none" onchange={handleIncomeFileInput} />
 				</div>
 			{/if}
 		</Sheet.Content>
@@ -497,7 +573,20 @@
 			<form
 				method="POST"
 				action="?/create"
-				use:enhance
+				use:enhance={() => async ({ result, update }) => {
+					if (result.type === 'success' && newIncomeFiles.length > 0) {
+						const id = (result.data as Record<string, unknown>)?.id as number | undefined;
+						if (id) {
+							for (const file of newIncomeFiles) {
+								const fd = new FormData();
+								fd.append('file', file);
+								await fetch(`/api/income/${id}/attachments`, { method: 'POST', body: fd });
+							}
+						}
+						newIncomeFiles = [];
+					}
+					await update();
+				}}
 				style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
 			>
 				{#if form?.error}
@@ -540,6 +629,40 @@
 				<div class="field">
 					<label class="field-label" for="descriptionText">Description</label>
 					<textarea id="descriptionText" name="descriptionText" placeholder="Optional notes…" style="width:100%; min-height:72px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:13.5px; outline:none; resize:vertical; line-height:1.5;"></textarea>
+				</div>
+
+				<div class="field">
+					<label class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></label>
+					{#if newIncomeFiles.length > 0}
+						<div class="attach-list" style="margin-bottom:8px;">
+							{#each newIncomeFiles as file, i}
+								<div class="attach-item">
+									<div class="attach-thumb"><Paperclip size={14} /></div>
+									<div class="attach-meta">
+										<div class="attach-name">{file.name}</div>
+										<div class="attach-sub">{(file.size / 1024).toFixed(0)} KB</div>
+									</div>
+									<button type="button" class="attach-del" onclick={() => (newIncomeFiles = newIncomeFiles.filter((_, j) => j !== i))}>
+										<X size={14} />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					<div
+						class="attach-drop-area"
+						class:drag={newIncomeDrag}
+						ondragover={(e) => { e.preventDefault(); newIncomeDrag = true; }}
+						ondragleave={() => (newIncomeDrag = false)}
+						ondrop={(e) => { e.preventDefault(); newIncomeDrag = false; if (e.dataTransfer?.files) newIncomeFiles = [...newIncomeFiles, ...Array.from(e.dataTransfer.files)]; }}
+						onclick={() => newIncomeFileInput?.click()}
+					>
+						<div class="attach-empty attach-empty-drop" style="pointer-events:none;">
+							<Upload size={14} /> Drop files here or click to browse
+						</div>
+					</div>
+					<input bind:this={newIncomeFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style="display:none"
+						onchange={(e) => { const f = (e.target as HTMLInputElement).files; if (f) newIncomeFiles = [...newIncomeFiles, ...Array.from(f)]; (e.target as HTMLInputElement).value = ''; }} />
 				</div>
 
 				<div style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:auto;">

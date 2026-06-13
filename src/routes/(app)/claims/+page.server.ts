@@ -34,9 +34,9 @@ export const actions: Actions = {
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (!expenseIds.length) return fail(400, { error: 'Select at least one expense' });
 
-		createClaim(db, userId, { date, expenseIds });
+		const claim = createClaim(db, userId, { date, expenseIds });
 
-		return { success: true };
+		return { success: true, id: claim.id };
 	},
 
 	delete: async ({ locals, request }) => {

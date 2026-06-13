@@ -52,8 +52,8 @@ export const actions: Actions = {
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
-		createIncome(db, userId, { source, category, date, amount, reference, descriptionText });
+		const income = createIncome(db, userId, { source, category, date, amount, reference, descriptionText });
 
-		return { success: true };
+		return { success: true, id: income.id };
 	}
 };

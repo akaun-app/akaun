@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { onMount, onDestroy } from 'svelte';
-	import { Plus, X, ChevronRight, Clock, CheckCircle, FileText, Calendar } from '@lucide/svelte';
+	import { Plus, X, ChevronRight, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
@@ -11,6 +11,8 @@
 	let { data }: { data: PageData } = $props();
 
 	type ClaimRow = (typeof data.claims)[0];
+	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
+	type FullClaim = ClaimRow & { attachments: Attachment[] };
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
 	let claims = $state(data.claims);
@@ -18,9 +20,14 @@
 
 	// --- State ---
 	let activeTab = $state<'all' | 'pending' | 'done'>('all');
-	let detailClaim = $state<ClaimRow | null>(null);
+	let detailClaim = $state<FullClaim | null>(null);
 	let showNew = $state(false);
+	let claimDrag = $state(false);
+	let claimFileInput = $state<HTMLInputElement | null>(null);
 	let newSelIds = $state(new Set<number>());
+	let newClaimFiles = $state<File[]>([]);
+	let newClaimDrag = $state(false);
+	let newClaimFileInput = $state<HTMLInputElement | null>(null);
 
 	// --- Derived ---
 	const counts = $derived({
@@ -64,8 +71,41 @@
 	}
 
 	// --- Actions ---
-	function openDetail(id: number) {
-		detailClaim = claims.find((c) => c.id === id) ?? null;
+	async function openDetail(id: number) {
+		const found = claims.find((c) => c.id === id);
+		if (!found) return;
+		detailClaim = { ...found, attachments: [] };
+		const res = await fetch(`/api/claims/${id}`);
+		if (res.ok) detailClaim = await res.json();
+	}
+
+	async function uploadClaimFiles(files: FileList) {
+		if (!detailClaim) return;
+		for (const file of Array.from(files)) {
+			const fd = new FormData();
+			fd.append('file', file);
+			const res = await fetch(`/api/claims/${detailClaim.id}/attachments`, { method: 'POST', body: fd });
+			if (res.ok) {
+				const att: Attachment = await res.json();
+				detailClaim = { ...detailClaim, attachments: [...detailClaim.attachments, att] };
+			}
+		}
+	}
+
+	async function deleteClaimAttachment(attachmentId: number) {
+		if (!detailClaim) return;
+		await fetch(`/api/claims/${detailClaim.id}/attachments/${attachmentId}`, { method: 'DELETE' });
+		detailClaim = { ...detailClaim, attachments: detailClaim.attachments.filter((a) => a.id !== attachmentId) };
+	}
+
+	function handleClaimDrop(e: DragEvent) {
+		e.preventDefault(); claimDrag = false;
+		if (e.dataTransfer?.files) uploadClaimFiles(e.dataTransfer.files);
+	}
+	function handleClaimFileInput(e: Event) {
+		const input = e.target as HTMLInputElement;
+		if (input.files) uploadClaimFiles(input.files);
+		input.value = '';
 	}
 
 	function toggleNewSel(id: number) {
@@ -77,6 +117,7 @@
 	function closeNewSheet() {
 		showNew = false;
 		newSelIds = new Set();
+		newClaimFiles = [];
 	}
 </script>
 
@@ -295,6 +336,44 @@
 							</div>
 						{/if}
 					</div>
+					<div>
+						<div class="attach-section-header">
+							<div class="detail-section-label" style="margin:0;">Attachments</div>
+							<button type="button" class="attach-add-btn" onclick={() => claimFileInput?.click()}>
+								<Plus size={11} /> Add
+							</button>
+						</div>
+						<div
+							class="attach-drop-area"
+							class:drag={claimDrag}
+							ondragover={(e) => { e.preventDefault(); claimDrag = true; }}
+							ondragleave={() => (claimDrag = false)}
+							ondrop={handleClaimDrop}
+						>
+							{#if detailClaim.attachments.length > 0}
+								<div class="attach-list">
+									{#each detailClaim.attachments as att (att.id)}
+										<div class="attach-item">
+											<div class="attach-thumb"><Paperclip size={14} /></div>
+											<div class="attach-meta">
+												<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
+												<div class="attach-sub">{att.addedDate}</div>
+											</div>
+											<button type="button" class="attach-del" onclick={() => deleteClaimAttachment(att.id)}>
+												<X size={14} />
+											</button>
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<div class="attach-empty attach-empty-drop" onclick={() => claimFileInput?.click()}>
+									<Paperclip size={14} /> Drop files here or click to add
+								</div>
+							{/if}
+						</div>
+						<input bind:this={claimFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png"
+							multiple style="display:none" onchange={handleClaimFileInput} />
+					</div>
 				</div>
 				<div class="sheet-foot">
 					<div class="sheet-foot-note">
@@ -370,7 +449,19 @@
 				action="?/create"
 				use:enhance={() =>
 					async ({ result, update }) => {
-						if (result.type === 'success') closeNewSheet();
+						if (result.type === 'success') {
+							if (newClaimFiles.length > 0) {
+								const id = (result.data as Record<string, unknown>)?.id as number | undefined;
+								if (id) {
+									for (const file of newClaimFiles) {
+										const fd = new FormData();
+										fd.append('file', file);
+										await fetch(`/api/claims/${id}/attachments`, { method: 'POST', body: fd });
+									}
+								}
+							}
+							closeNewSheet();
+						}
 						await update();
 					}}
 				style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
@@ -440,6 +531,40 @@
 				</div>
 
 				<input type="hidden" name="expenseIds" value={[...newSelIds].join(',')} />
+
+				<div class="field">
+					<label class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></label>
+					{#if newClaimFiles.length > 0}
+						<div class="attach-list" style="margin-bottom:8px;">
+							{#each newClaimFiles as file, i}
+								<div class="attach-item">
+									<div class="attach-thumb"><Paperclip size={14} /></div>
+									<div class="attach-meta">
+										<div class="attach-name">{file.name}</div>
+										<div class="attach-sub">{(file.size / 1024).toFixed(0)} KB</div>
+									</div>
+									<button type="button" class="attach-del" onclick={() => (newClaimFiles = newClaimFiles.filter((_, j) => j !== i))}>
+										<X size={14} />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					<div
+						class="attach-drop-area"
+						class:drag={newClaimDrag}
+						ondragover={(e) => { e.preventDefault(); newClaimDrag = true; }}
+						ondragleave={() => (newClaimDrag = false)}
+						ondrop={(e) => { e.preventDefault(); newClaimDrag = false; if (e.dataTransfer?.files) newClaimFiles = [...newClaimFiles, ...Array.from(e.dataTransfer.files)]; }}
+						onclick={() => newClaimFileInput?.click()}
+					>
+						<div class="attach-empty attach-empty-drop" style="pointer-events:none;">
+							<Upload size={14} /> Drop files here or click to browse
+						</div>
+					</div>
+					<input bind:this={newClaimFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style="display:none"
+						onchange={(e) => { const f = (e.target as HTMLInputElement).files; if (f) newClaimFiles = [...newClaimFiles, ...Array.from(f)]; (e.target as HTMLInputElement).value = ''; }} />
+				</div>
 
 				<div
 					style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:auto;"
