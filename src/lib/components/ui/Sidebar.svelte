@@ -13,6 +13,7 @@
 		ChevronRight
 	} from '@lucide/svelte';
 	import { appState } from '$lib/state/app.svelte.js';
+	import { mode, setMode } from 'mode-watcher';
 
 	let {
 		user,
@@ -48,20 +49,11 @@
 	}
 
 	function toggleTheme() {
-		const current = appState.theme;
-		if (current === 'auto') {
-			appState.theme = 'light';
-		} else if (current === 'light') {
-			appState.theme = 'dark';
-		} else {
-			appState.theme = 'auto';
-		}
+		setMode(mode.current === 'dark' ? 'light' : 'dark');
 	}
 
-	const themeLabel = $derived(
-		appState.theme === 'dark' ? 'Dark' : appState.theme === 'light' ? 'Light' : 'Auto'
-	);
-	const isDark = $derived(appState.theme === 'dark');
+	const isDark = $derived(mode.current === 'dark');
+	const themeLabel = $derived(isDark ? 'Dark' : 'Light');
 </script>
 
 <aside class="sidebar" class:collapsed>
@@ -116,7 +108,7 @@
 				{:else}
 					<Sun size={18} />
 				{/if}
-				{#if !collapsed}<span class="sb-item-label">{themeLabel} · theme</span>{/if}
+				{#if !collapsed}<span class="sb-item-label">{themeLabel}</span>{/if}
 			</button>
 			<button
 				class="sb-item"
