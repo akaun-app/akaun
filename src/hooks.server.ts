@@ -1,10 +1,10 @@
 import { redirect, type Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { eq } from 'drizzle-orm';
-import { db, ensureDefaultAdmin } from '$lib/server/db/client.js';
+import { db, ensureDefaultAdmin, ensureApiToken } from '$lib/server/db/client.js';
 import { getSessionUser } from '$lib/server/auth.js';
 import { users } from '$lib/server/db/schema.js';
-import { API_BEARER_TOKEN } from '$lib/server/env.js';
+import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { setLogLevel } from '$lib/server/logger.js';
 import { startImportWorker } from '$lib/server/import/worker.js';
 
@@ -14,6 +14,7 @@ if (env.LOG_LEVEL) setLogLevel(env.LOG_LEVEL);
 
 export const init = async () => {
 	await ensureDefaultAdmin();
+	ensureApiToken();
 	startImportWorker();
 };
 
@@ -23,15 +24,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (pathname.startsWith('/api/')) {
 		const header = event.request.headers.get('Authorization');
 		if (header) {
-			// Bearer token auth (iOS Shortcuts / external clients)
-			if (header !== `Bearer ${API_BEARER_TOKEN}`) {
-				return new Response('Unauthorized', { status: 401 });
-			}
+			// Bearer token auth (external clients)
 			const apiUser = db
 				.select({ id: users.id, username: users.username, role: users.role })
 				.from(users)
 				.where(eq(users.role, 'owner'))
 				.get();
+			const effectiveToken = apiUser ? getSetting(db, apiUser.id, SETTING_KEYS.apiBearer) : null;
+			if (!effectiveToken || header !== `Bearer ${effectiveToken}`) {
+				return new Response('Unauthorized', { status: 401 });
+			}
 			event.locals.user = apiUser ?? null;
 		} else {
 			// Session cookie auth (web UI fetch calls)

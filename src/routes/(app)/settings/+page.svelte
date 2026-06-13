@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Plus, X } from '@lucide/svelte';
+	import { Plus, X, Lock, RefreshCw, Copy, Check } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'intelligence' | 'categories' | 'backup' | 'advanced';
+	type Tab = 'general' | 'intelligence' | 'categories' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Expense categories state
@@ -38,6 +38,12 @@
 	// Income categories state
 	let incCats = $state<string[]>([...data.incomeCategories]);
 	let newIncCat = $state('');
+
+	// Advanced state
+	let godMode = $state(data.godModeEnabled);
+	let currentBearer = $state(data.apiBearer);
+	let bearerCopied = $state(false);
+	let bearerRevealed = $state(false);
 
 	function addExpCat() {
 		const v = newExpCat.trim();
@@ -71,14 +77,20 @@
 		if (e.key === 'Enter') { e.preventDefault(); addIncCat(); }
 	}
 
-	// Re-sync local AI state after successful save (data is updated by use:enhance's invalidateAll)
+	// Re-sync local AI state after successful save
 	$effect(() => {
 		if (form?.success) {
 			aiApiKey = data.autoImportApiKey;
 			aiModel = data.autoImportModel;
 			aiParallelTasks = data.autoImportParallelTasks;
 			aiCategoryHints = data.autoImportCategoryHints;
-			toast.success('Settings saved');
+			if ('newToken' in (form ?? {})) {
+				currentBearer = (form as { newToken: string }).newToken;
+				bearerRevealed = true;
+				toast.success('Bearer token regenerated — copy it now');
+			} else {
+				toast.success('Settings saved');
+			}
 		}
 	});
 
@@ -99,13 +111,12 @@
 			});
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const json = await res.json();
-			const raw: { id: string; name: string; pricing?: { prompt?: string }; canonical_slug?: string }[] =
-				json.data ?? [];
+			const raw: { id: string; name: string; pricing?: { prompt?: string } }[] = json.data ?? [];
 			orModels = raw
 				.map((m) => ({
 					id: m.id,
 					name: m.name,
-					isFree: (parseFloat(m.pricing?.prompt ?? '1') === 0)
+					isFree: parseFloat(m.pricing?.prompt ?? '1') === 0
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name));
 			if (!orModels.find((m) => m.id === aiModel)) {
@@ -118,11 +129,20 @@
 		}
 	}
 
+	async function copyBearer() {
+		await navigator.clipboard.writeText(currentBearer);
+		bearerCopied = true;
+		setTimeout(() => (bearerCopied = false), 2000);
+	}
+
+	function maskedBearer(): string {
+		return '••••••••••••••••••••••••';
+	}
+
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'categories', label: 'Categories' },
-		{ id: 'backup', label: 'Backup' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
 </script>
@@ -248,11 +268,12 @@
 								<div class="slider-row">
 									<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
 									<Slider
+										type="multiple"
 										min={1}
 										max={10}
 										step={1}
 										value={[aiParallelTasks]}
-										onValueChange={(v) => (aiParallelTasks = v[0])}
+										onValueChange={(v: number[]) => (aiParallelTasks = v[0])}
 										style="width:140px;"
 									/>
 									<span class="slider-val num">{aiParallelTasks}</span>
@@ -284,38 +305,21 @@
 						<h2 class="set-section-title">Expense Categories</h2>
 						<p class="set-section-sub">Categories available when recording expenses</p>
 					</div>
-					<form
-						method="POST"
-						action="?/saveExpenseCategories"
-						use:enhance
-					>
+					<form method="POST" action="?/saveExpenseCategories" use:enhance>
 						<input type="hidden" name="categories" value={JSON.stringify(expCats)} />
 						<div class="cat-chips">
 							{#each expCats as cat}
 								<span class="cat-chip-removable">
 									{cat}
-									<button
-										type="button"
-										class="chip-remove"
-										onclick={() => removeExpCat(cat)}
-										aria-label="Remove {cat}"
-									>
+									<button type="button" class="chip-remove" onclick={() => removeExpCat(cat)} aria-label="Remove {cat}">
 										<X size={11} />
 									</button>
 								</span>
 							{/each}
 						</div>
 						<div class="cat-add-row">
-							<input
-								class="form-input cat-add-input"
-								type="text"
-								placeholder="New category name..."
-								bind:value={newExpCat}
-								onkeydown={handleExpKey}
-							/>
-							<button type="button" class="btn-ghost" onclick={addExpCat}>
-								<Plus size={14} /> Add
-							</button>
+							<input class="form-input cat-add-input" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
+							<button type="button" class="btn-ghost" onclick={addExpCat}><Plus size={14} /> Add</button>
 						</div>
 						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
 					</form>
@@ -326,65 +330,101 @@
 						<h2 class="set-section-title">Income Categories</h2>
 						<p class="set-section-sub">Categories available when recording income</p>
 					</div>
-					<form
-						method="POST"
-						action="?/saveIncomeCategories"
-						use:enhance
-					>
+					<form method="POST" action="?/saveIncomeCategories" use:enhance>
 						<input type="hidden" name="categories" value={JSON.stringify(incCats)} />
 						<div class="cat-chips">
 							{#each incCats as cat}
 								<span class="cat-chip-removable">
 									{cat}
-									<button
-										type="button"
-										class="chip-remove"
-										onclick={() => removeIncCat(cat)}
-										aria-label="Remove {cat}"
-									>
+									<button type="button" class="chip-remove" onclick={() => removeIncCat(cat)} aria-label="Remove {cat}">
 										<X size={11} />
 									</button>
 								</span>
 							{/each}
 						</div>
 						<div class="cat-add-row">
-							<input
-								class="form-input cat-add-input"
-								type="text"
-								placeholder="New category name..."
-								bind:value={newIncCat}
-								onkeydown={handleIncKey}
-							/>
-							<button type="button" class="btn-ghost" onclick={addIncCat}>
-								<Plus size={14} /> Add
-							</button>
+							<input class="form-input cat-add-input" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
+							<button type="button" class="btn-ghost" onclick={addIncCat}><Plus size={14} /> Add</button>
 						</div>
 						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
 					</form>
-				</div>
-
-			{:else if activeTab === 'backup'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Backup & Export</h2>
-						<p class="set-section-sub">Data backup and export options</p>
-					</div>
-					<div class="stub-placeholder">
-						<div class="stub-title">Coming in Phase 6</div>
-						<div class="stub-sub">Backup and export features will be available in an upcoming update.</div>
-					</div>
 				</div>
 
 			{:else if activeTab === 'advanced'}
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Advanced</h2>
-						<p class="set-section-sub">Developer and advanced options</p>
+						<p class="set-section-sub">Power-user controls. Use with care.</p>
 					</div>
-					<div class="stub-placeholder">
-						<div class="stub-title">Coming in Phase 6</div>
-						<div class="stub-sub">Advanced configuration options will be available in an upcoming update.</div>
+
+					<!-- API bearer token — standalone, no Save involved -->
+					<div class="set-sub-head">
+						<h3 class="set-sub-title">API bearer token</h3>
+						<p class="set-section-sub">Used to authenticate requests from external clients via the <code style="font-size:11px;">Authorization: Bearer</code> header.</p>
 					</div>
+					<div class="bearer-row">
+						<code class="bearer-value">{bearerRevealed ? currentBearer : maskedBearer()}</code>
+						<button
+							type="button"
+							class="icon-btn"
+							onclick={() => (bearerRevealed = !bearerRevealed)}
+							title={bearerRevealed ? 'Hide token' : 'Reveal token'}
+						>
+							{#if bearerRevealed}
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+							{:else}
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+							{/if}
+						</button>
+						<button
+							type="button"
+							class="icon-btn"
+							onclick={copyBearer}
+							title="Copy token"
+						>
+							{#if bearerCopied}
+								<Check size={14} />
+							{:else}
+								<Copy size={14} />
+							{/if}
+						</button>
+						<form method="POST" action="?/regenerateBearer" use:enhance={() => ({ update }) => update({ reset: false })} style="display:contents;">
+							<button type="submit" class="btn-ghost-sm" title="Generate a new token — existing clients will need to update their token">
+								<RefreshCw size={13} /> Regenerate
+							</button>
+						</form>
+					</div>
+
+					<!-- God Mode — form with Save -->
+					<div class="set-sub-head" style="margin-top:28px;">
+						<h3 class="set-sub-title">God Mode</h3>
+					</div>
+					<form method="POST" action="?/saveAdvanced" use:enhance={() => ({ update }) => update({ reset: false })}>
+						<input type="hidden" name="godMode" value={String(godMode)} />
+						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">God Mode</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Allow editing descriptive fields on claimed expenses. Amounts stay locked.</div>
+								</div>
+								<button
+									type="button"
+									class="toggle-btn"
+									class:on={godMode}
+									onclick={() => { godMode = !godMode; }}
+									aria-pressed={godMode}
+								>
+									<span class="toggle-thumb"></span>
+								</button>
+							</div>
+							{#if godMode}
+								<div class="warn-banner">
+									<Lock size={13} /> God Mode is on — descriptive fields are editable on locked records.
+								</div>
+							{/if}
+						</div>
+						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+					</form>
 				</div>
 			{/if}
 		</div>
@@ -392,26 +432,6 @@
 </div>
 
 <style>
-	.stub-placeholder {
-		padding: 40px 24px;
-		background: var(--muted);
-		border-radius: var(--radius);
-		text-align: center;
-		border: 1px dashed var(--border-strong);
-	}
-
-	.stub-title {
-		font-size: 14px;
-		font-weight: 500;
-		color: var(--foreground);
-		margin-bottom: 6px;
-	}
-
-	.stub-sub {
-		font-size: 13px;
-		color: var(--muted-foreground);
-	}
-
 	.cat-add-row {
 		display: flex;
 		gap: 8px;
@@ -441,4 +461,100 @@
 		opacity: 1;
 		background: oklch(0 0 0 / 0.1);
 	}
+
+	/* Advanced sub-sections */
+	.set-sub-head {
+		margin-bottom: 10px;
+	}
+
+	.set-sub-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--foreground);
+		margin: 0 0 2px;
+	}
+
+	.warn-banner {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 8px 12px;
+		background: oklch(0.97 0.04 85 / 0.6);
+		border: 1px solid oklch(0.85 0.1 85);
+		border-radius: var(--radius);
+		font-size: 12px;
+		color: oklch(0.45 0.15 70);
+		margin: 0 16px;
+	}
+
+	:global(.dark) .warn-banner {
+		background: oklch(0.25 0.05 85 / 0.4);
+		border-color: oklch(0.4 0.1 85);
+		color: oklch(0.75 0.1 85);
+	}
+
+	/* Bearer token */
+	.bearer-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 10px;
+		flex-wrap: wrap;
+	}
+
+	.bearer-value {
+		font-family: var(--font-mono, monospace);
+		font-size: 12px;
+		background: var(--muted);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 5px 10px;
+		color: var(--foreground);
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 400px;
+	}
+
+	.icon-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		cursor: pointer;
+		color: var(--muted-foreground);
+		flex-shrink: 0;
+	}
+
+	.icon-btn:hover {
+		background: var(--muted);
+		color: var(--foreground);
+	}
+
+	.btn-ghost-sm {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 10px;
+		font-size: 12px;
+		background: none;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		cursor: pointer;
+		color: var(--muted-foreground);
+		white-space: nowrap;
+	}
+
+	.btn-ghost-sm:hover {
+		background: var(--muted);
+		color: var(--foreground);
+	}
+
+
 </style>

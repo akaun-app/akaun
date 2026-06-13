@@ -1,0 +1,12 @@
+node_modules/
+.svelte-kit/
+build/
+/data/
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.git/
+.gitignore
+*.md

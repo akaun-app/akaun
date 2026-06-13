@@ -2,6 +2,7 @@ import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { fail } from '@sveltejs/kit';
+import { randomBytes } from 'node:crypto';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
 	'Food & Beverage',
@@ -40,6 +41,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const autoImportParallelTasks = parseInt(getSetting(db, userId, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
 	const autoImportCategoryHints = (getSetting(db, userId, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
 
+	const godModeEnabled = (getSetting(db, userId, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
+
+	const apiBearer = getSetting(db, userId, SETTING_KEYS.apiBearer) ?? '';
+
 	return {
 		expenseCategories,
 		incomeCategories,
@@ -48,7 +53,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		autoImportApiKey,
 		autoImportModel,
 		autoImportParallelTasks,
-		autoImportCategoryHints
+		autoImportCategoryHints,
+		godModeEnabled,
+		apiBearer
 	};
 };
 
@@ -98,5 +105,20 @@ export const actions: Actions = {
 		setSetting(db, userId, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
 
 		return { success: true };
+	},
+
+	saveAdvanced: async ({ locals, request }) => {
+		const userId = locals.user!.id;
+		const data = await request.formData();
+		const godMode = data.get('godMode') === 'true';
+		setSetting(db, userId, SETTING_KEYS.godModeEnabled, String(godMode));
+		return { success: true };
+	},
+
+	regenerateBearer: async ({ locals }) => {
+		const userId = locals.user!.id;
+		const newToken = 'akn_' + randomBytes(24).toString('hex');
+		setSetting(db, userId, SETTING_KEYS.apiBearer, newToken);
+		return { success: true, newToken };
 	}
 };

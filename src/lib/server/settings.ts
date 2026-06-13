@@ -11,7 +11,8 @@ export const SETTING_KEYS = {
 	autoImportEnabled: 'autoImport.enabled',
 	autoImportParallelTasks: 'autoImport.parallelTasks',
 	autoImportCategoryHints: 'autoImport.categoryHints',
-	godModeEnabled: 'godMode.enabled'
+	godModeEnabled: 'godMode.enabled',
+	apiBearer: 'api.bearerToken'
 } as const;
 
 export function getSetting(

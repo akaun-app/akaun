@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "6969:6969"
+    volumes:
+      - app_data:/app/data
+    restart: unless-stopped
+    # Optional overrides (all have defaults baked into the image):
+    # environment:
+    #   DATABASE_PATH: /app/data/akaun.db
+    #   STORAGE_PATH: /app/data/storage
+    #   LOG_LEVEL: info
+
+volumes:
+  app_data:

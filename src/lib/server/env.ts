@@ -1,11 +1,4 @@
 import { env } from '$env/dynamic/private';
 
-function requireEnv(key: string): string {
-	const value = env[key];
-	if (!value) throw new Error(`Missing required environment variable: ${key}`);
-	return value;
-}
-
-export const DATABASE_PATH = requireEnv('DATABASE_PATH');
-export const STORAGE_PATH = requireEnv('STORAGE_PATH');
-export const API_BEARER_TOKEN = requireEnv('API_BEARER_TOKEN');
+export const DATABASE_PATH = env['DATABASE_PATH'] || './data/akaun.db';
+export const STORAGE_PATH = env['STORAGE_PATH'] || './data/storage';
