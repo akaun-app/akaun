@@ -38,8 +38,9 @@
 						border: { display: false }
 					},
 					y: {
-						grid: { color: 'oklch(0.92 0.004 286.3)' },
+						grid: { color: 'oklch(0.75 0.004 286.3 / 0.25)', drawTicks: false },
 						ticks: {
+							maxTicksLimit: 4,
 							font: { family: '"Geist Mono", monospace', size: 11 },
 							callback: (v: number | string) =>
 								'RM ' + (typeof v === 'number' ? v.toLocaleString() : v)
