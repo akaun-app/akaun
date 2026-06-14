@@ -3,7 +3,8 @@ import { db } from '$lib/server/db/client.js';
 import { listIncomes } from '$lib/server/queries/income.js';
 import { createIncome } from '$lib/server/services/income.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
+import { hasPermission } from '$lib/server/permissions.js';
 
 const DEFAULT_INCOME_CATEGORIES = [
 	'Client Project',
@@ -16,6 +17,7 @@ const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 export const load: PageServerLoad = async ({ locals }) => {
+	if (!hasPermission(locals, 'income', 'view')) throw redirect(302, '/dashboard');
 	const userId = locals.user!.id;
 	const allIncomes = listIncomes(db, userId, { limit: 1000 });
 

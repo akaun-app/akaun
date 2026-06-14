@@ -3,8 +3,10 @@ import { db } from '$lib/server/db/client.js';
 import { claimAttachments } from '$lib/server/db/schema.js';
 import { getClaim } from '$lib/server/queries/claims.js';
 import { saveToTemp, moveToFinal, displayName } from '$lib/server/file-storage.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
+	if (!hasPermission(locals, 'claims', 'change')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const id = parseInt(params.id!);
 

@@ -3,8 +3,10 @@ import { db } from '$lib/server/db/client.js';
 import { incomeAttachments } from '$lib/server/db/schema.js';
 import { getIncome } from '$lib/server/queries/income.js';
 import { saveToTemp, moveToFinal, displayName } from '$lib/server/file-storage.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
+	if (!hasPermission(locals, 'income', 'change')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const id = parseInt(params.id!);
 

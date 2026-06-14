@@ -4,8 +4,10 @@ import { getExpense } from '$lib/server/queries/expenses.js';
 import { canEditAmount, canEditDescriptive } from '$lib/server/locking.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { patchExpense, removeExpense } from '$lib/server/services/expenses.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
+	if (!hasPermission(locals, 'expenses', 'view')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const id = parseInt(params.id!);
 
@@ -16,6 +18,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 };
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
+	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const id = parseInt(params.id!);
 
@@ -50,6 +53,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 };
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
+	if (!hasPermission(locals, 'expenses', 'delete')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const id = parseInt(params.id!);
 

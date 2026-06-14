@@ -3,6 +3,8 @@ import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { eq, desc } from 'drizzle-orm';
+import { redirect } from '@sveltejs/kit';
+import { hasPermission } from '$lib/server/permissions.js';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
 	'Food & Beverage',
@@ -27,6 +29,7 @@ const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 export const load: PageServerLoad = async ({ locals }) => {
+	if (!hasPermission(locals, 'import', 'view')) throw redirect(302, '/dashboard');
 	const userId = locals.user!.id;
 
 	const jobs = db

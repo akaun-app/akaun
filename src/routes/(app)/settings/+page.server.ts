@@ -2,7 +2,6 @@ import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { fail } from '@sveltejs/kit';
-import { randomBytes } from 'node:crypto';
 
 const DEFAULT_EXPENSE_CATEGORIES = [
 	'Food & Beverage',
@@ -43,8 +42,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const godModeEnabled = (getSetting(db, userId, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
 
-	const apiBearer = getSetting(db, userId, SETTING_KEYS.apiBearer) ?? '';
-
 	return {
 		expenseCategories,
 		incomeCategories,
@@ -54,8 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		autoImportModel,
 		autoImportParallelTasks,
 		autoImportCategoryHints,
-		godModeEnabled,
-		apiBearer
+		godModeEnabled
 	};
 };
 
@@ -115,10 +111,4 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	regenerateBearer: async ({ locals }) => {
-		const userId = locals.user!.id;
-		const newToken = 'akn_' + randomBytes(24).toString('hex');
-		setSetting(db, userId, SETTING_KEYS.apiBearer, newToken);
-		return { success: true, newToken };
-	}
 };

@@ -3,8 +3,10 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { expenseAttachments, expenses } from '$lib/server/db/schema.js';
 import { deleteFile } from '$lib/server/file-storage.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
+	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const expenseId = parseInt(params.id!);
 	const attachmentId = parseInt(params.attachmentId!);

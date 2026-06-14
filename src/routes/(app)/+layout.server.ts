@@ -7,11 +7,13 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	const user = locals.user;
 	const godMode = getSetting(db, user!.id, 'godMode.enabled') === 'true';
 
-	// Count unpaid expenses for sidebar badge
 	const unpaidExpenses = listExpenses(db, user!.id, { status: 'unpaid', limit: 1000 });
 
 	return {
+		user: locals.user,
 		godMode,
-		unpaidCount: unpaidExpenses.length
+		unpaidCount: unpaidExpenses.length,
+		isSuperuser: locals.isSuperuser,
+		permissions: locals.permissions
 	};
 };

@@ -3,11 +3,13 @@ import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { importEvents } from '$lib/server/import/events.js';
 import type { RequestHandler } from './$types.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 const TERMINAL_STATES = ['confirmed', 'skipped'];
 
 export const GET: RequestHandler = ({ locals }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'view')) return new Response('Forbidden', { status: 403 });
 
 	const userId = locals.user.id;
 	const encoder = new TextEncoder();

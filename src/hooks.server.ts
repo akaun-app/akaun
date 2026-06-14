@@ -1,20 +1,18 @@
 import { redirect, type Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { eq } from 'drizzle-orm';
-import { db, ensureDefaultAdmin, ensureApiToken } from '$lib/server/db/client.js';
+import { db, ensureDefaultAdmin, ensureGroupSeed } from '$lib/server/db/client.js';
 import { getSessionUser } from '$lib/server/auth.js';
 import { users } from '$lib/server/db/schema.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { getEffectivePermissions } from '$lib/server/permissions.js';
 import { setLogLevel } from '$lib/server/logger.js';
 import { startImportWorker } from '$lib/server/import/worker.js';
 
-// Bridge $env/dynamic/private → pino. Runs after all module-level imports are
-// evaluated (so all child loggers exist), but before any log calls happen.
 if (env.LOG_LEVEL) setLogLevel(env.LOG_LEVEL);
 
 export const init = async () => {
 	await ensureDefaultAdmin();
-	ensureApiToken();
+	ensureGroupSeed();
 	startImportWorker();
 };
 
@@ -23,35 +21,48 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (pathname.startsWith('/api/')) {
 		const header = event.request.headers.get('Authorization');
-		if (header) {
-			// Bearer token auth (external clients)
+		if (header?.startsWith('Bearer ')) {
+			const rawToken = header.slice(7);
 			const apiUser = db
-				.select({ id: users.id, username: users.username, role: users.role })
+				.select({ id: users.id, email: users.email, username: users.username, name: users.name, role: users.role })
 				.from(users)
-				.where(eq(users.role, 'owner'))
+				.where(eq(users.bearerToken, rawToken))
 				.get();
-			const effectiveToken = apiUser ? getSetting(db, apiUser.id, SETTING_KEYS.apiBearer) : null;
-			if (!effectiveToken || header !== `Bearer ${effectiveToken}`) {
+			if (!apiUser) {
 				return new Response('Unauthorized', { status: 401 });
 			}
-			event.locals.user = apiUser ?? null;
+			event.locals.user = apiUser;
+			const { permissions, isSuperuser } = getEffectivePermissions(db, apiUser.id);
+			event.locals.permissions = permissions;
+			event.locals.isSuperuser = isSuperuser;
 		} else {
-			// Session cookie auth (web UI fetch calls)
 			const sessionId = event.cookies.get('session');
-			event.locals.user = sessionId ? getSessionUser(db, sessionId) : null;
-			if (!event.locals.user) {
+			const sessionUser = sessionId ? getSessionUser(db, sessionId) : null;
+			if (!sessionUser) {
 				return new Response('Unauthorized', { status: 401 });
 			}
+			event.locals.user = sessionUser;
+			const { permissions, isSuperuser } = getEffectivePermissions(db, sessionUser.id);
+			event.locals.permissions = permissions;
+			event.locals.isSuperuser = isSuperuser;
 		}
 		return resolve(event);
 	}
 
 	const sessionId = event.cookies.get('session');
-	event.locals.user = sessionId ? getSessionUser(db, sessionId) : null;
+	const sessionUser = sessionId ? getSessionUser(db, sessionId) : null;
+	event.locals.user = sessionUser;
 
-	if (!event.locals.user && pathname !== '/login') {
-		throw redirect(302, '/login');
+	if (!sessionUser) {
+		if (pathname !== '/login') throw redirect(302, '/login');
+		event.locals.permissions = null;
+		event.locals.isSuperuser = false;
+		return resolve(event);
 	}
+
+	const { permissions, isSuperuser } = getEffectivePermissions(db, sessionUser.id);
+	event.locals.permissions = permissions;
+	event.locals.isSuperuser = isSuperuser;
 
 	return resolve(event);
 };

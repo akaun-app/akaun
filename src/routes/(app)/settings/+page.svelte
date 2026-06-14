@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Plus, X, Lock, RefreshCw, Copy, Check } from '@lucide/svelte';
+	import { Plus, X, Lock } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
@@ -41,9 +41,6 @@
 
 	// Advanced state
 	let godMode = $state(data.godModeEnabled);
-	let currentBearer = $state(data.apiBearer);
-	let bearerCopied = $state(false);
-	let bearerRevealed = $state(false);
 
 	function addExpCat() {
 		const v = newExpCat.trim();
@@ -84,13 +81,7 @@
 			aiModel = data.autoImportModel;
 			aiParallelTasks = data.autoImportParallelTasks;
 			aiCategoryHints = data.autoImportCategoryHints;
-			if ('newToken' in (form ?? {})) {
-				currentBearer = (form as { newToken: string }).newToken;
-				bearerRevealed = true;
-				toast.success('Bearer token regenerated — copy it now');
-			} else {
-				toast.success('Settings saved');
-			}
+			toast.success('Settings saved');
 		}
 	});
 
@@ -127,16 +118,6 @@
 		} finally {
 			orFetching = false;
 		}
-	}
-
-	async function copyBearer() {
-		await navigator.clipboard.writeText(currentBearer);
-		bearerCopied = true;
-		setTimeout(() => (bearerCopied = false), 2000);
-	}
-
-	function maskedBearer(): string {
-		return '••••••••••••••••••••••••';
 	}
 
 	const TABS: { id: Tab; label: string }[] = [
@@ -206,13 +187,13 @@
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">OpenRouter key used for document understanding</div>
 								</div>
 								<input
-									class="form-input"
+									class="form-input set-input-right"
 									type="password"
 									name="apiKey"
 									placeholder="sk-or-v1-…"
 									value={aiApiKey}
 									oninput={(e) => (aiApiKey = (e.target as HTMLInputElement).value)}
-									style="width:220px; flex-shrink:0;"
+									style="flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
@@ -230,10 +211,9 @@
 								</div>
 								<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
 									<select
-										class="form-input"
+										class="form-input set-input-right set-input-wide"
 										name="model"
 										bind:value={aiModel}
-										style="width:260px;"
 										disabled={orModels.length === 0}
 									>
 										{#if orModels.length === 0}
@@ -356,49 +336,6 @@
 						<h2 class="set-section-title">Advanced</h2>
 						<p class="set-section-sub">Power-user controls. Use with care.</p>
 					</div>
-
-					<!-- API bearer token — standalone, no Save involved -->
-					<div class="set-sub-head">
-						<h3 class="set-sub-title">API bearer token</h3>
-						<p class="set-section-sub">Used to authenticate requests from external clients via the <code style="font-size:11px;">Authorization: Bearer</code> header.</p>
-					</div>
-					<div class="bearer-row">
-						<code class="bearer-value">{bearerRevealed ? currentBearer : maskedBearer()}</code>
-						<button
-							type="button"
-							class="icon-btn"
-							onclick={() => (bearerRevealed = !bearerRevealed)}
-							title={bearerRevealed ? 'Hide token' : 'Reveal token'}
-						>
-							{#if bearerRevealed}
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-							{:else}
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-							{/if}
-						</button>
-						<button
-							type="button"
-							class="icon-btn"
-							onclick={copyBearer}
-							title="Copy token"
-						>
-							{#if bearerCopied}
-								<Check size={14} />
-							{:else}
-								<Copy size={14} />
-							{/if}
-						</button>
-						<form method="POST" action="?/regenerateBearer" use:enhance={() => ({ update }) => update({ reset: false })} style="display:contents;">
-							<button type="submit" class="btn-ghost-sm" title="Generate a new token — existing clients will need to update their token">
-								<RefreshCw size={13} /> Regenerate
-							</button>
-						</form>
-					</div>
-
-					<!-- God Mode — form with Save -->
-					<div class="set-sub-head" style="margin-top:28px;">
-						<h3 class="set-sub-title">God Mode</h3>
-					</div>
 					<form method="POST" action="?/saveAdvanced" use:enhance={() => ({ update }) => update({ reset: false })}>
 						<input type="hidden" name="godMode" value={String(godMode)} />
 						<div class="set-rows">
@@ -462,18 +399,6 @@
 		background: oklch(0 0 0 / 0.1);
 	}
 
-	/* Advanced sub-sections */
-	.set-sub-head {
-		margin-bottom: 10px;
-	}
-
-	.set-sub-title {
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--foreground);
-		margin: 0 0 2px;
-	}
-
 	.warn-banner {
 		display: flex;
 		align-items: center;
@@ -491,69 +416,6 @@
 		background: oklch(0.25 0.05 85 / 0.4);
 		border-color: oklch(0.4 0.1 85);
 		color: oklch(0.75 0.1 85);
-	}
-
-	/* Bearer token */
-	.bearer-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-top: 10px;
-		flex-wrap: wrap;
-	}
-
-	.bearer-value {
-		font-family: var(--font-mono, monospace);
-		font-size: 12px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		padding: 5px 10px;
-		color: var(--foreground);
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		max-width: 400px;
-	}
-
-	.icon-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		background: none;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		cursor: pointer;
-		color: var(--muted-foreground);
-		flex-shrink: 0;
-	}
-
-	.icon-btn:hover {
-		background: var(--muted);
-		color: var(--foreground);
-	}
-
-	.btn-ghost-sm {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 10px;
-		font-size: 12px;
-		background: none;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		cursor: pointer;
-		color: var(--muted-foreground);
-		white-space: nowrap;
-	}
-
-	.btn-ghost-sm:hover {
-		background: var(--muted);
-		color: var(--foreground);
 	}
 
 

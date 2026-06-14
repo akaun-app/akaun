@@ -1,8 +1,10 @@
 import { claimEvents } from '$lib/server/finance/events.js';
 import type { RequestHandler } from './$types.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = ({ locals }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
 
 	const userId = locals.user.id;
 	const encoder = new TextEncoder();

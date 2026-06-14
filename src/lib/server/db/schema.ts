@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, primaryKey, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, primaryKey, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 export const users = sqliteTable('users', {
@@ -7,8 +7,60 @@ export const users = sqliteTable('users', {
 	username: text('username').notNull().unique(),
 	passwordHash: text('password_hash').notNull(),
 	role: text('role').notNull().default('owner'),
+	name: text('name'),
+	bearerToken: text('bearer_token').unique(),
 	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 });
+
+export const groups = sqliteTable('groups', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	name: text('name').notNull().unique(),
+	description: text('description').notNull().default(''),
+	isSuperuser: integer('is_superuser', { mode: 'boolean' }).notNull().default(false)
+});
+
+export const groupPermissions = sqliteTable(
+	'group_permissions',
+	{
+		groupId: integer('group_id')
+			.notNull()
+			.references(() => groups.id, { onDelete: 'cascade' }),
+		resource: text('resource').notNull(),
+		canView: integer('can_view', { mode: 'boolean' }).notNull().default(false),
+		canAdd: integer('can_add', { mode: 'boolean' }).notNull().default(false),
+		canChange: integer('can_change', { mode: 'boolean' }).notNull().default(false),
+		canDelete: integer('can_delete', { mode: 'boolean' }).notNull().default(false)
+	},
+	(t) => [primaryKey({ columns: [t.groupId, t.resource] })]
+);
+
+export const userGroups = sqliteTable(
+	'user_groups',
+	{
+		userId: integer('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		groupId: integer('group_id')
+			.notNull()
+			.references(() => groups.id, { onDelete: 'cascade' })
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.groupId] })]
+);
+
+export const userPermissions = sqliteTable(
+	'user_permissions',
+	{
+		userId: integer('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		resource: text('resource').notNull(),
+		canView: integer('can_view', { mode: 'boolean' }).notNull().default(false),
+		canAdd: integer('can_add', { mode: 'boolean' }).notNull().default(false),
+		canChange: integer('can_change', { mode: 'boolean' }).notNull().default(false),
+		canDelete: integer('can_delete', { mode: 'boolean' }).notNull().default(false)
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.resource] })]
+);
 
 export const sessions = sqliteTable('sessions', {
 	id: text('id').primaryKey(),

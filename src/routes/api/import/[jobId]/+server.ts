@@ -5,9 +5,11 @@ import { importQueue } from '$lib/server/db/schema.js';
 import { deleteFile } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import type { RequestHandler } from './$types.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'view')) return new Response('Forbidden', { status: 403 });
 
 	const row = db
 		.select()
@@ -21,6 +23,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'delete')) return new Response('Forbidden', { status: 403 });
 
 	const row = db
 		.select()

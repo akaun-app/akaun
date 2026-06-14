@@ -1,0 +1,40 @@
+import { json } from '@sveltejs/kit';
+import type { RequestHandler } from './$types.js';
+import { eq } from 'drizzle-orm';
+import { db } from '$lib/server/db/client.js';
+import { users, userGroups, groups } from '$lib/server/db/schema.js';
+
+export const GET: RequestHandler = async ({ locals, params }) => {
+	if (!locals.isSuperuser) return new Response('Forbidden', { status: 403 });
+
+	const userId = parseInt(params.id);
+	const memberships = db
+		.select({ id: groups.id, name: groups.name, isSuperuser: groups.isSuperuser })
+		.from(userGroups)
+		.innerJoin(groups, eq(userGroups.groupId, groups.id))
+		.where(eq(userGroups.userId, userId))
+		.all();
+
+	return json(memberships);
+};
+
+export const PATCH: RequestHandler = async ({ locals, params, request }) => {
+	if (!locals.isSuperuser) return new Response('Forbidden', { status: 403 });
+
+	const userId = parseInt(params.id);
+	const user = db.select({ id: users.id }).from(users).where(eq(users.id, userId)).get();
+	if (!user) return new Response('Not Found', { status: 404 });
+
+	const body = await request.json();
+	const groupIds: number[] = body.groupIds ?? [];
+
+	// Replace all memberships atomically
+	db.delete(userGroups).where(eq(userGroups.userId, userId)).run();
+	if (groupIds.length > 0) {
+		db.insert(userGroups)
+			.values(groupIds.map((gid) => ({ userId, groupId: gid })))
+			.run();
+	}
+
+	return json({ success: true });
+};

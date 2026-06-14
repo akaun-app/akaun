@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { onMount, onDestroy } from 'svelte';
+	import { fly } from 'svelte/transition';
 	import {
 		TrendingUp,
 		Plus,
@@ -36,6 +37,10 @@
 
 	// UI state
 	let showNew = $state(false);
+	let mobileFilterOpen = $state(false);
+	let mobileSearchOpen = $state(false);
+	let mobileSearchEl = $state<HTMLInputElement | null>(null);
+	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
 	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
 	type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
 	let detailIncome = $state<FullIncome | null>(null);
@@ -229,11 +234,30 @@
 					/>
 				</div>
 			</div>
+			{#if mobileSearchOpen}
+				<div class="mobile-search-inline" transition:fly={{ x: 12, duration: 180 }}>
+					<span class="mobile-search-inline-icon"><Search size={15} /></span>
+					<input
+						class="mobile-search-inline-input"
+						type="search"
+						placeholder="Search source, reference…"
+						bind:value={searchRaw}
+						bind:this={mobileSearchEl}
+					/>
+				</div>
+			{/if}
+			<button
+				class="mobile-search-toggle"
+				class:active={mobileSearchOpen}
+				onclick={() => { mobileSearchOpen = !mobileSearchOpen; if (!mobileSearchOpen) searchRaw = ''; }}
+			>
+				{#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
+			</button>
 			<button
 				onclick={() => (showNew = true)}
 				style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
 			>
-				<Plus size={15} /> Record income
+				<Plus size={15} /> <span class="btn-text">Record income</span>
 			</button>
 		</div>
 	</header>
@@ -265,6 +289,19 @@
 				<div class="toolbar-heading">
 					<TrendingUp size={14} />
 					All income
+				</div>
+				<div class="mobile-filter-row">
+					<button
+						class="btn-outline btn-sm"
+						style="display:inline-flex; align-items:center; gap:6px;"
+						onclick={() => (mobileFilterOpen = true)}
+					>
+						<SlidersHorizontal size={13} /> Filters
+						{#if activeFilterCount > 0}<span class="filter-count">{activeFilterCount}</span>{/if}
+					</button>
+					{#if activeFilterCount > 0}
+						<button class="clear-filters" onclick={clearAllFilters}><X size={13} /> Clear</button>
+					{/if}
 				</div>
 				<div class="toolbar-filters">
 					{#if activeFilterCount > 0}
@@ -336,10 +373,12 @@
 			</div>
 
 			<!-- Result meta -->
+			{#if filtered.length > 0 || activeFilterCount > 0}
 			<div class="result-meta">
 				<span>Showing <b>{filtered.length}</b> of {stats.count}</span>
 				<span class="result-total">Filtered total <b class="num">+{formatMoneyRM(filteredTotal)}</b></span>
 			</div>
+			{/if}
 
 			<!-- Table -->
 			<div class="table-card">
@@ -387,22 +426,22 @@
 										{#if selected.has(inc.id)}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>{/if}
 									</button>
 								</td>
-								<td>
+								<td class="td-primary">
 									<div class="cell-item">
 										<span class="cell-itemname">{inc.source}</span>
 										<span class="cell-itemnum">{inc.incomeNumber}</span>
 									</div>
 								</td>
-								<td>
+								<td data-label="Category">
 									<span style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;">
 										{inc.category}
 									</span>
 								</td>
-								<td style="color:var(--muted-foreground); font-size:13px;">{inc.reference || '—'}</td>
-								<td class="td-date">
+								<td data-label="Reference" style="color:var(--muted-foreground); font-size:13px;">{inc.reference || '—'}</td>
+								<td class="td-date" data-label="Date">
 									{formatDateShort(inc.date)}<span class="td-year">{inc.date.slice(0, 4)}</span>
 								</td>
-								<td class="td-amount">
+								<td class="td-amount" data-label="Amount">
 									<span class="amount-num" style="color:var(--green);">+RM {formatMoney(inc.amount)}</span>
 								</td>
 							</tr>
@@ -458,6 +497,65 @@
 		</div>
 	</div>
 </div>
+
+<!-- Mobile filter sheet -->
+<Sheet.Root bind:open={mobileFilterOpen}>
+	<Sheet.Portal>
+		<Sheet.Overlay />
+		<Sheet.Content side="bottom" style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + env(safe-area-inset-bottom));">
+			<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+				<div style="font-size:15px; font-weight:600;">Filters</div>
+				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
+			</div>
+			<div style="margin-bottom:16px;">
+				<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+					<span>Category</span>
+					{#if selectedCats.length}<button onclick={() => (selectedCats = [])} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
+				</div>
+				<div style="display:flex; flex-wrap:wrap; gap:7px;">
+					{#each data.categories as cat}
+						<button
+							onclick={() => toggleCat(cat)}
+							style="border:1px solid {selectedCats.includes(cat) ? 'var(--primary)' : 'var(--border)'}; background:{selectedCats.includes(cat) ? 'var(--primary-soft)' : 'var(--card)'}; color:{selectedCats.includes(cat) ? 'var(--primary)' : 'var(--foreground)'}; font-family:inherit; font-size:13px; padding:5px 12px; border-radius:999px; cursor:pointer;"
+						>{cat}</button>
+					{/each}
+				</div>
+			</div>
+			<div style="margin-bottom:16px;">
+				<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+					<span>Date range</span>
+					{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
+				</div>
+				<div style="display:flex; flex-direction:column; gap:8px;">
+					<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
+					<DatePicker bind:value={dateFrom} placeholder="From date" />
+					<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
+					<DatePicker bind:value={dateTo} placeholder="To date" />
+				</div>
+			</div>
+			<div style="margin-bottom:20px;">
+				<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between;">
+					<span>Amount range</span>
+					{#if amountMin || amountMax}<button onclick={() => { amountMin = ''; amountMax = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
+				</div>
+				<div style="display:flex; align-items:center; gap:8px;">
+					<div class="amount-input" style="flex:1;">
+						<span class="amount-prefix">RM</span>
+						<input class="amount-field" inputmode="decimal" placeholder="Min" bind:value={amountMin} style="flex:1;" />
+					</div>
+					<span style="color:var(--muted-foreground);">–</span>
+					<div class="amount-input" style="flex:1;">
+						<span class="amount-prefix">RM</span>
+						<input class="amount-field" inputmode="decimal" placeholder="Max" bind:value={amountMax} style="flex:1;" />
+					</div>
+				</div>
+			</div>
+			<button class="btn-primary" style="width:100%;" onclick={() => (mobileFilterOpen = false)}>
+				Show results
+			</button>
+		</Sheet.Content>
+	</Sheet.Portal>
+</Sheet.Root>
 
 <!-- Detail sheet -->
 <Sheet.Root open={!!detailIncome} onOpenChange={(o) => { if (!o) detailIncome = null; }}>

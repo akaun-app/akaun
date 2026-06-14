@@ -3,14 +3,13 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { hash } from 'argon2';
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { DATABASE_PATH } from '../env.js';
 import { createLogger } from '../logger.js';
-import { getSetting, setSetting, SETTING_KEYS } from '../settings.js';
 import * as schema from './schema.js';
-import { users } from './schema.js';
+import { users, groups, groupPermissions, userGroups, settings } from './schema.js';
 
 const log = createLogger('db');
 
@@ -43,18 +42,112 @@ export async function ensureDefaultAdmin(): Promise<void> {
 	}
 }
 
-export function ensureApiToken(): void {
-	const owner = db
+const SEED_GROUPS = [
+	{
+		name: 'Administrators',
+		description: 'Unrestricted access to every area, including user management, backups and reset. Cannot be renamed or deleted.',
+		isSuperuser: true,
+		permissions: {}
+	},
+	{
+		name: 'Bookkeeper',
+		description: 'Maintains day-to-day records across the shared ledger.',
+		isSuperuser: false,
+		permissions: {
+			expenses: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			income: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			claims: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			import: { canView: true, canAdd: true, canChange: false, canDelete: false },
+			categories: { canView: true, canAdd: false, canChange: true, canDelete: false }
+		}
+	},
+	{
+		name: 'Data Entry',
+		description: 'Adds new records but cannot edit, claim or delete existing ones.',
+		isSuperuser: false,
+		permissions: {
+			expenses: { canView: false, canAdd: true, canChange: false, canDelete: false },
+			income: { canView: false, canAdd: true, canChange: false, canDelete: false },
+			claims: { canView: false, canAdd: false, canChange: false, canDelete: false },
+			import: { canView: false, canAdd: true, canChange: false, canDelete: false },
+			categories: { canView: true, canAdd: false, canChange: false, canDelete: false }
+		}
+	},
+	{
+		name: 'Reviewer',
+		description: 'Read-only visibility across all financial records.',
+		isSuperuser: false,
+		permissions: {
+			expenses: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			income: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			claims: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			import: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			categories: { canView: true, canAdd: false, canChange: false, canDelete: false }
+		}
+	}
+];
+
+export function ensureGroupSeed(): void {
+	// Seed default groups
+	for (const seed of SEED_GROUPS) {
+		const existing = db.select({ id: groups.id }).from(groups).where(eq(groups.name, seed.name)).get();
+		if (!existing) {
+			const [group] = db
+				.insert(groups)
+				.values({ name: seed.name, description: seed.description, isSuperuser: seed.isSuperuser })
+				.returning({ id: groups.id })
+				.all();
+			if (!seed.isSuperuser) {
+				const permRows = Object.entries(seed.permissions).map(([resource, perms]) => ({
+					groupId: group.id,
+					resource,
+					...perms
+				}));
+				if (permRows.length > 0) {
+					db.insert(groupPermissions).values(permRows).run();
+				}
+			}
+			log.info({ group: seed.name }, 'Seeded default group');
+		}
+	}
+
+	// Migrate api.bearerToken from settings → users.bearer_token
+	const allUsers = db.select({ id: users.id, bearerToken: users.bearerToken }).from(users).all();
+	for (const user of allUsers) {
+		if (user.bearerToken) continue; // already migrated
+		const row = db
+			.select({ value: settings.value })
+			.from(settings)
+			.where(and(eq(settings.userId, user.id), eq(settings.key, 'api.bearerToken')))
+			.get();
+		if (row?.value) {
+			db.update(users).set({ bearerToken: row.value }).where(eq(users.id, user.id)).run();
+			db.delete(settings)
+				.where(and(eq(settings.userId, user.id), eq(settings.key, 'api.bearerToken')))
+				.run();
+			log.info({ userId: user.id }, 'Migrated api.bearerToken to users.bearer_token');
+		}
+	}
+
+	// Assign all ungrouped users to Administrators
+	const adminGroup = db.select({ id: groups.id }).from(groups).where(eq(groups.name, 'Administrators')).get();
+	if (!adminGroup) return;
+
+	const ungrouped = db
 		.select({ id: users.id })
 		.from(users)
-		.where(eq(users.role, 'owner'))
-		.get();
-	if (!owner) return;
+		.all()
+		.filter((u) => {
+			const membership = db
+				.select({ groupId: userGroups.groupId })
+				.from(userGroups)
+				.where(eq(userGroups.userId, u.id))
+				.get();
+			return !membership;
+		});
 
-	const existing = getSetting(db, owner.id, SETTING_KEYS.apiBearer);
-	if (existing) return;
-
-	const token = randomBytes(32).toString('hex');
-	setSetting(db, owner.id, SETTING_KEYS.apiBearer, token);
-	log.info({ token }, 'API bearer token generated — copy this to use the API or iOS Shortcuts');
+	for (const u of ungrouped) {
+		db.insert(userGroups).values({ userId: u.id, groupId: adminGroup.id }).run();
+		log.info({ userId: u.id }, 'Assigned ungrouped user to Administrators');
+	}
 }

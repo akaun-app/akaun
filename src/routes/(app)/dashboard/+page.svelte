@@ -6,7 +6,8 @@
 		Wallet,
 		ArrowUpRight,
 		FileText,
-		TrendingDown
+		TrendingDown,
+		ChevronDown
 	} from '@lucide/svelte';
 	import BarChart from '$lib/components/charts/BarChart.svelte';
 	import DonutChart from '$lib/components/charts/DonutChart.svelte';
@@ -23,6 +24,7 @@
 	];
 
 	let period = $state(data.period ?? '2m');
+	let mobilePeriodOpen = $state(false);
 
 	$effect(() => {
 		const p = period;
@@ -50,6 +52,8 @@
 	});
 </script>
 
+<svelte:window onclick={() => (mobilePeriodOpen = false)} />
+
 <div class="screen">
 	<header class="topbar">
 		<div class="topbar-left">
@@ -57,6 +61,7 @@
 			<p class="page-sub">Welcome back, {data.user?.username}</p>
 		</div>
 		<div class="topbar-right">
+			<!-- Desktop: full segmented control -->
 			<div class="seg">
 				{#each PERIODS as p}
 					<button
@@ -67,6 +72,28 @@
 						{p.label}
 					</button>
 				{/each}
+			</div>
+			<!-- Mobile: compact period dropdown -->
+			<div class="mobile-period-wrap" role="none">
+				<button
+					class="mobile-period-toggle"
+					onclick={(e) => { e.stopPropagation(); mobilePeriodOpen = !mobilePeriodOpen; }}
+				>
+					{periodLabel} <ChevronDown size={13} />
+				</button>
+				{#if mobilePeriodOpen}
+					<div class="mobile-period-menu" role="none" onclick={(e) => e.stopPropagation()}>
+						{#each PERIODS as p}
+							<button
+								class="mobile-period-item"
+								class:active={period === p.id}
+								onclick={() => { period = p.id; mobilePeriodOpen = false; }}
+							>
+								{p.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		</div>
 	</header>

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { onMount, onDestroy } from 'svelte';
-	import { Plus, X, ChevronRight, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload } from '@lucide/svelte';
+	import { fly } from 'svelte/transition';
+	import { Plus, X, Search, ChevronRight, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
@@ -20,6 +21,10 @@
 
 	// --- State ---
 	let activeTab = $state<'all' | 'pending' | 'done'>('all');
+	let searchRaw = $state('');
+	let search = $state('');
+	let mobileSearchOpen = $state(false);
+	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	let detailClaim = $state<FullClaim | null>(null);
 	let showNew = $state(false);
 	let claimDrag = $state(false);
@@ -43,9 +48,18 @@
 	});
 
 	const displayed = $derived.by(() => {
-		const list = activeTab === 'all' ? claims.slice() : claims.filter((c) => c.status === activeTab);
+		const list = (activeTab === 'all' ? claims.slice() : claims.filter((c) => c.status === activeTab))
+			.filter((c) => search === '' || c.claimNumber.toLowerCase().includes(search));
 		return list.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
 	});
+
+	// Search debounce
+	$effect(() => {
+		const v = searchRaw.trim().toLowerCase();
+		const t = setTimeout(() => (search = v), 300);
+		return () => clearTimeout(t);
+	});
+	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
 
 	const newSelList = $derived(data.unpaidExpenses.filter((e) => newSelIds.has(e.id)));
 	const newTotal = $derived(newSelList.reduce((s, e) => s + e.amount, 0));
@@ -133,11 +147,45 @@
 			</p>
 		</div>
 		<div class="topbar-right">
+			<div class="search-box">
+				<div style="position:relative; display:flex; align-items:center;">
+					<span style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;">
+						<Search size={15} />
+					</span>
+					<input
+						type="search"
+						placeholder="Search claim number…"
+						bind:value={searchRaw}
+						style="width:100%; height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px 0 32px; font-family:inherit; font-size:13px; outline:none; transition:border-color .12s, box-shadow .12s;"
+						onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }}
+						onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}
+					/>
+				</div>
+			</div>
+			{#if mobileSearchOpen}
+				<div class="mobile-search-inline" transition:fly={{ x: 12, duration: 180 }}>
+					<span class="mobile-search-inline-icon"><Search size={15} /></span>
+					<input
+						class="mobile-search-inline-input"
+						type="search"
+						placeholder="Search claim number…"
+						bind:value={searchRaw}
+						bind:this={mobileSearchEl}
+					/>
+				</div>
+			{/if}
+			<button
+				class="mobile-search-toggle"
+				class:active={mobileSearchOpen}
+				onclick={() => { mobileSearchOpen = !mobileSearchOpen; if (!mobileSearchOpen) searchRaw = ''; }}
+			>
+				{#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
+			</button>
 			<button
 				onclick={() => (showNew = true)}
 				style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
 			>
-				<Plus size={15} /> New claim
+				<Plus size={15} /> <span class="btn-text">New claim</span>
 			</button>
 		</div>
 	</header>
@@ -180,9 +228,11 @@
 			</div>
 
 			<!-- Result meta -->
+			{#if displayed.length > 0 || search !== ''}
 			<div class="result-meta">
 				<span>Showing <b>{displayed.length}</b> of {counts.all}</span>
 			</div>
+			{/if}
 
 			<!-- Table -->
 			<div class="table-card">
@@ -200,7 +250,7 @@
 					<tbody>
 						{#each displayed as claim (claim.id)}
 							<tr class="exp-row" onclick={() => openDetail(claim.id)}>
-								<td>
+								<td class="td-primary">
 									<div class="cell-item">
 										<span class="cell-itemname">{claim.claimNumber}</span>
 										<span class="cell-itemnum"
@@ -208,11 +258,11 @@
 										>
 									</div>
 								</td>
-								<td class="td-date">{formatDate(claim.date)}</td>
-								<td>
+								<td class="td-date" data-label="Date">{formatDate(claim.date)}</td>
+								<td class="td-status" data-label="Status">
 									<StatusBadge status={claim.status === 'done' ? 'claimed' : 'pending'} />
 								</td>
-								<td>
+								<td data-label="Expenses">
 									<div class="claim-suppliers">
 										{#each claim.suppliers.slice(0, 3) as s}
 											<span class="chip">{s}</span>
@@ -225,10 +275,10 @@
 										{/if}
 									</div>
 								</td>
-								<td class="td-amount">
+								<td class="td-amount" data-label="Total">
 									<span class="amount-num">{formatMoneyRM(claim.total)}</span>
 								</td>
-								<td style="text-align:right;">
+								<td class="td-chevron" style="text-align:right;">
 									<ChevronRight size={16} style="color:var(--muted-foreground);" />
 								</td>
 							</tr>

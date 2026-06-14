@@ -15,6 +15,20 @@
       "when": 1781176362094,
       "tag": "0001_hesitant_centennial",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1781398900000,
+      "tag": "0002_phase25_users_groups",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781920800000,
+      "tag": "0003_user_permissions",
+      "breakpoints": true
     }
   ]
 }

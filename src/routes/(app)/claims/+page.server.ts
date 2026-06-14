@@ -3,9 +3,11 @@ import { db } from '$lib/server/db/client.js';
 import { listClaims } from '$lib/server/queries/claims.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createClaim, patchClaim, removeClaim } from '$lib/server/services/claims.js';
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	if (!hasPermission(locals, 'claims', 'view')) throw redirect(302, '/dashboard');
 	const userId = locals.user!.id;
 	const allClaims = listClaims(db, userId);
 	const unpaidExpenses = listExpenses(db, userId, { status: 'unpaid', limit: 500 });

@@ -2,14 +2,17 @@ import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { listClaims } from '$lib/server/queries/claims.js';
 import { createClaim } from '$lib/server/services/claims.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals }) => {
+	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const results = listClaims(db, user.id);
 	return Response.json(results);
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
+	if (!hasPermission(locals, 'claims', 'add')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const body = await request.json();
 

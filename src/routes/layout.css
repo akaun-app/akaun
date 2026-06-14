@@ -383,6 +383,9 @@ th.sortable:hover .th-idle { opacity: .5; }
 @keyframes sheet-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheet-overlay-out { from { opacity: 1; } to { opacity: 0; } }
 
+[data-slot="sheet-overlay"] { z-index: 50; }
+[data-slot="sheet-content"] { z-index: 55; }
+
 [data-slot="sheet-overlay"][data-state="open"] {
   animation: sheet-overlay-in 0.25s ease forwards;
 }
@@ -610,7 +613,7 @@ th.sortable:hover .th-idle { opacity: .5; }
 
 /* ===================== Settings ===================== */
 .set-layout { flex: 1; display: flex; min-height: 0; overflow: hidden; }
-.set-nav { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 18px 14px 18px 24px; display: flex; flex-direction: column; gap: 3px; }
+.set-nav { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 18px 14px; display: flex; flex-direction: column; gap: 3px; }
 .set-nav-item { display: flex; align-items: center; gap: 10px; border: none; background: none; font-family: inherit; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--muted-foreground); padding: 8px 11px; border-radius: 8px; text-align: left; transition: all .12s; }
 .set-nav-item:hover { background: var(--accent); color: var(--foreground); }
 .set-nav-item.active { background: var(--accent); color: var(--foreground); }
@@ -639,6 +642,8 @@ th.sortable:hover .th-idle { opacity: .5; }
 .set-rows { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 18px; }
 .set-row-label { font-size: 13.5px; font-weight: 500; color: var(--foreground); }
 .set-row-value { font-size: 13.5px; color: var(--muted-foreground); }
+.set-input-right { width: 220px; }
+.set-input-wide { width: 260px; }
 
 /* responsive */
 @media (max-width: 1180px) {
@@ -649,4 +654,414 @@ th.sortable:hover .th-idle { opacity: .5; }
 }
 @media (max-width: 920px) {
   .filter-rail { display: none; }
+}
+
+/* ===================== Mobile (< 768px) ===================== */
+
+/* Bottom sheet animation (for mobile filter sheets) */
+@keyframes sheet-slide-in-bottom {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes sheet-slide-out-bottom {
+  from { transform: translateY(0);    opacity: 1; }
+  to   { transform: translateY(100%); opacity: 0; }
+}
+[data-slot="sheet-content"][data-side="bottom"] {
+  transform: translateY(100%);
+  opacity: 0;
+}
+[data-slot="sheet-content"][data-side="bottom"][data-state="open"] {
+  animation: sheet-slide-in-bottom 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+[data-slot="sheet-content"][data-side="bottom"][data-state="closed"] {
+  animation: sheet-slide-out-bottom 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Mobile filter button — hidden on desktop, shown on mobile */
+.mobile-filter-row { display: none; }
+/* Mobile search toggle — hidden on desktop, shown on mobile */
+.mobile-search-toggle { display: none; }
+/* Mobile inline search — hidden on desktop, shown on mobile */
+.mobile-search-inline { display: none; }
+/* Mobile period dropdown — hidden on desktop, shown on mobile */
+.mobile-period-wrap { display: none; }
+
+@media (max-width: 767px) {
+  /* ---------- Core layout ---------- */
+  .sidebar { display: none !important; }
+
+  /* Main becomes the vertical scroll container */
+  .main {
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  /* Screen, work, work-main: natural height blocks for single-scroll */
+  .screen { flex: none; overflow: visible; display: block; min-height: auto; }
+  .work { overflow: visible; flex: none; display: block; min-height: auto; }
+  .work-main {
+    overflow: visible;
+    flex: none;
+    min-height: auto;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  /* Dashboard scroll area */
+  .dash-scroll {
+    overflow: visible;
+    flex: none;
+    padding: 12px 16px calc(20px);
+    gap: 12px;
+  }
+
+  /* Table card: no inner scroll, no rounded border on mobile */
+  .table-card {
+    overflow: visible;
+    flex: none;
+    height: auto;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    box-shadow: none;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    padding: 10px 0;
+  }
+
+  /* ---------- Topbar ---------- */
+  .topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 12px 16px 10px;
+    padding-left: 52px; /* room for hamburger button */
+    min-height: 55px; /* consistent height: 32px content + 12px top pad + 10px bot pad + 1px border */
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: var(--background);
+  }
+  .topbar-left { flex: 1; min-width: 0; }
+  .page-title { font-size: 18px; }
+  .page-sub { display: none; }
+  .topbar-right { gap: 6px; }
+  /* Desktop search box: hidden on mobile (replaced by toggle + search row) */
+  .topbar-right .search-box { display: none; }
+
+  /* Uniform 32×32 icon buttons in topbar on mobile (overrides inline padding/height) */
+  .topbar-right button {
+    width: 32px !important;
+    height: 32px !important;
+    padding: 0 !important;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* Mobile search toggle button */
+  .mobile-search-toggle {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--foreground);
+  }
+  .mobile-search-toggle.active { border-color: var(--primary); color: var(--primary); }
+
+  /* When search is open: title fixed width, right side fills remaining space */
+  .topbar:has(.mobile-search-inline) { gap: 24px; }
+  .topbar:has(.mobile-search-inline) .topbar-left { flex: 0 0 auto; max-width: 45%; }
+  .topbar:has(.mobile-search-inline) .topbar-right { flex: 1; }
+
+  /* Mobile inline search input (shown inline when toggle is active) */
+  .mobile-search-inline {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    position: relative;
+  }
+  .mobile-search-inline-icon {
+    position: absolute;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    color: var(--muted-foreground);
+    pointer-events: none;
+  }
+  .mobile-search-inline-input {
+    width: 100%;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 8px 0 30px;
+    background: var(--card);
+    color: var(--foreground);
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: border-color .12s, box-shadow .12s;
+    min-width: 0;
+  }
+  .mobile-search-inline-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+  }
+
+  /* Hide button text labels on mobile (icon-only CTA buttons) */
+  .btn-text { display: none; }
+
+  /* ---------- Dashboard: compact period dropdown ---------- */
+  /* Hide the full segmented control; show compact dropdown instead */
+  .topbar-right .seg { display: none; }
+
+  .mobile-period-wrap {
+    display: block;
+    position: relative;
+  }
+
+  /* Override the generic 32×32 rule — period toggle needs text + padding */
+  .topbar-right .mobile-period-toggle {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    width: auto !important;
+    height: 32px !important;
+    padding: 0 10px !important;
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--foreground);
+    white-space: nowrap;
+    flex-shrink: 0;
+    justify-content: center !important;
+  }
+
+  .mobile-period-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    z-index: 20;
+    min-width: 150px;
+  }
+
+  /* Override generic 32×32 rule for menu items */
+  .topbar-right .mobile-period-item {
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+    height: auto !important;
+    padding: 11px 14px !important;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+    color: var(--foreground);
+    text-align: left;
+    justify-content: flex-start !important;
+  }
+  .topbar-right .mobile-period-item:hover { background: var(--accent); }
+  .topbar-right .mobile-period-item.active {
+    color: var(--primary);
+    font-weight: 600;
+    background: var(--primary-soft);
+  }
+
+
+  /* ---------- Stat strip ---------- */
+  .stat-strip {
+    grid-template-columns: repeat(2, 1fr) !important;
+    padding: 12px 16px 4px;
+    gap: 10px;
+  }
+  .stat-value { font-size: 18px; }
+  .stat-card { padding: 10px 12px; }
+
+  /* ---------- Toolbar ---------- */
+  .toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+  .toolbar-heading { display: none; }
+  .toolbar-filters { display: none; }
+  .mobile-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  /* Scrollable status tabs */
+  .status-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-shrink: 0;
+    max-width: calc(100% - 100px);
+  }
+  .status-tabs::-webkit-scrollbar { display: none; }
+
+  /* ---------- Result meta ---------- */
+  .result-meta { padding: 6px 0 8px; font-size: 12px; }
+
+  /* ---------- Bulk bar: fixed above bottom nav ---------- */
+  .bulkbar {
+    position: fixed;
+    bottom: calc(22px + 56px + env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translate(-50%, calc(100% + 40px));
+  }
+  .bulkbar.show { transform: translate(-50%, 0); }
+
+  /* ---------- Table → Card transform ---------- */
+  .exp-table,
+  .exp-table thead,
+  .exp-table tbody,
+  .exp-table th,
+  .exp-table td,
+  .exp-table tr { display: block; }
+
+  .exp-table thead { display: none; }
+
+  /* Card wrapper */
+  .exp-row {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 0 0 10px;
+    padding: 12px 14px;
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+  }
+  .exp-row:hover { background: var(--card); } /* override desktop hover on mobile */
+
+  /* Reset all cell padding */
+  .exp-row td { padding: 0; border-bottom: none; }
+
+  /* Checkbox: absolute top-right */
+  .exp-row .td-check {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: auto;
+    padding: 0 !important;
+  }
+
+  /* Primary cell: name (bold) + number (muted small text) */
+  .exp-row .td-primary { padding-right: 36px; margin-bottom: 4px; }
+
+  /* No label prefix for primary */
+  .exp-row .td-primary::before { display: none; }
+
+  /* Amount: float right — will appear on last line */
+  .exp-row .td-amount { float: right; text-align: right; margin-top: 6px; }
+
+  /* Status: inline */
+  .exp-row .td-status {
+    display: inline-block;
+    margin-top: 6px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* Date: inline muted */
+  .exp-row td[data-label="Date"] {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    margin-top: 6px;
+    vertical-align: middle;
+  }
+
+  /* Secondary fields: inline muted text flowing naturally */
+  .exp-row td[data-label="Supplier"],
+  .exp-row td[data-label="Category"],
+  .exp-row td[data-label="Source"],
+  .exp-row td[data-label="Reference"],
+  .exp-row td[data-label="Expenses"] {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--muted-foreground);
+    margin-top: 2px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  /* No labels — context is clear from content */
+  .exp-row td[data-label]::before { display: none; }
+
+  /* Clearfix */
+  .exp-row::after { content: ''; display: table; clear: both; }
+
+  /* Empty row in card mode */
+  .empty-row td { padding: 40px 20px !important; }
+
+  /* Table foot */
+  .table-foot { padding: 8px 0 16px; }
+
+  /* ---------- Dashboard ---------- */
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .kpi { padding: 12px; }
+  .kpi-value { font-size: 20px; }
+  .kpi-cur { font-size: 11px; }
+  .kpi-sub { font-size: 11px; }
+  .panel-row { grid-template-columns: 1fr; gap: 12px; }
+  .panel { padding: 14px; }
+  .chart-canvas-wrap { min-height: 160px; }
+
+  /* ---------- Settings / Profile ---------- */
+  .set-layout { flex-direction: column; overflow: visible; }
+  .set-nav {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    gap: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-shrink: 0;
+  }
+  .set-nav::-webkit-scrollbar { display: none; }
+  .set-nav-item { white-space: nowrap; flex-shrink: 0; font-size: 13px; padding: 7px 12px; }
+  .set-content { overflow: visible; padding: 16px 16px 32px; }
+  .set-section { max-width: 100%; }
+  .set-rows { padding: 0 14px; }
+  .set-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  /* Full-width inputs on mobile (override inline width styles) */
+  .set-input-right { width: 100% !important; }
+  .slider-row { justify-content: flex-start; }
+
+  /* Claims: no checkbox so primary cell needs no right clearance */
+  .exp-row:not(:has(.td-check)) .td-primary {
+    padding-right: 0;
+  }
+  /* Hide chevron column on mobile (card tap is the action) */
+  .td-chevron { display: none; }
+
+  /* ---------- Import ---------- */
+  .review-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .review-actions { flex-direction: column; }
+  .review-actions-btns { justify-content: flex-end; }
+  .pipe-state { min-width: 90px; font-size: 11.5px; }
+  .dropzone { padding: 24px 16px; }
 }

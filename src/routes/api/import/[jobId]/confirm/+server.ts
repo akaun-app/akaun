@@ -17,9 +17,11 @@ import {
 import { moveToFinal, displayName } from '$lib/server/file-storage.js';
 import { nextNumber } from '$lib/server/running-number.js';
 import type { RequestHandler } from './$types.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'change')) return new Response('Forbidden', { status: 403 });
 
 	const row = db
 		.select()

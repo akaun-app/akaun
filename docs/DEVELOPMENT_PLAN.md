@@ -32,7 +32,7 @@ bun add -d @sveltejs/adapter-node drizzle-kit @types/better-sqlite3
 **`vite.config.ts`** — Change `adapter-auto` import to `adapter-node`
 
 **`src/lib/server/db/schema.ts`** — All Drizzle table definitions:
-- `users` — id, email (UNIQUE), password_hash, first_name, last_name, bearer_token (TEXT, UNIQUE, nullable — for `/api/*` Shortcuts auth), created_at. No role/permission columns — access is entirely group-derived (see Phase 2.5).
+- `users` — id, email (UNIQUE), password_hash, name, bearer_token (TEXT, UNIQUE, nullable — for `/api/*` Shortcuts auth), created_at. No role/permission columns — access is entirely group-derived (see Phase 2.5).
 - `groups` — id, name (UNIQUE), description, is_superuser (boolean, default `false`)
 - `group_permissions` — group_id (FK → groups, CASCADE), resource (TEXT), can_view, can_add, can_change, can_delete (booleans, default `false`); PK (group_id, resource)
 - `user_groups` — user_id (FK → users, CASCADE), group_id (FK → groups, CASCADE); PK (user_id, group_id)
@@ -87,7 +87,7 @@ Year/month bucketing uses the **document's date** (not upload date) so receipts 
 **`src/lib/server/auth.ts`** — `validateSession(cookie)` helper; `getSessionUser(cookie)` returns user row; `getEffectivePermissions(userId)` returns the resolved `{ resource: { view, add, change, delete } }` map (superuser short-circuit + union across groups) — see Phase 2.5
 
 ### Setup Utility
-**`scripts/create-admin.ts`** — One-time script: `bun run scripts/create-admin.ts <email> <password> [firstName] [lastName]` → creates the first user and adds it to the seeded `Administrators` group (`is_superuser = true`). Subsequent users/groups are managed via Settings → Users (Phase 2.5); each user can edit their own name/email/password via Settings → Profile.
+**`scripts/create-admin.ts`** — One-time script: `bun run scripts/create-admin.ts <email> <password> [name]` → creates the first user and adds it to the seeded `Administrators` group (`is_superuser = true`). Subsequent users/groups are managed via Settings → Users (Phase 2.5).
 
 ### Multi-User Readiness
 - Data is a **single shared ledger** — no `WHERE user_id = ?` filtering on reads. Every query in `src/lib/server/queries/*.ts` instead passes through `hasPermission(locals, resource, action)` before running, enforced centrally rather than per-row.
@@ -146,10 +146,9 @@ On first migration, seed:
 
 | Endpoint | Methods | Notes |
 |---|---|---|
-| `/api/users` | GET, POST | List users (with group memberships + superuser-derived flag); create user (email, password, name, optional bearer token, group IDs). Superuser only. |
+| `/api/users` | GET, POST | List users (with group memberships + superuser-derived flag); create user (name, email, password, optional bearer token, group IDs). Superuser only. |
 | `/api/users/[id]` | GET, PATCH, DELETE | PATCH: name, email, password reset, regenerate bearer token. Superuser only. |
 | `/api/users/[id]/groups` | GET, PATCH | Get/replace this user's group memberships (array of group IDs, can be empty). Superuser only. |
-| `/api/profile` | GET, PATCH | **Self-service**, any authenticated user (no permission grid involved). GET returns own `firstName`/`lastName`/`email`/group memberships (read-only display); PATCH updates own `firstName`/`lastName`/`email`, and optionally `password` (requires current password). Bearer-token requests are also accepted, scoped to the token's user. |
 | `/api/groups` | GET, POST | List groups with permission grids; create a new group. Superuser only. |
 | `/api/groups/[id]` | GET, PATCH, DELETE | Edit name/description/is_superuser; DELETE blocked for `Administrators` and for any group with members (reassign first). Superuser only. |
 | `/api/groups/[id]/permissions` | GET, PATCH | Get/replace the view/add/change/delete grid for a group (no-op if `is_superuser`). Superuser only. |
@@ -174,10 +173,9 @@ PATCH handlers run this permission check **first**, then apply the existing fiel
 
 ### UI
 
-- `settings/profile/+page.svelte` (**every authenticated user**, not superuser-gated) — edit own first name, last name, email; change password (requires current password); view (read-only) own group memberships; regenerate own bearer token for iOS Shortcuts.
-- `settings/users/+page.svelte` (superuser-only tab) — table of users (name, email, groups, "no groups" warning badge, last login); create/edit user form (first name, last name, email, password); per-user group multi-select; password reset / regenerate bearer token actions.
+- `settings/users/+page.svelte` (superuser-only tab) — table of users (name, email, groups, "no groups" warning badge, last login); create/edit user form (name, email, password); per-user group multi-select; password reset / regenerate bearer token actions.
 - `settings/groups/+page.svelte` (superuser-only tab) — list of groups; create/edit group (name, description, is_superuser toggle — disabled for `Administrators`); permission grid editor (checkboxes, disabled entirely if `is_superuser` is on).
-- `+layout.svelte` sidebar — display name shown as `firstName + " " + lastName` (fallback to email) in the user menu; nav items conditionally rendered from `locals.permissions` (e.g. no `import.view` → no "Import" link); Settings → Profile renders for everyone; Users/Groups/Backup/Reset/Advanced tabs only render for `locals.isSuperuser`.
+- `+layout.svelte` sidebar — display the user's `name` (fallback to email) in the user menu; nav items conditionally rendered from `locals.permissions` (e.g. no `import.view` → no "Import" link); Settings → Users/Groups/Backup/Reset/Advanced tabs only render for `locals.isSuperuser`.
 - Server-side route guards remain the actual enforcement; hidden nav items are convenience only.
 
 ---
@@ -245,8 +243,8 @@ src/routes/
   income/  (same pattern)
   claims/  (same pattern)
   import/+page.svelte, +page.server.ts
-  settings/+layout.svelte     — tab nav for panes (Profile visible to everyone; Users/Groups tabs only render for superusers)
-  settings/general, intelligence, categories, backup, reset, advanced, profile, users, groups
+  settings/+layout.svelte     — tab nav for panes (Users/Groups tabs only render for superusers)
+  settings/general, intelligence, categories, backup, reset, advanced, users, groups
 ```
 
 ### Component Library (`src/lib/components/`)
@@ -463,5 +461,4 @@ All query code in `src/lib/server/queries/*.ts` is unchanged — Drizzle's query
 5. **Auto Import**: upload PDF via API → `202` with jobId; poll shows `extracting → processing → pending_review`; confirm with no body → expense/income created with LLM-extracted values; confirm with corrected amount → corrected value in DB; file moves from `import/temp/` to `expenses/{year}/{month}/`; duplicate upload → `duplicate_signal` set, skip deletes temp file
 6. **iOS Shortcuts**: `POST /api/expenses` with a user's Bearer token → 201 with expenseNumber; without token → 401; token belonging to a user without `expenses.add` → 403
 7. **Backup**: export → ZIP with all 4 expected files; import the same ZIP → all records intact; both endpoints return 403 for a non-superuser
-8. **Groups & permissions**: create a "Reviewer" group (`view` only on all resources), assign a new user to it → that user can view expenses/income/claims/import but POST/PATCH/DELETE all return 403, and `/settings/users`, `/settings/groups`, `/settings/backup` etc. return 403/redirect; remove the user from all groups → nav collapses to empty shell, all data routes 403/404, login still succeeds; add user to `Administrators` → full access including Settings → Users/Groups; attempt to rename or delete `Administrators` → blocked
-9. **Profile**: any logged-in user (including a zero-group user) can open Settings → Profile, update first/last name and email, and change their own password with the correct current password (wrong current password → rejected); display name in the sidebar updates immediately; a non-superuser cannot reach `/settings/users` or `/settings/groups` even though `/settings/profile` is accessible
+8. **Groups & permissions**: create a "Reviewer" group (`view` only on all resources), assign a new user (with a name set) to it → that user can view expenses/income/claims/import but POST/PATCH/DELETE all return 403, and `/settings/users`, `/settings/groups`, `/settings/backup` etc. return 403/redirect; sidebar shows the user's name; remove the user from all groups → nav collapses to empty shell, all data routes 403/404, login still succeeds; add user to `Administrators` → full access including Settings → Users/Groups; attempt to rename or delete `Administrators` → blocked

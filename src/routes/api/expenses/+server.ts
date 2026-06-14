@@ -2,8 +2,10 @@ import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createExpense } from '$lib/server/services/expenses.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
+	if (!hasPermission(locals, 'expenses', 'view')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const p = url.searchParams;
 
@@ -28,6 +30,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
+	if (!hasPermission(locals, 'expenses', 'add')) return new Response('Forbidden', { status: 403 });
 	const user = locals.user!;
 	const body = await request.json();
 

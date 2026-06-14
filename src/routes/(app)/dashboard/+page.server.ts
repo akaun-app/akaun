@@ -1,7 +1,9 @@
 import type { PageServerLoad } from './$types.js';
+import { redirect } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { expenses, incomes } from '$lib/server/db/schema.js';
 import { eq, gte, lte, and } from 'drizzle-orm';
+import { hasPermission } from '$lib/server/permissions.js';
 
 function today(): string {
 	return new Date().toISOString().slice(0, 10);
@@ -35,6 +37,7 @@ function last6Months(): string[] {
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
+	if (!hasPermission(locals, 'dashboard', 'view')) throw redirect(302, '/settings');
 	const userId = locals.user!.id;
 	const period = url.searchParams.get('period') ?? '2m';
 

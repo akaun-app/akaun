@@ -4,7 +4,8 @@ import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createExpense, patchExpense } from '$lib/server/services/expenses.js';
 import { createClaim } from '$lib/server/services/claims.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
+import { hasPermission } from '$lib/server/permissions.js';
 
 const DEFAULT_CATEGORIES = [
 	'Food & Beverage',
@@ -19,6 +20,7 @@ const DEFAULT_CATEGORIES = [
 ];
 
 export const load: PageServerLoad = async ({ locals }) => {
+	if (!hasPermission(locals, 'expenses', 'view')) throw redirect(302, '/dashboard');
 	const userId = locals.user!.id;
 	const allExpenses = listExpenses(db, userId, { limit: 1000 });
 

@@ -6,11 +6,13 @@ import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import type { RequestHandler } from './$types.js';
+import { hasPermission } from '$lib/server/permissions.js';
 
 const ACTIVE_STATES = ['queued', 'extracting', 'processing'];
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'view')) return new Response('Forbidden', { status: 403 });
 
 	const activeOnly = url.searchParams.get('active') === '1';
 
@@ -38,6 +40,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
 export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!hasPermission(locals, 'import', 'add')) return new Response('Forbidden', { status: 403 });
 
 	const formData = await request.formData();
 	const file = formData.get('file');
