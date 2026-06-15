@@ -1,6 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, sep } from 'path';
 import { and, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import {
@@ -29,7 +29,7 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const storageRoot = resolve(STORAGE_PATH);
 	const abs = resolve(join(STORAGE_PATH, filePath));
 
-	if (!abs.startsWith(storageRoot + '/') && abs !== storageRoot) {
+	if (!abs.startsWith(storageRoot + sep) && abs !== storageRoot) {
 		return new Response('Forbidden', { status: 403 });
 	}
 
