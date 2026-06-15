@@ -272,6 +272,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Auto Import - Akaun</title>
+</svelte:head>
+
 <div class="screen">
 	<header class="topbar">
 		<div class="topbar-left">

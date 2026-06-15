@@ -135,6 +135,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Claims - Akaun</title>
+</svelte:head>
+
 <div class="screen">
 	<!-- Topbar -->
 	<header class="topbar">

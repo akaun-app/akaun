@@ -238,6 +238,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Expenses - Akaun</title>
+</svelte:head>
+
 <div class="screen" style="position:relative;">
 	<!-- Top bar -->
 	<header class="topbar">

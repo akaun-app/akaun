@@ -209,6 +209,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Income - Akaun</title>
+</svelte:head>
+
 <div class="screen" style="position:relative;">
 	<!-- Top bar -->
 	<header class="topbar">

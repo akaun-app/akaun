@@ -52,6 +52,10 @@
 	});
 </script>
 
+<svelte:head>
+	<title>Dashboard - Akaun</title>
+</svelte:head>
+
 <svelte:window onclick={() => (mobilePeriodOpen = false)} />
 
 <div class="screen">

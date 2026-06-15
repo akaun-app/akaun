@@ -67,6 +67,10 @@
 	];
 </script>
 
+<svelte:head>
+	<title>Profile - Akaun</title>
+</svelte:head>
+
 <div class="screen">
 	<header class="topbar">
 		<div class="topbar-left">

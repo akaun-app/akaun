@@ -9,6 +9,10 @@
 	let loading = $state(false);
 </script>
 
+<svelte:head>
+	<title>Login - Akaun</title>
+</svelte:head>
+
 <div class="login">
 	<div class="loginwrap">
 		<!-- Logo mark -->

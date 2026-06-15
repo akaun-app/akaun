@@ -6,6 +6,10 @@
 	let { children } = $props();
 </script>
 
+<svelte:head>
+	<title>Akaun</title>
+</svelte:head>
+
 <ModeWatcher defaultMode="system" />
 {@render children()}
 <Toaster richColors position="bottom-right" />
