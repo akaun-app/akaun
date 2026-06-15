@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'fs';
-import { dirname, basename, join, resolve } from 'path';
+import { dirname, basename, join, resolve, sep } from 'path';
 import { randomUUID } from 'crypto';
 import { STORAGE_PATH } from './env.js';
 
@@ -55,7 +55,7 @@ export function moveToFinal(
 	const src = join(STORAGE_PATH, tempRelPath);
 	const dest = join(STORAGE_PATH, rel);
 	const storageRoot = resolve(STORAGE_PATH);
-	if (!resolve(dest).startsWith(storageRoot + '/')) {
+	if (!resolve(dest).startsWith(storageRoot + sep)) {
 		throw new Error('Resolved destination escapes storage root');
 	}
 	mkdirSync(dirname(dest), { recursive: true });
