@@ -29,7 +29,6 @@
 		name: string | null;
 		email: string;
 		username: string;
-		bearerToken: string | null;
 		hasBearerToken: boolean;
 		groups: GroupSummary[];
 		isSuperuser: boolean;
@@ -253,7 +252,7 @@
 		if (data.newToken) {
 			newFullToken = data.newToken;
 			if (editingUser?.id === u.id) {
-				editingUser = { ...editingUser, hasBearerToken: true, bearerToken: 'akn_live_••' + data.newToken.slice(-4) };
+				editingUser = { ...editingUser, hasBearerToken: true };
 			}
 			toast.success('New token generated — copy it now');
 			await loadAll();
@@ -268,7 +267,7 @@
 		});
 		toast.success('Token revoked');
 		if (editingUser?.id === userId) {
-			editingUser = { ...editingUser, hasBearerToken: false, bearerToken: null };
+			editingUser = { ...editingUser, hasBearerToken: false };
 		}
 		newFullToken = null;
 		await loadAll();
@@ -529,7 +528,7 @@
 								</td>
 								<td>
 									{#if u.hasBearerToken}
-										<span class="ax-token"><Key size={13} /> {u.bearerToken}</span>
+										<span class="ax-token"><Key size={13} /> Configured</span>
 									{:else}
 										<span class="muted-sm">None</span>
 									{/if}
@@ -722,7 +721,7 @@
 									</div>
 								{:else if editingUser.hasBearerToken}
 									<div class="ax-token-existing">
-										<code class="codepill">{editingUser.bearerToken}</code>
+										<code class="codepill">API token configured</code>
 										<div class="ax-token-btns">
 											<button class="btn-outline btn-sm" onclick={() => regenerateToken(editingUser as UserRow)}>
 												<RefreshCw size={13} /> Regenerate

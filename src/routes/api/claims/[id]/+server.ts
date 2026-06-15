@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client.js';
 import { getClaim } from '$lib/server/queries/claims.js';
 import { patchClaim, removeClaim } from '$lib/server/services/claims.js';
 import { hasPermission } from '$lib/server/permissions.js';
+import { isValidDate } from '$lib/server/date.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
@@ -23,7 +24,12 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const body = await request.json();
 	const patch: { status?: string; date?: string } = {};
 	if (body.status !== undefined) patch.status = body.status;
-	if (body.date !== undefined) patch.date = body.date;
+	if (body.date !== undefined) {
+		if (!isValidDate(body.date)) {
+			return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });
+		}
+		patch.date = body.date;
+	}
 
 	const updated = patchClaim(db, id, user.id, patch);
 	if (!updated) return Response.json({ error: 'Not found' }, { status: 404 });

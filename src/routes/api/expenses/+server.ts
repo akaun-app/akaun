@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createExpense } from '$lib/server/services/expenses.js';
 import { hasPermission } from '$lib/server/permissions.js';
+import { isValidDate, today } from '$lib/server/date.js';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'expenses', 'view')) return new Response('Forbidden', { status: 403 });
@@ -38,6 +39,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return Response.json({ error: 'itemName and amount are required' }, { status: 400 });
 	}
 
+	if (body.date !== undefined && !isValidDate(body.date)) {
+		return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });
+	}
+
 	const expense = createExpense(db, user.id, {
 		itemName: body.itemName,
 		supplier: body.supplier,
@@ -45,7 +50,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		remark: body.remark,
 		category: body.category,
 		status: body.status,
-		date: body.date ?? new Date().toISOString().slice(0, 10),
+		date: body.date ?? today(),
 		amount: body.amount
 	});
 

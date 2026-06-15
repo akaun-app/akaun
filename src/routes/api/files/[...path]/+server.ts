@@ -69,10 +69,16 @@ export const GET: RequestHandler = ({ locals, params }) => {
 	const filename = filePath.split('/').pop() ?? 'file';
 	const displayFilename = filename.replace(/^[0-9a-f-]{36}_/i, '');
 
+	// Sanitize before placing the user-supplied name into a header value: strip control
+	// chars and quotes for the ASCII fallback, and provide an RFC 5987 encoded variant.
+	const asciiFallback = displayFilename.replace(/[\x00-\x1f"\\]/g, '_') || 'file';
+	const encoded = encodeURIComponent(displayFilename);
+	const disposition = `inline; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+
 	return new Response(content, {
 		headers: {
 			'Content-Type': contentType,
-			'Content-Disposition': `inline; filename="${displayFilename}"`
+			'Content-Disposition': disposition
 		}
 	});
 };

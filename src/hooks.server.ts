@@ -16,6 +16,18 @@ export const init = async () => {
 	startImportWorker();
 };
 
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function withSecurityHeaders(response: Response): Response {
+	response.headers.set('X-Content-Type-Options', 'nosniff');
+	response.headers.set('X-Frame-Options', 'DENY');
+	response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+	if (!response.headers.has('Content-Security-Policy')) {
+		response.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+	}
+	return response;
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
 	const { pathname } = event.url;
 
@@ -41,12 +53,31 @@ export const handle: Handle = async ({ event, resolve }) => {
 			if (!sessionUser) {
 				return new Response('Unauthorized', { status: 401 });
 			}
+			// CSRF defence-in-depth for cookie-authenticated state-changing requests:
+			// require the Origin (or Referer) host to match this site. Bearer-token clients
+			// are exempt (they authenticate without ambient cookies and send no Origin).
+			if (MUTATING_METHODS.has(event.request.method)) {
+				const origin = event.request.headers.get('origin');
+				const referer = event.request.headers.get('referer');
+				const source = origin ?? referer;
+				let ok = false;
+				if (source) {
+					try {
+						ok = new URL(source).host === event.url.host;
+					} catch {
+						ok = false;
+					}
+				}
+				if (!ok) {
+					return new Response('Forbidden (CSRF origin check failed)', { status: 403 });
+				}
+			}
 			event.locals.user = sessionUser;
 			const { permissions, isSuperuser } = getEffectivePermissions(db, sessionUser.id);
 			event.locals.permissions = permissions;
 			event.locals.isSuperuser = isSuperuser;
 		}
-		return resolve(event);
+		return withSecurityHeaders(await resolve(event));
 	}
 
 	const sessionId = event.cookies.get('session');
@@ -57,12 +88,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (pathname !== '/login') throw redirect(302, '/login');
 		event.locals.permissions = null;
 		event.locals.isSuperuser = false;
-		return resolve(event);
+		return withSecurityHeaders(await resolve(event));
 	}
 
 	const { permissions, isSuperuser } = getEffectivePermissions(db, sessionUser.id);
 	event.locals.permissions = permissions;
 	event.locals.isSuperuser = isSuperuser;
 
-	return resolve(event);
+	return withSecurityHeaders(await resolve(event));
 };

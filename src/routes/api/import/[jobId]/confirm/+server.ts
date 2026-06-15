@@ -15,6 +15,7 @@ import {
 	incomeSearchText
 } from '$lib/server/db/schema.js';
 import { moveToFinal, displayName } from '$lib/server/file-storage.js';
+import { normalizeDate } from '$lib/server/date.js';
 import { nextNumber } from '$lib/server/running-number.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -49,7 +50,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const docType = (overrides.document_type as string) || row.documentType || 'expense';
 	const itemName = (overrides.item_name as string) ?? row.itemName ?? '';
 	const supplier = (overrides.supplier as string) ?? row.supplier ?? '';
-	const date = (overrides.date as string) ?? row.date ?? new Date().toISOString().slice(0, 10);
+	// Validate any client-supplied date — it is used both as the stored record date and to
+	// build the file's destination path, so an invalid value must never reach the filesystem.
+	const date = normalizeDate((overrides.date as string) ?? row.date);
 	const amount = (overrides.amount as number) ?? row.amount ?? 0;
 	const reference = (overrides.reference as string) ?? row.reference ?? '';
 	const category = (overrides.category as string) ?? row.category ?? 'Other';

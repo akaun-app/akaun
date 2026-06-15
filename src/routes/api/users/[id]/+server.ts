@@ -25,7 +25,6 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		name: user.name,
 		email: user.email,
 		username: user.username,
-		bearerToken: user.bearerToken ? 'akn_live_••' + user.bearerToken.slice(-4) : null,
 		hasBearerToken: !!user.bearerToken,
 		groups: memberships.map((m) => ({ id: m.groupId, name: m.groupName })),
 		isSuperuser: memberships.some((m) => m.isSuperuser),

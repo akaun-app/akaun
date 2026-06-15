@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { DATABASE_PATH } from '../env.js';
+import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
 import { users, groups, groupPermissions, userGroups, settings } from './schema.js';
@@ -34,11 +34,20 @@ export async function ensureDefaultAdmin(): Promise<void> {
 		.get();
 
 	if (!exists) {
-		const passwordHash = await hash('admin');
+		const generated = !ADMIN_PASSWORD;
+		const password = ADMIN_PASSWORD || randomBytes(18).toString('base64url');
+		const passwordHash = await hash(password);
 		db.insert(users)
 			.values({ email: 'admin@localhost', username: 'admin', passwordHash, role: 'owner' })
 			.run();
-		log.info('Default admin user created (username: admin, password: admin)');
+		if (generated) {
+			// Print the generated password exactly once so the operator can log in and change it.
+			log.warn(
+				`Default admin user created (username: admin). Generated password: ${password} — log in and change it now. Set ADMIN_PASSWORD to control this.`
+			);
+		} else {
+			log.info('Default admin user created (username: admin) with password from ADMIN_PASSWORD.');
+		}
 	}
 }
 
