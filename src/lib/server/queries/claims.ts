@@ -114,7 +114,12 @@ export function markClaimDone(db: Db, id: number, userId: number) {
 	});
 }
 
-export function updateClaim(db: Db, id: number, userId: number, patch: { status?: string }) {
+export function updateClaim(
+	db: Db,
+	id: number,
+	userId: number,
+	patch: { status?: string; date?: string }
+) {
 	if (patch.status === 'done') {
 		return markClaimDone(db, id, userId);
 	}

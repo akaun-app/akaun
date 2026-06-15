@@ -3,7 +3,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { saveToTemp } from '$lib/server/file-storage.js';
+import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -49,13 +49,25 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
 
-	const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
 	const allowedExtensions = /\.(pdf|jpe?g|png)$/i;
-	if (!allowedTypes.includes(file.type) && !allowedExtensions.test(file.name)) {
+	if (!allowedExtensions.test(file.name)) {
 		return json({ error: 'Unsupported file type. Upload a PDF, JPG, or PNG.' }, { status: 400 });
 	}
 
+	if (file.size > MAX_UPLOAD_BYTES) {
+		return json(
+			{ error: `File too large. Maximum size is ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MB.` },
+			{ status: 413 }
+		);
+	}
+
 	const buffer = Buffer.from(await file.arrayBuffer());
+
+	// Validate by content, not just the client-supplied name/MIME.
+	if (!sniffAllowedType(buffer)) {
+		return json({ error: 'File content is not a valid PDF, JPG, or PNG.' }, { status: 400 });
+	}
+
 	const tempFilePath = saveToTemp(buffer, file.name);
 
 	const jobId = randomUUID();

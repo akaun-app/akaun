@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client.js';
 import { listIncomes } from '$lib/server/queries/income.js';
 import { createIncome } from '$lib/server/services/income.js';
 import { hasPermission } from '$lib/server/permissions.js';
+import { isValidDate, today } from '$lib/server/date.js';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'income', 'view')) return new Response('Forbidden', { status: 403 });
@@ -37,13 +38,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return Response.json({ error: 'amount is required' }, { status: 400 });
 	}
 
+	if (body.date !== undefined && !isValidDate(body.date)) {
+		return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });
+	}
+
 	const income = createIncome(db, user.id, {
 		source: body.source,
 		descriptionText: body.descriptionText,
 		reference: body.reference,
 		remark: body.remark,
 		category: body.category,
-		date: body.date ?? new Date().toISOString().slice(0, 10),
+		date: body.date ?? today(),
 		amount: body.amount
 	});
 
