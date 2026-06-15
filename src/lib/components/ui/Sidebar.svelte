@@ -103,12 +103,9 @@
 
 <aside class="sidebar" class:collapsed style="position:relative">
 	<div class="sb-brand">
-		<div class="sb-logo">A</div>
+		<img class="sb-logo" src="/icons/icon-512.png" alt="Akaun" />
 		{#if !collapsed}
-			<div>
-				<div class="sb-brand-name">Akaun</div>
-				<div class="sb-brand-sub">Bookkeeping</div>
-			</div>
+			<div class="sb-brand-name">Akaun</div>
 		{/if}
 	</div>
 

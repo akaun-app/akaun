@@ -88,11 +88,8 @@
 	>
 		<!-- Brand -->
 		<div class="drawer-brand">
-			<div class="drawer-logo">A</div>
-			<div>
-				<div class="drawer-brand-name">Akaun</div>
-				<div class="drawer-brand-sub">Bookkeeping</div>
-			</div>
+			<img class="drawer-logo" src="/icons/icon-512.png" alt="Akaun" />
+			<div class="drawer-brand-name">Akaun</div>
 		</div>
 
 		<!-- User card -->
@@ -201,25 +198,15 @@
 		width: 30px;
 		height: 30px;
 		border-radius: 8px;
-		background: var(--primary);
-		color: var(--primary-foreground);
-		display: grid;
-		place-items: center;
-		font-weight: 700;
-		font-size: 15px;
 		flex-shrink: 0;
-		font-family: 'Geist', system-ui, sans-serif;
+		object-fit: contain;
+		filter: drop-shadow(0 2px 6px oklch(0.646 0.187 41.6 / 0.3));
 	}
 
 	.drawer-brand-name {
 		font-size: 14px;
 		font-weight: 700;
 		letter-spacing: -0.01em;
-	}
-
-	.drawer-brand-sub {
-		font-size: 11px;
-		color: var(--muted-foreground);
 	}
 
 	/* User card */

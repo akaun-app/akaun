@@ -1,320 +1,416 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import type { ActionData } from './$types.js';
 
 	let { form }: { form: ActionData } = $props();
+
+	let showPassword = $state(false);
+	let remember = $state(true);
+	let loading = $state(false);
 </script>
 
-<div class="login-root">
-	<!-- Brand panel -->
-	<div class="login-brand">
-		<div class="brand-bg-glyph">A</div>
-		<div class="brand-content">
-			<div class="brand-logo">A</div>
-			<div class="brand-name">Akaun</div>
-			<div class="brand-tag">Your finances, simplified.</div>
+<div class="login">
+	<div class="loginwrap">
+		<!-- Logo mark -->
+		<div class="form-logo">
+			<div class="mark">
+				<img src="/icons/icon-512.png" alt="Akaun" />
+			</div>
 		</div>
-	</div>
 
-	<!-- Form sheet -->
-	<div class="login-sheet">
-		<div class="sheet-inner">
-			<h1 class="sheet-title">Sign in</h1>
-			<p class="sheet-sub">Enter your credentials to continue.</p>
+		<!-- Heading -->
+		<div class="form-head">
+			<h1 class="form-title">Welcome back</h1>
+			<p class="form-sub">Sign in to your Akaun workspace to continue.</p>
+		</div>
 
-			{#if form?.error}
-				<div class="error-banner">
-					<svg
-						width="15"
-						height="15"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
-					>
-						<path
-							d="m10.29 3.86-8.18 14.14A2 2 0 0 0 3.84 21h16.32a2 2 0 0 0 1.73-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-						/>
-						<line x1="12" x2="12" y1="9" y2="13" />
-						<line x1="12" x2="12.01" y1="17" y2="17" />
-					</svg>
-					{form.error}
-				</div>
-			{/if}
-
-			<form method="POST" class="login-form">
-				<div class="field">
+		<form
+			method="POST"
+			use:enhance={() => {
+				loading = true;
+				return async ({ update }) => {
+					loading = false;
+					await update();
+				};
+			}}
+		>
+			<!-- Username -->
+			<div class="field">
+				<div class="field-label">
 					<label for="username">Username</label>
+				</div>
+				<div class="input-wrap">
+					<span class="input-lead" aria-hidden="true">
+						<!-- mail icon -->
+						<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+					</span>
 					<input
 						id="username"
 						name="username"
 						type="text"
-						required
+						class="input {form?.error ? 'invalid' : ''}"
 						autocomplete="username"
 						placeholder="Enter username"
+						required
 					/>
 				</div>
+			</div>
 
-				<div class="field">
+			<!-- Password -->
+			<div class="field">
+				<div class="field-label">
 					<label for="password">Password</label>
+					<a class="forgot" href="#" onclick={(e) => e.preventDefault()}>Forgot?</a>
+				</div>
+				<div class="input-wrap">
+					<span class="input-lead" aria-hidden="true">
+						<!-- lock icon -->
+						<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+					</span>
 					<input
 						id="password"
 						name="password"
-						type="password"
-						required
+						type={showPassword ? 'text' : 'password'}
+						class="input has-trail {form?.error ? 'invalid' : ''}"
 						autocomplete="current-password"
-						placeholder="Enter password"
+						placeholder="••••••••"
+						required
 					/>
+					<button
+						type="button"
+						class="eye"
+						onclick={() => (showPassword = !showPassword)}
+						aria-label={showPassword ? 'Hide password' : 'Show password'}
+					>
+						{#if showPassword}
+							<!-- eye-off icon -->
+							<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/><path d="M9.36 9.36a3 3 0 0 0 4.28 4.28"/></svg>
+						{:else}
+							<!-- eye icon -->
+							<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg>
+						{/if}
+					</button>
 				</div>
+			</div>
 
-				<button type="submit" class="submit-btn">Sign in</button>
-			</form>
-		</div>
+			<!-- Error -->
+			{#if form?.error}
+				<div class="field-err">
+					<!-- alert icon -->
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+					{form.error}
+				</div>
+			{/if}
+
+			<!-- Keep me signed in -->
+			<div class="row-between">
+				<button
+					type="button"
+					class="remember"
+					onclick={() => (remember = !remember)}
+					aria-pressed={remember}
+				>
+					<span class="cbox {remember ? 'on' : ''}">
+						{#if remember}
+							<!-- check icon -->
+							<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+						{/if}
+					</span>
+					Keep me signed in
+				</button>
+			</div>
+
+			<!-- Submit -->
+			<button type="submit" class="btn-primary" disabled={loading}>
+				{#if loading}
+					<span class="spinner" aria-hidden="true"></span>
+					Signing in…
+				{:else}
+					Sign in
+					<!-- arrow icon -->
+					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+				{/if}
+			</button>
+		</form>
+
+		<p class="form-foot">New to Akaun? <a href="#" onclick={(e) => e.preventDefault()}>Ask your admin for access</a></p>
 	</div>
 </div>
 
 <style>
-	/* ── Root ─────────────────────────────────────────────── */
-	.login-root {
+	/* ── Layout ─────────────────────────────────────────────── */
+	.login {
+		min-height: 100vh;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 40px 24px;
+		background: var(--background);
+	}
+
+	.loginwrap {
+		width: 100%;
+		max-width: 368px;
+	}
+
+	/* ── Logo mark ───────────────────────────────────────────── */
+	.form-logo {
 		display: flex;
 		flex-direction: column;
-		min-height: 100vh;
-		background: var(--background);
+		align-items: center;
+		margin-bottom: 24px;
 	}
 
-	/* ── Brand panel ─────────────────────────────────────── */
-	.login-brand {
-		position: relative;
-		background: var(--primary);
-		padding: 52px 28px 64px;
-		display: flex;
-		align-items: flex-end;
-		overflow: hidden;
-		flex-shrink: 0;
+	.mark {
+		width: 54px;
+		height: 54px;
 	}
 
-	.brand-bg-glyph {
-		position: absolute;
-		top: -30px;
-		right: -16px;
-		font-size: 200px;
-		font-weight: 800;
-		color: oklch(1 0 0 / 0.08);
-		line-height: 1;
-		user-select: none;
-		letter-spacing: -0.05em;
-		pointer-events: none;
-	}
-
-	.brand-content {
-		position: relative;
-		z-index: 1;
-	}
-
-	.brand-logo {
-		width: 50px;
-		height: 50px;
-		border-radius: 15px;
-		background: oklch(1 0 0 / 0.18);
-		color: var(--primary-foreground);
-		display: grid;
-		place-items: center;
-		font-size: 26px;
-		font-weight: 800;
-		margin-bottom: 18px;
-		letter-spacing: -0.02em;
-		backdrop-filter: blur(4px);
-	}
-
-	.brand-name {
-		font-size: 30px;
-		font-weight: 700;
-		color: var(--primary-foreground);
-		letter-spacing: -0.03em;
-		line-height: 1;
-	}
-
-	.brand-tag {
-		font-size: 14px;
-		color: oklch(1 0 0 / 0.62);
-		margin-top: 8px;
-		font-weight: 400;
-		letter-spacing: -0.01em;
-	}
-
-	/* ── Form sheet ──────────────────────────────────────── */
-	.login-sheet {
-		flex: 1;
-		background: var(--background);
-		border-radius: 24px 24px 0 0;
-		margin-top: -24px;
-		padding: 36px 28px 48px;
-		position: relative;
-		z-index: 2;
-		animation: sheet-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
-	}
-
-	@keyframes sheet-rise {
-		from {
-			transform: translateY(22px);
-			opacity: 0;
-		}
-		to {
-			transform: translateY(0);
-			opacity: 1;
-		}
-	}
-
-	.sheet-inner {
+	.mark img {
 		width: 100%;
+		height: 100%;
+		filter: drop-shadow(0 4px 10px oklch(0.646 0.187 41.6 / 0.35));
 	}
 
-	.sheet-title {
-		font-size: 22px;
+	/* ── Heading ─────────────────────────────────────────────── */
+	.form-head {
+		text-align: center;
+		margin-bottom: 24px;
+	}
+
+	.form-title {
+		font-size: 23px;
 		font-weight: 600;
-		letter-spacing: -0.025em;
-		margin: 0 0 6px;
+		letter-spacing: -0.022em;
+		margin: 0;
 		color: var(--foreground);
 	}
 
-	.sheet-sub {
+	.form-sub {
 		font-size: 14px;
 		color: var(--muted-foreground);
-		margin: 0 0 28px;
+		margin: 7px 0 0;
+		line-height: 1.5;
 	}
 
-	/* ── Error banner ────────────────────────────────────── */
-	.error-banner {
-		background: var(--red-soft);
-		color: var(--red);
-		border-radius: 12px;
-		padding: 12px 14px;
-		font-size: 13.5px;
-		margin-bottom: 22px;
+	/* ── Fields ──────────────────────────────────────────────── */
+	.field {
+		margin-bottom: 15px;
+	}
+
+	.field-label {
 		display: flex;
 		align-items: center;
-		gap: 9px;
-		flex-shrink: 0;
-	}
-
-	/* ── Form ────────────────────────────────────────────── */
-	.login-form {
-		display: flex;
-		flex-direction: column;
-		gap: 18px;
-	}
-
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-
-	.field label {
+		justify-content: space-between;
 		font-size: 13px;
 		font-weight: 500;
 		color: var(--foreground);
-		letter-spacing: -0.01em;
+		margin-bottom: 7px;
 	}
 
-	.field input {
-		height: 48px;
-		border: 1.5px solid var(--input);
+	.forgot {
+		font-size: 12.5px;
+		font-weight: 500;
+		color: var(--primary);
+		text-decoration: none;
+	}
+
+	.forgot:hover {
+		text-decoration: underline;
+	}
+
+	.input-wrap {
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
+
+	.input-lead {
+		position: absolute;
+		left: 13px;
+		color: var(--muted-foreground);
+		display: flex;
+		pointer-events: none;
+	}
+
+	.input {
+		width: 100%;
+		height: 46px;
+		border: 1px solid var(--input);
 		background: var(--card);
 		color: var(--foreground);
-		border-radius: 12px;
-		padding: 0 16px;
+		border-radius: 10px;
+		padding: 0 14px 0 40px;
 		font-family: inherit;
 		font-size: 15px;
 		outline: none;
-		transition: border-color 0.15s, box-shadow 0.15s;
-		width: 100%;
+		transition:
+			border-color 0.12s,
+			box-shadow 0.12s;
 		-webkit-appearance: none;
 	}
 
-	.field input::placeholder {
+	.input::placeholder {
 		color: var(--muted-foreground);
 	}
 
-	.field input:focus {
+	.input:focus {
 		border-color: var(--primary);
-		box-shadow: 0 0 0 4px var(--primary-soft);
+		box-shadow: 0 0 0 3px var(--primary-soft);
 	}
 
-	.submit-btn {
+	.input.invalid {
+		border-color: var(--red);
+	}
+
+	.input.invalid:focus {
+		box-shadow: 0 0 0 3px var(--red-soft);
+	}
+
+	.input.has-trail {
+		padding-right: 44px;
+	}
+
+	.eye {
+		position: absolute;
+		right: 6px;
+		width: 34px;
+		height: 34px;
+		border-radius: 8px;
+		border: none;
+		background: none;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		transition: background 0.1s, color 0.1s;
+	}
+
+	.eye:hover {
+		background: var(--accent);
+		color: var(--foreground);
+	}
+
+	/* ── Error ───────────────────────────────────────────────── */
+	.field-err {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12.5px;
+		color: var(--red);
+		margin: -6px 0 14px;
+	}
+
+	/* ── Remember row ────────────────────────────────────────── */
+	.row-between {
+		display: flex;
+		align-items: center;
+		margin: 4px 0 20px;
+	}
+
+	.remember {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		font-size: 13.5px;
+		color: var(--foreground);
+		cursor: pointer;
+		user-select: none;
+		white-space: nowrap;
+		background: none;
+		border: none;
+		padding: 0;
+		font-family: inherit;
+	}
+
+	.cbox {
+		width: 19px;
+		height: 19px;
+		border-radius: 6px;
+		border: 1.5px solid var(--border-strong);
+		background: var(--card);
+		display: grid;
+		place-items: center;
+		color: var(--primary-foreground);
+		flex-shrink: 0;
+		transition:
+			background 0.1s,
+			border-color 0.1s;
+	}
+
+	.cbox.on {
+		background: var(--primary);
+		border-color: var(--primary);
+	}
+
+	/* ── Submit ──────────────────────────────────────────────── */
+	.btn-primary {
 		width: 100%;
-		height: 50px;
+		height: 46px;
+		border: none;
+		border-radius: 10px;
+		cursor: pointer;
 		background: var(--primary);
 		color: var(--primary-foreground);
-		border: none;
-		border-radius: 14px;
 		font-family: inherit;
 		font-size: 15px;
 		font-weight: 600;
-		cursor: pointer;
-		letter-spacing: -0.01em;
-		margin-top: 6px;
-		transition: filter 0.15s, transform 0.1s;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 9px;
+		box-shadow: 0 1px 2px 0 oklch(0 0 0 / 0.05);
+		transition:
+			filter 0.12s,
+			opacity 0.12s;
 	}
 
-	.submit-btn:hover {
-		filter: brightness(1.07);
+	.btn-primary:hover:not(:disabled) {
+		filter: brightness(1.06);
 	}
 
-	.submit-btn:active {
-		transform: scale(0.98);
+	.btn-primary:disabled {
+		opacity: 0.7;
+		cursor: default;
 	}
 
-	/* ── Desktop: two-column split (≥ 1200px) ────────────── */
-	@media (min-width: 1200px) {
-		.login-root {
-			flex-direction: row;
-		}
+	.btn-primary:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
 
-		.login-brand {
-			width: 42%;
-			min-height: 100vh;
-			padding: 56px;
-			align-items: center;
-			flex-shrink: 0;
-		}
+	.spinner {
+		width: 17px;
+		height: 17px;
+		border: 2px solid oklch(1 0 0 / 0.35);
+		border-top-color: #fff;
+		border-radius: 50%;
+		animation: spin 0.7s linear infinite;
+		flex-shrink: 0;
+	}
 
-		.brand-bg-glyph {
-			font-size: 340px;
-			top: auto;
-			bottom: -70px;
-			right: -40px;
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
 		}
+	}
 
-		.brand-name {
-			font-size: 40px;
-		}
+	/* ── Footer ──────────────────────────────────────────────── */
+	.form-foot {
+		margin-top: 22px;
+		text-align: center;
+		font-size: 13px;
+		color: var(--muted-foreground);
+		line-height: 1.6;
+	}
 
-		.brand-tag {
-			font-size: 15px;
-			margin-top: 10px;
-		}
+	.form-foot a {
+		color: var(--primary);
+		text-decoration: none;
+		font-weight: 500;
+	}
 
-		.login-sheet {
-			flex: 1;
-			margin-top: 0;
-			border-radius: 0;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			padding: 56px 48px;
-			animation: none;
-		}
-
-		.sheet-inner {
-			width: 100%;
-			max-width: 400px;
-		}
-
-		.sheet-title {
-			font-size: 24px;
-		}
+	.form-foot a:hover {
+		text-decoration: underline;
 	}
 </style>
