@@ -6,10 +6,10 @@ import {
 	type ExpensePatch
 } from '$lib/server/queries/expenses.js';
 import { expenseEvents } from '$lib/server/finance/events.js';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = BetterSQLite3Database<any>;
+type Db = BunSQLiteDatabase<any>;
 
 export function createExpense(db: Db, userId: number, data: ExpenseCreate) {
 	const expense = _create(db, userId, data);

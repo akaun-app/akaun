@@ -7,10 +7,10 @@ import {
 	deleteClaim as _delete
 } from '$lib/server/queries/claims.js';
 import { claimEvents, expenseEvents } from '$lib/server/finance/events.js';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = BetterSQLite3Database<any>;
+type Db = BunSQLiteDatabase<any>;
 
 function emitLinkedExpenses(db: Db, claimId: number, userId: number) {
 	const linked = db.select().from(expensesTable).where(eq(expensesTable.claimId, claimId)).all();

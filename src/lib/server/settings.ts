@@ -1,5 +1,5 @@
 import { eq, and } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { settings } from './db/schema.js';
 
 export const SETTING_KEYS = {
@@ -16,7 +16,7 @@ export const SETTING_KEYS = {
 
 export function getSetting(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	db: BetterSQLite3Database<any>,
+	db: BunSQLiteDatabase<any>,
 	userId: number,
 	key: string
 ): string | null {
@@ -30,7 +30,7 @@ export function getSetting(
 
 export function setSetting(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	db: BetterSQLite3Database<any>,
+	db: BunSQLiteDatabase<any>,
 	userId: number,
 	key: string,
 	value: string

@@ -17,6 +17,9 @@ export default defineConfig({
 			adapter: adapter()
 		})
 	],
+	// bun:sqlite is a Bun runtime builtin — keep the import external so it
+	// resolves at runtime instead of being bundled by Rollup.
+	ssr: { external: ['bun:sqlite'] },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

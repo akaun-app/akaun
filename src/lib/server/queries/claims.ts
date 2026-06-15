@@ -1,11 +1,11 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { claims, claimAttachments, expenses } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = BetterSQLite3Database<typeof schema> | BetterSQLite3Database<any>;
+type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
 
 export function listClaims(db: Db, userId: number) {
 	const rows = db

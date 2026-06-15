@@ -1,10 +1,10 @@
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { appSequences } from './db/schema.js';
 import { sql } from 'drizzle-orm';
 
 export function nextNumber(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	db: BetterSQLite3Database<any>,
+	db: BunSQLiteDatabase<any>,
 	prefix: string,
 	date: string,
 	userId: number

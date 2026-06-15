@@ -1,11 +1,11 @@
 import { and, eq, gte, lte, inArray, sql } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { expenses, expenseAttachments, expenseSearchText } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Db = BetterSQLite3Database<typeof schema> | BetterSQLite3Database<any>;
+type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
 
 export type ExpenseFilters = {
 	status?: string;
