@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { onNavigate } from '$app/navigation';
 	import { Menu } from '@lucide/svelte';
 	import Sidebar from '$lib/components/ui/Sidebar.svelte';
 	import BottomNav from '$lib/components/ui/BottomNav.svelte';
@@ -8,6 +9,16 @@
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 	let drawerOpen = $state(false);
+
+	onNavigate((navigation) => {
+		if (!document.startViewTransition) return;
+		return new Promise((resolve) => {
+			document.startViewTransition(async () => {
+				resolve();
+				await navigation.complete;
+			});
+		});
+	});
 </script>
 
 <div class="app">
