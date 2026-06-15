@@ -1,10 +1,10 @@
 import { randomBytes } from 'crypto';
 import { eq, lt } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from './db/schema.js';
 import { sessions, users } from './db/schema.js';
 
-type Db = BetterSQLite3Database<typeof schema>;
+type Db = BunSQLiteDatabase<typeof schema>;
 
 export function getSessionUser(
 	db: Db,

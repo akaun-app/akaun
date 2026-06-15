@@ -1,9 +1,9 @@
 import { eq, inArray } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from './db/schema.js';
 import { groups, groupPermissions, userGroups, userPermissions } from './db/schema.js';
 
-type Db = BetterSQLite3Database<typeof schema>;
+type Db = BunSQLiteDatabase<typeof schema>;
 
 export type ResourceName = 'dashboard' | 'expenses' | 'income' | 'claims' | 'import' | 'categories';
 export type ActionName = 'view' | 'add' | 'change' | 'delete';

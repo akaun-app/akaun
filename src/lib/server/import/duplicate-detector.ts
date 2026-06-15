@@ -1,8 +1,8 @@
 import { and, eq, or } from 'drizzle-orm';
-import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { expenses, incomes, importQueue } from '../db/schema.js';
 
-type Db = BetterSQLite3Database<Record<string, never>>;
+type Db = BunSQLiteDatabase<Record<string, never>>;
 
 type JobSnapshot = {
 	originalFilename: string;
@@ -20,7 +20,7 @@ type DuplicateResult = {
 
 export function detectDuplicate(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	db: BetterSQLite3Database<any>,
+	db: BunSQLiteDatabase<any>,
 	userId: number,
 	job: JobSnapshot
 ): DuplicateResult {
