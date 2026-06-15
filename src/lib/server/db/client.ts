@@ -1,6 +1,6 @@
-import { Database } from 'bun:sqlite';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { hash } from 'argon2';
 import { randomBytes } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
@@ -16,8 +16,8 @@ const log = createLogger('db');
 function createDb() {
 	mkdirSync(dirname(DATABASE_PATH), { recursive: true });
 	const raw = new Database(DATABASE_PATH);
-	raw.exec('PRAGMA journal_mode = WAL');
-	raw.exec('PRAGMA foreign_keys = ON');
+	raw.pragma('journal_mode = WAL');
+	raw.pragma('foreign_keys = ON');
 	const db = drizzle(raw, { schema });
 	migrate(db, { migrationsFolder: 'drizzle' });
 	return { db, raw };
