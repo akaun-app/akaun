@@ -1,6 +1,4 @@
-FROM node:20-alpine AS base
-RUN apk add --no-cache python3 make g++
-RUN npm install -g bun
+FROM oven/bun:1-alpine AS base
 WORKDIR /app
 COPY package.json bun.lock ./
 
@@ -12,7 +10,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM node:20-alpine AS runtime
+FROM oven/bun:1-alpine AS runtime
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/build ./build
@@ -25,4 +23,4 @@ ENV DATABASE_PATH=/app/data/akaun.db
 ENV STORAGE_PATH=/app/data/storage
 ENV LOG_LEVEL=info
 EXPOSE 6969
-CMD ["node", "build/index.js"]
+CMD ["bun", "build/index.js"]
