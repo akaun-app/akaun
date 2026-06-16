@@ -7,14 +7,13 @@ import { hasPermission } from '$lib/server/permissions.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'change')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const claimId = parseInt(params.id!);
 	const attachmentId = parseInt(params.attachmentId!);
 
 	const claim = db
 		.select({ id: claims.id })
 		.from(claims)
-		.where(and(eq(claims.id, claimId), eq(claims.userId, user.id)))
+		.where(eq(claims.id, claimId))
 		.get();
 
 	if (!claim) return Response.json({ error: 'Not found' }, { status: 404 });

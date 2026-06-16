@@ -1,17 +1,17 @@
-import { eq, and, not, inArray } from 'drizzle-orm';
+import { not, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
-const TERMINAL_STATES = ['confirmed', 'skipped'];
+const TERMINAL_STATES = [ImportState.Confirmed, ImportState.Skipped];
 
 export const GET: RequestHandler = ({ locals }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
 	if (!hasPermission(locals, 'import', 'view')) return new Response('Forbidden', { status: 403 });
 
-	const userId = locals.user.id;
 	const encoder = new TextEncoder();
 
 	const encodeEvent = (data: object) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
@@ -21,16 +21,15 @@ export const GET: RequestHandler = ({ locals }) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
-			// Send current non-terminal jobs as a catch-up snapshot on connect
+			// Shared ledger — snapshot every active job, not just the caller's.
 			const currentJobs = db
 				.select()
 				.from(importQueue)
-				.where(and(eq(importQueue.userId, userId), not(inArray(importQueue.state, TERMINAL_STATES))))
+				.where(not(inArray(importQueue.state, TERMINAL_STATES)))
 				.all();
 			controller.enqueue(encodeEvent({ type: 'snapshot', jobs: currentJobs }));
 
-			const updateHandler = ({ userId: uid, job }: { userId: number; job: unknown }) => {
-				if (uid !== userId) return;
+			const updateHandler = ({ job }: { job: unknown }) => {
 				try {
 					controller.enqueue(encodeEvent({ type: 'job-update', job }));
 				} catch {
@@ -38,8 +37,7 @@ export const GET: RequestHandler = ({ locals }) => {
 				}
 			};
 
-			const deleteHandler = ({ userId: uid, jobId }: { userId: number; jobId: string }) => {
-				if (uid !== userId) return;
+			const deleteHandler = ({ jobId }: { jobId: string }) => {
 				try {
 					controller.enqueue(encodeEvent({ type: 'job-deleted', jobId }));
 				} catch {

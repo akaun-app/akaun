@@ -8,6 +8,8 @@ import { extractText } from './extractor.js';
 import { callLLM } from './llm.js';
 import { detectDuplicate } from './duplicate-detector.js';
 import { importEvents } from './events.js';
+import { resolveContactCandidates } from '../queries/contacts.js';
+import { ImportState, DocumentType, Role, documentTypeEnum } from '$lib/enums.js';
 import { join } from 'path';
 
 const log = createLogger('import:worker');
@@ -40,8 +42,8 @@ function scheduleTick() {
 
 function recoverStaleJobs() {
 	db.update(importQueue)
-		.set({ state: 'queued' })
-		.where(inArray(importQueue.state, ['extracting', 'processing']))
+		.set({ state: ImportState.Queued })
+		.where(inArray(importQueue.state, [ImportState.Extracting, ImportState.Processing]))
 		.run();
 }
 
@@ -49,7 +51,7 @@ async function tick() {
 	const queued = db
 		.select()
 		.from(importQueue)
-		.where(eq(importQueue.state, 'queued'))
+		.where(eq(importQueue.state, ImportState.Queued))
 		.all();
 
 	const slots = DEFAULT_CONCURRENCY - activeJobs.size;
@@ -64,23 +66,23 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 	activeJobs.add(job.id);
 
 	try {
-		// Get the owner user for settings lookup
+		// The uploader (for event routing / audit). Settings are global.
 		const ownerUser = db
 			.select({ id: users.id })
 			.from(users)
-			.where(eq(users.id, job.userId))
+			.where(eq(users.id, job.createdBy))
 			.get();
-		const userId = ownerUser?.id ?? job.userId;
+		const userId = ownerUser?.id ?? job.createdBy;
 
-		const apiKey = getSetting(db, userId, SETTING_KEYS.autoImportApiKey);
+		const apiKey = getSetting(db, SETTING_KEYS.autoImportApiKey);
 		if (!apiKey) {
 			markFailed(job.id, userId, 'No OpenRouter API key configured. Go to Settings → Intelligence to add one.');
 			return;
 		}
 
-		const model = getSetting(db, userId, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
-		const expCatsRaw = getSetting(db, userId, SETTING_KEYS.expenseCategories);
-		const incCatsRaw = getSetting(db, userId, SETTING_KEYS.incomeCategories);
+		const model = getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
+		const expCatsRaw = getSetting(db, SETTING_KEYS.expenseCategories);
+		const incCatsRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 		const expenseCategories: string[] = expCatsRaw ? JSON.parse(expCatsRaw) : [];
 		const incomeCategories: string[] = incCatsRaw ? JSON.parse(incCatsRaw) : [];
 
@@ -88,7 +90,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		// Extracting
 		db.update(importQueue)
-			.set({ state: 'extracting' })
+			.set({ state: ImportState.Extracting })
 			.where(eq(importQueue.id, job.id))
 			.run();
 		emitJobUpdate(job.id, userId);
@@ -115,7 +117,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		// Processing — LLM call
 		db.update(importQueue)
-			.set({ state: 'processing' })
+			.set({ state: ImportState.Processing })
 			.where(eq(importQueue.id, job.id))
 			.run();
 		emitJobUpdate(job.id, userId);
@@ -133,7 +135,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		log.info({ jobId: job.id, documentType: result.document_type, amount: result.amount, date: result.date }, 'LLM result');
 
 		// Duplicate detection
-		const dup = detectDuplicate(db, userId, {
+		const dup = detectDuplicate(db, {
 			originalFilename: job.originalFilename,
 			itemName: result.item_name,
 			supplier: result.supplier,
@@ -142,13 +144,23 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 			reference: result.reference
 		});
 
+		// Contact resolution — deterministic backend step (LLM is never given the
+		// contact list). For an expense the party is the supplier; for income the
+		// payer/customer is carried in item_name (supplier holds the description).
+		const docType = documentTypeEnum.fromLabel(result.document_type) ?? DocumentType.Expense;
+		const role = docType === DocumentType.Income ? Role.Customer : Role.Supplier;
+		const partyName = docType === DocumentType.Income ? result.item_name : result.supplier;
+		const { matchedId, candidates } = resolveContactCandidates(db, partyName ?? '', role);
+
 		const now = new Date().toISOString();
 		db.update(importQueue)
 			.set({
-				state: 'pending_review',
-				documentType: result.document_type,
+				state: ImportState.PendingReview,
+				documentType: docType,
 				itemName: result.item_name,
 				supplier: result.supplier,
+				matchedContactId: matchedId,
+				matchCandidates: candidates.length ? JSON.stringify(candidates) : null,
 				date: result.date,
 				amount: result.amount,
 				reference: result.reference,
@@ -171,7 +183,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 function markFailed(jobId: string, userId: number, error: string) {
 	log.error({ jobId, error }, 'Job failed');
 	db.update(importQueue)
-		.set({ state: 'failed', error })
+		.set({ state: ImportState.Failed, error })
 		.where(eq(importQueue.id, jobId))
 		.run();
 	emitJobUpdate(jobId, userId);

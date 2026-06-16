@@ -1,28 +1,19 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { settings } from '$lib/server/db/schema.js';
 import { setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 
 // Only these keys may be written through the API — prevents arbitrary keys being
-// injected into a user's settings namespace.
+// injected into the global settings namespace.
 const ALLOWED_KEYS = new Set<string>(Object.values(SETTING_KEYS));
 
-export const GET: RequestHandler = async ({ locals }) => {
-	const user = locals.user!;
-
-	const rows = db
-		.select({ key: settings.key, value: settings.value })
-		.from(settings)
-		.where(eq(settings.userId, user.id))
-		.all();
-
+export const GET: RequestHandler = async () => {
+	const rows = db.select({ key: settings.key, value: settings.value }).from(settings).all();
 	const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
 	return Response.json(map);
 };
 
-export const PATCH: RequestHandler = async ({ locals, request }) => {
-	const user = locals.user!;
+export const PATCH: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 
 	if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -36,15 +27,10 @@ export const PATCH: RequestHandler = async ({ locals, request }) => {
 	}
 
 	for (const [key, value] of entries) {
-		setSetting(db, user.id, key, String(value));
+		setSetting(db, key, String(value));
 	}
 
-	const rows = db
-		.select({ key: settings.key, value: settings.value })
-		.from(settings)
-		.where(eq(settings.userId, user.id))
-		.all();
-
+	const rows = db.select({ key: settings.key, value: settings.value }).from(settings).all();
 	const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
 	return Response.json(map);
 };

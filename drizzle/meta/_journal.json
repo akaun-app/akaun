@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1781165862990,
-      "tag": "0000_narrow_captain_britain",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1781176362094,
-      "tag": "0001_hesitant_centennial",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1781398900000,
-      "tag": "0002_phase25_users_groups",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1781920800000,
-      "tag": "0003_user_permissions",
+      "when": 1781604218162,
+      "tag": "0000_optimal_harrier",
       "breakpoints": true
     }
   ]

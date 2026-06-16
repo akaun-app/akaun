@@ -1,14 +1,15 @@
 import { json } from '@sveltejs/kit';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
-const ACTIVE_STATES = ['queued', 'extracting', 'processing'];
+const ACTIVE_STATES: number[] = [ImportState.Queued, ImportState.Extracting, ImportState.Processing];
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
@@ -16,16 +17,12 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
 	const activeOnly = url.searchParams.get('active') === '1';
 
-	const conditions = [eq(importQueue.userId, locals.user.id)];
-	if (activeOnly) {
-		conditions.push(inArray(importQueue.state, ACTIVE_STATES));
-	}
-
-	const rows = db
-		.select()
-		.from(importQueue)
-		.where(and(...conditions))
-		.all();
+	// Shared ledger — list every job, not just the caller's uploads.
+	const rows = (
+		activeOnly
+			? db.select().from(importQueue).where(inArray(importQueue.state, ACTIVE_STATES))
+			: db.select().from(importQueue)
+	).all();
 
 	// Sort: active first, then by createdAt desc
 	rows.sort((a, b) => {
@@ -74,8 +71,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	db.insert(importQueue)
 		.values({
 			id: jobId,
-			userId: locals.user.id,
-			state: 'queued',
+			createdBy: locals.user.id,
+			state: ImportState.Queued,
 			tempFilePath,
 			originalFilename: file.name
 		})

@@ -7,10 +7,9 @@ import { hasPermission } from '$lib/server/permissions.js';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const id = parseInt(params.id!);
 
-	const expense = getExpense(db, id, user.id);
+	const expense = getExpense(db, id);
 	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
 
 	const formData = await request.formData();

@@ -10,6 +10,8 @@
 		RotateCcw
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
+	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -24,6 +26,8 @@
 		| 'skipped'
 		| 'failed';
 
+	type Candidate = { id: number; legalName: string; score?: number };
+
 	type Job = {
 		id: string;
 		state: JobState;
@@ -31,6 +35,8 @@
 		documentType: string | null;
 		itemName: string | null;
 		supplier: string | null;
+		matchedContactId: number | null;
+		matchCandidates: Candidate[];
 		date: string | null;
 		amount: number | null;
 		reference: string | null;
@@ -43,26 +49,38 @@
 		_edits?: Record<string, string | number>;
 	};
 
-	// Initialize from SSR data, converting DB rows to typed Job objects
-	let jobs = $state<Job[]>(
-		data.jobs.map((j) => ({
+	// Convert a raw DB queue row (INT enum codes) into a display Job (string labels).
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	function normalizeJob(j: any): Job {
+		let candidates: Candidate[] = [];
+		try {
+			candidates = j.matchCandidates ? JSON.parse(j.matchCandidates) : [];
+		} catch {
+			candidates = [];
+		}
+		return {
 			id: j.id,
-			state: j.state as JobState,
+			state: (importStateEnum.toLabel(j.state) ?? 'queued') as JobState,
 			originalFilename: j.originalFilename,
-			documentType: j.documentType,
+			documentType: documentTypeEnum.toLabel(j.documentType),
 			itemName: j.itemName,
 			supplier: j.supplier,
+			matchedContactId: j.matchedContactId ?? null,
+			matchCandidates: candidates,
 			date: j.date,
 			amount: j.amount,
 			reference: j.reference,
 			category: j.category,
 			remark: j.remark,
 			duplicateOf: j.duplicateOf,
-			duplicateSignal: j.duplicateSignal,
+			duplicateSignal: duplicateSignalEnum.toLabel(j.duplicateSignal),
 			error: j.error,
 			_edits: {}
-		}))
-	);
+		};
+	}
+
+	// Initialize from SSR data, converting DB rows to typed Job objects
+	let jobs = $state<Job[]>(data.jobs.map(normalizeJob));
 
 	// Store original file references for retry
 	const fileStore = new Map<string, File>();
@@ -102,7 +120,9 @@
 		_es?.close();
 	});
 
-	function mergeServerJobs(incoming: Job[]) {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	function mergeServerJobs(incomingRaw: any[]) {
+		const incoming = incomingRaw.map(normalizeJob);
 		const byId = new Map(incoming.map((j) => [j.id, j]));
 		const existingIds = new Set(jobs.map((j) => j.id));
 
@@ -116,8 +136,21 @@
 		// Prepend jobs added in another tab that we don't know about yet
 		const brandNew = incoming.filter((j) => !existingIds.has(j.id));
 		if (brandNew.length > 0) {
-			jobs = [...brandNew.map((j) => ({ ...j, _edits: {} })), ...jobs];
+			jobs = [...brandNew, ...jobs];
 		}
+	}
+
+	// Set the contact intent (existing id, typed new name, or cleared) for a review row.
+	function setContact(jobId: string, v: { value: number | null; newName: string | null }) {
+		jobs = jobs.map((j) => {
+			if (j.id !== jobId) return j;
+			const edits = { ...(j._edits ?? {}) };
+			delete edits.contactId;
+			delete edits.newContactName;
+			if (v.value != null) edits.contactId = v.value;
+			else if (v.newName) edits.newContactName = v.newName;
+			return { ...j, _edits: edits };
+		});
 	}
 
 	async function uploadFiles(files: FileList | File[]) {
@@ -445,30 +478,50 @@
 
 							<!-- Fields grid -->
 							<div class="review-grid">
-								<!-- Item / Source -->
+								<!-- Item (expense) / Customer combobox (income) -->
 								<div class="rfield">
 									<label class="rfield-label">
-										{isIncome ? 'Source' : 'Item'}
-										{#if isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
+										{isIncome ? 'Customer' : 'Item'}
+										{#if !isIncome && isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
+										{#if isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
 									</label>
-									<input
-										class="form-input rinput"
-										value={editedValue(job, 'item_name')}
-										oninput={(e) => updateEdit(job.id, 'item_name', (e.target as HTMLInputElement).value)}
-									/>
+									{#if isIncome}
+										<ContactSelect
+											role={Role.Customer}
+											initialLabel={job.itemName}
+											suggestions={job.matchCandidates}
+											onChange={(v) => setContact(job.id, v)}
+										/>
+									{:else}
+										<input
+											class="form-input rinput"
+											value={editedValue(job, 'item_name')}
+											oninput={(e) => updateEdit(job.id, 'item_name', (e.target as HTMLInputElement).value)}
+										/>
+									{/if}
 								</div>
 
-								<!-- Supplier / Description -->
+								<!-- Supplier combobox (expense) / Description (income) -->
 								<div class="rfield">
 									<label class="rfield-label">
 										{isIncome ? 'Description' : 'Supplier'}
-										{#if isEdited(job, 'supplier')}<span class="edited-tag">edited</span>{/if}
+										{#if isIncome && isEdited(job, 'supplier')}<span class="edited-tag">edited</span>{/if}
+										{#if !isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
 									</label>
-									<input
-										class="form-input rinput"
-										value={editedValue(job, 'supplier')}
-										oninput={(e) => updateEdit(job.id, 'supplier', (e.target as HTMLInputElement).value)}
-									/>
+									{#if isIncome}
+										<input
+											class="form-input rinput"
+											value={editedValue(job, 'supplier')}
+											oninput={(e) => updateEdit(job.id, 'supplier', (e.target as HTMLInputElement).value)}
+										/>
+									{:else}
+										<ContactSelect
+											role={Role.Supplier}
+											initialLabel={job.supplier}
+											suggestions={job.matchCandidates}
+											onChange={(v) => setContact(job.id, v)}
+										/>
+									{/if}
 								</div>
 
 								<!-- Amount -->

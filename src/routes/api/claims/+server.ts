@@ -6,8 +6,7 @@ import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals }) => {
 	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
-	const results = listClaims(db, user.id);
+	const results = listClaims(db);
 	return Response.json(results);
 };
 

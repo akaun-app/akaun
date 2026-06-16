@@ -1,7 +1,7 @@
-import { and, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, eq, gte, lte, sql, getTableColumns } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { incomes, incomeAttachments, incomeSearchText } from '../db/schema.js';
+import { incomes, incomeAttachments, incomeSearchText, contacts } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -19,7 +19,7 @@ export type IncomeFilters = {
 };
 
 export type IncomeCreate = {
-	source?: string;
+	contactId?: number | null;
 	descriptionText?: string;
 	reference?: string;
 	remark?: string;
@@ -30,31 +30,44 @@ export type IncomeCreate = {
 
 export type IncomePatch = Partial<IncomeCreate>;
 
+type IncomeRow = typeof incomes.$inferSelect;
+
+function contactNameFor(db: Db, contactId: number | null | undefined): string {
+	if (!contactId) return '';
+	const row = db
+		.select({ legalName: contacts.legalName })
+		.from(contacts)
+		.where(eq(contacts.id, contactId))
+		.get();
+	return row?.legalName ?? '';
+}
+
 function buildSearchText(i: {
-	source: string;
 	descriptionText: string;
 	reference: string;
 	remark: string;
 	category: string;
-}): string {
-	return [i.source, i.descriptionText, i.reference, i.remark, i.category]
+}, contactName: string): string {
+	return [contactName, i.descriptionText, i.reference, i.remark, i.category]
 		.filter(Boolean)
 		.join(' ');
 }
 
-export function listIncomes(db: Db, userId: number, filters: IncomeFilters = {}) {
-	const {
-		category,
-		dateFrom,
-		dateTo,
-		amountMin,
-		amountMax,
-		search,
-		limit = 100,
-		offset = 0
-	} = filters;
+function reindex(db: Db, incomeId: number, row: IncomeRow) {
+	const text = buildSearchText(row, contactNameFor(db, row.contactId));
+	db.insert(incomeSearchText)
+		.values({ incomeId, text })
+		.onConflictDoUpdate({ target: incomeSearchText.incomeId, set: { text } })
+		.run();
+}
 
-	const conditions = [eq(incomes.userId, userId)];
+const incomeWithContact = { ...getTableColumns(incomes), contactName: contacts.legalName };
+
+export function listIncomes(db: Db, filters: IncomeFilters = {}) {
+	const { category, dateFrom, dateTo, amountMin, amountMax, search, limit = 100, offset = 0 } =
+		filters;
+
+	const conditions = [];
 	if (category) conditions.push(eq(incomes.category, category));
 	if (dateFrom) conditions.push(gte(incomes.date, dateFrom));
 	if (dateTo) conditions.push(lte(incomes.date, dateTo));
@@ -68,19 +81,21 @@ export function listIncomes(db: Db, userId: number, filters: IncomeFilters = {})
 	}
 
 	return db
-		.select()
+		.select(incomeWithContact)
 		.from(incomes)
-		.where(and(...conditions))
+		.leftJoin(contacts, eq(contacts.id, incomes.contactId))
+		.where(conditions.length ? and(...conditions) : undefined)
 		.limit(limit)
 		.offset(offset)
 		.all();
 }
 
-export function getIncome(db: Db, id: number, userId: number) {
+export function getIncome(db: Db, id: number) {
 	const income = db
-		.select()
+		.select(incomeWithContact)
 		.from(incomes)
-		.where(and(eq(incomes.id, id), eq(incomes.userId, userId)))
+		.leftJoin(contacts, eq(contacts.id, incomes.contactId))
+		.where(eq(incomes.id, id))
 		.get();
 
 	if (!income) return null;
@@ -94,69 +109,49 @@ export function getIncome(db: Db, id: number, userId: number) {
 	return { ...income, attachments };
 }
 
-export function createIncome(db: Db, userId: number, data: IncomeCreate) {
-	const incomeNumber = nextNumber(db, 'IN', data.date, userId);
+export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
+	const incomeNumber = nextNumber(db, 'IN', data.date);
 
 	const row = db
 		.insert(incomes)
 		.values({
 			incomeNumber,
-			source: data.source ?? '',
+			contactId: data.contactId ?? null,
 			descriptionText: data.descriptionText ?? '',
 			reference: data.reference ?? '',
 			remark: data.remark ?? '',
 			category: data.category ?? 'Other',
 			date: data.date,
 			amount: data.amount,
-			userId
+			createdBy: actingUserId,
+			updatedBy: actingUserId
 		})
 		.returning()
 		.get()!;
 
-	const text = buildSearchText(row);
-	db.insert(incomeSearchText)
-		.values({ incomeId: row.id, text })
-		.onConflictDoUpdate({
-			target: incomeSearchText.incomeId,
-			set: { text }
-		})
-		.run();
-
+	reindex(db, row.id, row);
 	return row;
 }
 
-export function updateIncome(db: Db, id: number, userId: number, patch: IncomePatch) {
-	const existing = db
-		.select()
-		.from(incomes)
-		.where(and(eq(incomes.id, id), eq(incomes.userId, userId)))
-		.get();
-
+export function updateIncome(db: Db, id: number, actingUserId: number, patch: IncomePatch) {
+	const existing = db.select().from(incomes).where(eq(incomes.id, id)).get();
 	if (!existing) return null;
 
 	const updated = db
 		.update(incomes)
-		.set(patch)
-		.where(and(eq(incomes.id, id), eq(incomes.userId, userId)))
+		.set({ ...patch, updatedBy: actingUserId })
+		.where(eq(incomes.id, id))
 		.returning()
 		.get()!;
 
-	const text = buildSearchText(updated);
-	db.insert(incomeSearchText)
-		.values({ incomeId: id, text })
-		.onConflictDoUpdate({
-			target: incomeSearchText.incomeId,
-			set: { text }
-		})
-		.run();
-
+	reindex(db, id, updated);
 	return updated;
 }
 
-export function deleteIncome(db: Db, id: number, userId: number): boolean {
+export function deleteIncome(db: Db, id: number): boolean {
 	const result = db
 		.delete(incomes)
-		.where(and(eq(incomes.id, id), eq(incomes.userId, userId)))
+		.where(eq(incomes.id, id))
 		.returning({ id: incomes.id })
 		.get();
 

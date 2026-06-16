@@ -7,10 +7,9 @@ import { isValidDate } from '$lib/server/date.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const id = parseInt(params.id!);
 
-	const claim = getClaim(db, id, user.id);
+	const claim = getClaim(db, id);
 	if (!claim) return Response.json({ error: 'Not found' }, { status: 404 });
 
 	return Response.json(claim);
@@ -22,8 +21,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const id = parseInt(params.id!);
 
 	const body = await request.json();
-	const patch: { status?: string; date?: string } = {};
-	if (body.status !== undefined) patch.status = body.status;
+	const patch: { status?: number; date?: string } = {};
+	if (body.status !== undefined) patch.status = Number(body.status);
 	if (body.date !== undefined) {
 		if (!isValidDate(body.date)) {
 			return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });
@@ -39,10 +38,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'delete')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const id = parseInt(params.id!);
 
-	const deleted = removeClaim(db, id, user.id);
+	const deleted = removeClaim(db, id);
 	if (!deleted) return Response.json({ error: 'Not found' }, { status: 404 });
 
 	return new Response(null, { status: 204 });

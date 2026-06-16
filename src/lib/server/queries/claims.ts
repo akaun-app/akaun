@@ -1,55 +1,49 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { claims, claimAttachments, expenses } from '../db/schema.js';
+import { claims, claimAttachments, expenses, contacts } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
+import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
 
-export function listClaims(db: Db, userId: number) {
-	const rows = db
-		.select()
-		.from(claims)
-		.where(eq(claims.userId, userId))
-		.orderBy(desc(claims.date))
+// Minimal expense projection for the claim view (does not leak full expense detail).
+function claimExpensesFor(db: Db, claimId: number) {
+	return db
+		.select({
+			id: expenses.id,
+			expenseNumber: expenses.expenseNumber,
+			itemName: expenses.itemName,
+			contactId: expenses.contactId,
+			contactName: contacts.legalName,
+			status: expenses.status,
+			amount: expenses.amount,
+			date: expenses.date
+		})
+		.from(expenses)
+		.leftJoin(contacts, eq(contacts.id, expenses.contactId))
+		.where(eq(expenses.claimId, claimId))
 		.all();
+}
+
+export function listClaims(db: Db) {
+	const rows = db.select().from(claims).orderBy(desc(claims.date)).all();
 
 	return rows.map((claim) => {
-		const claimExpenses = db
-			.select({
-				id: expenses.id,
-				expenseNumber: expenses.expenseNumber,
-				itemName: expenses.itemName,
-				supplier: expenses.supplier,
-				status: expenses.status,
-				amount: expenses.amount
-			})
-			.from(expenses)
-			.where(eq(expenses.claimId, claim.id))
-			.all();
-
+		const claimExpenses = claimExpensesFor(db, claim.id);
 		const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
-		const suppliers = [...new Set(claimExpenses.map((e) => e.supplier).filter(Boolean))];
+		const suppliers = [...new Set(claimExpenses.map((e) => e.contactName).filter(Boolean))];
 
 		return { ...claim, total, expenseCount: claimExpenses.length, suppliers, expenses: claimExpenses };
 	});
 }
 
-export function getClaim(db: Db, id: number, userId: number) {
-	const claim = db
-		.select()
-		.from(claims)
-		.where(and(eq(claims.id, id), eq(claims.userId, userId)))
-		.get();
-
+export function getClaim(db: Db, id: number) {
+	const claim = db.select().from(claims).where(eq(claims.id, id)).get();
 	if (!claim) return null;
 
-	const claimExpenses = db
-		.select()
-		.from(expenses)
-		.where(eq(expenses.claimId, id))
-		.all();
+	const claimExpenses = claimExpensesFor(db, id);
 
 	const attachments = db
 		.select()
@@ -59,34 +53,31 @@ export function getClaim(db: Db, id: number, userId: number) {
 
 	const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
 	const expenseCount = claimExpenses.length;
-	const suppliers = [...new Set(claimExpenses.map((e) => e.supplier).filter(Boolean))];
+	const suppliers = [...new Set(claimExpenses.map((e) => e.contactName).filter(Boolean))];
 
 	return { ...claim, expenses: claimExpenses, attachments, total, expenseCount, suppliers };
 }
 
-export function createClaim(
-	db: Db,
-	userId: number,
-	data: { date: string; expenseIds: number[] }
-) {
+export function createClaim(db: Db, actingUserId: number, data: { date: string; expenseIds: number[] }) {
 	return db.transaction(() => {
-		const claimNumber = nextNumber(
-			db,
-			'CL',
-			data.date,
-			userId
-		);
+		const claimNumber = nextNumber(db, 'CL', data.date);
 
 		const claim = db
 			.insert(claims)
-			.values({ claimNumber, date: data.date, status: 'pending', userId })
+			.values({
+				claimNumber,
+				date: data.date,
+				status: ClaimStatus.Pending,
+				createdBy: actingUserId,
+				updatedBy: actingUserId
+			})
 			.returning()
 			.get()!;
 
 		if (data.expenseIds.length > 0) {
 			db.update(expenses)
-				.set({ status: 'pending', claimId: claim.id })
-				.where(and(inArray(expenses.id, data.expenseIds), eq(expenses.userId, userId)))
+				.set({ status: ExpenseStatus.Pending, claimId: claim.id })
+				.where(inArray(expenses.id, data.expenseIds))
 				.run();
 		}
 
@@ -94,21 +85,18 @@ export function createClaim(
 	});
 }
 
-export function markClaimDone(db: Db, id: number, userId: number) {
+export function markClaimDone(db: Db, id: number, actingUserId: number) {
 	return db.transaction(() => {
 		const claim = db
 			.update(claims)
-			.set({ status: 'done' })
-			.where(and(eq(claims.id, id), eq(claims.userId, userId)))
+			.set({ status: ClaimStatus.Done, updatedBy: actingUserId })
+			.where(eq(claims.id, id))
 			.returning()
 			.get();
 
 		if (!claim) return null;
 
-		db.update(expenses)
-			.set({ status: 'paid' })
-			.where(eq(expenses.claimId, id))
-			.run();
+		db.update(expenses).set({ status: ExpenseStatus.Paid }).where(eq(expenses.claimId, id)).run();
 
 		return claim;
 	});
@@ -117,33 +105,30 @@ export function markClaimDone(db: Db, id: number, userId: number) {
 export function updateClaim(
 	db: Db,
 	id: number,
-	userId: number,
-	patch: { status?: string; date?: string }
+	actingUserId: number,
+	patch: { status?: number; date?: string }
 ) {
-	if (patch.status === 'done') {
-		return markClaimDone(db, id, userId);
+	if (patch.status === ClaimStatus.Done) {
+		return markClaimDone(db, id, actingUserId);
 	}
 
-	return db
-		.update(claims)
-		.set(patch)
-		.where(and(eq(claims.id, id), eq(claims.userId, userId)))
-		.returning()
-		.get() ?? null;
+	return (
+		db
+			.update(claims)
+			.set({ ...patch, updatedBy: actingUserId })
+			.where(eq(claims.id, id))
+			.returning()
+			.get() ?? null
+	);
 }
 
-export function deleteClaim(db: Db, id: number, userId: number): boolean {
+export function deleteClaim(db: Db, id: number): boolean {
 	return db.transaction(() => {
-		const claim = db
-			.select({ id: claims.id })
-			.from(claims)
-			.where(and(eq(claims.id, id), eq(claims.userId, userId)))
-			.get();
-
+		const claim = db.select({ id: claims.id }).from(claims).where(eq(claims.id, id)).get();
 		if (!claim) return false;
 
 		db.update(expenses)
-			.set({ status: 'unpaid', claimId: null })
+			.set({ status: ExpenseStatus.Unpaid, claimId: null })
 			.where(eq(expenses.claimId, id))
 			.run();
 

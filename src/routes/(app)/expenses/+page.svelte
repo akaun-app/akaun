@@ -20,12 +20,25 @@
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
+	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
+	import { ExpenseStatus, Role } from '$lib/enums.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	// Status tab id → ExpenseStatus INT code.
+	const STATUS_CODE: Record<string, number> = {
+		unpaid: ExpenseStatus.Unpaid,
+		pending: ExpenseStatus.Pending,
+		paid: ExpenseStatus.Paid
+	};
+
+	// New-expense contact picker state (submitted via hidden inputs).
+	let newContactId = $state<number | null>(null);
+	let newContactName = $state<string | null>(null);
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
 	let expenses = $state(data.expenses);
@@ -67,12 +80,12 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) newExpenseFiles = []; });
+	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; } });
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
 		let rows = expenses.slice();
-		if (statusTab !== 'all') rows = rows.filter((e) => e.status === statusTab);
+		if (statusTab !== 'all') rows = rows.filter((e) => e.status === STATUS_CODE[statusTab]);
 		if (selectedCats.length) rows = rows.filter((e) => selectedCats.includes(e.category));
 		const mn = amountMin !== '' ? parseFloat(amountMin) : null;
 		const mx = amountMax !== '' ? parseFloat(amountMax) : null;
@@ -85,7 +98,7 @@
 			rows = rows.filter(
 				(e) =>
 					e.itemName.toLowerCase().includes(q) ||
-					e.supplier.toLowerCase().includes(q) ||
+					(e.contactName ?? '').toLowerCase().includes(q) ||
 					e.expenseNumber.toLowerCase().includes(q) ||
 					(e.reference ?? '').toLowerCase().includes(q) ||
 					e.category.toLowerCase().includes(q)
@@ -109,19 +122,19 @@
 	const someSelected = $derived(filtered.some((e) => selected.has(e.id)) && !allSelected);
 	const selectedList = $derived(filtered.filter((e) => selected.has(e.id)));
 	const selTotal = $derived(selectedList.reduce((s, e) => s + e.amount, 0));
-	const claimable = $derived(selectedList.length > 0 && selectedList.every((e) => e.status === 'unpaid'));
+	const claimable = $derived(selectedList.length > 0 && selectedList.every((e) => e.status === ExpenseStatus.Unpaid));
 
 	const counts = $derived.by(() => ({
 		all: expenses.length,
-		unpaid: expenses.filter((e) => e.status === 'unpaid').length,
-		pending: expenses.filter((e) => e.status === 'pending').length,
-		paid: expenses.filter((e) => e.status === 'paid').length,
+		unpaid: expenses.filter((e) => e.status === ExpenseStatus.Unpaid).length,
+		pending: expenses.filter((e) => e.status === ExpenseStatus.Pending).length,
+		paid: expenses.filter((e) => e.status === ExpenseStatus.Paid).length,
 	}));
 
 	// Stats — derived from local state so they update in real-time
 	const stats = $derived.by(() => {
-		const unpaid = expenses.filter((e) => e.status === 'unpaid');
-		const pending = expenses.filter((e) => e.status === 'pending');
+		const unpaid = expenses.filter((e) => e.status === ExpenseStatus.Unpaid);
+		const pending = expenses.filter((e) => e.status === ExpenseStatus.Pending);
 		const now = new Date();
 		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 		const thisMonth = expenses.filter((e) => e.date.startsWith(monthKey));
@@ -481,13 +494,13 @@
 										<span class="cell-itemnum">{e.expenseNumber}</span>
 									</div>
 								</td>
-								<td class="td-supplier" data-label="Supplier">{e.supplier || '—'}</td>
+								<td class="td-supplier" data-label="Supplier">{e.contactName || '—'}</td>
 								<td data-label="Category">
 									<span style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;">
 										{e.category}
 									</span>
 								</td>
-								<td class="td-status"><StatusBadge status={e.status as 'unpaid'|'pending'|'paid'} /></td>
+								<td class="td-status"><StatusBadge status={e.status} /></td>
 								<td class="td-date" data-label="Date">
 									{formatDateShort(e.date)}<span class="td-year">{e.date.slice(0, 4)}</span>
 								</td>
@@ -645,16 +658,16 @@
 						{/if}
 					</div>
 					<div class="detail-statusrow">
-						<StatusBadge status={detailExpense.status as 'unpaid'|'pending'|'paid'} />
+						<StatusBadge status={detailExpense.status} />
 						{#if detailExpense.claimId}
 							<span style="font-size:11.5px; color:var(--muted-foreground);">Linked to claim</span>
 						{/if}
 					</div>
 					<div class="detail-list">
-						{#if detailExpense.supplier}
+						{#if detailExpense.contactName}
 							<div class="detail-row">
 								<div class="detail-key">Supplier</div>
-								<div class="detail-val">{detailExpense.supplier}</div>
+								<div class="detail-val">{detailExpense.contactName}</div>
 							</div>
 						{/if}
 						<div class="detail-row">
@@ -778,7 +791,14 @@
 
 				<div class="field">
 					<label class="field-label" for="supplier">Supplier</label>
-					<input id="supplier" name="supplier" type="text" placeholder="e.g. IKEA" style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;" />
+					<ContactSelect
+						role={Role.Supplier}
+						bind:value={newContactId}
+						bind:newName={newContactName}
+						placeholder="Search or add a supplier…"
+					/>
+					<input type="hidden" name="contactId" value={newContactId ?? ''} />
+					<input type="hidden" name="newContactName" value={newContactName ?? ''} />
 				</div>
 
 				<div class="field">

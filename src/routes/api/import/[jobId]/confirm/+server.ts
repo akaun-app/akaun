@@ -7,31 +7,27 @@ import { importEvents } from '$lib/server/import/events.js';
 const log = createLogger('import:confirm');
 import {
 	importQueue,
-	expenses,
 	expenseAttachments,
-	expenseSearchText,
-	incomes,
-	incomeAttachments,
-	incomeSearchText
+	incomeAttachments
 } from '$lib/server/db/schema.js';
 import { moveToFinal, displayName } from '$lib/server/file-storage.js';
 import { normalizeDate } from '$lib/server/date.js';
-import { nextNumber } from '$lib/server/running-number.js';
+import { createExpense } from '$lib/server/services/expenses.js';
+import { createIncome } from '$lib/server/services/income.js';
+import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
+import { ImportState, DocumentType, Role, documentTypeEnum } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	// Shared ledger: any user with import.change may confirm, not just the uploader.
 	if (!hasPermission(locals, 'import', 'change')) return new Response('Forbidden', { status: 403 });
 
-	const row = db
-		.select()
-		.from(importQueue)
-		.where(and(eq(importQueue.id, params.jobId), eq(importQueue.userId, locals.user.id)))
-		.get();
+	const row = db.select().from(importQueue).where(eq(importQueue.id, params.jobId)).get();
 
 	if (!row) return new Response('Not found', { status: 404 });
-	if (row.state !== 'pending_review') {
+	if (row.state !== ImportState.PendingReview) {
 		return json({ error: 'Job is not in pending_review state' }, { status: 400 });
 	}
 
@@ -46,53 +42,64 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		}
 	}
 
+	// Resolve the document type → DocumentType code (overrides may be a label or a code).
+	let docCode: number;
+	if (typeof overrides.document_type === 'number') docCode = overrides.document_type;
+	else if (typeof overrides.document_type === 'string')
+		docCode = documentTypeEnum.fromLabel(overrides.document_type) ?? row.documentType ?? DocumentType.Expense;
+	else docCode = row.documentType ?? DocumentType.Expense;
+	const isIncome = docCode === DocumentType.Income;
+
 	// Merge: start from queue row, apply only the overridden fields
-	const docType = (overrides.document_type as string) || row.documentType || 'expense';
 	const itemName = (overrides.item_name as string) ?? row.itemName ?? '';
 	const supplier = (overrides.supplier as string) ?? row.supplier ?? '';
-	// Validate any client-supplied date — it is used both as the stored record date and to
-	// build the file's destination path, so an invalid value must never reach the filesystem.
 	const date = normalizeDate((overrides.date as string) ?? row.date);
 	const amount = (overrides.amount as number) ?? row.amount ?? 0;
 	const reference = (overrides.reference as string) ?? row.reference ?? '';
 	const category = (overrides.category as string) ?? row.category ?? 'Other';
 	const remark = (overrides.remark as string) ?? row.remark ?? '';
 
+	// Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
+	// Priority: explicit contactId → typed new name → confident match → raw extracted name.
+	const role = isIncome ? Role.Customer : Role.Supplier;
+	const partyRawName = isIncome ? itemName : supplier;
+	// If the user edited the party name as free text, don't let a stale fuzzy match win.
+	const partyEdited = isIncome ? overrides.item_name !== undefined : overrides.supplier !== undefined;
+	const uploader = row.createdBy;
+	let contactId: number | null = null;
+	if (typeof overrides.contactId === 'number') {
+		contactId = overrides.contactId;
+	} else if (typeof overrides.newContactName === 'string' && overrides.newContactName.trim()) {
+		contactId = resolveOrCreateContact(db, overrides.newContactName, role, uploader);
+	} else if (row.matchedContactId && !partyEdited) {
+		contactId = row.matchedContactId;
+	} else if (partyRawName.trim()) {
+		contactId = resolveOrCreateContact(db, partyRawName, role, uploader);
+	}
+
 	const now = new Date().toISOString();
 
-	// Mark as confirmed before DB transaction
+	// Mark as confirmed before insert
 	db.update(importQueue)
-		.set({ state: 'confirmed', confirmedAt: now })
+		.set({ state: ImportState.Confirmed, confirmedAt: now })
 		.where(eq(importQueue.id, params.jobId))
 		.run();
 
 	let resultId: number;
-	let resultType: string;
 	let number: string;
 
-	if (docType === 'income') {
-		const incomeNumber = nextNumber(db, 'IN', date, locals.user.id);
-		const searchText = [itemName, supplier, reference, remark, category].filter(Boolean).join(' ');
-
-		const inserted = db
-			.insert(incomes)
-			.values({
-				incomeNumber,
-				source: itemName,
-				descriptionText: supplier,
-				reference,
-				remark,
-				category,
-				date,
-				amount,
-				userId: locals.user.id
-			})
-			.returning({ id: incomes.id })
-			.get();
-
-		resultId = inserted!.id;
-		resultType = 'income';
-		number = incomeNumber;
+	if (isIncome) {
+		const inserted = createIncome(db, uploader, {
+			contactId,
+			descriptionText: supplier,
+			reference,
+			remark,
+			category,
+			date,
+			amount
+		});
+		resultId = inserted.id;
+		number = inserted.incomeNumber;
 
 		db.insert(incomeAttachments)
 			.values({
@@ -102,38 +109,18 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				addedDate: date
 			})
 			.run();
-
-		db.insert(incomeSearchText)
-			.values({ incomeId: resultId, text: searchText })
-			.onConflictDoUpdate({
-				target: [incomeSearchText.incomeId],
-				set: { text: searchText }
-			})
-			.run();
 	} else {
-		const expenseNumber = nextNumber(db, 'EX', date, locals.user.id);
-		const searchText = [itemName, supplier, reference, remark, category].filter(Boolean).join(' ');
-
-		const inserted = db
-			.insert(expenses)
-			.values({
-				expenseNumber,
-				itemName,
-				supplier,
-				reference,
-				remark,
-				category,
-				date,
-				amount,
-				status: 'unpaid',
-				userId: locals.user.id
-			})
-			.returning({ id: expenses.id })
-			.get();
-
-		resultId = inserted!.id;
-		resultType = 'expense';
-		number = expenseNumber;
+		const inserted = createExpense(db, uploader, {
+			itemName,
+			contactId,
+			reference,
+			remark,
+			category,
+			date,
+			amount
+		});
+		resultId = inserted.id;
+		number = inserted.expenseNumber;
 
 		db.insert(expenseAttachments)
 			.values({
@@ -143,25 +130,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 				addedDate: date
 			})
 			.run();
-
-		db.insert(expenseSearchText)
-			.values({ expenseId: resultId, text: searchText })
-			.onConflictDoUpdate({
-				target: [expenseSearchText.expenseId],
-				set: { text: searchText }
-			})
-			.run();
 	}
 
-	// Move file from temp to final location (after DB commit)
+	// Move file from temp to final location (after insert)
 	try {
-		const finalPath = moveToFinal(
-			row.tempFilePath,
-			docType === 'income' ? 'income' : 'expenses',
-			date
-		);
-		// Update attachment record with final path
-		if (docType === 'income') {
+		const finalPath = moveToFinal(row.tempFilePath, isIncome ? 'income' : 'expenses', date);
+		if (isIncome) {
 			db.update(incomeAttachments)
 				.set({ filename: finalPath })
 				.where(and(eq(incomeAttachments.incomeId, resultId), eq(incomeAttachments.filename, row.tempFilePath)))
@@ -177,7 +151,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	}
 
 	db.update(importQueue)
-		.set({ state: 'imported', resultId, resultType, completedAt: new Date().toISOString() })
+		.set({ state: ImportState.Imported, resultId, resultType: docCode, completedAt: new Date().toISOString() })
 		.where(eq(importQueue.id, params.jobId))
 		.run();
 

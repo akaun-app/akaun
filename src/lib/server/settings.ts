@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { settings } from './db/schema.js';
 
@@ -17,13 +17,12 @@ export const SETTING_KEYS = {
 export function getSetting(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	db: BunSQLiteDatabase<any>,
-	userId: number,
 	key: string
 ): string | null {
 	const row = db
 		.select({ value: settings.value })
 		.from(settings)
-		.where(and(eq(settings.userId, userId), eq(settings.key, key)))
+		.where(eq(settings.key, key))
 		.get();
 	return row?.value ?? null;
 }
@@ -31,14 +30,13 @@ export function getSetting(
 export function setSetting(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	db: BunSQLiteDatabase<any>,
-	userId: number,
 	key: string,
 	value: string
 ): void {
 	db.insert(settings)
-		.values({ userId, key, value })
+		.values({ key, value })
 		.onConflictDoUpdate({
-			target: [settings.userId, settings.key],
+			target: settings.key,
 			set: { value }
 		})
 		.run();

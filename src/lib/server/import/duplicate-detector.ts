@@ -1,8 +1,7 @@
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { expenses, incomes, importQueue } from '../db/schema.js';
-
-type Db = BunSQLiteDatabase<Record<string, never>>;
+import { expenses, incomes, importQueue, contacts } from '../db/schema.js';
+import { ImportState, DuplicateSignal } from '$lib/enums.js';
 
 type JobSnapshot = {
 	originalFilename: string;
@@ -15,78 +14,69 @@ type JobSnapshot = {
 
 type DuplicateResult = {
 	duplicateOf: number;
-	duplicateSignal: string;
+	duplicateSignal: number;
 } | null;
 
+// Shared ledger: no per-user filtering — a duplicate is a duplicate for everyone.
 export function detectDuplicate(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	db: BunSQLiteDatabase<any>,
-	userId: number,
 	job: JobSnapshot
 ): DuplicateResult {
-	// 1. Filename — another imported queue row with same original filename
+	// 1. Filename — another imported queue row with the same original filename.
 	const byFilename = db
 		.select({ id: importQueue.resultId })
 		.from(importQueue)
 		.where(
 			and(
-				eq(importQueue.userId, userId),
 				eq(importQueue.originalFilename, job.originalFilename),
-				eq(importQueue.state, 'imported')
+				eq(importQueue.state, ImportState.Imported)
 			)
 		)
 		.get();
 	if (byFilename?.id != null) {
-		return { duplicateOf: byFilename.id, duplicateSignal: 'filename' };
+		return { duplicateOf: byFilename.id, duplicateSignal: DuplicateSignal.Filename };
 	}
 
-	// 2. Reference — non-empty reference match in expenses or incomes
+	// 2. Reference — non-empty reference match in expenses or incomes.
 	if (job.reference && job.reference.trim()) {
 		const ref = job.reference.trim();
-		const byExpRef = db
-			.select({ id: expenses.id })
-			.from(expenses)
-			.where(and(eq(expenses.userId, userId), eq(expenses.reference, ref)))
-			.get();
-		if (byExpRef) return { duplicateOf: byExpRef.id, duplicateSignal: 'reference' };
+		const byExpRef = db.select({ id: expenses.id }).from(expenses).where(eq(expenses.reference, ref)).get();
+		if (byExpRef) return { duplicateOf: byExpRef.id, duplicateSignal: DuplicateSignal.Reference };
 
-		const byIncRef = db
-			.select({ id: incomes.id })
-			.from(incomes)
-			.where(and(eq(incomes.userId, userId), eq(incomes.reference, ref)))
-			.get();
-		if (byIncRef) return { duplicateOf: byIncRef.id, duplicateSignal: 'reference' };
+		const byIncRef = db.select({ id: incomes.id }).from(incomes).where(eq(incomes.reference, ref)).get();
+		if (byIncRef) return { duplicateOf: byIncRef.id, duplicateSignal: DuplicateSignal.Reference };
 	}
 
-	// 3. Amount + date + supplier
+	// 3. Amount + date + supplier (matched via the linked contact's legal name).
 	if (job.amount && job.date && job.supplier) {
 		const byTriple = db
 			.select({ id: expenses.id })
 			.from(expenses)
+			.leftJoin(contacts, eq(contacts.id, expenses.contactId))
 			.where(
 				and(
-					eq(expenses.userId, userId),
 					eq(expenses.amount, job.amount),
 					eq(expenses.date, job.date),
-					or(eq(expenses.supplier, job.supplier), eq(expenses.itemName, job.itemName ?? ''))
+					eq(contacts.legalName, job.supplier)
 				)
 			)
 			.get();
-		if (byTriple) return { duplicateOf: byTriple.id, duplicateSignal: 'amount_date_supplier' };
+		if (byTriple) return { duplicateOf: byTriple.id, duplicateSignal: DuplicateSignal.AmountDateSupplier };
 
 		const byIncTriple = db
 			.select({ id: incomes.id })
 			.from(incomes)
+			.leftJoin(contacts, eq(contacts.id, incomes.contactId))
 			.where(
 				and(
-					eq(incomes.userId, userId),
 					eq(incomes.amount, job.amount),
 					eq(incomes.date, job.date),
-					eq(incomes.source, job.itemName ?? '')
+					eq(contacts.legalName, job.supplier)
 				)
 			)
 			.get();
-		if (byIncTriple) return { duplicateOf: byIncTriple.id, duplicateSignal: 'amount_date_supplier' };
+		if (byIncTriple) return { duplicateOf: byIncTriple.id, duplicateSignal: DuplicateSignal.AmountDateSupplier };
 	}
 
 	return null;

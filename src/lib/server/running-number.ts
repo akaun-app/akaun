@@ -6,16 +6,15 @@ export function nextNumber(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	db: BunSQLiteDatabase<any>,
 	prefix: string,
-	date: string,
-	userId: number
+	date: string
 ): string {
 	const dateKey = date.replace(/-/g, '');
 
 	const result = db
 		.insert(appSequences)
-		.values({ prefix, dateKey, lastSequence: 1, userId })
+		.values({ prefix, dateKey, lastSequence: 1 })
 		.onConflictDoUpdate({
-			target: [appSequences.prefix, appSequences.dateKey, appSequences.userId],
+			target: [appSequences.prefix, appSequences.dateKey],
 			set: { lastSequence: sql`${appSequences.lastSequence} + 1` }
 		})
 		.returning({ seq: appSequences.lastSequence })

@@ -44,6 +44,7 @@
 		{ id: 'expenses', label: 'Expenses', href: '/expenses', Icon: Wallet, badge: unpaidCount, resource: 'expenses' },
 		{ id: 'income', label: 'Income', href: '/income', Icon: TrendingUp, resource: 'income' },
 		{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText, resource: 'claims' },
+		{ id: 'contacts', label: 'Contacts', href: '/contacts', Icon: Users, resource: 'contacts' },
 		{ id: 'import', label: 'Auto Import', href: '/import', Icon: Upload, resource: 'import' }
 	].filter((item) => {
 		if (!item.resource) return true;

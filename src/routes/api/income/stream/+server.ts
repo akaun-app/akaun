@@ -6,7 +6,6 @@ export const GET: RequestHandler = ({ locals }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
 	if (!hasPermission(locals, 'income', 'view')) return new Response('Forbidden', { status: 403 });
 
-	const userId = locals.user.id;
 	const encoder = new TextEncoder();
 	const encodeEvent = (data: object) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 	const encodeComment = (text: string) => encoder.encode(`: ${text}\n\n`);
@@ -15,8 +14,7 @@ export const GET: RequestHandler = ({ locals }) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
-			const updateHandler = ({ userId: uid, item }: { userId: number; item: unknown }) => {
-				if (uid !== userId) return;
+			const updateHandler = ({ item }: { item: unknown }) => {
 				try {
 					controller.enqueue(encodeEvent({ type: 'income-update', item }));
 				} catch {
@@ -24,8 +22,7 @@ export const GET: RequestHandler = ({ locals }) => {
 				}
 			};
 
-			const deleteHandler = ({ userId: uid, id }: { userId: number; id: number }) => {
-				if (uid !== userId) return;
+			const deleteHandler = ({ id }: { id: number }) => {
 				try {
 					controller.enqueue(encodeEvent({ type: 'income-delete', id }));
 				} catch {

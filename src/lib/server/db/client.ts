@@ -3,13 +3,13 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { hash } from 'argon2';
 import { randomBytes } from 'node:crypto';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
-import { users, groups, groupPermissions, userGroups, settings } from './schema.js';
+import { users, groups, groupPermissions, userGroups } from './schema.js';
 
 const log = createLogger('db');
 
@@ -67,7 +67,8 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			claims: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			import: { canView: true, canAdd: true, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: true, canDelete: false }
+			categories: { canView: true, canAdd: false, canChange: true, canDelete: false },
+			contacts: { canView: true, canAdd: true, canChange: true, canDelete: false }
 		}
 	},
 	{
@@ -79,7 +80,8 @@ const SEED_GROUPS = [
 			income: { canView: false, canAdd: true, canChange: false, canDelete: false },
 			claims: { canView: false, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: false, canAdd: true, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: false, canDelete: false }
+			categories: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			contacts: { canView: true, canAdd: true, canChange: false, canDelete: false }
 		}
 	},
 	{
@@ -91,7 +93,8 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			claims: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: true, canAdd: false, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: false, canDelete: false }
+			categories: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			contacts: { canView: true, canAdd: false, canChange: false, canDelete: false }
 		}
 	}
 ];
@@ -117,24 +120,6 @@ export function ensureGroupSeed(): void {
 				}
 			}
 			log.info({ group: seed.name }, 'Seeded default group');
-		}
-	}
-
-	// Migrate api.bearerToken from settings → users.bearer_token
-	const allUsers = db.select({ id: users.id, bearerToken: users.bearerToken }).from(users).all();
-	for (const user of allUsers) {
-		if (user.bearerToken) continue; // already migrated
-		const row = db
-			.select({ value: settings.value })
-			.from(settings)
-			.where(and(eq(settings.userId, user.id), eq(settings.key, 'api.bearerToken')))
-			.get();
-		if (row?.value) {
-			db.update(users).set({ bearerToken: row.value }).where(eq(users.id, user.id)).run();
-			db.delete(settings)
-				.where(and(eq(settings.userId, user.id), eq(settings.key, 'api.bearerToken')))
-				.run();
-			log.info({ userId: user.id }, 'Migrated api.bearerToken to users.bearer_token');
 		}
 	}
 

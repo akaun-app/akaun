@@ -26,21 +26,20 @@ const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 export const load: PageServerLoad = async ({ locals }) => {
-	const userId = locals.user!.id;
 
-	const expCatRaw = getSetting(db, userId, SETTING_KEYS.expenseCategories);
-	const incCatRaw = getSetting(db, userId, SETTING_KEYS.incomeCategories);
-	const currency = getSetting(db, userId, SETTING_KEYS.currencyCode) ?? 'MYR';
+	const expCatRaw = getSetting(db, SETTING_KEYS.expenseCategories);
+	const incCatRaw = getSetting(db, SETTING_KEYS.incomeCategories);
+	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'MYR';
 
 	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
 	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
 
-	const autoImportApiKey = getSetting(db, userId, SETTING_KEYS.autoImportApiKey) ?? '';
-	const autoImportModel = getSetting(db, userId, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
-	const autoImportParallelTasks = parseInt(getSetting(db, userId, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
-	const autoImportCategoryHints = (getSetting(db, userId, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
+	const autoImportApiKey = getSetting(db, SETTING_KEYS.autoImportApiKey) ?? '';
+	const autoImportModel = getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
+	const autoImportParallelTasks = parseInt(getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
+	const autoImportCategoryHints = (getSetting(db, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
 
-	const godModeEnabled = (getSetting(db, userId, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
+	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
 
 	return {
 		expenseCategories,
@@ -57,13 +56,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	saveExpenseCategories: async ({ locals, request }) => {
-		const userId = locals.user!.id;
 		const data = await request.formData();
 		const raw = String(data.get('categories') ?? '[]');
 		try {
 			const cats = JSON.parse(raw);
 			if (!Array.isArray(cats)) throw new Error('not array');
-			setSetting(db, userId, SETTING_KEYS.expenseCategories, JSON.stringify(cats));
+			setSetting(db, SETTING_KEYS.expenseCategories, JSON.stringify(cats));
 			return { success: true };
 		} catch {
 			return fail(400, { error: 'Invalid categories data' });
@@ -71,13 +69,12 @@ export const actions: Actions = {
 	},
 
 	saveIncomeCategories: async ({ locals, request }) => {
-		const userId = locals.user!.id;
 		const data = await request.formData();
 		const raw = String(data.get('categories') ?? '[]');
 		try {
 			const cats = JSON.parse(raw);
 			if (!Array.isArray(cats)) throw new Error('not array');
-			setSetting(db, userId, SETTING_KEYS.incomeCategories, JSON.stringify(cats));
+			setSetting(db, SETTING_KEYS.incomeCategories, JSON.stringify(cats));
 			return { success: true };
 		} catch {
 			return fail(400, { error: 'Invalid categories data' });
@@ -85,7 +82,6 @@ export const actions: Actions = {
 	},
 
 	saveIntelligence: async ({ locals, request }) => {
-		const userId = locals.user!.id;
 		const data = await request.formData();
 
 		const apiKey = String(data.get('apiKey') ?? '').trim();
@@ -95,19 +91,18 @@ export const actions: Actions = {
 
 		if (!model) return fail(400, { error: 'Model is required' });
 
-		if (apiKey) setSetting(db, userId, SETTING_KEYS.autoImportApiKey, apiKey);
-		setSetting(db, userId, SETTING_KEYS.autoImportModel, model);
-		setSetting(db, userId, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
-		setSetting(db, userId, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
+		if (apiKey) setSetting(db, SETTING_KEYS.autoImportApiKey, apiKey);
+		setSetting(db, SETTING_KEYS.autoImportModel, model);
+		setSetting(db, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
+		setSetting(db, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
 
 		return { success: true };
 	},
 
 	saveAdvanced: async ({ locals, request }) => {
-		const userId = locals.user!.id;
 		const data = await request.formData();
 		const godMode = data.get('godMode') === 'true';
-		setSetting(db, userId, SETTING_KEYS.godModeEnabled, String(godMode));
+		setSetting(db, SETTING_KEYS.godModeEnabled, String(godMode));
 		return { success: true };
 	},
 

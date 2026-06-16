@@ -7,9 +7,16 @@
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
+	import { ClaimStatus } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
+
+	// Tab id → ClaimStatus INT code.
+	const CLAIM_CODE: Record<string, number> = {
+		pending: ClaimStatus.Pending,
+		done: ClaimStatus.Done
+	};
 
 	type ClaimRow = (typeof data.claims)[0];
 	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
@@ -37,18 +44,18 @@
 	// --- Derived ---
 	const counts = $derived({
 		all: claims.length,
-		pending: claims.filter((c) => c.status === 'pending').length,
-		done: claims.filter((c) => c.status === 'done').length
+		pending: claims.filter((c) => c.status === ClaimStatus.Pending).length,
+		done: claims.filter((c) => c.status === ClaimStatus.Done).length
 	});
 
 	const totals = $derived({
-		pending: claims.filter((c) => c.status === 'pending').reduce((s, c) => s + c.total, 0),
-		done: claims.filter((c) => c.status === 'done').reduce((s, c) => s + c.total, 0),
+		pending: claims.filter((c) => c.status === ClaimStatus.Pending).reduce((s, c) => s + c.total, 0),
+		done: claims.filter((c) => c.status === ClaimStatus.Done).reduce((s, c) => s + c.total, 0),
 		all: claims.reduce((s, c) => s + c.total, 0)
 	});
 
 	const displayed = $derived.by(() => {
-		const list = (activeTab === 'all' ? claims.slice() : claims.filter((c) => c.status === activeTab))
+		const list = (activeTab === 'all' ? claims.slice() : claims.filter((c) => c.status === CLAIM_CODE[activeTab]))
 			.filter((c) => search === '' || c.claimNumber.toLowerCase().includes(search));
 		return list.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
 	});
@@ -264,7 +271,7 @@
 								</td>
 								<td class="td-date" data-label="Date">{formatDate(claim.date)}</td>
 								<td class="td-status" data-label="Status">
-									<StatusBadge status={claim.status === 'done' ? 'claimed' : 'pending'} />
+									<StatusBadge status={claim.status === ClaimStatus.Done ? 'claimed' : 'pending'} />
 								</td>
 								<td data-label="Expenses">
 									<div class="claim-suppliers">
@@ -359,7 +366,7 @@
 						<span class="detail-amount-val">{formatMoney(detailClaim.total)}</span>
 					</div>
 					<div class="detail-statusrow">
-						<StatusBadge status={detailClaim.status === 'done' ? 'claimed' : 'pending'} />
+						<StatusBadge status={detailClaim.status === ClaimStatus.Done ? 'claimed' : 'pending'} />
 						<span class="date-badge">
 							<Calendar size={12} />
 							{formatDate(detailClaim.date)}
@@ -375,10 +382,10 @@
 								<div class="claim-exp-main">
 									<div class="claim-exp-name">{e.itemName}</div>
 									<div class="claim-exp-sub">
-										{e.supplier ? e.supplier + ' · ' : ''}{e.expenseNumber}
+										{e.contactName ? e.contactName + ' · ' : ''}{e.expenseNumber}
 									</div>
 								</div>
-								<StatusBadge status={e.status as 'unpaid' | 'pending' | 'paid'} />
+								<StatusBadge status={e.status} />
 								<div class="claim-exp-amt num">{formatMoney(e.amount)}</div>
 							</div>
 						{/each}
@@ -431,7 +438,7 @@
 				</div>
 				<div class="sheet-foot">
 					<div class="sheet-foot-note">
-						{detailClaim.status === 'pending'
+						{detailClaim.status === ClaimStatus.Pending
 							? 'Marking as claimed sets all linked expenses to paid. Deleting reverts them to unpaid.'
 							: 'All expenses in this claim are reimbursed and locked.'}
 					</div>
@@ -465,11 +472,11 @@
 							<input type="hidden" name="id" value={detailClaim.id} />
 							<button
 								type="submit"
-								disabled={detailClaim.status === 'done'}
-								style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{detailClaim.status === 'done' ? 0.5 : 1};"
+								disabled={detailClaim.status === ClaimStatus.Done}
+								style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{detailClaim.status === ClaimStatus.Done ? 0.5 : 1};"
 							>
 								<CheckCircle size={14} />
-								{detailClaim.status === 'done' ? 'Claimed' : 'Mark as claimed'}
+								{detailClaim.status === ClaimStatus.Done ? 'Claimed' : 'Mark as claimed'}
 							</button>
 						</form>
 					</div>
@@ -568,7 +575,7 @@
 											>{e.itemName}</div
 										>
 										<div style="font-size:11.5px; color:var(--muted-foreground);">
-											{e.expenseNumber}{e.supplier ? ' · ' + e.supplier : ''} · {formatDateShort(
+											{e.expenseNumber}{e.contactName ? ' · ' + e.contactName : ''} · {formatDateShort(
 												e.date
 											)}
 										</div>

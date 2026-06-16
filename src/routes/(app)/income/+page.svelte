@@ -16,10 +16,16 @@
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
+	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import { Role } from '$lib/enums.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	// New-income customer picker state (submitted via hidden inputs).
+	let newContactId = $state<number | null>(null);
+	let newContactName = $state<string | null>(null);
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
 	let incomes = $state(data.incomes);
@@ -61,7 +67,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) newIncomeFiles = []; });
+	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; } });
 
 	function toggleCat(cat: string) {
 		selectedCats = selectedCats.includes(cat)
@@ -83,7 +89,7 @@
 			const q = search.toLowerCase();
 			list = list.filter(
 				(i) =>
-					i.source.toLowerCase().includes(q) ||
+					(i.contactName ?? '').toLowerCase().includes(q) ||
 					(i.descriptionText ?? '').toLowerCase().includes(q) ||
 					(i.reference ?? '').toLowerCase().includes(q) ||
 					i.category.toLowerCase().includes(q) ||
@@ -432,7 +438,7 @@
 								</td>
 								<td class="td-primary">
 									<div class="cell-item">
-										<span class="cell-itemname">{inc.source}</span>
+										<span class="cell-itemname">{inc.contactName ?? '—'}</span>
 										<span class="cell-itemnum">{inc.incomeNumber}</span>
 									</div>
 								</td>
@@ -570,7 +576,7 @@
 				<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 					<div>
 						<div class="sheet-eyebrow">{detailIncome.incomeNumber}</div>
-						<div class="sheet-title-text">{detailIncome.source}</div>
+						<div class="sheet-title-text">{detailIncome.contactName ?? '—'}</div>
 					</div>
 					<div style="display:flex; align-items:center; gap:8px;">
 						<span class="statusbadge tone-green"><span class="statusdot"></span>Received</span>
@@ -586,8 +592,8 @@
 					</div>
 					<div class="detail-list">
 						<div class="detail-row">
-							<div class="detail-key">Source</div>
-							<div class="detail-val">{detailIncome.source}</div>
+							<div class="detail-key">Customer</div>
+							<div class="detail-val">{detailIncome.contactName ?? '—'}</div>
 						</div>
 						<div class="detail-row">
 							<div class="detail-key">Category</div>
@@ -696,8 +702,15 @@
 				{/if}
 
 				<div class="field">
-					<label class="field-label" for="source">Source *</label>
-					<input id="source" name="source" type="text" required placeholder="e.g. ACME Corp" style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;" />
+					<label class="field-label" for="source">Customer *</label>
+					<ContactSelect
+						role={Role.Customer}
+						bind:value={newContactId}
+						bind:newName={newContactName}
+						placeholder="Search or add a customer…"
+					/>
+					<input type="hidden" name="contactId" value={newContactId ?? ''} />
+					<input type="hidden" name="newContactName" value={newContactName ?? ''} />
 				</div>
 
 				<div class="field-grid field">

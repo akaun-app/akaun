@@ -1,8 +1,9 @@
 import type { PageServerLoad } from './$types.js';
 import { redirect } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
-import { expenses, incomes } from '$lib/server/db/schema.js';
-import { eq, gte, lte, and } from 'drizzle-orm';
+import { listExpenses } from '$lib/server/queries/expenses.js';
+import { listIncomes } from '$lib/server/queries/income.js';
+import { ExpenseStatus } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 function today(): string {
@@ -38,24 +39,14 @@ function last6Months(): string[] {
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'dashboard', 'view')) throw redirect(302, '/settings');
-	const userId = locals.user!.id;
 	const period = url.searchParams.get('period') ?? '2m';
 
 	const periodStart =
 		period === 'ytd' ? startOfYear() : period === 'mtd' ? startOfMonth() : monthsAgo(2);
 	const todayStr = today();
 
-	const allExpenses = db
-		.select()
-		.from(expenses)
-		.where(eq(expenses.userId, userId))
-		.all();
-
-	const allIncomes = db
-		.select()
-		.from(incomes)
-		.where(eq(incomes.userId, userId))
-		.all();
+	const allExpenses = listExpenses(db, { limit: 100000 });
+	const allIncomes = listIncomes(db, { limit: 100000 });
 
 	// Period totals
 	const periodExpenses = allExpenses.filter(
@@ -67,7 +58,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const expTotal = periodExpenses.reduce((s, e) => s + e.amount, 0);
 	const incTotal = periodIncomes.reduce((s, i) => s + i.amount, 0);
 	const outstanding = allExpenses
-		.filter((e) => e.status === 'unpaid')
+		.filter((e) => e.status === ExpenseStatus.Unpaid)
 		.reduce((s, e) => s + e.amount, 0);
 
 	// Monthly cash flow (last 6 months)
@@ -111,7 +102,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			kind: 'expense' as const,
 			date: e.date,
 			name: e.itemName,
-			sub: e.supplier,
+			sub: e.contactName ?? '',
 			amount: e.amount,
 			status: e.status
 		}));
@@ -122,7 +113,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.map((i) => ({
 			kind: 'income' as const,
 			date: i.date,
-			name: i.source,
+			name: i.contactName ?? '',
 			sub: i.descriptionText,
 			amount: i.amount,
 			status: undefined

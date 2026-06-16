@@ -3,14 +3,14 @@ import { db } from '$lib/server/db/client.js';
 import { listClaims } from '$lib/server/queries/claims.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createClaim, patchClaim, removeClaim } from '$lib/server/services/claims.js';
+import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!hasPermission(locals, 'claims', 'view')) throw redirect(302, '/dashboard');
-	const userId = locals.user!.id;
-	const allClaims = listClaims(db, userId);
-	const unpaidExpenses = listExpenses(db, userId, { status: 'unpaid', limit: 500 });
+	const allClaims = listClaims(db);
+	const unpaidExpenses = listExpenses(db, { status: ExpenseStatus.Unpaid, limit: 500 });
 	return { claims: allClaims, unpaidExpenses };
 };
 
@@ -21,7 +21,7 @@ export const actions: Actions = {
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
 
-		const result = patchClaim(db, id, userId, { status: 'done' });
+		const result = patchClaim(db, id, userId, { status: ClaimStatus.Done });
 		if (!result) return fail(404, { error: 'Claim not found' });
 
 		return { success: true };
@@ -42,12 +42,11 @@ export const actions: Actions = {
 	},
 
 	delete: async ({ locals, request }) => {
-		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
 
-		const ok = removeClaim(db, id, userId);
+		const ok = removeClaim(db, id);
 		if (!ok) return fail(404, { error: 'Claim not found' });
 
 		return { success: true };

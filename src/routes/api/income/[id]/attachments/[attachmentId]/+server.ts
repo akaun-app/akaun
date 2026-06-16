@@ -7,14 +7,13 @@ import { hasPermission } from '$lib/server/permissions.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'income', 'change')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const incomeId = parseInt(params.id!);
 	const attachmentId = parseInt(params.attachmentId!);
 
 	const income = db
 		.select({ id: incomes.id })
 		.from(incomes)
-		.where(and(eq(incomes.id, incomeId), eq(incomes.userId, user.id)))
+		.where(eq(incomes.id, incomeId))
 		.get();
 
 	if (!income) return Response.json({ error: 'Not found' }, { status: 404 });

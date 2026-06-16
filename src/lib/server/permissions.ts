@@ -5,12 +5,27 @@ import { groups, groupPermissions, userGroups, userPermissions } from './db/sche
 
 type Db = BunSQLiteDatabase<typeof schema>;
 
-export type ResourceName = 'dashboard' | 'expenses' | 'income' | 'claims' | 'import' | 'categories';
+export type ResourceName =
+	| 'dashboard'
+	| 'expenses'
+	| 'income'
+	| 'claims'
+	| 'import'
+	| 'categories'
+	| 'contacts';
 export type ActionName = 'view' | 'add' | 'change' | 'delete';
 export type PermissionSet = Record<ActionName, boolean>;
 export type EffectivePermissions = Record<ResourceName, PermissionSet>;
 
-const ALL_RESOURCES: ResourceName[] = ['dashboard', 'expenses', 'income', 'claims', 'import', 'categories'];
+const ALL_RESOURCES: ResourceName[] = [
+	'dashboard',
+	'expenses',
+	'income',
+	'claims',
+	'import',
+	'categories',
+	'contacts'
+];
 
 function emptyPermissions(): EffectivePermissions {
 	const perms = {} as EffectivePermissions;

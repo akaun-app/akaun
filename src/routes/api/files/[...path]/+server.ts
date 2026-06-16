@@ -1,15 +1,12 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { readFileSync } from 'fs';
 import { join, resolve, sep } from 'path';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import {
 	expenseAttachments,
-	expenses,
 	incomeAttachments,
-	incomes,
-	claimAttachments,
-	claims
+	claimAttachments
 } from '$lib/server/db/schema.js';
 import { STORAGE_PATH } from '$lib/server/env.js';
 
@@ -33,26 +30,22 @@ export const GET: RequestHandler = ({ locals, params }) => {
 		return new Response('Forbidden', { status: 403 });
 	}
 
-	const userId = locals.user.id;
-
+	// Shared ledger — any authenticated user may read a file that belongs to a record.
 	const owned =
 		db
 			.select({ id: expenseAttachments.id })
 			.from(expenseAttachments)
-			.innerJoin(expenses, eq(expenseAttachments.expenseId, expenses.id))
-			.where(and(eq(expenseAttachments.filename, filePath), eq(expenses.userId, userId)))
+			.where(eq(expenseAttachments.filename, filePath))
 			.get() ??
 		db
 			.select({ id: incomeAttachments.id })
 			.from(incomeAttachments)
-			.innerJoin(incomes, eq(incomeAttachments.incomeId, incomes.id))
-			.where(and(eq(incomeAttachments.filename, filePath), eq(incomes.userId, userId)))
+			.where(eq(incomeAttachments.filename, filePath))
 			.get() ??
 		db
 			.select({ id: claimAttachments.id })
 			.from(claimAttachments)
-			.innerJoin(claims, eq(claimAttachments.claimId, claims.id))
-			.where(and(eq(claimAttachments.filename, filePath), eq(claims.userId, userId)))
+			.where(eq(claimAttachments.filename, filePath))
 			.get();
 
 	if (!owned) return new Response('Forbidden', { status: 403 });

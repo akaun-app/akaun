@@ -7,15 +7,13 @@ import { hasPermission } from '$lib/server/permissions.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const expenseId = parseInt(params.id!);
 	const attachmentId = parseInt(params.attachmentId!);
 
-	// Verify the expense belongs to the user
 	const expense = db
 		.select({ id: expenses.id })
 		.from(expenses)
-		.where(and(eq(expenses.id, expenseId), eq(expenses.userId, user.id)))
+		.where(eq(expenses.id, expenseId))
 		.get();
 
 	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
