@@ -56,6 +56,18 @@
 	] as const;
 	const ACTIONS = ['view', 'add', 'change', 'delete'] as const;
 
+	// ─── Mobile detection ─────────────────────────────────────────────────────────
+
+	let isMobile = $state(false);
+	$effect(() => {
+		const mq = window.matchMedia('(max-width: 767px)');
+		isMobile = mq.matches;
+		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
+		mq.addEventListener('change', handler);
+		return () => mq.removeEventListener('change', handler);
+	});
+	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+
 	// ─── State ───────────────────────────────────────────────────────────────────
 
 	let activeTab = $state<'users' | 'groups'>('users');
@@ -73,6 +85,7 @@
 
 	// Groups tab
 	let selectedGroupId = $state<number | null>(null);
+	let groupSheetOpen = $state(false);
 	let savingGroup = $state(false);
 
 	const selectedGroup = $derived(groupList.find((g) => g.id === selectedGroupId) ?? null);
@@ -230,15 +243,17 @@
 		}
 	}
 
-	async function deleteUser(u: UserRow) {
-		if (!confirm(`Remove ${u.name || u.email}? This cannot be undone.`)) return;
+	async function deleteUser(u: UserRow): Promise<boolean> {
+		if (!confirm(`Remove ${u.name || u.email}? This cannot be undone.`)) return false;
 		const res = await fetch(`/api/users/${u.id}`, { method: 'DELETE' });
 		if (!res.ok) {
 			const err = await res.json();
 			toast.error(err.error ?? 'Failed to delete user');
+			return false;
 		} else {
 			toast.success('User removed');
 			await loadAll();
+			return true;
 		}
 	}
 
@@ -499,7 +514,7 @@
 					<tbody>
 						{#each userList as u (u.id)}
 							<tr class="exp-row" onclick={() => openEditUser(u)}>
-								<td>
+								<td class="td-primary">
 									<div class="ax-usercell">
 										<div class="ax-uavatar">{initials(u.name, u.email)}</div>
 										<div class="cell-item">
@@ -508,7 +523,7 @@
 										</div>
 									</div>
 								</td>
-								<td>
+								<td data-label="Groups">
 									{#if u.groups.length > 0}
 										<div class="ax-chips">
 											{#each u.groups as g}
@@ -521,7 +536,7 @@
 										<span class="ax-warn"><AlertTriangle size={12} /> No groups</span>
 									{/if}
 								</td>
-								<td>
+								<td data-label="Access">
 									{#if userAccess(u) === 'super'}
 										<span class="ax-super-badge"><ShieldCheck size={13} /> Superuser</span>
 									{:else if userAccess(u) === 'none'}
@@ -530,15 +545,15 @@
 										<span class="ax-std-badge"><Shield size={12} /> Standard</span>
 									{/if}
 								</td>
-								<td>
+								<td data-label="Token">
 									{#if u.hasBearerToken}
 										<span class="ax-token"><Key size={13} /> Configured</span>
 									{:else}
 										<span class="muted-sm">None</span>
 									{/if}
 								</td>
-								<td class="td-date">{u.createdAt.slice(0, 10)}</td>
-								<td onclick={(e) => e.stopPropagation()}>
+								<td class="td-date" data-label="Date">{u.createdAt.slice(0, 10)}</td>
+								<td class="td-actions" onclick={(e) => e.stopPropagation()}>
 									<div class="dropdown-wrap">
 										<button class="btn-icon-sm" onclick={(e) => { e.currentTarget.nextElementSibling?.classList.toggle('open'); }}>
 											<MoreHorizontal size={16} />
@@ -572,11 +587,11 @@
 		<Sheet.Root open={userSheetOpen} onOpenChange={(o) => { if (!o) closeUserSheet(); }}>
 			<Sheet.Portal>
 				<Sheet.Overlay />
-				<Sheet.Content side="right" style="width:440px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;">
+				<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:440px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
 					{#if editingUser}
 						<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 							<div>
-								<div class="sheet-eyebrow"><Users size={13} /> {editingUser.id ? 'Edit user' : 'New user'}</div>
+								<div class="sheet-eyebrow">{editingUser.id ? 'Edit user' : 'New user'}</div>
 								<div class="sheet-title-text">{editingUser.name || (editingUser.id ? 'Unnamed user' : 'Add a user')}</div>
 							</div>
 							<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
@@ -745,14 +760,21 @@
 								{/if}
 							{/if}
 						</div>
-						<div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px;">
-							<button class="btn-outline btn-sm" onclick={closeUserSheet}>Cancel</button>
-							<button class="btn-primary btn-sm" onclick={saveUser} disabled={savingUser}>
-								{#if savingUser}
-									<span class="spinner xs"></span>
-								{/if}
-								{editingUser.id ? 'Save changes' : 'Create user'}
-							</button>
+						<div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:space-between; gap:8px;">
+							{#if editingUser.id}
+								<button class="btn-ghost-danger btn-sm" onclick={async () => { if (editingUser?.id && await deleteUser(editingUser as UserRow)) closeUserSheet(); }}>
+									<Trash2 size={14} /> Remove
+								</button>
+							{/if}
+							<div style="display:flex; gap:8px; margin-left:auto;">
+								<button class="btn-outline btn-sm" onclick={closeUserSheet}>Cancel</button>
+								<button class="btn-primary btn-sm" onclick={saveUser} disabled={savingUser}>
+									{#if savingUser}
+										<span class="spinner xs"></span>
+									{/if}
+									{editingUser.id ? 'Save changes' : 'Create user'}
+								</button>
+							</div>
 						</div>
 					{/if}
 				</Sheet.Content>
@@ -761,7 +783,112 @@
 
 	{:else}
 		<!-- ═══ Groups tab ═══ -->
-		<div class="ax-body ax-split">
+		{#snippet groupBody(g)}
+			<div class="ax-gdetail-content">
+				<textarea
+					class="form-input ax-detail-desc"
+					rows={2}
+					value={groupDraft?.description ?? ''}
+					disabled={g.locked}
+					placeholder="Describe what this group is for…"
+					oninput={(e) => { if (groupDraft) groupDraft = { ...groupDraft, description: (e.target as HTMLTextAreaElement).value }; }}
+				></textarea>
+
+				<div class="set-card ax-superrow">
+					<div class="set-row">
+						<div class="set-text">
+							<div class="set-title">Superuser</div>
+							<div class="set-desc">Bypasses the permission grid entirely — full access to every area, plus user management, backup and reset.</div>
+						</div>
+						<div class="set-control">
+							<button
+								class="toggle-btn"
+								class:on={groupDraft?.isSuperuser}
+								disabled={g.locked}
+								onclick={() => {
+									if (groupDraft && !g.locked) {
+										groupDraft = { ...groupDraft, isSuperuser: !groupDraft.isSuperuser };
+									}
+								}}
+								role="switch"
+								aria-checked={groupDraft?.isSuperuser}
+							>
+								<span class="toggle-thumb"></span>
+							</button>
+						</div>
+					</div>
+				</div>
+
+				<div class="ax-permhead">
+					<div class="detail-section-label" style="margin: 4px 0 0">Permissions</div>
+					{#if !groupDraft?.isSuperuser}
+						<span class="ax-permcount">{grantCount(g)} of {RESOURCES.length * ACTIONS.length} granted</span>
+					{/if}
+				</div>
+
+				{#if groupDraft?.isSuperuser}
+					<div class="ax-bypass">
+						<div class="ax-bypass-icon"><ShieldCheck size={20} /></div>
+						<div>
+							<div class="ax-bypass-title">Grid bypassed</div>
+							<div class="ax-bypass-desc">Superusers are granted every action on every resource automatically. System areas — settings, user &amp; group management and backup/restore — are available to superusers only and never appear in the grid below.</div>
+						</div>
+					</div>
+				{:else}
+					<div class="ax-permcard">
+						<table class="ax-perm">
+							<thead>
+								<tr>
+									<th class="res">Resource</th>
+									<th class="col-all">All</th>
+									{#each ACTIONS as action}
+										<th>{action.charAt(0).toUpperCase() + action.slice(1)}</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody>
+								{#each RESOURCES as r}
+									{@const perms = groupDraft?.permissions[r.id] ?? { view: false, add: false, change: false, delete: false }}
+									<tr class="ax-resrow">
+										<td><span class="ax-resname">{r.label}</span></td>
+										<td>
+											<div class="ax-permcellwrap">
+												<input
+													type="checkbox"
+													class="perm-cb perm-cb-all"
+													checked={rowAll(r.id)}
+													indeterminate={rowSome(r.id)}
+													onchange={(e) => toggleRowAll(r.id, (e.target as HTMLInputElement).checked)}
+												/>
+											</div>
+										</td>
+										{#each ACTIONS as action}
+											<td>
+												<div class="ax-permcellwrap">
+													<input
+														type="checkbox"
+														class="perm-cb"
+														checked={perms[action as keyof typeof perms]}
+														onchange={(e) => togglePermDraft(r.id, action, (e.target as HTMLInputElement).checked)}
+													/>
+												</div>
+											</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+
+					<p class="ax-permnote">
+						<Lock size={12} /> Claims always show a minimal summary (item, amount, date) for attached expenses,
+						so <b>Claims · View</b> never leaks full expense detail.
+					</p>
+				{/if}
+			</div>
+		{/snippet}
+
+		<div class="ax-body" class:ax-split={!isMobile}>
 			<!-- Left list -->
 			<div class="ax-glist">
 				<button class="ax-newgroup" onclick={createGroup}>
@@ -771,7 +898,7 @@
 					<button
 						class="ax-gitem"
 						class:active={g.id === selectedGroupId}
-						onclick={() => (selectedGroupId = g.id)}
+						onclick={() => { selectedGroupId = g.id; if (isMobile) groupSheetOpen = true; }}
 					>
 						<div class="ax-gitem-top">
 							<span class="ax-gname">{g.name}</span>
@@ -789,8 +916,8 @@
 				{/each}
 			</div>
 
-			<!-- Right detail -->
-			{#if selectedGroup}
+			<!-- Desktop: right detail panel -->
+			{#if !isMobile && selectedGroup}
 				<div class="ax-gdetail">
 					<div class="ax-detail-head">
 						<div class="ax-detail-titlewrap">
@@ -825,108 +952,7 @@
 							</div>
 						</div>
 					</div>
-
-					<textarea
-						class="form-input ax-detail-desc"
-						rows={2}
-						value={groupDraft?.description ?? ''}
-						disabled={selectedGroup.locked}
-						placeholder="Describe what this group is for…"
-						oninput={(e) => { if (groupDraft) groupDraft = { ...groupDraft, description: (e.target as HTMLTextAreaElement).value }; }}
-					></textarea>
-
-					<div class="set-card ax-superrow">
-						<div class="set-row">
-							<div class="set-text">
-								<div class="set-title">Superuser</div>
-								<div class="set-desc">Bypasses the permission grid entirely — full access to every area, plus user management, backup and reset.</div>
-							</div>
-							<div class="set-control">
-								<button
-									class="toggle-btn"
-									class:on={groupDraft?.isSuperuser}
-									disabled={selectedGroup.locked}
-									onclick={() => {
-										if (groupDraft && !selectedGroup!.locked) {
-											groupDraft = { ...groupDraft, isSuperuser: !groupDraft.isSuperuser };
-										}
-									}}
-									role="switch"
-									aria-checked={groupDraft?.isSuperuser}
-								>
-									<span class="toggle-thumb"></span>
-								</button>
-							</div>
-						</div>
-					</div>
-
-					<div class="ax-permhead">
-						<div class="detail-section-label" style="margin: 4px 0 0">Permissions</div>
-						{#if !groupDraft?.isSuperuser}
-							<span class="ax-permcount">{grantCount(selectedGroup)} of {RESOURCES.length * ACTIONS.length} granted</span>
-						{/if}
-					</div>
-
-					{#if groupDraft?.isSuperuser}
-						<div class="ax-bypass">
-							<div class="ax-bypass-icon"><ShieldCheck size={20} /></div>
-							<div>
-								<div class="ax-bypass-title">Grid bypassed</div>
-								<div class="ax-bypass-desc">Superusers are granted every action on every resource automatically. System areas — settings, user &amp; group management and backup/restore — are available to superusers only and never appear in the grid below.</div>
-							</div>
-						</div>
-					{:else}
-						<div class="ax-permcard">
-							<table class="ax-perm">
-								<thead>
-									<tr>
-										<th class="res">Resource</th>
-										<th class="col-all">All</th>
-										{#each ACTIONS as action}
-											<th>{action.charAt(0).toUpperCase() + action.slice(1)}</th>
-										{/each}
-									</tr>
-								</thead>
-								<tbody>
-									{#each RESOURCES as r}
-										{@const perms = groupDraft?.permissions[r.id] ?? { view: false, add: false, change: false, delete: false }}
-										<tr class="ax-resrow">
-											<td><span class="ax-resname">{r.label}</span></td>
-											<td>
-												<div class="ax-permcellwrap">
-													<input
-														type="checkbox"
-														class="perm-cb perm-cb-all"
-														checked={rowAll(r.id)}
-														indeterminate={rowSome(r.id)}
-														onchange={(e) => toggleRowAll(r.id, (e.target as HTMLInputElement).checked)}
-													/>
-												</div>
-											</td>
-											{#each ACTIONS as action}
-												<td>
-													<div class="ax-permcellwrap">
-														<input
-															type="checkbox"
-															class="perm-cb"
-															checked={perms[action as keyof typeof perms]}
-															onchange={(e) => togglePermDraft(r.id, action, (e.target as HTMLInputElement).checked)}
-														/>
-													</div>
-												</td>
-											{/each}
-										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
-
-						<p class="ax-permnote">
-							<Lock size={12} /> Claims always show a minimal summary (item, amount, date) for attached expenses,
-							so <b>Claims · View</b> never leaks full expense detail.
-						</p>
-					{/if}
-
+					{@render groupBody(selectedGroup)}
 					{#if isDirty}
 						<div class="ax-gdetail-footer">
 							<button class="btn-outline btn-sm" onclick={resetGroupDraft}>Reset</button>
@@ -939,6 +965,63 @@
 				</div>
 			{/if}
 		</div>
+
+		<!-- Mobile: bottom sheet for group detail -->
+		{#if isMobile}
+		<Sheet.Root bind:open={groupSheetOpen}>
+			<Sheet.Portal>
+				<Sheet.Overlay />
+				<Sheet.Content side="bottom" style="height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;">
+					{#if selectedGroup}
+						<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border); flex-shrink:0;">
+							<div>
+								<div class="sheet-eyebrow">Edit group</div>
+								<div class="sheet-title-text">{selectedGroup.name}</div>
+							</div>
+							<div style="display:flex; align-items:center; gap:6px;">
+								<div class="dropdown-wrap">
+									<button class="btn-outline-icon" onclick={(e) => { e.currentTarget.nextElementSibling?.classList.toggle('open'); }}>
+										<MoreHorizontal size={16} />
+									</button>
+									<div class="dropdown-menu">
+										<button
+											class="dd-item danger"
+											disabled={selectedGroup.locked || selectedGroup.memberCount > 0}
+											onclick={() => deleteGroup(selectedGroup!)}
+										>
+											<Trash2 size={14} /> Delete group
+										</button>
+									</div>
+								</div>
+								<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
+							</div>
+						</div>
+						<div style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:16px;">
+							<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+								{#if groupDraft?.isSuperuser}
+									<span class="ax-super-badge"><ShieldCheck size={13} /> Superuser</span>
+								{/if}
+								{#if selectedGroup.locked}
+									<span class="ax-meta-text"><Lock size={12} /> Protected</span>
+								{/if}
+								<span class="ax-meta-text">{selectedGroup.memberCount} member{selectedGroup.memberCount !== 1 ? 's' : ''}</span>
+							</div>
+							{@render groupBody(selectedGroup)}
+						</div>
+						{#if isDirty}
+							<div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; flex-shrink:0;">
+								<button class="btn-outline btn-sm" onclick={resetGroupDraft}>Reset</button>
+								<button class="btn-primary btn-sm" onclick={saveGroupDraft} disabled={savingGroup}>
+									{#if savingGroup}<span class="spinner xs"></span>{/if}
+									Save changes
+								</button>
+							</div>
+						{/if}
+					{/if}
+				</Sheet.Content>
+			</Sheet.Portal>
+		</Sheet.Root>
+		{/if}
 	{/if}
 </div>
 
@@ -1460,4 +1543,25 @@
 	.set-title { font-size: 13.5px; font-weight: 500; }
 	.set-desc { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.45; }
 	.set-control { flex-shrink: 0; }
+
+	/* ── Mobile overrides ── */
+	@media (max-width: 767px) {
+		.ax-tabsbar { padding: 8px 16px 6px; }
+		.ax-hint { display: none; }
+		.ax-body { padding: 2px 16px 16px; }
+
+		/* Hide action dropdown column in card view */
+		.exp-row .td-actions { display: none; }
+
+		/* Group list: no border, full width */
+		.ax-glist { border-right: none; padding: 4px 0; }
+
+		/* Permission grid: horizontal scroll inside sheets */
+		.ax-permcard { overflow-x: auto; }
+		.ax-userperm { overflow-x: auto; }
+		.ax-perm { min-width: 500px; }
+
+		/* Group body inside sheet: use sheet's gap, no extra padding */
+		.ax-gdetail-content { display: flex; flex-direction: column; gap: 14px; }
+	}
 </style>

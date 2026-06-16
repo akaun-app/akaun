@@ -69,6 +69,17 @@
 	let newExpenseDrag = $state(false);
 	let newExpenseFileInput = $state<HTMLInputElement | null>(null);
 
+	// Mobile panel detection — full-screen bottom sheet on mobile
+	let isMobile = $state(false);
+	$effect(() => {
+		const mq = window.matchMedia('(max-width: 767px)');
+		isMobile = mq.matches;
+		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
+		mq.addEventListener('change', handler);
+		return () => mq.removeEventListener('change', handler);
+	});
+	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+
 	// Debounced search
 	$effect(() => {
 		const v = searchRaw;
@@ -116,7 +127,7 @@
 
 	const filteredTotal = $derived(filtered.reduce((s, e) => s + e.amount, 0));
 	const activeFilterCount = $derived(
-		selectedCats.length + (amountMin || amountMax ? 1 : 0) + (dateFrom || dateTo ? 1 : 0)
+		selectedCats.length + (amountMin || amountMax ? 1 : 0) + (dateFrom || dateTo ? 1 : 0) + (search.trim() ? 1 : 0)
 	);
 	const allSelected = $derived(filtered.length > 0 && filtered.every((e) => selected.has(e.id)));
 	const someSelected = $derived(filtered.some((e) => selected.has(e.id)) && !allSelected);
@@ -514,14 +525,8 @@
 								<td colspan="7">
 									<div class="empty">
 										<div class="empty-icon"><Wallet size={20} /></div>
-										<div class="empty-title">No expenses recorded yet</div>
-										<div class="empty-sub">Add your first expense to get started</div>
-										<button
-											onclick={() => (showNew = true)}
-											style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
-										>
-											<Plus size={14} /> New expense
-										</button>
+										<div class="empty-title">No expenses yet</div>
+										<div class="empty-sub">Your expense history will appear here.</div>
 									</div>
 								</td>
 							</tr>
@@ -530,7 +535,8 @@
 								<td colspan="7">
 									<div class="empty">
 										<div class="empty-icon"><Search size={20} /></div>
-										<div class="empty-title">No expenses match these filters</div>
+										<div class="empty-title">No expenses match your filters</div>
+										<div class="empty-sub">Try adjusting your search or filters.</div>
 										<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>
 									</div>
 								</td>
@@ -638,7 +644,7 @@
 <Sheet.Root open={!!detailExpense} onOpenChange={(o) => { if (!o) detailExpense = null; }}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side="right" style="width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;">
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
 			{#if detailExpense}
 				<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 					<div>
@@ -737,7 +743,7 @@
 <Sheet.Root bind:open={showNew}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side="right" style="width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;">
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
 					<div class="sheet-eyebrow">New</div>

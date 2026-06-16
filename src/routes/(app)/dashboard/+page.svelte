@@ -179,7 +179,8 @@
 					<DonutChart data={data.categoryData} />
 				{:else}
 					<div class="empty" style="padding:20px;">
-						<div class="empty-title">No expense data</div>
+						<div class="empty-title">No expense data yet</div>
+						<div class="empty-sub">Add expenses to see your spending breakdown.</div>
 					</div>
 				{/if}
 			</div>
@@ -222,8 +223,9 @@
 						</div>
 					{/each}
 					{#if data.recent.length === 0}
-						<div style="padding:20px; text-align:center; color:var(--muted-foreground); font-size:13px;">
-							No activity yet
+						<div class="empty" style="padding:20px;">
+							<div class="empty-title">No activity yet</div>
+							<div class="empty-sub">Recent transactions will appear here.</div>
 						</div>
 					{/if}
 				</div>

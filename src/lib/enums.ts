@@ -48,14 +48,14 @@ export type DuplicateSignalCode = (typeof DuplicateSignal)[keyof typeof Duplicat
 export type ResetScopeCode = (typeof ResetScope)[keyof typeof ResetScope];
 
 export const EntityTypeLabels: Record<number, string> = {
-	[EntityType.Individual]: 'individual',
-	[EntityType.Business]: 'business'
+	[EntityType.Individual]: 'Individual',
+	[EntityType.Business]: 'Business'
 };
 
 export const RoleLabels: Record<number, string> = {
-	[Role.Customer]: 'customer',
-	[Role.Supplier]: 'supplier',
-	[Role.Employee]: 'employee'
+	[Role.Customer]: 'Customer',
+	[Role.Supplier]: 'Supplier',
+	[Role.Employee]: 'Employee'
 };
 
 export const ExpenseStatusLabels: Record<number, string> = {

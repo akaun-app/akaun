@@ -41,6 +41,17 @@
 	let newClaimDrag = $state(false);
 	let newClaimFileInput = $state<HTMLInputElement | null>(null);
 
+	// Mobile panel detection — full-screen bottom sheet on mobile
+	let isMobile = $state(false);
+	$effect(() => {
+		const mq = window.matchMedia('(max-width: 767px)');
+		isMobile = mq.matches;
+		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
+		mq.addEventListener('change', handler);
+		return () => mq.removeEventListener('change', handler);
+	});
+	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+
 	// --- Derived ---
 	const counts = $derived({
 		all: claims.length,
@@ -309,17 +320,17 @@
 										</div>
 										<div class="empty-title">
 											{activeTab === 'pending'
-												? 'No pending claims'
+												? 'No pending claims yet'
 												: activeTab === 'done'
-													? 'No completed claims'
+													? 'No completed claims yet'
 													: 'No claims yet'}
 										</div>
 										<div class="empty-sub">
 											{activeTab === 'pending'
-												? 'Create a claim by selecting unpaid expenses'
+												? 'Pending claims will appear here.'
 												: activeTab === 'done'
-													? 'Completed claims will appear here'
-													: 'Create a claim from the Expenses page or using the New claim button above'}
+													? 'Completed claims will appear here.'
+													: 'Your claims will appear here.'}
 										</div>
 									</div>
 								</td>
@@ -345,8 +356,8 @@
 	<Sheet.Portal>
 		<Sheet.Overlay />
 		<Sheet.Content
-			side="right"
-			style="width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;"
+			side={panelSide}
+			style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}
 		>
 			{#if detailClaim}
 				<div
@@ -491,8 +502,8 @@
 	<Sheet.Portal>
 		<Sheet.Overlay />
 		<Sheet.Content
-			side="right"
-			style="width:480px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;"
+			side={panelSide}
+			style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:480px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}
 		>
 			<div
 				style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
@@ -545,7 +556,8 @@
 						<div
 							style="color:var(--muted-foreground); font-size:13px; padding:16px; border:1px dashed var(--border); border-radius:8px; text-align:center;"
 						>
-							No unpaid expenses available
+							<div style="font-weight:500; color:var(--foreground); margin-bottom:4px;">No unpaid expenses</div>
+							All expenses have been settled.
 						</div>
 					{:else}
 						<div
