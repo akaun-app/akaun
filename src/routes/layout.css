@@ -385,6 +385,41 @@ th.sortable:hover .th-idle { opacity: .5; }
 [data-slot="sheet-overlay"] { z-index: 50; }
 [data-slot="sheet-content"] { z-index: 55; }
 
+/* Floating popover layers (date-picker calendar, selects, dropdown menus) are portaled to
+   <body> as siblings of the sheet panel, so they need a higher z-index than sheet-content (55)
+   to stay visible when opened from inside a Sheet. */
+[data-slot="popover-content"],
+[data-slot="select-content"],
+[data-slot="dropdown-menu-content"] { z-index: 60; }
+
+/* Entrance / exit animation for the portaled floating layers above. bits-ui keeps the
+   Floating-UI positioning transform on a parent wrapper, so animating transform on the
+   content itself is safe. @keyframes (not transitions) so bits-ui's getAnimations() lifecycle
+   waits for the exit animation before unmounting on close — same approach as the sheet below. */
+@keyframes popover-pop-in {
+  from { opacity: 0; transform: scale(0.94) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+@keyframes popover-pop-out {
+  from { opacity: 1; transform: scale(1)    translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(-4px); }
+}
+[data-slot="popover-content"][data-state="open"],
+[data-slot="select-content"][data-state="open"],
+[data-slot="dropdown-menu-content"][data-state="open"] {
+  animation: popover-pop-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+[data-slot="popover-content"][data-state="closed"],
+[data-slot="select-content"][data-state="closed"],
+[data-slot="dropdown-menu-content"][data-state="closed"] {
+  animation: popover-pop-out 0.16s ease forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="popover-content"][data-state],
+  [data-slot="select-content"][data-state],
+  [data-slot="dropdown-menu-content"][data-state] { animation: none; }
+}
+
 [data-slot="sheet-overlay"][data-state="open"] {
   animation: sheet-overlay-in 0.25s ease forwards;
 }
