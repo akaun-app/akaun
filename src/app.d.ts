@@ -10,4 +10,10 @@ declare global {
 	}
 }
 
+declare module 'svelte/elements' {
+	interface SvelteWindowAttributes {
+		'onfilter-dropdown-open'?: (e: CustomEvent) => void;
+	}
+}
+
 export {};

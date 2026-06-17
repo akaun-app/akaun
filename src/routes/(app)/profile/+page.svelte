@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { Copy, Check, RefreshCw, Trash2, KeyRound } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -107,42 +109,39 @@
 						<div class="set-rows">
 							<div class="set-row">
 								<div class="set-row-label">Display name</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="text"
 									name="name"
 									placeholder="Your full name"
 									bind:value={profileName}
-									style="width:240px; flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
 								<div class="set-row-label">Email</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="email"
 									name="email"
 									required
 									bind:value={profileEmail}
-									style="width:240px; flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
 								<div class="set-row-label">Username</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="text"
 									name="username"
 									required
 									bind:value={profileUsername}
-									style="width:240px; flex-shrink:0;"
 								/>
 							</div>
 						</div>
 						{#if form?.action === 'profile' && form?.error}
 							<p class="form-error">{form.error}</p>
 						{/if}
-						<button type="submit" class="btn-primary" style="margin-top:16px;">Save changes</button>
+						<Button type="submit" class="mt-4">Save changes</Button>
 					</form>
 				</div>
 
@@ -160,40 +159,37 @@
 						<div class="set-rows">
 							<div class="set-row">
 								<div class="set-row-label">Current password</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="password"
 									name="currentPassword"
 									required
 									bind:value={currentPassword}
 									autocomplete="current-password"
-									style="width:240px; flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
 								<div class="set-row-label">New password</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="password"
 									name="newPassword"
 									required
-									minlength="8"
+									minlength={8}
 									bind:value={newPassword}
 									autocomplete="new-password"
-									style="width:240px; flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
 								<div class="set-row-label">Confirm new password</div>
-								<input
-									class="form-input"
+								<Input
+									class="set-input-right"
 									type="password"
 									name="confirmPassword"
 									required
 									bind:value={confirmPassword}
 									autocomplete="new-password"
-									style="width:240px; flex-shrink:0;"
-									class:input-error={passwordMismatch}
+									aria-invalid={passwordMismatch}
 								/>
 							</div>
 							{#if passwordMismatch}
@@ -203,14 +199,9 @@
 						{#if form?.action === 'security' && form?.error}
 							<p class="form-error">{form.error}</p>
 						{/if}
-						<button
-							type="submit"
-							class="btn-primary"
-							style="margin-top:16px;"
-							disabled={passwordMismatch}
-						>
+						<Button type="submit" class="mt-4" disabled={passwordMismatch}>
 							Change password
-						</button>
+						</Button>
 					</form>
 				</div>
 
@@ -229,13 +220,13 @@
 							</div>
 							<div class="token-box">
 								<code class="token-value">{revealedToken}</code>
-								<button class="btn-ghost btn-sm token-copy" onclick={copyToken} type="button">
+								<Button variant="ghost" size="sm" onclick={copyToken}>
 									{#if copied}
 										<Check size={14} /> Copied
 									{:else}
 										<Copy size={14} /> Copy
 									{/if}
-								</button>
+								</Button>
 							</div>
 						</div>
 					{:else if hasBearerToken}
@@ -256,17 +247,17 @@
 
 					<div class="token-actions">
 						<form method="POST" action="?/regenerateToken" use:enhance>
-							<button type="submit" class="btn-outline btn-sm">
+							<Button type="submit" variant="outline" size="sm">
 								<RefreshCw size={13} />
 								{hasBearerToken ? 'Regenerate token' : 'Generate token'}
-							</button>
+							</Button>
 						</form>
 						{#if hasBearerToken}
 							<form method="POST" action="?/revokeToken" use:enhance>
-								<button type="submit" class="btn-ghost btn-sm" style="color:var(--red);">
+								<Button type="submit" variant="ghost" size="sm" class="text-destructive">
 									<Trash2 size={13} />
 									Revoke token
-								</button>
+								</Button>
 							</form>
 						{/if}
 					</div>
@@ -281,10 +272,6 @@
 		margin: 10px 16px 0;
 		font-size: 12px;
 		color: var(--red);
-	}
-
-	.input-error {
-		border-color: var(--red) !important;
 	}
 
 	.token-reveal {
@@ -321,10 +308,6 @@
 		font-size: 12px;
 		word-break: break-all;
 		color: var(--foreground);
-	}
-
-	.token-copy {
-		flex-shrink: 0;
 	}
 
 	.token-masked {

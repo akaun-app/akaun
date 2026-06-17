@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy } from 'svelte';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
 	import {
 		TrendingUp,
@@ -17,6 +18,11 @@
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import StatCard from '$lib/components/ui/StatCard.svelte';
+	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
 	import { Role } from '$lib/enums.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import type { PageData, ActionData } from './$types.js';
@@ -28,6 +34,7 @@
 	let newContactName = $state<string | null>(null);
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	// svelte-ignore state_referenced_locally
 	let incomes = $state(data.incomes);
 	$effect(() => { incomes = data.incomes; });
 
@@ -51,22 +58,14 @@
 	type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
 	let detailIncome = $state<FullIncome | null>(null);
 	let selected = $state(new Set<number>());
-	let incomeDrag = $state(false);
-	let incomeFileInput = $state<HTMLInputElement | null>(null);
 	let newIncomeFiles = $state<File[]>([]);
 	let newIncomeDrag = $state(false);
 	let newIncomeFileInput = $state<HTMLInputElement | null>(null);
 
 	// Mobile panel detection — full-screen bottom sheet on mobile
-	let isMobile = $state(false);
-	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
-		isMobile = mq.matches;
-		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// Debounce search
 	$effect(() => {
@@ -171,24 +170,13 @@
 	});
 
 	// SSE — real-time updates from server
-	let _es: EventSource | null = null;
-	onMount(() => {
-		_es = new EventSource('/api/income/stream');
-		_es.onmessage = (e) => {
-			const msg = JSON.parse(e.data);
-			if (msg.type === 'income-update') mergeIncomes([msg.item]);
-			else if (msg.type === 'income-delete') incomes = incomes.filter((i) => i.id !== msg.id);
-		};
+	type IncomeStreamMsg =
+		| { type: 'income-update'; item: (typeof data.incomes)[0] }
+		| { type: 'income-delete'; id: number };
+	createResourceStream<IncomeStreamMsg>('/api/income/stream', (msg) => {
+		if (msg.type === 'income-update') incomes = mergeById(incomes, [msg.item]);
+		else if (msg.type === 'income-delete') incomes = incomes.filter((i) => i.id !== msg.id);
 	});
-	onDestroy(() => _es?.close());
-
-	function mergeIncomes(incoming: typeof data.incomes) {
-		const byId = new Map(incoming.map((i) => [i.id, i]));
-		const existingIds = new Set(incomes.map((i) => i.id));
-		incomes = incomes.map((local) => byId.get(local.id) ?? local);
-		const brandNew = incoming.filter((i) => !existingIds.has(i.id));
-		if (brandNew.length > 0) incomes = [...brandNew, ...incomes];
-	}
 
 	async function openIncome(inc: (typeof data.incomes)[0]) {
 		detailIncome = { ...inc, attachments: [] };
@@ -196,34 +184,6 @@
 		if (res.ok) detailIncome = await res.json();
 	}
 
-	async function uploadIncomeFiles(files: FileList) {
-		if (!detailIncome) return;
-		for (const file of Array.from(files)) {
-			const fd = new FormData();
-			fd.append('file', file);
-			const res = await fetch(`/api/income/${detailIncome.id}/attachments`, { method: 'POST', body: fd });
-			if (res.ok) {
-				const att: Attachment = await res.json();
-				detailIncome = { ...detailIncome, attachments: [...detailIncome.attachments, att] };
-			}
-		}
-	}
-
-	async function deleteIncomeAttachment(attachmentId: number) {
-		if (!detailIncome) return;
-		await fetch(`/api/income/${detailIncome.id}/attachments/${attachmentId}`, { method: 'DELETE' });
-		detailIncome = { ...detailIncome, attachments: detailIncome.attachments.filter((a) => a.id !== attachmentId) };
-	}
-
-	function handleIncomeDrop(e: DragEvent) {
-		e.preventDefault(); incomeDrag = false;
-		if (e.dataTransfer?.files) uploadIncomeFiles(e.dataTransfer.files);
-	}
-	function handleIncomeFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		if (input.files) uploadIncomeFiles(input.files);
-		input.value = '';
-	}
 </script>
 
 <svelte:head>
@@ -285,22 +245,10 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip">
-		<div class="stat-card tone-green">
-			<div class="stat-label">This month</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.thisMonth)}</div>
-		</div>
-		<div class="stat-card">
-			<div class="stat-label">This quarter</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.thisQuarter)}</div>
-		</div>
-		<div class="stat-card">
-			<div class="stat-label">Largest payment</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.largest)}</div>
-		</div>
-		<div class="stat-card tone-green">
-			<div class="stat-label">All received</div>
-			<div class="stat-value"><span class="stat-cur">+RM</span>{formatMoney(stats.allTotal)}</div>
-		</div>
+		<StatCard tone="green" label="This month" cur="+RM" value={formatMoney(stats.thisMonth)} />
+		<StatCard label="This quarter" cur="+RM" value={formatMoney(stats.thisQuarter)} />
+		<StatCard label="Largest payment" cur="+RM" value={formatMoney(stats.largest)} />
+		<StatCard tone="green" label="All received" cur="+RM" value={formatMoney(stats.allTotal)} />
 	</div>
 
 	<div class="work">
@@ -343,6 +291,8 @@
 									style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
 									onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
 									onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+									onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+									onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
 								>
 									<span style="width:16px; height:16px; border-radius:4px; border:1.5px solid {selectedCats.includes(cat) ? 'var(--primary)' : 'var(--border-strong)'}; background:{selectedCats.includes(cat) ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
 										{#if selectedCats.includes(cat)}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
@@ -361,9 +311,9 @@
 								{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600; padding:0;">Clear</button>{/if}
 							</div>
 							<div style="display:flex; flex-direction:column; gap:8px;">
-								<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
+								<span style="font-size:11.5px; color:var(--muted-foreground);">From</span>
 								<DatePicker bind:value={dateFrom} placeholder="From date" />
-								<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
+								<span style="font-size:11.5px; color:var(--muted-foreground);">To</span>
 								<DatePicker bind:value={dateTo} placeholder="To date" />
 							</div>
 						</div>
@@ -470,22 +420,18 @@
 						{#if stats.count === 0}
 							<tr class="empty-row">
 								<td colspan="6">
-									<div class="empty">
-										<div class="empty-icon"><TrendingUp size={20} /></div>
-										<div class="empty-title">No income yet</div>
-										<div class="empty-sub">Your income history will appear here.</div>
-									</div>
+									<EmptyState title="No income yet" sub="Your income history will appear here.">
+										{#snippet icon()}<TrendingUp size={20} />{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{:else if filtered.length === 0}
 							<tr class="empty-row">
 								<td colspan="6">
-									<div class="empty">
-										<div class="empty-icon"><Search size={20} /></div>
-										<div class="empty-title">No income matches your filters</div>
-										<div class="empty-sub">Try adjusting your search or filters.</div>
-										<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>
-									</div>
+									<EmptyState title="No income matches your filters" sub="Try adjusting your search or filters.">
+										{#snippet icon()}<Search size={20} />{/snippet}
+										{#snippet action()}<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{/if}
@@ -500,18 +446,13 @@
 	</div>
 
 	<!-- Bulk action bar -->
-	<div class="bulkbar" class:show={selected.size > 0}>
-		<div class="bulkbar-inner">
-			<button class="bulk-close" onclick={clearSel} aria-label="Clear selection"><X size={16} /></button>
-			<span class="bulk-count"><b>{selected.size}</b> selected</span>
-			<span class="bulk-total">· <span class="num">+RM {formatMoney(selTotal)}</span></span>
-			<div class="bulk-actions">
-				<button class="bulk-actions-ghost" onclick={clearSel} style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;">
-					Deselect all
-				</button>
-			</div>
-		</div>
-	</div>
+	<BulkActionBar show={selected.size > 0} count={selected.size} total={`+RM ${formatMoney(selTotal)}`} onclear={clearSel}>
+		{#snippet actions()}
+			<button class="bulk-actions-ghost" onclick={clearSel} style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;">
+				Deselect all
+			</button>
+		{/snippet}
+	</BulkActionBar>
 </div>
 
 <!-- Mobile filter sheet -->
@@ -543,9 +484,9 @@
 					{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
 				</div>
 				<div style="display:flex; flex-direction:column; gap:8px;">
-					<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
+					<span style="font-size:11.5px; color:var(--muted-foreground);">From</span>
 					<DatePicker bind:value={dateFrom} placeholder="From date" />
-					<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
+					<span style="font-size:11.5px; color:var(--muted-foreground);">To</span>
 					<DatePicker bind:value={dateTo} placeholder="To date" />
 				</div>
 			</div>
@@ -566,9 +507,9 @@
 					</div>
 				</div>
 			</div>
-			<button class="btn-primary" style="width:100%;" onclick={() => (mobileFilterOpen = false)}>
+			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>
 				Show results
-			</button>
+			</Button>
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
@@ -628,42 +569,7 @@
 							</div>
 						{/if}
 					</div>
-					<div class="attach-section-header">
-						<div class="detail-section-label" style="margin:0;">Attachments</div>
-						<button type="button" class="attach-add-btn" onclick={() => incomeFileInput?.click()}>
-							<Plus size={11} /> Add
-						</button>
-					</div>
-					<div
-						class="attach-drop-area"
-						class:drag={incomeDrag}
-						ondragover={(e) => { e.preventDefault(); incomeDrag = true; }}
-						ondragleave={() => (incomeDrag = false)}
-						ondrop={handleIncomeDrop}
-					>
-						{#if detailIncome.attachments.length > 0}
-							<div class="attach-list">
-								{#each detailIncome.attachments as att (att.id)}
-									<div class="attach-item">
-										<div class="attach-thumb"><Paperclip size={14} /></div>
-										<div class="attach-meta">
-											<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
-											<div class="attach-sub">{att.addedDate}</div>
-										</div>
-										<button type="button" class="attach-del" onclick={() => deleteIncomeAttachment(att.id)}>
-											<X size={14} />
-										</button>
-									</div>
-								{/each}
-							</div>
-						{:else}
-							<div class="attach-empty attach-empty-drop" onclick={() => incomeFileInput?.click()}>
-								<Paperclip size={14} /> Drop files here or click to add
-							</div>
-						{/if}
-					</div>
-					<input bind:this={incomeFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png"
-						multiple style="display:none" onchange={handleIncomeFileInput} />
+					<AttachmentManager apiBase={`/api/income/${detailIncome.id}`} bind:attachments={detailIncome.attachments} />
 				</div>
 			{/if}
 		</Sheet.Content>
@@ -753,7 +659,7 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></label>
+					<span class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></span>
 					{#if newIncomeFiles.length > 0}
 						<div class="attach-list" style="margin-bottom:8px;">
 							{#each newIncomeFiles as file, i}
@@ -773,10 +679,14 @@
 					<div
 						class="attach-drop-area"
 						class:drag={newIncomeDrag}
+						role="button"
+						tabindex="0"
+						aria-label="Attach files"
 						ondragover={(e) => { e.preventDefault(); newIncomeDrag = true; }}
 						ondragleave={() => (newIncomeDrag = false)}
 						ondrop={(e) => { e.preventDefault(); newIncomeDrag = false; if (e.dataTransfer?.files) newIncomeFiles = [...newIncomeFiles, ...Array.from(e.dataTransfer.files)]; }}
 						onclick={() => newIncomeFileInput?.click()}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); newIncomeFileInput?.click(); } }}
 					>
 						<div class="attach-empty attach-empty-drop" style="pointer-events:none;">
 							<Upload size={14} /> Drop files here or click to browse

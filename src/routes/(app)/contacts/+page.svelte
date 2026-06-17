@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy } from 'svelte';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
 	import { Plus, Search, X, Users, Merge, SlidersHorizontal, Building2, EyeOff } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import { EntityType, Role, EntityTypeLabels, RoleLabels } from '$lib/enums.js';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -12,6 +16,7 @@
 
 	type Contact = (typeof data.contacts)[0];
 
+	// svelte-ignore state_referenced_locally
 	let contacts = $state<Contact[]>(data.contacts);
 	$effect(() => { contacts = data.contacts; });
 
@@ -28,15 +33,9 @@
 	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
 
 	// Mobile panel detection — full-screen bottom sheet on mobile
-	let isMobile = $state(false);
-	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
-		isMobile = mq.matches;
-		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	$effect(() => {
 		const v = searchRaw;
@@ -122,24 +121,13 @@
 	}
 
 	// --- SSE ---
-	let es: EventSource | null = null;
-	onMount(() => {
-		es = new EventSource('/api/contacts/stream');
-		es.onmessage = (e) => {
-			const msg = JSON.parse(e.data);
-			if (msg.type === 'contact-update') merge([msg.item]);
-			else if (msg.type === 'contact-delete') contacts = contacts.filter((c) => c.id !== msg.id);
-		};
+	type ContactStreamMsg =
+		| { type: 'contact-update'; item: Contact }
+		| { type: 'contact-delete'; id: number };
+	createResourceStream<ContactStreamMsg>('/api/contacts/stream', (msg) => {
+		if (msg.type === 'contact-update') contacts = mergeById(contacts, [msg.item]);
+		else if (msg.type === 'contact-delete') contacts = contacts.filter((c) => c.id !== msg.id);
 	});
-	onDestroy(() => es?.close());
-
-	function merge(incoming: Contact[]) {
-		const byId = new Map(incoming.map((c) => [c.id, c]));
-		const existing = new Set(contacts.map((c) => c.id));
-		contacts = contacts.map((c) => byId.get(c.id) ?? c);
-		const brandNew = incoming.filter((c) => !existing.has(c.id));
-		if (brandNew.length) contacts = [...brandNew, ...contacts];
-	}
 </script>
 
 <svelte:head>
@@ -189,17 +177,14 @@
 				{#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
 			</button>
 			{#if data.perms.change && data.perms.delete}
-				<button class="btn-outline btn-sm" onclick={loadDuplicates} style="display:inline-flex; align-items:center; gap:6px;">
+				<Button variant="outline" size="sm" onclick={loadDuplicates}>
 					<Merge size={14} /> <span class="btn-text">Find duplicates</span>
-				</button>
+				</Button>
 			{/if}
 			{#if data.perms.add}
-				<button
-					onclick={openCreate}
-					style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
-				>
+				<Button size="sm" onclick={openCreate}>
 					<Plus size={15} /> <span class="btn-text">New contact</span>
-				</button>
+				</Button>
 			{/if}
 		</div>
 	</header>
@@ -249,6 +234,8 @@
 									style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
 									onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
 									onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+									onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+									onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
 								>
 									<span style="width:16px; height:16px; border-radius:50%; border:1.5px solid {entityFilter === val ? 'var(--primary)' : 'var(--border-strong)'}; background:{entityFilter === val ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
 										{#if entityFilter === val}<span style="width:6px; height:6px; border-radius:50%; background:white; display:block;"></span>{/if}
@@ -270,6 +257,8 @@
 								style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
 								onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
 								onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+								onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+								onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
 							>
 								<span style="width:16px; height:16px; border-radius:4px; border:1.5px solid {showInactive ? 'var(--primary)' : 'var(--border-strong)'}; background:{showInactive ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
 									{#if showInactive}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
@@ -334,18 +323,13 @@
 						{:else}
 							<tr class="empty-row">
 								<td colspan="5">
-									<div class="empty">
-										<div class="empty-icon"><Users size={20} /></div>
-										<div class="empty-title">
-											{activeFilterCount > 0 ? 'No contacts match your filters' : 'No contacts yet'}
-										</div>
-										{#if activeFilterCount > 0}
-											<div class="empty-sub">Try adjusting your search or filters.</div>
-											<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>
-										{:else}
-											<div class="empty-sub">Your contacts will appear here.</div>
-										{/if}
-									</div>
+									<EmptyState
+										title={activeFilterCount > 0 ? 'No contacts match your filters' : 'No contacts yet'}
+										sub={activeFilterCount > 0 ? 'Try adjusting your search or filters.' : 'Your contacts will appear here.'}
+									>
+										{#snippet icon()}<Users size={20} />{/snippet}
+										{#snippet action()}{#if activeFilterCount > 0}<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>{/if}{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{/each}
@@ -380,6 +364,8 @@
 							style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:8px 4px; border-radius:7px; cursor:pointer; text-align:left;"
 							onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
 							onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+							onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+							onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
 						>
 							<span style="width:16px; height:16px; border-radius:50%; border:1.5px solid {entityFilter === val ? 'var(--primary)' : 'var(--border-strong)'}; background:{entityFilter === val ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
 								{#if entityFilter === val}<span style="width:6px; height:6px; border-radius:50%; background:white; display:block;"></span>{/if}
@@ -398,9 +384,9 @@
 					>Show inactive</button>
 				</div>
 			</div>
-			<button class="btn-primary" style="width:100%;" onclick={() => (mobileFilterOpen = false)}>
+			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>
 				Show results
-			</button>
+			</Button>
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
@@ -436,7 +422,7 @@
 
 					<div class="field">
 						<label class="field-label" for="legalName">Legal name *</label>
-						<input id="legalName" name="legalName" required value={editing?.legalName ?? ''} style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }} />
+						<Input id="legalName" name="legalName" required value={editing?.legalName ?? ''} class="w-full" />
 					</div>
 
 					<div class="field">
@@ -453,15 +439,15 @@
 
 					<div class="field">
 						<label class="field-label" for="registrationNo">Registration no.</label>
-						<input id="registrationNo" name="registrationNo" value={editing?.registrationNo ?? ''} style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }} />
+						<Input id="registrationNo" name="registrationNo" value={editing?.registrationNo ?? ''} class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="email">Email</label>
-						<input id="email" name="email" type="email" value={editing?.email ?? ''} style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }} />
+						<Input id="email" name="email" type="email" value={editing?.email ?? ''} class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="phone">Phone</label>
-						<input id="phone" name="phone" value={editing?.phone ?? ''} style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }} />
+						<Input id="phone" name="phone" value={editing?.phone ?? ''} class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="address">Address</label>
@@ -500,11 +486,9 @@
 			</div>
 			<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 				{#if clusters.length === 0}
-					<div class="empty" style="padding:40px 20px;">
-						<div class="empty-icon"><Users size={20} /></div>
-						<div class="empty-title">No duplicates found</div>
-						<div class="empty-sub">All your contacts appear to be unique.</div>
-					</div>
+					<EmptyState title="No duplicates found" sub="All your contacts appear to be unique." style="padding:40px 20px;">
+						{#snippet icon()}<Users size={20} />{/snippet}
+					</EmptyState>
 				{/if}
 				{#each clusters as cl}
 					<div class="cluster">

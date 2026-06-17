@@ -2,6 +2,8 @@
 	import { enhance } from '$app/forms';
 	import { Plus, X, Lock } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -11,13 +13,18 @@
 	let activeTab = $state<Tab>('general');
 
 	// Expense categories state
+	// svelte-ignore state_referenced_locally
 	let expCats = $state<string[]>([...data.expenseCategories]);
 	let newExpCat = $state('');
 
 	// Intelligence settings state
+	// svelte-ignore state_referenced_locally
 	let aiApiKey = $state(data.autoImportApiKey);
+	// svelte-ignore state_referenced_locally
 	let aiModel = $state(data.autoImportModel);
+	// svelte-ignore state_referenced_locally
 	let aiParallelTasks = $state(data.autoImportParallelTasks);
+	// svelte-ignore state_referenced_locally
 	let aiCategoryHints = $state(data.autoImportCategoryHints);
 
 	// OpenRouter model fetching
@@ -36,10 +43,12 @@
 	});
 
 	// Income categories state
+	// svelte-ignore state_referenced_locally
 	let incCats = $state<string[]>([...data.incomeCategories]);
 	let newIncCat = $state('');
 
 	// Advanced state
+	// svelte-ignore state_referenced_locally
 	let godMode = $state(data.godModeEnabled);
 
 	function addExpCat() {
@@ -190,14 +199,13 @@
 									<div class="set-row-label">API key</div>
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">OpenRouter key used for document understanding</div>
 								</div>
-								<input
-									class="form-input set-input-right"
+								<Input
+									class="set-input-right shrink-0"
 									type="password"
 									name="apiKey"
 									placeholder="sk-or-v1-…"
 									value={aiApiKey}
 									oninput={(e) => (aiApiKey = (e.target as HTMLInputElement).value)}
-									style="flex-shrink:0;"
 								/>
 							</div>
 							<div class="set-row">
@@ -237,6 +245,7 @@
 								<button
 									type="button"
 									class="toggle-btn"
+									aria-label="Free models only"
 									class:on={showFreeOnly}
 									onclick={() => { showFreeOnly = !showFreeOnly; }}
 									aria-pressed={showFreeOnly}
@@ -271,6 +280,7 @@
 								<button
 									type="button"
 									class="toggle-btn"
+									aria-label="Category hints"
 									class:on={aiCategoryHints}
 									onclick={() => { aiCategoryHints = !aiCategoryHints; }}
 									aria-pressed={aiCategoryHints}
@@ -279,7 +289,7 @@
 								</button>
 							</div>
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 
@@ -302,10 +312,10 @@
 							{/each}
 						</div>
 						<div class="cat-add-row">
-							<input class="form-input cat-add-input" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
-							<button type="button" class="btn-ghost" onclick={addExpCat}><Plus size={14} /> Add</button>
+							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
+							<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 
@@ -327,10 +337,10 @@
 							{/each}
 						</div>
 						<div class="cat-add-row">
-							<input class="form-input cat-add-input" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
-							<button type="button" class="btn-ghost" onclick={addIncCat}><Plus size={14} /> Add</button>
+							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
+							<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 
@@ -351,6 +361,7 @@
 								<button
 									type="button"
 									class="toggle-btn"
+									aria-label="God Mode"
 									class:on={godMode}
 									onclick={() => { godMode = !godMode; }}
 									aria-pressed={godMode}
@@ -364,7 +375,7 @@
 								</div>
 							{/if}
 						</div>
-						<button type="submit" class="btn-primary" style="margin-top:16px;">Save</button>
+						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 			{/if}
@@ -378,11 +389,6 @@
 		gap: 8px;
 		align-items: center;
 		margin-top: 12px;
-	}
-
-	.cat-add-input {
-		flex: 1;
-		min-width: 0;
 	}
 
 	.chip-remove {

@@ -64,7 +64,7 @@
 			<div class="field">
 				<div class="field-label">
 					<label for="password">Password</label>
-					<a class="forgot" href="#" onclick={(e) => e.preventDefault()}>Forgot?</a>
+					<button type="button" class="forgot" onclick={(e) => e.preventDefault()}>Forgot?</button>
 				</div>
 				<div class="input-wrap">
 					<span class="input-lead" aria-hidden="true">
@@ -137,7 +137,7 @@
 			</button>
 		</form>
 
-		<p class="form-foot">New to Akaun? <a href="#" onclick={(e) => e.preventDefault()}>Ask your admin for access</a></p>
+		<p class="form-foot">New to Akaun? <button type="button" onclick={(e) => e.preventDefault()}>Ask your admin for access</button></p>
 	</div>
 </div>
 
@@ -217,6 +217,11 @@
 		font-weight: 500;
 		color: var(--primary);
 		text-decoration: none;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		font-family: inherit;
 	}
 
 	.forgot:hover {
@@ -252,6 +257,7 @@
 			border-color 0.12s,
 			box-shadow 0.12s;
 		-webkit-appearance: none;
+		appearance: none;
 	}
 
 	.input::placeholder {
@@ -408,13 +414,19 @@
 		line-height: 1.6;
 	}
 
-	.form-foot a {
+	.form-foot button {
 		color: var(--primary);
 		text-decoration: none;
 		font-weight: 500;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		font-family: inherit;
+		font-size: inherit;
 	}
 
-	.form-foot a:hover {
+	.form-foot button:hover {
 		text-decoration: underline;
 	}
 </style>

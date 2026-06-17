@@ -12,6 +12,7 @@
 	import BarChart from '$lib/components/charts/BarChart.svelte';
 	import DonutChart from '$lib/components/charts/DonutChart.svelte';
 	import TrendBars from '$lib/components/charts/TrendBars.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import { formatMoney, formatMoneyRM, formatDateShort } from '$lib/format.js';
 	import type { PageData } from './$types.js';
 
@@ -23,6 +24,7 @@
 		{ id: 'ytd', label: 'Year to date' }
 	];
 
+	// svelte-ignore state_referenced_locally
 	let period = $state(data.period ?? '2m');
 	let mobilePeriodOpen = $state(false);
 
@@ -178,10 +180,7 @@
 				{#if data.categoryData.length > 0}
 					<DonutChart data={data.categoryData} />
 				{:else}
-					<div class="empty" style="padding:20px;">
-						<div class="empty-title">No expense data yet</div>
-						<div class="empty-sub">Add expenses to see your spending breakdown.</div>
-					</div>
+					<EmptyState title="No expense data yet" sub="Add expenses to see your spending breakdown." style="padding:20px;" />
 				{/if}
 			</div>
 		</div>
@@ -223,10 +222,7 @@
 						</div>
 					{/each}
 					{#if data.recent.length === 0}
-						<div class="empty" style="padding:20px;">
-							<div class="empty-title">No activity yet</div>
-							<div class="empty-sub">Recent transactions will appear here.</div>
-						</div>
+						<EmptyState title="No activity yet" sub="Recent transactions will appear here." style="padding:20px;" />
 					{/if}
 				</div>
 			</div>

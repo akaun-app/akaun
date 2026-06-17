@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy } from 'svelte';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
 	import { Plus, X, Search, ChevronRight, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { ClaimStatus } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
@@ -23,6 +27,7 @@
 	type FullClaim = ClaimRow & { attachments: Attachment[] };
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	// svelte-ignore state_referenced_locally
 	let claims = $state(data.claims);
 	$effect(() => { claims = data.claims; });
 
@@ -34,23 +39,15 @@
 	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	let detailClaim = $state<FullClaim | null>(null);
 	let showNew = $state(false);
-	let claimDrag = $state(false);
-	let claimFileInput = $state<HTMLInputElement | null>(null);
 	let newSelIds = $state(new Set<number>());
 	let newClaimFiles = $state<File[]>([]);
 	let newClaimDrag = $state(false);
 	let newClaimFileInput = $state<HTMLInputElement | null>(null);
 
 	// Mobile panel detection — full-screen bottom sheet on mobile
-	let isMobile = $state(false);
-	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
-		isMobile = mq.matches;
-		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// --- Derived ---
 	const counts = $derived({
@@ -83,24 +80,13 @@
 	const newTotal = $derived(newSelList.reduce((s, e) => s + e.amount, 0));
 
 	// SSE — real-time updates from server
-	let _es: EventSource | null = null;
-	onMount(() => {
-		_es = new EventSource('/api/claims/stream');
-		_es.onmessage = (e) => {
-			const msg = JSON.parse(e.data);
-			if (msg.type === 'claim-update') mergeClaims([msg.item]);
-			else if (msg.type === 'claim-delete') claims = claims.filter((c) => c.id !== msg.id);
-		};
+	type ClaimStreamMsg =
+		| { type: 'claim-update'; item: (typeof data.claims)[0] }
+		| { type: 'claim-delete'; id: number };
+	createResourceStream<ClaimStreamMsg>('/api/claims/stream', (msg) => {
+		if (msg.type === 'claim-update') claims = mergeById(claims, [msg.item]);
+		else if (msg.type === 'claim-delete') claims = claims.filter((c) => c.id !== msg.id);
 	});
-	onDestroy(() => _es?.close());
-
-	function mergeClaims(incoming: typeof data.claims) {
-		const byId = new Map(incoming.map((c) => [c.id, c]));
-		const existingIds = new Set(claims.map((c) => c.id));
-		claims = claims.map((local) => byId.get(local.id) ?? local);
-		const brandNew = incoming.filter((c) => !existingIds.has(c.id));
-		if (brandNew.length > 0) claims = [...brandNew, ...claims];
-	}
 
 	// --- Actions ---
 	async function openDetail(id: number) {
@@ -111,34 +97,6 @@
 		if (res.ok) detailClaim = await res.json();
 	}
 
-	async function uploadClaimFiles(files: FileList) {
-		if (!detailClaim) return;
-		for (const file of Array.from(files)) {
-			const fd = new FormData();
-			fd.append('file', file);
-			const res = await fetch(`/api/claims/${detailClaim.id}/attachments`, { method: 'POST', body: fd });
-			if (res.ok) {
-				const att: Attachment = await res.json();
-				detailClaim = { ...detailClaim, attachments: [...detailClaim.attachments, att] };
-			}
-		}
-	}
-
-	async function deleteClaimAttachment(attachmentId: number) {
-		if (!detailClaim) return;
-		await fetch(`/api/claims/${detailClaim.id}/attachments/${attachmentId}`, { method: 'DELETE' });
-		detailClaim = { ...detailClaim, attachments: detailClaim.attachments.filter((a) => a.id !== attachmentId) };
-	}
-
-	function handleClaimDrop(e: DragEvent) {
-		e.preventDefault(); claimDrag = false;
-		if (e.dataTransfer?.files) uploadClaimFiles(e.dataTransfer.files);
-	}
-	function handleClaimFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		if (input.files) uploadClaimFiles(input.files);
-		input.value = '';
-	}
 
 	function toggleNewSel(id: number) {
 		if (newSelIds.has(id)) newSelIds.delete(id);
@@ -214,21 +172,9 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip" style="grid-template-columns:repeat(3,1fr);">
-		<div class="stat-card tone-amber">
-			<div class="stat-label">Awaiting reimbursement</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(totals.pending)}</div>
-			<div class="stat-sub">{counts.pending} pending claim{counts.pending !== 1 ? 's' : ''}</div>
-		</div>
-		<div class="stat-card tone-green">
-			<div class="stat-label">Reimbursed</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(totals.done)}</div>
-			<div class="stat-sub">{counts.done} completed</div>
-		</div>
-		<div class="stat-card">
-			<div class="stat-label">Total claimed</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(totals.all)}</div>
-			<div class="stat-sub">{counts.all} claim{counts.all !== 1 ? 's' : ''}</div>
-		</div>
+		<StatCard tone="amber" label="Awaiting reimbursement" cur="RM" value={formatMoney(totals.pending)} sub="{counts.pending} pending claim{counts.pending !== 1 ? 's' : ''}" />
+		<StatCard tone="green" label="Reimbursed" cur="RM" value={formatMoney(totals.done)} sub="{counts.done} completed" />
+		<StatCard label="Total claimed" cur="RM" value={formatMoney(totals.all)} sub="{counts.all} claim{counts.all !== 1 ? 's' : ''}" />
 	</div>
 
 	<!-- Work area -->
@@ -308,31 +254,12 @@
 						{#if displayed.length === 0}
 							<tr class="empty-row">
 								<td colspan="6">
-									<div class="empty">
-										<div class="empty-icon">
-											{#if activeTab === 'pending'}
-												<Clock size={20} />
-											{:else if activeTab === 'done'}
-												<CheckCircle size={20} />
-											{:else}
-												<FileText size={20} />
-											{/if}
-										</div>
-										<div class="empty-title">
-											{activeTab === 'pending'
-												? 'No pending claims yet'
-												: activeTab === 'done'
-													? 'No completed claims yet'
-													: 'No claims yet'}
-										</div>
-										<div class="empty-sub">
-											{activeTab === 'pending'
-												? 'Pending claims will appear here.'
-												: activeTab === 'done'
-													? 'Completed claims will appear here.'
-													: 'Your claims will appear here.'}
-										</div>
-									</div>
+									<EmptyState
+										title={activeTab === 'pending' ? 'No pending claims yet' : activeTab === 'done' ? 'No completed claims yet' : 'No claims yet'}
+										sub={activeTab === 'pending' ? 'Pending claims will appear here.' : activeTab === 'done' ? 'Completed claims will appear here.' : 'Your claims will appear here.'}
+									>
+										{#snippet icon()}{#if activeTab === 'pending'}<Clock size={20} />{:else if activeTab === 'done'}<CheckCircle size={20} />{:else}<FileText size={20} />{/if}{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{/if}
@@ -409,42 +336,7 @@
 						{/if}
 					</div>
 					<div>
-						<div class="attach-section-header">
-							<div class="detail-section-label" style="margin:0;">Attachments</div>
-							<button type="button" class="attach-add-btn" onclick={() => claimFileInput?.click()}>
-								<Plus size={11} /> Add
-							</button>
-						</div>
-						<div
-							class="attach-drop-area"
-							class:drag={claimDrag}
-							ondragover={(e) => { e.preventDefault(); claimDrag = true; }}
-							ondragleave={() => (claimDrag = false)}
-							ondrop={handleClaimDrop}
-						>
-							{#if detailClaim.attachments.length > 0}
-								<div class="attach-list">
-									{#each detailClaim.attachments as att (att.id)}
-										<div class="attach-item">
-											<div class="attach-thumb"><Paperclip size={14} /></div>
-											<div class="attach-meta">
-												<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
-												<div class="attach-sub">{att.addedDate}</div>
-											</div>
-											<button type="button" class="attach-del" onclick={() => deleteClaimAttachment(att.id)}>
-												<X size={14} />
-											</button>
-										</div>
-									{/each}
-								</div>
-							{:else}
-								<div class="attach-empty attach-empty-drop" onclick={() => claimFileInput?.click()}>
-									<Paperclip size={14} /> Drop files here or click to add
-								</div>
-							{/if}
-						</div>
-						<input bind:this={claimFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png"
-							multiple style="display:none" onchange={handleClaimFileInput} />
+						<AttachmentManager apiBase={`/api/claims/${detailClaim.id}`} bind:attachments={detailClaim.attachments} />
 					</div>
 				</div>
 				<div class="sheet-foot">
@@ -606,7 +498,7 @@
 				<input type="hidden" name="expenseIds" value={[...newSelIds].join(',')} />
 
 				<div class="field">
-					<label class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></label>
+					<span class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></span>
 					{#if newClaimFiles.length > 0}
 						<div class="attach-list" style="margin-bottom:8px;">
 							{#each newClaimFiles as file, i}
@@ -626,10 +518,14 @@
 					<div
 						class="attach-drop-area"
 						class:drag={newClaimDrag}
+						role="button"
+						tabindex="0"
+						aria-label="Attach files"
 						ondragover={(e) => { e.preventDefault(); newClaimDrag = true; }}
 						ondragleave={() => (newClaimDrag = false)}
 						ondrop={(e) => { e.preventDefault(); newClaimDrag = false; if (e.dataTransfer?.files) newClaimFiles = [...newClaimFiles, ...Array.from(e.dataTransfer.files)]; }}
 						onclick={() => newClaimFileInput?.click()}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); newClaimFileInput?.click(); } }}
 					>
 						<div class="attach-empty attach-empty-drop" style="pointer-events:none;">
 							<Upload size={14} /> Drop files here or click to browse
@@ -708,11 +604,5 @@
 		display: flex;
 		gap: 8px;
 		justify-content: flex-end;
-	}
-	.empty-sub {
-		font-size: 13px;
-		color: var(--muted-foreground);
-		text-align: center;
-		max-width: 320px;
 	}
 </style>

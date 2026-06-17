@@ -30,6 +30,7 @@
 	let query = $state('');
 	let debounced = $state('');
 	let results = $state<Candidate[]>([]);
+	// svelte-ignore state_referenced_locally
 	let selectedLabel = $state<string | null>(initialLabel);
 	let rootEl: HTMLDivElement;
 
@@ -117,6 +118,12 @@
 					onclick={(e) => {
 						e.stopPropagation();
 						clear();
+					}}
+					onkeydown={(e) => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault();
+							clear();
+						}
 					}}
 				>×</span>
 			{/if}

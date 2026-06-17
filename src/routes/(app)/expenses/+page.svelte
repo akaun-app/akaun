@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { onMount, onDestroy } from 'svelte';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
 	import {
 		Search,
@@ -19,6 +20,11 @@
 		Upload
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import StatCard from '$lib/components/ui/StatCard.svelte';
+	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
@@ -41,6 +47,7 @@
 	let newContactName = $state<string | null>(null);
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
+	// svelte-ignore state_referenced_locally
 	let expenses = $state(data.expenses);
 	$effect(() => { expenses = data.expenses; });
 
@@ -63,22 +70,14 @@
 	let mobileSearchOpen = $state(false);
 	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
-	let expenseDrag = $state(false);
-	let expenseFileInput = $state<HTMLInputElement | null>(null);
 	let newExpenseFiles = $state<File[]>([]);
 	let newExpenseDrag = $state(false);
 	let newExpenseFileInput = $state<HTMLInputElement | null>(null);
 
 	// Mobile panel detection — full-screen bottom sheet on mobile
-	let isMobile = $state(false);
-	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
-		isMobile = mq.matches;
-		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// Debounced search
 	$effect(() => {
@@ -207,24 +206,13 @@
 	const today = new Date().toISOString().slice(0, 10);
 
 	// SSE — real-time updates from server
-	let _es: EventSource | null = null;
-	onMount(() => {
-		_es = new EventSource('/api/expenses/stream');
-		_es.onmessage = (e) => {
-			const msg = JSON.parse(e.data);
-			if (msg.type === 'expense-update') mergeExpenses([msg.item]);
-			else if (msg.type === 'expense-delete') expenses = expenses.filter((e) => e.id !== msg.id);
-		};
+	type ExpenseStreamMsg =
+		| { type: 'expense-update'; item: (typeof data.expenses)[0] }
+		| { type: 'expense-delete'; id: number };
+	createResourceStream<ExpenseStreamMsg>('/api/expenses/stream', (msg) => {
+		if (msg.type === 'expense-update') expenses = mergeById(expenses, [msg.item]);
+		else if (msg.type === 'expense-delete') expenses = expenses.filter((e) => e.id !== msg.id);
 	});
-	onDestroy(() => _es?.close());
-
-	function mergeExpenses(incoming: typeof data.expenses) {
-		const byId = new Map(incoming.map((e) => [e.id, e]));
-		const existingIds = new Set(expenses.map((e) => e.id));
-		expenses = expenses.map((local) => byId.get(local.id) ?? local);
-		const brandNew = incoming.filter((e) => !existingIds.has(e.id));
-		if (brandNew.length > 0) expenses = [...brandNew, ...expenses];
-	}
 
 	async function openExpense(e: (typeof data.expenses)[0]) {
 		detailExpense = { ...e, attachments: [] };
@@ -232,34 +220,6 @@
 		if (res.ok) detailExpense = await res.json();
 	}
 
-	async function uploadExpenseFiles(files: FileList) {
-		if (!detailExpense) return;
-		for (const file of Array.from(files)) {
-			const fd = new FormData();
-			fd.append('file', file);
-			const res = await fetch(`/api/expenses/${detailExpense.id}/attachments`, { method: 'POST', body: fd });
-			if (res.ok) {
-				const att: Attachment = await res.json();
-				detailExpense = { ...detailExpense, attachments: [...detailExpense.attachments, att] };
-			}
-		}
-	}
-
-	async function deleteExpenseAttachment(attachmentId: number) {
-		if (!detailExpense) return;
-		await fetch(`/api/expenses/${detailExpense.id}/attachments/${attachmentId}`, { method: 'DELETE' });
-		detailExpense = { ...detailExpense, attachments: detailExpense.attachments.filter((a) => a.id !== attachmentId) };
-	}
-
-	function handleExpenseDrop(e: DragEvent) {
-		e.preventDefault(); expenseDrag = false;
-		if (e.dataTransfer?.files) uploadExpenseFiles(e.dataTransfer.files);
-	}
-	function handleExpenseFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		if (input.files) uploadExpenseFiles(input.files);
-		input.value = '';
-	}
 </script>
 
 <svelte:head>
@@ -321,26 +281,10 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip">
-		<div class="stat-card tone-red">
-			<div class="stat-label">Outstanding</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(stats.outstanding)}</div>
-			<div class="stat-sub">{stats.outstandingCount} unpaid</div>
-		</div>
-		<div class="stat-card tone-amber">
-			<div class="stat-label">Pending claims</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(stats.pendingTotal)}</div>
-			<div class="stat-sub">Awaiting reimbursement</div>
-		</div>
-		<div class="stat-card">
-			<div class="stat-label">This month</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(stats.monthTotal)}</div>
-			<div class="stat-sub">{stats.monthCount} records</div>
-		</div>
-		<div class="stat-card">
-			<div class="stat-label">All recorded</div>
-			<div class="stat-value"><span class="stat-cur">RM</span>{formatMoney(stats.allTotal)}</div>
-			<div class="stat-sub">{counts.all} expenses</div>
-		</div>
+		<StatCard tone="red" label="Outstanding" cur="RM" value={formatMoney(stats.outstanding)} sub="{stats.outstandingCount} unpaid" />
+		<StatCard tone="amber" label="Pending claims" cur="RM" value={formatMoney(stats.pendingTotal)} sub="Awaiting reimbursement" />
+		<StatCard label="This month" cur="RM" value={formatMoney(stats.monthTotal)} sub="{stats.monthCount} records" />
+		<StatCard label="All recorded" cur="RM" value={formatMoney(stats.allTotal)} sub="{counts.all} expenses" />
 	</div>
 
 	<div class="work">
@@ -390,6 +334,8 @@
 									style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
 									onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
 									onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+									onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+									onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
 								>
 									<span style="width:16px; height:16px; border-radius:4px; border:1.5px solid {selectedCats.includes(cat) ? 'var(--primary)' : 'var(--border-strong)'}; background:{selectedCats.includes(cat) ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
 										{#if selectedCats.includes(cat)}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
@@ -408,9 +354,9 @@
 								{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600; padding:0;">Clear</button>{/if}
 							</div>
 							<div style="display:flex; flex-direction:column; gap:8px;">
-								<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
+								<span style="font-size:11.5px; color:var(--muted-foreground);">From</span>
 								<DatePicker bind:value={dateFrom} placeholder="From date" />
-								<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
+								<span style="font-size:11.5px; color:var(--muted-foreground);">To</span>
 								<DatePicker bind:value={dateTo} placeholder="To date" />
 							</div>
 						</div>
@@ -523,22 +469,18 @@
 						{#if counts.all === 0}
 							<tr class="empty-row">
 								<td colspan="7">
-									<div class="empty">
-										<div class="empty-icon"><Wallet size={20} /></div>
-										<div class="empty-title">No expenses yet</div>
-										<div class="empty-sub">Your expense history will appear here.</div>
-									</div>
+									<EmptyState title="No expenses yet" sub="Your expense history will appear here.">
+										{#snippet icon()}<Wallet size={20} />{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{:else if filtered.length === 0}
 							<tr class="empty-row">
 								<td colspan="7">
-									<div class="empty">
-										<div class="empty-icon"><Search size={20} /></div>
-										<div class="empty-title">No expenses match your filters</div>
-										<div class="empty-sub">Try adjusting your search or filters.</div>
-										<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>
-									</div>
+									<EmptyState title="No expenses match your filters" sub="Try adjusting your search or filters.">
+										{#snippet icon()}<Search size={20} />{/snippet}
+										{#snippet action()}<button class="link-btn" onclick={clearAllFilters}>Clear filters</button>{/snippet}
+									</EmptyState>
 								</td>
 							</tr>
 						{/if}
@@ -553,32 +495,27 @@
 	</div>
 
 	<!-- Bulk action bar -->
-	<div class="bulkbar" class:show={selected.size > 0}>
-		<div class="bulkbar-inner">
-			<button class="bulk-close" onclick={clearSel} aria-label="Clear selection"><X size={16} /></button>
-			<span class="bulk-count"><b>{selected.size}</b> selected</span>
-			<span class="bulk-total">· <span class="num">RM {formatMoney(selTotal)}</span></span>
-			<div class="bulk-actions">
-				<form method="POST" action="?/markPaid" use:enhance={() => () => { clearSel(); }}>
-					<input type="hidden" name="ids" value={[...selected].join(',')} />
-					<button type="submit" class="bulk-actions-ghost" style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;">
-						Mark paid
-					</button>
-				</form>
-				<form method="POST" action="?/createClaim" use:enhance={() => () => { clearSel(); }}>
-					<input type="hidden" name="ids" value={[...selected].join(',')} />
-					<button
-						type="submit"
-						disabled={!claimable}
-						title={claimable ? '' : 'Only unpaid expenses can be claimed'}
-						style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{claimable ? 1 : 0.5};"
-					>
-						<FileText size={14} /> Create claim
-					</button>
-				</form>
-			</div>
-		</div>
-	</div>
+	<BulkActionBar show={selected.size > 0} count={selected.size} total={`RM ${formatMoney(selTotal)}`} onclear={clearSel}>
+		{#snippet actions()}
+			<form method="POST" action="?/markPaid" use:enhance={() => () => { clearSel(); }}>
+				<input type="hidden" name="ids" value={[...selected].join(',')} />
+				<button type="submit" class="bulk-actions-ghost" style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;">
+					Mark paid
+				</button>
+			</form>
+			<form method="POST" action="?/createClaim" use:enhance={() => () => { clearSel(); }}>
+				<input type="hidden" name="ids" value={[...selected].join(',')} />
+				<button
+					type="submit"
+					disabled={!claimable}
+					title={claimable ? '' : 'Only unpaid expenses can be claimed'}
+					style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{claimable ? 1 : 0.5};"
+				>
+					<FileText size={14} /> Create claim
+				</button>
+			</form>
+		{/snippet}
+	</BulkActionBar>
 </div>
 
 <!-- Mobile filter sheet -->
@@ -610,9 +547,9 @@
 					{#if dateFrom || dateTo}<button onclick={() => { dateFrom = ''; dateTo = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
 				</div>
 				<div style="display:flex; flex-direction:column; gap:8px;">
-					<label style="font-size:11.5px; color:var(--muted-foreground);">From</label>
+					<span style="font-size:11.5px; color:var(--muted-foreground);">From</span>
 					<DatePicker bind:value={dateFrom} placeholder="From date" />
-					<label style="font-size:11.5px; color:var(--muted-foreground);">To</label>
+					<span style="font-size:11.5px; color:var(--muted-foreground);">To</span>
 					<DatePicker bind:value={dateTo} placeholder="To date" />
 				</div>
 			</div>
@@ -633,9 +570,9 @@
 					</div>
 				</div>
 			</div>
-			<button class="btn-primary" style="width:100%;" onclick={() => (mobileFilterOpen = false)}>
+			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>
 				Show results
-			</button>
+			</Button>
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
@@ -697,42 +634,7 @@
 							</div>
 						{/if}
 					</div>
-					<div class="attach-section-header">
-						<div class="detail-section-label" style="margin:0;">Attachments</div>
-						<button type="button" class="attach-add-btn" onclick={() => expenseFileInput?.click()}>
-							<Plus size={11} /> Add
-						</button>
-					</div>
-					<div
-						class="attach-drop-area"
-						class:drag={expenseDrag}
-						ondragover={(e) => { e.preventDefault(); expenseDrag = true; }}
-						ondragleave={() => (expenseDrag = false)}
-						ondrop={handleExpenseDrop}
-					>
-						{#if detailExpense.attachments.length > 0}
-							<div class="attach-list">
-								{#each detailExpense.attachments as att (att.id)}
-									<div class="attach-item">
-										<div class="attach-thumb"><Paperclip size={14} /></div>
-										<div class="attach-meta">
-											<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
-											<div class="attach-sub">{att.addedDate}</div>
-										</div>
-										<button type="button" class="attach-del" onclick={() => deleteExpenseAttachment(att.id)}>
-											<X size={14} />
-										</button>
-									</div>
-								{/each}
-							</div>
-						{:else}
-							<div class="attach-empty attach-empty-drop" onclick={() => expenseFileInput?.click()}>
-								<Paperclip size={14} /> Drop files here or click to add
-							</div>
-						{/if}
-					</div>
-					<input bind:this={expenseFileInput} type="file" accept=".pdf,.jpg,.jpeg,.png"
-						multiple style="display:none" onchange={handleExpenseFileInput} />
+					<AttachmentManager apiBase={`/api/expenses/${detailExpense.id}`} bind:attachments={detailExpense.attachments} />
 				</div>
 			{/if}
 		</Sheet.Content>
@@ -827,7 +729,7 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></label>
+					<span class="field-label">Attachments <span style="font-weight:400; color:var(--muted-foreground);">optional</span></span>
 					{#if newExpenseFiles.length > 0}
 						<div class="attach-list" style="margin-bottom:8px;">
 							{#each newExpenseFiles as file, i}
@@ -847,10 +749,14 @@
 					<div
 						class="attach-drop-area"
 						class:drag={newExpenseDrag}
+						role="button"
+						tabindex="0"
+						aria-label="Attach files"
 						ondragover={(e) => { e.preventDefault(); newExpenseDrag = true; }}
 						ondragleave={() => (newExpenseDrag = false)}
 						ondrop={(e) => { e.preventDefault(); newExpenseDrag = false; if (e.dataTransfer?.files) newExpenseFiles = [...newExpenseFiles, ...Array.from(e.dataTransfer.files)]; }}
 						onclick={() => newExpenseFileInput?.click()}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); newExpenseFileInput?.click(); } }}
 					>
 						<div class="attach-empty attach-empty-drop" style="pointer-events:none;">
 							<Upload size={14} /> Drop files here or click to browse

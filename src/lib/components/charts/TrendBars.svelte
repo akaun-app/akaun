@@ -62,7 +62,7 @@
 		const d = data;
 		chart.data.labels = d.map((r) => r.label);
 		chart.data.datasets[0].data = d.map((r) => r.value);
-		(chart.data.datasets[0] as { backgroundColor: string[] }).backgroundColor = colors(d);
+		(chart.data.datasets[0] as unknown as { backgroundColor: string[] }).backgroundColor = colors(d);
 		chart.update();
 	});
 </script>

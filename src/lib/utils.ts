@@ -22,7 +22,7 @@ export type WithChild<
 		? never
 		: Component<
 				TChild extends keyof HTMLElementTagNameMap
-					? HTMLAttributes<HTMLElementTagNameMap[TChild]>
+					? HTMLAttributes<HTMLElementTagNameMap[TChild] & EventTarget>
 					: TChild extends Component
 						? ComponentProps<TChild>
 						: never

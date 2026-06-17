@@ -338,10 +338,6 @@ th.sortable:hover .th-idle { opacity: .5; }
 
 /* ---------- Empty ---------- */
 .empty-row td { border-bottom: none !important; }
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 56px 20px; text-align: center; }
-.empty-icon { width: 46px; height: 46px; border-radius: 12px; background: var(--accent); display: grid; place-items: center; color: var(--muted-foreground); }
-.empty-title { font-weight: 500; }
-.empty-sub { font-size: 13px; color: var(--muted-foreground); }
 .link-btn { border: none; background: none; color: var(--primary); cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; }
 
 /* ---------- Status badge ---------- */

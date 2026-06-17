@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { Button } from '$lib/components/ui/button/index.js';
 	import { toast } from 'svelte-sonner';
 	import {
 		Users,
@@ -58,15 +60,9 @@
 
 	// ─── Mobile detection ─────────────────────────────────────────────────────────
 
-	let isMobile = $state(false);
-	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
-		isMobile = mq.matches;
-		const handler = (e: MediaQueryListEvent) => isMobile = e.matches;
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-	let panelSide = $derived(isMobile ? 'bottom' : 'right');
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// ─── State ───────────────────────────────────────────────────────────────────
 
@@ -494,9 +490,9 @@
 					<b>{userList.length}</b> user{userList.length !== 1 ? 's' : ''} ·
 					<b>{noGroupCount}</b> without a group
 				</div>
-				<button class="btn-primary btn-sm" onclick={openNewUser}>
+				<Button size="sm" onclick={openNewUser}>
 					<UserPlus size={15} /> Add user
-				</button>
+				</Button>
 			</div>
 
 			<div class="table-card">
@@ -742,38 +738,38 @@
 									<div class="ax-token-existing">
 										<code class="codepill">API token configured</code>
 										<div class="ax-token-btns">
-											<button class="btn-outline btn-sm" onclick={() => regenerateToken(editingUser as UserRow)}>
+											<Button variant="outline" size="sm" onclick={() => regenerateToken(editingUser as UserRow)}>
 												<RefreshCw size={13} /> Regenerate
-											</button>
-											<button class="btn-ghost-danger btn-sm" onclick={() => revokeToken(editingUser!.id!)}>
+											</Button>
+											<Button variant="ghost" size="sm" class="text-destructive hover:bg-destructive/10" onclick={() => revokeToken(editingUser!.id!)}>
 												<X size={13} /> Revoke
-											</button>
+											</Button>
 										</div>
 									</div>
 								{:else}
 									<div class="ax-token-empty">
 										<span class="muted-sm">No API token issued</span>
-										<button class="btn-outline btn-sm" onclick={() => regenerateToken(editingUser as UserRow)}>
+										<Button variant="outline" size="sm" onclick={() => regenerateToken(editingUser as UserRow)}>
 											<Key size={13} /> Issue token
-										</button>
+										</Button>
 									</div>
 								{/if}
 							{/if}
 						</div>
 						<div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:space-between; gap:8px;">
 							{#if editingUser.id}
-								<button class="btn-ghost-danger btn-sm" onclick={async () => { if (editingUser?.id && await deleteUser(editingUser as UserRow)) closeUserSheet(); }}>
+								<Button variant="ghost" size="sm" class="text-destructive hover:bg-destructive/10" onclick={async () => { if (editingUser?.id && await deleteUser(editingUser as UserRow)) closeUserSheet(); }}>
 									<Trash2 size={14} /> Remove
-								</button>
+								</Button>
 							{/if}
 							<div style="display:flex; gap:8px; margin-left:auto;">
-								<button class="btn-outline btn-sm" onclick={closeUserSheet}>Cancel</button>
-								<button class="btn-primary btn-sm" onclick={saveUser} disabled={savingUser}>
+								<Button variant="outline" size="sm" onclick={closeUserSheet}>Cancel</Button>
+								<Button size="sm" onclick={saveUser} disabled={savingUser}>
 									{#if savingUser}
 										<span class="spinner xs"></span>
 									{/if}
 									{editingUser.id ? 'Save changes' : 'Create user'}
-								</button>
+								</Button>
 							</div>
 						</div>
 					{/if}
@@ -783,7 +779,7 @@
 
 	{:else}
 		<!-- ═══ Groups tab ═══ -->
-		{#snippet groupBody(g)}
+		{#snippet groupBody(g: GroupRow)}
 			<div class="ax-gdetail-content">
 				<textarea
 					class="form-input ax-detail-desc"
@@ -803,6 +799,7 @@
 						<div class="set-control">
 							<button
 								class="toggle-btn"
+								aria-label="Superuser group"
 								class:on={groupDraft?.isSuperuser}
 								disabled={g.locked}
 								onclick={() => {
@@ -955,11 +952,11 @@
 					{@render groupBody(selectedGroup)}
 					{#if isDirty}
 						<div class="ax-gdetail-footer">
-							<button class="btn-outline btn-sm" onclick={resetGroupDraft}>Reset</button>
-							<button class="btn-primary btn-sm" onclick={saveGroupDraft} disabled={savingGroup}>
+							<Button variant="outline" size="sm" onclick={resetGroupDraft}>Reset</Button>
+							<Button size="sm" onclick={saveGroupDraft} disabled={savingGroup}>
 								{#if savingGroup}<span class="spinner xs"></span>{/if}
 								Save changes
-							</button>
+							</Button>
 						</div>
 					{/if}
 				</div>
@@ -1010,11 +1007,11 @@
 						</div>
 						{#if isDirty}
 							<div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; flex-shrink:0;">
-								<button class="btn-outline btn-sm" onclick={resetGroupDraft}>Reset</button>
-								<button class="btn-primary btn-sm" onclick={saveGroupDraft} disabled={savingGroup}>
+								<Button variant="outline" size="sm" onclick={resetGroupDraft}>Reset</Button>
+								<Button size="sm" onclick={saveGroupDraft} disabled={savingGroup}>
 									{#if savingGroup}<span class="spinner xs"></span>{/if}
 									Save changes
-								</button>
+								</Button>
 							</div>
 						{/if}
 					{/if}
@@ -1100,7 +1097,6 @@
 		border-radius: 999px;
 		border: 1px solid var(--border);
 	}
-	.chip.muted { color: var(--muted-foreground); }
 	.chip.is-super {
 		background: oklch(0.97 0.05 280 / 0.5);
 		color: oklch(0.45 0.15 280);
@@ -1163,7 +1159,7 @@
 		min-width: 180px;
 		padding: 4px;
 	}
-	.dropdown-menu.open { display: block; }
+	.dropdown-menu:global(.open) { display: block; }
 	.dd-item {
 		display: flex;
 		align-items: center;
@@ -1186,7 +1182,6 @@
 	.field { display: flex; flex-direction: column; gap: 6px; }
 	.field-label { font-size: 13px; font-weight: 500; }
 	.field-hint { font-size: 12px; color: var(--muted-foreground); margin: 2px 0 0; }
-	.field-hint.warn { color: oklch(0.55 0.15 50); }
 
 	/* ── Group picker in sheet ── */
 	.ax-warn-block {
@@ -1307,20 +1302,6 @@
 		gap: 10px;
 		padding: 10px 0 4px;
 	}
-	.btn-ghost-danger {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		background: none;
-		border: none;
-		border-radius: var(--radius);
-		padding: 5px 10px;
-		font-size: 13px;
-		color: oklch(0.55 0.2 25);
-		cursor: pointer;
-	}
-	.btn-ghost-danger:hover { background: oklch(0.95 0.02 25); color: oklch(0.45 0.2 25); }
-	:global(.dark) .btn-ghost-danger:hover { background: oklch(0.25 0.04 25); }
 
 	/* ── Buttons ── */
 	.btn-outline-icon {
@@ -1398,8 +1379,6 @@
 	.ax-gitem-top { display: flex; align-items: center; gap: 5px; justify-content: space-between; }
 	.ax-gname { font-size: 13px; font-weight: 500; }
 	.ax-gmeta { font-size: 11.5px; color: var(--muted-foreground); }
-	.ax-icon-super { color: var(--primary); flex-shrink: 0; }
-	.muted-icon { color: var(--muted-foreground); flex-shrink: 0; }
 
 	/* ── Group detail panel ── */
 	.ax-gdetail {

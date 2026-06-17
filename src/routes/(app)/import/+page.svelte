@@ -11,6 +11,7 @@
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
@@ -80,6 +81,7 @@
 	}
 
 	// Initialize from SSR data, converting DB rows to typed Job objects
+	// svelte-ignore state_referenced_locally
 	let jobs = $state<Job[]>(data.jobs.map(normalizeJob));
 
 	// Store original file references for retry
@@ -416,11 +418,11 @@
 							</div>
 							<div class="fail-actions">
 								{#if fileStore.has(job.id)}
-									<button class="btn-outline btn-sm" onclick={() => retryJob(job.id)}>
+									<Button variant="outline" size="sm" onclick={() => retryJob(job.id)}>
 										<RotateCcw size={14} /> Retry
-									</button>
+									</Button>
 								{/if}
-								<button class="btn-ghost btn-sm" onclick={() => discardJob(job.id)}>Discard</button>
+								<Button variant="ghost" size="sm" onclick={() => discardJob(job.id)}>Discard</Button>
 							</div>
 						</div>
 					{/each}
@@ -433,9 +435,9 @@
 			<div class="import-section-head between">
 				<span>Ready to review <span class="hbadge">{review.length}</span></span>
 				{#if confirmable > 0}
-					<button class="btn-primary btn-sm" onclick={confirmAll}>
+					<Button size="sm" onclick={confirmAll}>
 						<Check size={15} /> Confirm all ({confirmable})
-					</button>
+					</Button>
 				{/if}
 			</div>
 			{#if review.length === 0}
@@ -480,11 +482,11 @@
 							<div class="review-grid">
 								<!-- Item (expense) / Customer combobox (income) -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										{isIncome ? 'Customer' : 'Item'}
 										{#if !isIncome && isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
 										{#if isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									{#if isIncome}
 										<ContactSelect
 											role={Role.Customer}
@@ -503,11 +505,11 @@
 
 								<!-- Supplier combobox (expense) / Description (income) -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										{isIncome ? 'Description' : 'Supplier'}
 										{#if isIncome && isEdited(job, 'supplier')}<span class="edited-tag">edited</span>{/if}
 										{#if !isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									{#if isIncome}
 										<input
 											class="form-input rinput"
@@ -526,10 +528,10 @@
 
 								<!-- Amount -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										Amount
 										{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									<div class="amount-input sm">
 										<span class="amount-prefix">RM</span>
 										<input
@@ -545,10 +547,10 @@
 
 								<!-- Category -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										Category
 										{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									<select
 										class="form-input rinput"
 										value={editedValue(job, 'category')}
@@ -562,10 +564,10 @@
 
 								<!-- Date -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										Date
 										{#if isEdited(job, 'date')}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									<DatePicker
 										value={editedValue(job, 'date') as string}
 										onchange={(v) => updateEdit(job.id, 'date', v)}
@@ -574,10 +576,10 @@
 
 								<!-- Reference -->
 								<div class="rfield">
-									<label class="rfield-label">
+									<span class="rfield-label">
 										Reference
 										{#if isEdited(job, 'reference')}<span class="edited-tag">edited</span>{/if}
-									</label>
+									</span>
 									<input
 										class="form-input rinput"
 										placeholder="—"
@@ -600,10 +602,10 @@
 									{/if}
 								</span>
 								<div class="review-actions-btns">
-									<button class="btn-ghost btn-sm" onclick={() => skipJob(job.id)}>Skip</button>
-									<button class="btn-primary btn-sm" onclick={() => confirmJob(job.id)}>
+									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
+									<Button size="sm" onclick={() => confirmJob(job.id)}>
 										<Check size={15} /> {dup ? 'Import anyway' : 'Confirm & import'}
-									</button>
+									</Button>
 								</div>
 							</div>
 						</div>
