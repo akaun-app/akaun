@@ -11,6 +11,7 @@
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import { ClaimStatus } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
@@ -132,13 +133,11 @@
 					<span style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;">
 						<Search size={15} />
 					</span>
-					<input
+					<Input
 						type="search"
 						placeholder="Search claim number…"
 						bind:value={searchRaw}
-						style="width:100%; height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px 0 32px; font-family:inherit; font-size:13px; outline:none; transition:border-color .12s, box-shadow .12s;"
-						onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }}
-						onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}
+						class="h-[34px] pl-8 text-[13px]"
 					/>
 				</div>
 			</div>
@@ -249,6 +248,7 @@
 								<td class="td-chevron" style="text-align:right;">
 									<ChevronRight size={16} style="color:var(--muted-foreground);" />
 								</td>
+								<td class="row-break"></td>
 							</tr>
 						{/each}
 						{#if displayed.length === 0}
@@ -604,5 +604,10 @@
 		display: flex;
 		gap: 8px;
 		justify-content: flex-end;
+	}
+
+	@media (max-width: 767px) {
+		td[data-label="Expenses"] { display: none; }
+		.td-chevron { display: none; }
 	}
 </style>

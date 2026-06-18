@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { cn } from '$lib/utils.js';
+	import XIcon from '@lucide/svelte/icons/x';
 
 	type Candidate = { id: number; legalName: string; score?: number };
 
@@ -25,6 +27,9 @@
 		// Fired whenever the selection changes (existing pick / new name / cleared).
 		onChange?: (v: { value: number | null; newName: string | null }) => void;
 	} = $props();
+
+	const controlClass =
+		'border-input focus-visible:border-ring focus-visible:ring-[var(--primary-soft)] h-9 w-full rounded-md border bg-card px-3 text-[13.5px] transition-[color,box-shadow] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50 flex items-center';
 
 	let open = $state(false);
 	let query = $state('');
@@ -105,16 +110,21 @@
 	});
 </script>
 
-<div class="contact-select" bind:this={rootEl}>
+<div class="relative w-full" bind:this={rootEl}>
 	{#if selectedLabel && !open}
-		<button type="button" class="cs-display" {disabled} onclick={() => (open = true)}>
-			<span class="cs-label">{selectedLabel}</span>
+		<button
+			type="button"
+			class={cn(controlClass, 'justify-between gap-2 text-left cursor-pointer')}
+			{disabled}
+			onclick={() => (open = true)}
+		>
+			<span class="overflow-hidden text-ellipsis whitespace-nowrap">{selectedLabel}</span>
 			{#if !disabled}
 				<span
-					class="cs-clear"
 					role="button"
 					tabindex="0"
 					aria-label="Clear contact"
+					class="text-muted-foreground flex shrink-0 items-center hover:text-foreground"
 					onclick={(e) => {
 						e.stopPropagation();
 						clear();
@@ -125,12 +135,16 @@
 							clear();
 						}
 					}}
-				>×</span>
+				><XIcon size={13} /></span>
 			{/if}
 		</button>
 	{:else}
 		<input
-			class="cs-input"
+			class={cn(
+				controlClass,
+				'placeholder:text-muted-foreground',
+				open && 'border-ring ring-3 ring-[var(--primary-soft)]'
+			)}
 			type="text"
 			{placeholder}
 			{disabled}
@@ -140,99 +154,31 @@
 	{/if}
 
 	{#if open && !disabled}
-		<div class="cs-menu">
+		<div
+			class="bg-popover text-popover-foreground ring-foreground/10 absolute top-[calc(100%+4px)] left-0 right-0 z-50 max-h-64 overflow-y-auto rounded-lg p-1.5 shadow-md ring-1"
+		>
 			{#each shown as c (c.id)}
-				<button type="button" class="cs-item" onclick={() => pick(c)}>
+				<button
+					type="button"
+					class="hover:bg-accent hover:text-accent-foreground block w-full rounded-md px-2 py-1.5 text-left text-sm"
+					onclick={() => pick(c)}
+				>
 					{c.legalName}
 				</button>
 			{:else}
 				{#if !showCreate}
-					<div class="cs-empty">No matching contacts</div>
+					<div class="text-muted-foreground px-2 py-1.5 text-sm">No matching contacts</div>
 				{/if}
 			{/each}
 			{#if showCreate}
-				<button type="button" class="cs-item cs-create" onclick={createNew}>
-					Create “{typed}” <span class="cs-hint">(Business, on confirm)</span>
+				<button
+					type="button"
+					class="hover:bg-accent text-primary block w-full rounded-md px-2 py-1.5 text-left text-sm"
+					onclick={createNew}
+				>
+					Create "{typed}" <span class="text-muted-foreground">(Business, on confirm)</span>
 				</button>
 			{/if}
 		</div>
 	{/if}
 </div>
-
-<style>
-	.contact-select {
-		position: relative;
-		width: 100%;
-	}
-	.cs-input,
-	.cs-display {
-		width: 100%;
-		box-sizing: border-box;
-		padding: 0.5rem 0.625rem;
-		border: 1px solid var(--border, #d4d4d8);
-		border-radius: 0.375rem;
-		background: var(--background, #fff);
-		font-size: 0.875rem;
-		text-align: left;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		cursor: pointer;
-	}
-	.cs-display:disabled {
-		opacity: 0.6;
-		cursor: default;
-	}
-	.cs-label {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.cs-clear {
-		color: var(--muted-foreground, #71717a);
-		font-size: 1rem;
-		line-height: 1;
-		cursor: pointer;
-	}
-	.cs-menu {
-		position: absolute;
-		z-index: 50;
-		top: calc(100% + 4px);
-		left: 0;
-		right: 0;
-		max-height: 16rem;
-		overflow-y: auto;
-		background: var(--background, #fff);
-		border: 1px solid var(--border, #d4d4d8);
-		border-radius: 0.375rem;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-		padding: 0.25rem;
-	}
-	.cs-item {
-		display: block;
-		width: 100%;
-		text-align: left;
-		padding: 0.5rem 0.625rem;
-		border: none;
-		background: none;
-		border-radius: 0.25rem;
-		font-size: 0.875rem;
-		cursor: pointer;
-	}
-	.cs-item:hover {
-		background: var(--accent, #f4f4f5);
-	}
-	.cs-create {
-		color: var(--primary, #2563eb);
-	}
-	.cs-hint {
-		color: var(--muted-foreground, #71717a);
-		font-size: 0.75rem;
-	}
-	.cs-empty {
-		padding: 0.5rem 0.625rem;
-		font-size: 0.875rem;
-		color: var(--muted-foreground, #71717a);
-	}
-</style>

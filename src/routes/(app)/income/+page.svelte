@@ -23,6 +23,9 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { Role } from '$lib/enums.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import type { PageData, ActionData } from './$types.js';
@@ -32,6 +35,7 @@
 	// New-income customer picker state (submitted via hidden inputs).
 	let newContactId = $state<number | null>(null);
 	let newContactName = $state<string | null>(null);
+	let newIncomeCategory = $state<string>('');
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
 	// svelte-ignore state_referenced_locally
@@ -77,7 +81,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; } });
+	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; newIncomeCategory = ''; } });
 
 	function toggleCat(cat: string) {
 		selectedCats = selectedCats.includes(cat)
@@ -205,13 +209,11 @@
 					<span style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;">
 						<Search size={15} />
 					</span>
-					<input
+					<Input
 						type="search"
 						placeholder="Search source, reference…"
 						bind:value={searchRaw}
-						style="width:100%; height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px 0 32px; font-family:inherit; font-size:13px; outline:none; transition:border-color .12s, box-shadow .12s;"
-						onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }}
-						onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}
+						class="h-[34px] pl-8 text-[13px]"
 					/>
 				</div>
 			</div>
@@ -408,13 +410,14 @@
 										{inc.category}
 									</span>
 								</td>
-								<td data-label="Reference" style="color:var(--muted-foreground); font-size:13px;">{inc.reference || '—'}</td>
+								{#if inc.reference}<td data-label="Reference" style="color:var(--muted-foreground); font-size:13px;">{inc.reference}</td>{/if}
 								<td class="td-date" data-label="Date">
 									{formatDateShort(inc.date)}<span class="td-year">{inc.date.slice(0, 4)}</span>
 								</td>
 								<td class="td-amount" data-label="Amount">
 									<span class="amount-num" style="color:var(--green);">+RM {formatMoney(inc.amount)}</span>
 								</td>
+								<td class="row-break"></td>
 							</tr>
 						{/each}
 						{#if stats.count === 0}
@@ -641,21 +644,26 @@
 
 				<div class="field">
 					<label class="field-label" for="category">Category</label>
-					<select id="category" name="category" style="appearance:none; width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; cursor:pointer;">
-						{#each data.categories as cat}
-							<option value={cat}>{cat}</option>
-						{/each}
-					</select>
+					<Select.Root type="single" name="category" bind:value={newIncomeCategory}>
+						<Select.Trigger id="category" class="w-full">
+							{newIncomeCategory || 'Select category'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each data.categories as cat}
+								<Select.Item value={cat} label={cat} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 
 				<div class="field">
 					<label class="field-label" for="reference">Reference</label>
-					<input id="reference" name="reference" type="text" placeholder="e.g. INV-001" style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;" />
+					<Input id="reference" name="reference" type="text" placeholder="e.g. INV-001" />
 				</div>
 
 				<div class="field">
 					<label class="field-label" for="descriptionText">Description</label>
-					<textarea id="descriptionText" name="descriptionText" placeholder="Optional notes…" style="width:100%; min-height:72px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:13.5px; outline:none; resize:vertical; line-height:1.5;"></textarea>
+					<Textarea id="descriptionText" name="descriptionText" placeholder="Optional notes…" class="leading-relaxed" />
 				</div>
 
 				<div class="field">

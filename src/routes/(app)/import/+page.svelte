@@ -12,6 +12,7 @@
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
@@ -551,15 +552,20 @@
 										Category
 										{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
 									</span>
-									<select
-										class="form-input rinput"
-										value={editedValue(job, 'category')}
-										onchange={(e) => updateEdit(job.id, 'category', (e.target as HTMLSelectElement).value)}
+									<Select.Root
+										type="single"
+										value={String(editedValue(job, 'category'))}
+										onValueChange={(v) => updateEdit(job.id, 'category', v)}
 									>
-										{#each (isIncome ? data.incomeCategories : data.expenseCategories) as cat}
-											<option value={cat}>{cat}</option>
-										{/each}
-									</select>
+										<Select.Trigger class="rinput w-full">
+											{editedValue(job, 'category') || 'Select category'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each (isIncome ? data.incomeCategories : data.expenseCategories) as cat}
+												<Select.Item value={cat} label={cat} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
 								</div>
 
 								<!-- Date -->

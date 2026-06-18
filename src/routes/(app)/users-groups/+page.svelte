@@ -1542,5 +1542,10 @@
 
 		/* Group body inside sheet: use sheet's gap, no extra padding */
 		.ax-gdetail-content { display: flex; flex-direction: column; gap: 14px; }
+
+		/* .set-row collides with the global Settings-page class of the same
+		   name, which stacks it vertically on mobile; keep it left-aligned
+		   instead of the global rule's centered stack. */
+		.set-row { align-items: flex-start; }
 	}
 </style>

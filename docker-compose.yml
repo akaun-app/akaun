@@ -1,6 +1,6 @@
 services:
-  akaun-web:
-    image: akaun-web:0.0.1
+  akaun:
+    image: akaun:0.0.1
     restart: unless-stopped
     ports:
       - 6969:6969

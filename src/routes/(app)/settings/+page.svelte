@@ -4,6 +4,7 @@
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { toast } from 'svelte-sonner';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -222,19 +223,18 @@
 									{/if}
 								</div>
 								<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-									<select
-										class="form-input set-input-right set-input-wide"
-										name="model"
-										bind:value={aiModel}
-										disabled={orModels.length === 0}
-									>
-										{#if orModels.length === 0}
-											<option value="">Enter API key to load models</option>
-										{/if}
-										{#each filteredModels as m (m.id)}
-											<option value={m.id}>{m.name}</option>
-										{/each}
-									</select>
+									<Select.Root type="single" name="model" bind:value={aiModel} disabled={orModels.length === 0}>
+										<Select.Trigger class="set-input-right set-input-wide">
+											{orModels.length === 0
+												? 'Enter API key to load models'
+												: filteredModels.find((m) => m.id === aiModel)?.name ?? 'Select model'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each filteredModels as m (m.id)}
+												<Select.Item value={m.id} label={m.name} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
 								</div>
 							</div>
 							<div class="set-row">

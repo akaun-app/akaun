@@ -28,6 +28,9 @@
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { ExpenseStatus, Role } from '$lib/enums.js';
@@ -45,6 +48,7 @@
 	// New-expense contact picker state (submitted via hidden inputs).
 	let newContactId = $state<number | null>(null);
 	let newContactName = $state<string | null>(null);
+	let newExpenseCategory = $state<string>('');
 
 	// Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
 	// svelte-ignore state_referenced_locally
@@ -90,7 +94,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; } });
+	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; } });
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
@@ -241,13 +245,11 @@
 					<span style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;">
 						<Search size={15} />
 					</span>
-					<input
+					<Input
 						type="search"
 						placeholder="Search item, supplier, ref…"
 						bind:value={searchRaw}
-						style="width:100%; height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px 0 32px; font-family:inherit; font-size:13px; outline:none; transition:border-color .12s, box-shadow .12s;"
-						onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }}
-						onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}
+						class="h-[34px] pl-8 text-[13px]"
 					/>
 				</div>
 			</div>
@@ -451,7 +453,7 @@
 										<span class="cell-itemnum">{e.expenseNumber}</span>
 									</div>
 								</td>
-								<td class="td-supplier" data-label="Supplier">{e.contactName || '—'}</td>
+								<td class="td-supplier" data-label="Supplier">{e.contactName || ''}</td>
 								<td data-label="Category">
 									<span style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;">
 										{e.category}
@@ -464,6 +466,7 @@
 								<td class="td-amount" data-label="Amount">
 									<span class="amount-num">RM {formatMoney(e.amount)}</span>
 								</td>
+								<td class="row-break"></td>
 							</tr>
 						{/each}
 						{#if counts.all === 0}
@@ -680,7 +683,7 @@
 
 				<div class="field">
 					<label class="field-label" for="itemName">Item name *</label>
-					<input id="itemName" name="itemName" type="text" required placeholder="e.g. Office chair" style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none;" />
+					<Input id="itemName" name="itemName" type="text" required placeholder="e.g. Office chair" />
 				</div>
 
 				<div class="field-grid field">
@@ -711,21 +714,26 @@
 
 				<div class="field">
 					<label class="field-label" for="category">Category</label>
-					<select id="category" name="category" style="appearance:none; width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; outline:none; cursor:pointer;">
-						{#each data.categories as cat}
-							<option value={cat}>{cat}</option>
-						{/each}
-					</select>
+					<Select.Root type="single" name="category" bind:value={newExpenseCategory}>
+						<Select.Trigger id="category" class="w-full">
+							{newExpenseCategory || 'Select category'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each data.categories as cat}
+								<Select.Item value={cat} label={cat} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 
 				<div class="field">
 					<label class="field-label" for="reference">Reference</label>
-					<input id="reference" name="reference" type="text" placeholder="e.g. INV-001" style="width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px; font-family:inherit; font-size:inherit; font-size:13.5px; outline:none;" />
+					<Input id="reference" name="reference" type="text" placeholder="e.g. INV-001" />
 				</div>
 
 				<div class="field">
 					<label class="field-label" for="remark">Remark</label>
-					<textarea id="remark" name="remark" placeholder="Optional notes…" style="width:100%; min-height:72px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:13.5px; outline:none; resize:vertical; line-height:1.5;"></textarea>
+					<Textarea id="remark" name="remark" placeholder="Optional notes…" class="leading-relaxed" />
 				</div>
 
 				<div class="field">
@@ -778,3 +786,12 @@
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
+
+<style>
+	@media (max-width: 767px) {
+		/* Status leads, then category chip, then supplier text, then date */
+		td[data-label="Category"] { order: 6 !important; }
+		.td-supplier { order: 7 !important; }
+		.td-date { order: 8 !important; }
+	}
+</style>

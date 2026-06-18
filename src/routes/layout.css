@@ -319,6 +319,7 @@ th.sortable:hover .th-idle { opacity: .5; }
 .exp-row.selected { background: var(--primary-soft); }
 .exp-row.selected:hover { background: var(--primary-soft); }
 .td-check { width: 42px; padding-left: 16px !important; padding-right: 0 !important; }
+.row-break { display: none; } /* mobile-only flex-wrap spacer, see .exp-row .row-break below */
 .cell-item { display: flex; flex-direction: column; gap: 1px; }
 .cell-itemname { font-weight: 500; color: var(--foreground); }
 .cell-itemnum { font-size: 11px; color: var(--muted-foreground); }
@@ -729,13 +730,15 @@ th.sortable:hover .th-idle { opacity: .5; }
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
   }
 
-  /* Screen, work, work-main: natural height blocks for single-scroll */
-  .screen { flex: none; overflow: visible; display: block; min-height: auto; }
-  .work { overflow: visible; flex: none; display: block; min-height: auto; }
+  /* Screen, work, work-main: fill the visible viewport so footers (e.g.
+     table-foot) land at the bottom on short lists, but still grow with
+     content for long lists since .main is the single scroll container. */
+  .screen { flex: none; overflow: visible; display: flex; flex-direction: column; min-height: 100%; }
+  .work { overflow: visible; flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .work-main {
     overflow: visible;
-    flex: none;
-    min-height: auto;
+    flex: 1;
+    min-height: 0;
     padding-left: 16px;
     padding-right: 16px;
   }
@@ -748,11 +751,12 @@ th.sortable:hover .th-idle { opacity: .5; }
     gap: 12px;
   }
 
-  /* Table card: no inner scroll, no rounded border on mobile */
+  /* Table card: no inner scroll, no rounded border on mobile. Keeps
+     flex:1 (from the base rule) so it grows to fill the screen on short
+     lists — pushing table-foot to the bottom — and naturally expands
+     past the viewport (with .main scrolling) on long lists. */
   .table-card {
     overflow: visible;
-    flex: none;
-    height: auto;
     border-radius: 0;
     border-left: none;
     border-right: none;
@@ -967,12 +971,19 @@ th.sortable:hover .th-idle { opacity: .5; }
   .exp-table tbody,
   .exp-table th,
   .exp-table td,
-  .exp-table tr { display: block; }
+  .exp-table tr { display: block; } /* .exp-row overrides this to flex below */
 
   .exp-table thead { display: none; }
 
-  /* Card wrapper */
-  .exp-row {
+  /* Card wrapper: flex so sequencing is deliberate (order) instead of float/inline-block drift.
+     Specificity note: must beat ".exp-table tr { display: block }" above (class+tag), so this
+     selector also pairs with the tag. */
+  .exp-table tr.exp-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    column-gap: 8px;
+    row-gap: 0;
     position: relative;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -987,60 +998,41 @@ th.sortable:hover .th-idle { opacity: .5; }
   /* Reset all cell padding */
   .exp-row td { padding: 0; border-bottom: none; }
 
-  /* Checkbox: absolute top-right */
-  .exp-row .td-check {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    width: auto;
-    padding: 0 !important;
-  }
+  /* Bulk-select checkbox: desktop-only affordance, not worth the space on a card */
+  .exp-row .td-check { display: none; }
 
-  /* Primary cell: name (bold) + number (muted small text) */
-  .exp-row .td-primary { padding-right: 36px; margin-bottom: 4px; }
+  /* Line 1: title, amount — pinned in that order */
+  .exp-row .td-primary { order: 2; flex: 1 1 auto; min-width: 0; padding-right: 0; margin-bottom: 0; }
+  .exp-row .td-amount { order: 3; flex: 0 0 auto; float: none; white-space: nowrap; align-self: center; }
 
-  /* No label prefix for primary */
-  .exp-row .td-primary::before { display: none; }
+  /* Invisible spacer: forces everything after it onto a fresh, full-width line.
+     Container row-gap is 0 so wrapped lines don't auto-space; this spacer's
+     own margin-top is the single source of vertical gap between line 1 and
+     the rest of the card. */
+  .exp-row .row-break { order: 4; flex-basis: 100%; height: 0; padding: 0; margin: 6px 0 0; }
 
-  /* Amount: float right — will appear on last line */
-  .exp-row .td-amount { float: right; text-align: right; margin-top: 6px; }
-
-  /* Status: inline */
-  .exp-row .td-status {
-    display: inline-block;
-    margin-top: 6px;
-    margin-right: 8px;
-    vertical-align: middle;
-  }
-
-  /* Date: inline muted */
-  .exp-row td[data-label="Date"] {
-    display: inline-block;
+  /* Line 2+: every remaining cell (chips, status, supplier text, etc.) — real
+     flex-wrap with consistent gap from the parent, replacing per-cell margin hacks */
+  .exp-row td:not(.td-check):not(.td-primary):not(.td-amount):not(.row-break):not(.td-date) {
+    order: 5;
+    flex: 0 1 auto;
+    align-self: center;
     font-size: 12px;
     color: var(--muted-foreground);
-    margin-top: 6px;
-    vertical-align: middle;
   }
 
-  /* Secondary fields: inline muted text flowing naturally */
-  .exp-row td[data-label="Supplier"],
-  .exp-row td[data-label="Category"],
-  .exp-row td[data-label="Source"],
-  .exp-row td[data-label="Reference"],
-  .exp-row td[data-label="Expenses"] {
-    display: inline-block;
+  /* Date: pinned to the right edge of its line, so it stacks under Amount */
+  .exp-row .td-date {
+    order: 6;
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: auto;
     font-size: 12px;
     color: var(--muted-foreground);
-    margin-top: 2px;
-    margin-right: 6px;
-    vertical-align: middle;
   }
 
-  /* No labels — context is clear from content */
-  .exp-row td[data-label]::before { display: none; }
-
-  /* Clearfix */
-  .exp-row::after { content: ''; display: table; clear: both; }
+  /* Claims: give the supplier chip row the full card width to wrap chips against */
+  .exp-row td[data-label="Expenses"] { flex-basis: 100%; }
 
   /* Empty row in card mode */
   .empty-row td { padding: 40px 20px !important; }
@@ -1082,12 +1074,10 @@ th.sortable:hover .th-idle { opacity: .5; }
   .set-input-right { width: 100% !important; }
   .slider-row { justify-content: flex-start; }
 
-  /* Claims: no checkbox so primary cell needs no right clearance */
-  .exp-row:not(:has(.td-check)) .td-primary {
-    padding-right: 0;
-  }
   /* Hide chevron column on mobile (card tap is the action) */
   .td-chevron { display: none; }
+  /* The row-break spacer only does anything inside the mobile .exp-row flex layout */
+  .exp-row .row-break { display: block; }
 
   /* ---------- Import ---------- */
   .review-grid { grid-template-columns: 1fr 1fr; gap: 8px; }

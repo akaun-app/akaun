@@ -262,6 +262,8 @@
 
 	.drawer-group {
 		padding: 4px 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.drawer-group + .drawer-group {

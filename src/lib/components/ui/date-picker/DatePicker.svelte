@@ -61,7 +61,8 @@
 
 <Popover.Root bind:open>
 	<Popover.Trigger
-		style="display:flex; align-items:center; gap:8px; width:100%; height:36px; border:1px solid var(--input); background:var(--card); color:{dateValue ? 'var(--foreground)' : 'var(--muted-foreground)'}; border-radius:8px; padding:0 12px; font-family:inherit; font-size:13.5px; cursor:pointer; text-align:left;"
+		class="border-input focus-visible:border-ring focus-visible:ring-[var(--primary-soft)] data-[state=open]:border-ring data-[state=open]:ring-[var(--primary-soft)] data-[state=open]:ring-3 flex h-9 w-full items-center gap-2 rounded-md border bg-card px-3 text-[13.5px] outline-none transition-[color,box-shadow] focus-visible:ring-3"
+		style="color:{dateValue ? 'var(--foreground)' : 'var(--muted-foreground)'}; text-align:left;"
 	>
 		<CalendarIcon size={14} style="flex-shrink:0; opacity:0.5;" />
 		{displayLabel}

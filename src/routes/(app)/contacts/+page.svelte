@@ -9,6 +9,7 @@
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { EntityType, Role, EntityTypeLabels, RoleLabels } from '$lib/enums.js';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -147,13 +148,11 @@
 					<span style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;">
 						<Search size={15} />
 					</span>
-					<input
+					<Input
 						type="search"
 						placeholder="Search name, email, reg no…"
 						bind:value={searchRaw}
-						style="width:100%; height:34px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:0 12px 0 32px; font-family:inherit; font-size:13px; outline:none; transition:border-color .12s, box-shadow .12s;"
-						onfocus={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }}
-						onblur={(e) => { const el = e.currentTarget as HTMLInputElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}
+						class="h-[34px] pl-8 text-[13px]"
 					/>
 				</div>
 			</div>
@@ -451,11 +450,11 @@
 					</div>
 					<div class="field">
 						<label class="field-label" for="address">Address</label>
-						<textarea id="address" name="address" rows="2" style="width:100%; min-height:72px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:13.5px; outline:none; resize:vertical; line-height:1.5; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLTextAreaElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLTextAreaElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}>{editing?.address ?? ''}</textarea>
+						<Textarea id="address" name="address" rows={2} value={editing?.address ?? ''} class="leading-relaxed" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="remark">Remark</label>
-						<textarea id="remark" name="remark" rows="2" style="width:100%; min-height:72px; border:1px solid var(--input); background:var(--card); color:var(--foreground); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:13.5px; outline:none; resize:vertical; line-height:1.5; transition:border-color .12s, box-shadow .12s;" onfocus={(e) => { const el = e.currentTarget as HTMLTextAreaElement; el.style.borderColor = 'var(--primary)'; el.style.boxShadow = '0 0 0 3px var(--primary-soft)'; }} onblur={(e) => { const el = e.currentTarget as HTMLTextAreaElement; el.style.borderColor = ''; el.style.boxShadow = ''; }}>{editing?.remark ?? ''}</textarea>
+						<Textarea id="remark" name="remark" rows={2} value={editing?.remark ?? ''} class="leading-relaxed" />
 					</div>
 
 					<div style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:8px;">
