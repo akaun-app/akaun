@@ -33,9 +33,8 @@ export function listClaims(db: Db) {
 	return rows.map((claim) => {
 		const claimExpenses = claimExpensesFor(db, claim.id);
 		const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
-		const suppliers = [...new Set(claimExpenses.map((e) => e.contactName).filter(Boolean))];
 
-		return { ...claim, total, expenseCount: claimExpenses.length, suppliers, expenses: claimExpenses };
+		return { ...claim, total, expenseCount: claimExpenses.length, expenses: claimExpenses };
 	});
 }
 
@@ -53,9 +52,8 @@ export function getClaim(db: Db, id: number) {
 
 	const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
 	const expenseCount = claimExpenses.length;
-	const suppliers = [...new Set(claimExpenses.map((e) => e.contactName).filter(Boolean))];
 
-	return { ...claim, expenses: claimExpenses, attachments, total, expenseCount, suppliers };
+	return { ...claim, expenses: claimExpenses, attachments, total, expenseCount };
 }
 
 export function createClaim(db: Db, actingUserId: number, data: { date: string; expenseIds: number[] }) {

@@ -368,13 +368,15 @@
 									{#if allSelected}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>{:else if someSelected}<span style="width:8px; height:2px; border-radius:2px; background:white; display:block;"></span>{/if}
 								</button>
 							</th>
-							<th class={`sortable ${sort.key === 'source' ? 'sorted' : ''}`} onclick={() => onSort('source')} style="cursor:pointer; user-select:none;">
-								<span class="th-inner">Source {sort.key === 'source' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
+							<th class={`sortable ${sort.key === 'descriptionText' ? 'sorted' : ''}`} onclick={() => onSort('descriptionText')} style="cursor:pointer; user-select:none;">
+								<span class="th-inner">Description {sort.key === 'descriptionText' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
+							</th>
+							<th class={`sortable ${sort.key === 'contactName' ? 'sorted' : ''}`} onclick={() => onSort('contactName')} style="cursor:pointer; user-select:none;">
+								<span class="th-inner">Source {sort.key === 'contactName' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
 							</th>
 							<th class="sortable" onclick={() => onSort('category')} style="cursor:pointer; user-select:none;">
 								<span class="th-inner">Category {sort.key === 'category' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
 							</th>
-							<th>Reference</th>
 							<th class="sortable" onclick={() => onSort('date')} style="cursor:pointer; user-select:none;">
 								<span class="th-inner">Date {sort.key === 'date' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
 							</th>
@@ -401,16 +403,16 @@
 								</td>
 								<td class="td-primary">
 									<div class="cell-item">
-										<span class="cell-itemname">{inc.contactName ?? '—'}</span>
+										<span class="cell-itemname">{inc.descriptionText || '—'}</span>
 										<span class="cell-itemnum">{inc.incomeNumber}</span>
 									</div>
 								</td>
+								<td class="td-supplier" data-label="Source">{inc.contactName || ''}</td>
 								<td data-label="Category">
 									<span style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;">
 										{inc.category}
 									</span>
 								</td>
-								{#if inc.reference}<td data-label="Reference" style="color:var(--muted-foreground); font-size:13px;">{inc.reference}</td>{/if}
 								<td class="td-date" data-label="Date">
 									{formatDateShort(inc.date)}<span class="td-year">{inc.date.slice(0, 4)}</span>
 								</td>

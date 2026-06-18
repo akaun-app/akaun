@@ -209,7 +209,6 @@
 							<th>Claim</th>
 							<th>Date</th>
 							<th>Status</th>
-							<th>Expenses</th>
 							<th class="ta-right">Total</th>
 							<th style="width:40px;"></th>
 						</tr>
@@ -229,19 +228,6 @@
 								<td class="td-status" data-label="Status">
 									<StatusBadge status={claim.status === ClaimStatus.Done ? 'claimed' : 'pending'} />
 								</td>
-								<td data-label="Expenses">
-									<div class="claim-suppliers">
-										{#each claim.suppliers.slice(0, 3) as s}
-											<span class="chip">{s}</span>
-										{/each}
-										{#if claim.suppliers.length > 3}
-											<span class="chip chip-muted">+{claim.suppliers.length - 3} more</span>
-										{/if}
-										{#if claim.suppliers.length === 0}
-											<span style="color:var(--muted-foreground);">—</span>
-										{/if}
-									</div>
-								</td>
 								<td class="td-amount" data-label="Total">
 									<span class="amount-num">{formatMoneyRM(claim.total)}</span>
 								</td>
@@ -253,7 +239,7 @@
 						{/each}
 						{#if displayed.length === 0}
 							<tr class="empty-row">
-								<td colspan="6">
+								<td colspan="5">
 									<EmptyState
 										title={activeTab === 'pending' ? 'No pending claims yet' : activeTab === 'done' ? 'No completed claims yet' : 'No claims yet'}
 										sub={activeTab === 'pending' ? 'Pending claims will appear here.' : activeTab === 'done' ? 'Completed claims will appear here.' : 'Your claims will appear here.'}
@@ -559,27 +545,7 @@
 </Sheet.Root>
 
 <style>
-	.claim-suppliers {
-		display: flex;
-		gap: 5px;
-		flex-wrap: wrap;
-		align-items: center;
-	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		font-size: 11.5px;
-		background: var(--secondary);
-		color: var(--secondary-foreground);
-		padding: 2px 8px;
-		border-radius: 6px;
-		white-space: nowrap;
-	}
-	.chip-muted {
-		color: var(--muted-foreground);
-		background: transparent;
-	}
-	.date-badge {
+.date-badge {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
@@ -607,7 +573,6 @@
 	}
 
 	@media (max-width: 767px) {
-		td[data-label="Expenses"] { display: none; }
 		.td-chevron { display: none; }
 	}
 </style>
