@@ -1,12 +1,37 @@
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
-import adapter from '@sveltejs/adapter-auto';
+import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
+		VitePWA({
+			registerType: 'autoUpdate',
+			strategies: 'generateSW',
+			manifest: false,
+			workbox: {
+				globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+				navigateFallback: null,
+				runtimeCaching: [
+					{
+						urlPattern: /^\/api\//,
+						handler: 'NetworkFirst',
+						options: { cacheName: 'api-cache', networkTimeoutSeconds: 3 }
+					},
+					{
+						urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com/,
+						handler: 'CacheFirst',
+						options: {
+							cacheName: 'google-fonts',
+							expiration: { maxAgeSeconds: 60 * 60 * 24 * 365 }
+						}
+					}
+				]
+			}
+		}),
 		sveltekit({
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
@@ -14,12 +39,12 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 
-			// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
-			// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
-			// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 			adapter: adapter()
 		})
 	],
+	// bun:sqlite is a Bun runtime builtin — keep the import external so it
+	// resolves at runtime instead of being bundled by Rollup.
+	ssr: { external: ['bun:sqlite'] },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

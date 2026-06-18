@@ -1,12 +1,18 @@
-// See https://svelte.dev/docs/kit/types#app.d.ts
-// for information about these interfaces
+import type { EffectivePermissions } from '$lib/server/permissions.js';
+
 declare global {
 	namespace App {
-		// interface Error {}
-		// interface Locals {}
-		// interface PageData {}
-		// interface PageState {}
-		// interface Platform {}
+		interface Locals {
+			user: { id: number; email: string; username: string; name: string | null; role: string } | null;
+			permissions: EffectivePermissions | null;
+			isSuperuser: boolean;
+		}
+	}
+}
+
+declare module 'svelte/elements' {
+	interface SvelteWindowAttributes {
+		'onfilter-dropdown-open'?: (e: CustomEvent) => void;
 	}
 }
 
