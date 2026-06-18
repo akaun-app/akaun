@@ -12,9 +12,3 @@ services:
       - PGID=1000   # Set to $(id -g) to match your host group
       # - ADMIN_PASSWORD=  # Only read on first boot to seed the admin account password
       # - LOG_LEVEL=info
-    healthcheck:
-      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:6969/login"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
