@@ -57,9 +57,10 @@
 			bottom: 0;
 			left: 0;
 			right: 0;
-			height: 56px;
-			padding-left: env(safe-area-inset-left);
-			padding-right: env(safe-area-inset-right);
+			height: calc(56px + var(--safe-bottom));
+			padding-left: var(--safe-left);
+			padding-right: var(--safe-right);
+			padding-bottom: var(--safe-bottom);
 			background: var(--sidebar);
 			border-top: 1px solid var(--sidebar-border);
 			z-index: 50;

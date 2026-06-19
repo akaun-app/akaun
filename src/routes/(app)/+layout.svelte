@@ -60,8 +60,8 @@
 		.mobile-menu-btn {
 			display: flex;
 			position: fixed;
-			top: 11px;
-			left: calc(12px + env(safe-area-inset-left));
+			top: calc(11px + var(--safe-top));
+			left: calc(12px + var(--safe-left));
 			z-index: 35;
 			width: 32px;
 			height: 32px;
@@ -72,12 +72,6 @@
 			color: var(--foreground);
 			cursor: pointer;
 			-webkit-tap-highlight-color: transparent;
-		}
-	}
-
-	@media (max-width: 767px) and (display-mode: standalone) {
-		.mobile-menu-btn {
-			top: calc(11px + env(safe-area-inset-top));
 		}
 	}
 </style>

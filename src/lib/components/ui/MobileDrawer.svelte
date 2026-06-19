@@ -349,8 +349,9 @@
 
 	form { display: contents; }
 
-	@media (display-mode: standalone) {
-		.drawer-brand { padding-top: calc(20px + env(safe-area-inset-top)); }
-		.drawer-groups { padding-bottom: calc(12px + var(--safe-bottom)); }
-	}
+	/* Safe-area vars are 0 in a browser tab and the real insets in a PWA, so the
+	   brand clears the status bar and the footer clears the home indicator only
+	   when installed. */
+	.drawer-brand { padding-top: calc(20px + var(--safe-top)); }
+	.drawer-groups { padding-bottom: calc(12px + var(--safe-bottom)); }
 </style>
