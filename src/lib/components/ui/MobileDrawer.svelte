@@ -2,19 +2,26 @@
 	import { Settings, Sun, Moon, LogOut, User, Users } from '@lucide/svelte';
 	import { page } from '$app/stores';
 	import { mode, setMode } from 'mode-watcher';
-	import type { EffectivePermissions } from '$lib/server/permissions.js';
+	import { MAX_MOBILE_NAV_ITEMS, NAV_ICONS_BY_ID, type SerializableNavItem } from '$lib/nav-config.js';
 
 	let {
 		open = $bindable(false),
 		user,
 		isSuperuser = false,
-		permissions = null
+		navItems = []
 	}: {
 		open?: boolean;
 		user: { username: string; name?: string | null; email?: string } | null;
 		isSuperuser?: boolean;
-		permissions?: EffectivePermissions | null;
+		navItems?: (SerializableNavItem & { showOnMobile: boolean })[];
 	} = $props();
+
+	const overflowItems = $derived.by(() => {
+		const bottomNavIds = new Set(
+			navItems.filter((item) => item.showOnMobile).slice(0, MAX_MOBILE_NAV_ITEMS).map((i) => i.id)
+		);
+		return navItems.filter((item) => !bottomNavIds.has(item.id));
+	});
 
 	let closing = $state(false);
 	let panelEl: HTMLDivElement | undefined = $state();
@@ -103,6 +110,19 @@
 
 		<!-- Nav groups -->
 		<div class="drawer-groups">
+
+			<!-- Overflow main-nav items not pinned to the mobile bottom nav -->
+			{#if overflowItems.length > 0}
+				<div class="drawer-group">
+					<div class="drawer-group-label">More</div>
+					{#each overflowItems as item}
+						{@const Icon = NAV_ICONS_BY_ID[item.id]}
+						<a href={item.href} class="drawer-item" class:active={isActive(item.href)} onclick={close}>
+							<Icon size={17} /><span>{item.label}</span>
+						</a>
+					{/each}
+				</div>
+			{/if}
 
 			<!-- Preferences -->
 			<div class="drawer-group">

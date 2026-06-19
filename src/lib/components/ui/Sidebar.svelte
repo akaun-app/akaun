@@ -1,55 +1,29 @@
 <script lang="ts">
-	import {
-		LayoutDashboard,
-		Wallet,
-		TrendingUp,
-		FileText,
-		Upload,
-		Settings,
-		Sun,
-		Moon,
-		LogOut,
-		ChevronLeft,
-		ChevronRight,
-		Users,
-		User,
-		MoreHorizontal
-	} from '@lucide/svelte';
+	import { Settings, Sun, Moon, LogOut, ChevronLeft, ChevronRight, Users, User, MoreHorizontal } from '@lucide/svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { appState } from '$lib/state/app.svelte.js';
 	import { mode, setMode } from 'mode-watcher';
-	import type { Component } from 'svelte';
-	import type { EffectivePermissions } from '$lib/server/permissions.js';
+	import { NAV_ICONS_BY_ID, type SerializableNavItem } from '$lib/nav-config.js';
 
 	let {
 		user,
 		activePage,
 		unpaidCount = 0,
 		isSuperuser = false,
-		permissions = null
+		navItems = []
 	}: {
 		user: { username: string; name?: string | null; email?: string } | null;
 		activePage: string;
 		unpaidCount?: number;
 		isSuperuser?: boolean;
-		permissions?: EffectivePermissions | null;
+		navItems?: SerializableNavItem[];
 	} = $props();
 
 	const collapsed = $derived(appState.sidebarCollapsed);
 
-	type NavItem = { id: string; label: string; href: string; Icon: Component<{ size?: number | string }>; resource: string | null; badge?: number };
-
-	const nav = $derived<NavItem[]>([
-		{ id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: LayoutDashboard, resource: 'dashboard' },
-		{ id: 'expenses', label: 'Expenses', href: '/expenses', Icon: Wallet, badge: unpaidCount, resource: 'expenses' },
-		{ id: 'income', label: 'Income', href: '/income', Icon: TrendingUp, resource: 'income' },
-		{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText, resource: 'claims' },
-		{ id: 'contacts', label: 'Contacts', href: '/contacts', Icon: Users, resource: 'contacts' },
-		{ id: 'import', label: 'Auto Import', href: '/import', Icon: Upload, resource: 'import' }
-	].filter((item) => {
-		if (!item.resource) return true;
-		return permissions?.[item.resource as keyof EffectivePermissions]?.view ?? true;
-	}));
+	function badgeFor(item: SerializableNavItem): number | undefined {
+		return item.id === 'expenses' ? unpaidCount : undefined;
+	}
 
 	function isActive(href: string) {
 		return activePage === href || activePage.startsWith(href + '/');
@@ -113,18 +87,19 @@
 	<div class="sb-section">
 		{#if !collapsed}<div class="sb-section-label">Workspace</div>{/if}
 		<nav class="sb-nav">
-			{#each nav as item}
+			{#each navItems as item}
+				{@const Icon = NAV_ICONS_BY_ID[item.id]}
 				<a
 					href={item.href}
 					class="sb-item"
 					class:active={isActive(item.href)}
 					title={collapsed ? item.label : undefined}
 				>
-					<item.Icon size={18} />
+					<Icon size={18} />
 					{#if !collapsed}
 						<span class="sb-item-label">{item.label}</span>
-						{#if item.badge}
-							<span class="sb-item-badge">{item.badge}</span>
+						{#if badgeFor(item)}
+							<span class="sb-item-badge">{badgeFor(item)}</span>
 						{/if}
 					{/if}
 				</a>

@@ -62,6 +62,19 @@ export const userPermissions = sqliteTable(
 	(t) => [primaryKey({ columns: [t.userId, t.resource] })]
 );
 
+export const userNavPreferences = sqliteTable(
+	'user_nav_preferences',
+	{
+		userId: integer('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		itemId: text('item_id').notNull(),
+		sortOrder: integer('sort_order').notNull(),
+		showOnMobile: integer('show_on_mobile', { mode: 'boolean' }).notNull().default(true)
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.itemId] })]
+);
+
 export const sessions = sqliteTable('sessions', {
 	id: text('id').primaryKey(),
 	userId: integer('user_id')

@@ -1,15 +1,41 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Copy, Check, RefreshCw, Trash2, KeyRound } from '@lucide/svelte';
+	import { Copy, Check, RefreshCw, Trash2, KeyRound, GripVertical } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import { toast } from 'svelte-sonner';
+	import { dndzone } from 'svelte-dnd-action';
+	import type { DndEvent } from 'svelte-dnd-action';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'profile' | 'security' | 'token';
+	type Tab = 'profile' | 'security' | 'token' | 'navigation';
 	let activeTab = $state<Tab>('profile');
+
+	// Navigation tab state — local reorderable copy, synced from data
+	type NavPrefItem = { id: string; label: string; showOnMobile: boolean };
+	let navItems = $state<NavPrefItem[]>([]);
+
+	$effect(() => {
+		navItems = data.navItems.map((i) => ({ ...i }));
+	});
+
+	const mobileCount = $derived(navItems.filter((i) => i.showOnMobile).length);
+	const MAX_MOBILE = 5;
+
+	const reducedMotion =
+		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const flipDurationMs = reducedMotion ? 0 : 200;
+
+	function handleDndUpdate(e: CustomEvent<DndEvent<NavPrefItem>>) {
+		navItems = e.detail.items;
+	}
+
+	function navItemsJson() {
+		return JSON.stringify(navItems.map((i) => ({ itemId: i.id, showOnMobile: i.showOnMobile })));
+	}
 
 	// Profile tab state — initialized empty, synced from data via $effect
 	let profileName = $state('');
@@ -52,6 +78,9 @@
 				revealedToken = null;
 				toast.success('API token revoked');
 			}
+		} else if (form.action === 'navigation') {
+			if (form.success) toast.success('Navigation order saved');
+			else if (form.error) toast.error(form.error);
 		}
 	});
 
@@ -65,7 +94,8 @@
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'profile', label: 'Profile' },
 		{ id: 'security', label: 'Security' },
-		{ id: 'token', label: 'API Token' }
+		{ id: 'token', label: 'API Token' },
+		{ id: 'navigation', label: 'Navigation' }
 	];
 </script>
 
@@ -262,6 +292,47 @@
 						{/if}
 					</div>
 				</div>
+
+			{:else if activeTab === 'navigation'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Navigation</h2>
+						<p class="set-section-sub">
+							Choose the order of your nav items and which ones appear in the mobile bottom nav
+							(max {MAX_MOBILE}). Everything else is reachable from the menu drawer.
+						</p>
+					</div>
+
+					<form method="POST" action="?/saveNavOrder" use:enhance>
+						<input type="hidden" name="items" value={navItemsJson()} />
+						<div
+							class="nav-pref-list"
+							use:dndzone={{ items: navItems, flipDurationMs, dropTargetStyle: {} }}
+							onconsider={handleDndUpdate}
+							onfinalize={handleDndUpdate}
+						>
+							{#each navItems as item (item.id)}
+								<div class="nav-pref-row">
+									<span class="nav-pref-handle" aria-label={`Drag to reorder ${item.label}`}>
+										<GripVertical size={16} />
+									</span>
+									<span class="nav-pref-label">{item.label}</span>
+									<label class="nav-pref-checkbox">
+										<Checkbox
+											bind:checked={item.showOnMobile}
+											disabled={!item.showOnMobile && mobileCount >= MAX_MOBILE}
+										/>
+										<span>Show on mobile</span>
+									</label>
+								</div>
+							{/each}
+						</div>
+						{#if form?.action === 'navigation' && form?.error}
+							<p class="form-error">{form.error}</p>
+						{/if}
+						<Button type="submit" class="mt-4">Save changes</Button>
+					</form>
+				</div>
 			{/if}
 		</div>
 	</div>
@@ -275,7 +346,7 @@
 	}
 
 	.token-reveal {
-		margin: 0 16px 16px;
+		margin: 0 0 16px;
 	}
 
 	.token-warn {
@@ -320,6 +391,57 @@
 	.token-actions {
 		display: flex;
 		gap: 8px;
-		margin: 16px 16px 0;
+		margin: 16px 0 0;
+	}
+
+	.nav-pref-list {
+		display: flex;
+		flex-direction: column;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		overflow: hidden;
+	}
+
+	.nav-pref-row {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 10px 12px;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.nav-pref-row:last-child {
+		border-bottom: none;
+	}
+
+	.nav-pref-handle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		flex-shrink: 0;
+		color: var(--muted-foreground);
+		cursor: grab;
+		touch-action: none;
+	}
+
+	.nav-pref-row:active .nav-pref-handle {
+		cursor: grabbing;
+	}
+
+	.nav-pref-label {
+		flex: 1;
+		font-size: 13.5px;
+		font-weight: 500;
+	}
+
+	.nav-pref-checkbox {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 12.5px;
+		color: var(--muted-foreground);
+		cursor: pointer;
 	}
 </style>

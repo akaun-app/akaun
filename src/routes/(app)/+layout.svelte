@@ -27,7 +27,7 @@
 		activePage={$page.url.pathname}
 		unpaidCount={data.unpaidCount}
 		isSuperuser={data.isSuperuser}
-		permissions={data.permissions}
+		navItems={data.navItems}
 	/>
 	<main class="main">
 		<div class="mobile-menu-anchor">
@@ -42,14 +42,14 @@
 <BottomNav
 	activePage={$page.url.pathname}
 	unpaidCount={data.unpaidCount}
-	permissions={data.permissions}
+	navItems={data.navItems}
 />
 
 <MobileDrawer
 	bind:open={drawerOpen}
 	user={data.user}
 	isSuperuser={data.isSuperuser}
-	permissions={data.permissions}
+	navItems={data.navItems}
 />
 
 <style>

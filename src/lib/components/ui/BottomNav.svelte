@@ -1,47 +1,23 @@
 <script lang="ts">
-	import {
-		LayoutDashboard,
-		Wallet,
-		TrendingUp,
-		FileText,
-		Upload,
-		Users
-	} from '@lucide/svelte';
-	import type { Component } from 'svelte';
-	import type { EffectivePermissions } from '$lib/server/permissions.js';
+	import { MAX_MOBILE_NAV_ITEMS, NAV_ICONS_BY_ID, type SerializableNavItem } from '$lib/nav-config.js';
 
 	let {
 		activePage,
 		unpaidCount = 0,
-		permissions = null
+		navItems = []
 	}: {
 		activePage: string;
 		unpaidCount?: number;
-		permissions?: EffectivePermissions | null;
+		navItems?: (SerializableNavItem & { showOnMobile: boolean })[];
 	} = $props();
 
-	type NavItem = {
-		id: string;
-		label: string;
-		href: string;
-		Icon: Component<{ size?: number | string }>;
-		resource: string | null;
-		badge?: number;
-	};
-
-	const nav = $derived<NavItem[]>(
-		[
-			{ id: 'dashboard', label: 'Dashboard', href: '/dashboard', Icon: LayoutDashboard, resource: 'dashboard' },
-			{ id: 'expenses', label: 'Expenses', href: '/expenses', Icon: Wallet, badge: unpaidCount, resource: 'expenses' },
-			{ id: 'income', label: 'Income', href: '/income', Icon: TrendingUp, resource: 'income' },
-			{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText, resource: 'claims' },
-			{ id: 'contacts', label: 'Contacts', href: '/contacts', Icon: Users, resource: 'contacts' },
-			{ id: 'import', label: 'Import', href: '/import', Icon: Upload, resource: 'import' }
-		].filter((item) => {
-			if (!item.resource) return true;
-			return permissions?.[item.resource as keyof EffectivePermissions]?.view ?? true;
-		})
+	const nav = $derived(
+		navItems.filter((item) => item.showOnMobile).slice(0, MAX_MOBILE_NAV_ITEMS)
 	);
+
+	function badgeFor(item: SerializableNavItem): number | undefined {
+		return item.id === 'expenses' ? unpaidCount : undefined;
+	}
 
 	function isActive(href: string) {
 		return activePage === href || activePage.startsWith(href + '/');
@@ -50,6 +26,7 @@
 
 <nav class="bottom-nav" aria-label="Main navigation">
 	{#each nav as tab}
+		{@const Icon = NAV_ICONS_BY_ID[tab.id]}
 		<a
 			href={tab.href}
 			class="bottom-nav-tab"
@@ -58,9 +35,9 @@
 			aria-current={isActive(tab.href) ? 'page' : undefined}
 		>
 			<span class="bottom-nav-icon">
-				<tab.Icon size={22} />
-				{#if tab.badge && tab.badge > 0}
-					<span class="bottom-nav-badge">{tab.badge}</span>
+				<Icon size={22} />
+				{#if badgeFor(tab) && badgeFor(tab)! > 0}
+					<span class="bottom-nav-badge">{badgeFor(tab)}</span>
 				{/if}
 			</span>
 			<span class="bottom-nav-label">{tab.label}</span>

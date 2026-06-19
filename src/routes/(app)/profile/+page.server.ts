@@ -5,6 +5,8 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { users } from '$lib/server/db/schema.js';
+import { getUserNavOrder, setUserNavOrder } from '$lib/server/navPreferences.js';
+import { MAX_MOBILE_NAV_ITEMS } from '$lib/nav-config.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const userId = locals.user!.id;
@@ -17,12 +19,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const token = user?.bearerToken;
 
+	const navItems = getUserNavOrder(db, userId)
+		.filter((item) => locals.isSuperuser || (locals.permissions?.[item.resource]?.view ?? false))
+		.map((item) => ({ id: item.id, label: item.label, showOnMobile: item.showOnMobile }));
+
 	return {
 		name: locals.user!.name,
 		email: locals.user!.email,
 		username: locals.user!.username,
 		hasBearerToken: !!token,
-		maskedToken: token ? 'akn_live_••' + token.slice(-4) : null
+		maskedToken: token ? 'akn_live_••' + token.slice(-4) : null,
+		navItems
 	};
 };
 
@@ -93,5 +100,29 @@ export const actions: Actions = {
 		const userId = locals.user!.id;
 		db.update(users).set({ bearerToken: null }).where(eq(users.id, userId)).run();
 		return { action: 'token', success: true };
+	},
+
+	saveNavOrder: async ({ locals, request }) => {
+		const userId = locals.user!.id;
+		const data = await request.formData();
+
+		let items: { itemId: string; showOnMobile: boolean }[];
+		try {
+			items = JSON.parse(String(data.get('items') ?? '[]'));
+		} catch {
+			return fail(400, { action: 'navigation', error: 'Invalid navigation order.' });
+		}
+
+		const mobileCount = items.filter((i) => i.showOnMobile).length;
+		if (mobileCount > MAX_MOBILE_NAV_ITEMS) {
+			return fail(400, {
+				action: 'navigation',
+				error: `At most ${MAX_MOBILE_NAV_ITEMS} items can be shown on mobile.`
+			});
+		}
+
+		setUserNavOrder(db, userId, items);
+
+		return { action: 'navigation', success: true };
 	}
 };
