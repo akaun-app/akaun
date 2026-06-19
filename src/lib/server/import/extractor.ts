@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { PDFParse } from 'pdf-parse';
+import { extractText as pdfExtractText } from 'unpdf';
 import { createWorker } from 'tesseract.js';
 
 export async function extractText(absPath: string, mimeType: string): Promise<string> {
@@ -18,20 +18,14 @@ export async function extractText(absPath: string, mimeType: string): Promise<st
 
 async function extractFromPdf(absPath: string): Promise<string> {
 	const buffer = readFileSync(absPath);
-	const parser = new PDFParse({ data: buffer });
-	try {
-		const result = await parser.getText();
-		const text = result.text.trim();
-		const avgCharsPerPage = result.total > 0 ? text.length / result.total : text.length;
+	const { text, totalPages } = await pdfExtractText(new Uint8Array(buffer), { mergePages: true });
 
-		if (avgCharsPerPage < 50 && text.length < 200) {
-			// Scanned PDF — fall back to OCR on the raw buffer treated as image
-			return extractFromImage(absPath);
-		}
-		return text;
-	} finally {
-		await parser.destroy();
+	const avgCharsPerPage = totalPages > 0 ? text.length / totalPages : text.length;
+	if (avgCharsPerPage < 50 && text.length < 200) {
+		// Scanned PDF — fall back to OCR
+		return extractFromImage(absPath);
 	}
+	return text.trim();
 }
 
 async function extractFromImage(absPath: string): Promise<string> {
