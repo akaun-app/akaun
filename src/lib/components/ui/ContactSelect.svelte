@@ -89,7 +89,7 @@
 	function createNew() {
 		value = null;
 		newName = typed;
-		selectedLabel = `${typed} (new)`;
+		selectedLabel = typed;
 		open = false;
 		query = '';
 		onChange?.({ value, newName });
@@ -176,7 +176,7 @@
 					class="hover:bg-accent text-primary block w-full rounded-md px-2 py-1.5 text-left text-sm"
 					onclick={createNew}
 				>
-					Create "{typed}" <span class="text-muted-foreground">(Business, on confirm)</span>
+					Create "{typed}"
 				</button>
 			{/if}
 		</div>

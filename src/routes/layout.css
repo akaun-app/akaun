@@ -114,7 +114,7 @@
 
 /* ===================== Base styles ===================== */
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; height: 100%; width: 100%; overflow: hidden; position: fixed; }
 html, body { overscroll-behavior: none; }
 body {
   font-family: "Geist", "Geist Fallback", system-ui, sans-serif;
@@ -733,8 +733,8 @@ th.sortable:hover .th-idle { opacity: .5; }
   .main {
     overflow-y: auto;
     overflow-x: hidden;
-    overscroll-behavior-y: contain;
-    padding-bottom: calc(56px + var(--safe-bottom));
+    overscroll-behavior-y: none;
+    padding-bottom: 56px;
   }
 
   /* Screen, work, work-main: fill the visible viewport so footers (e.g.
@@ -966,7 +966,7 @@ th.sortable:hover .th-idle { opacity: .5; }
   /* ---------- Bulk bar: fixed above bottom nav ---------- */
   .bulkbar {
     position: fixed;
-    bottom: calc(22px + 56px + var(--safe-bottom));
+    bottom: calc(22px + 56px);
     left: 50%;
     transform: translate(-50%, calc(100% + 40px));
   }
