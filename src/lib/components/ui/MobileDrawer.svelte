@@ -331,6 +331,6 @@
 
 	@media (display-mode: standalone) {
 		.drawer-brand { padding-top: calc(20px + env(safe-area-inset-top)); }
-		.drawer-groups { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+		.drawer-groups { padding-bottom: calc(12px + var(--safe-bottom)); }
 	}
 </style>

@@ -30,6 +30,11 @@
 		permissions={data.permissions}
 	/>
 	<main class="main">
+		<div class="mobile-menu-anchor">
+			<button class="mobile-menu-btn" onclick={() => (drawerOpen = true)} aria-label="Open navigation">
+				<Menu size={20} />
+			</button>
+		</div>
 		{@render children()}
 	</main>
 </div>
@@ -40,10 +45,6 @@
 	permissions={data.permissions}
 />
 
-<button class="mobile-menu-btn" onclick={() => (drawerOpen = true)} aria-label="Open navigation">
-	<Menu size={20} />
-</button>
-
 <MobileDrawer
 	bind:open={drawerOpen}
 	user={data.user}
@@ -52,17 +53,29 @@
 />
 
 <style>
+	.mobile-menu-anchor {
+		display: none;
+	}
+
 	.mobile-menu-btn {
 		display: none;
 	}
 
 	@media (max-width: 767px) {
+		.mobile-menu-anchor {
+			display: block;
+			position: sticky;
+			top: 0;
+			height: 0;
+			overflow: visible;
+			z-index: 35;
+		}
+
 		.mobile-menu-btn {
 			display: flex;
-			position: fixed;
+			position: absolute;
 			top: 11px;
 			left: calc(12px + env(safe-area-inset-left));
-			z-index: 35;
 			width: 32px;
 			height: 32px;
 			align-items: center;
@@ -76,8 +89,8 @@
 	}
 
 	@media (max-width: 767px) and (display-mode: standalone) {
-		.mobile-menu-btn {
-			top: calc(11px + env(safe-area-inset-top));
+		.mobile-menu-anchor {
+			padding-top: env(safe-area-inset-top);
 		}
 	}
 </style>

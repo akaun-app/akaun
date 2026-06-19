@@ -459,7 +459,7 @@
 <Sheet.Root bind:open={mobileFilterOpen}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side="bottom" style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + env(safe-area-inset-bottom));">
+		<Sheet.Content side="bottom" style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + var(--safe-bottom));">
 			<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
 				<div style="font-size:15px; font-weight:600;">Filters</div>
 				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
