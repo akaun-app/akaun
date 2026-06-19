@@ -1337,7 +1337,7 @@
 		grid-template-columns: 220px 1fr;
 		gap: 0;
 		min-height: 0;
-		height: calc(100vh - 140px);
+		height: calc(100dvh - 140px);
 	}
 	.ax-glist {
 		border-right: 1px solid var(--border);

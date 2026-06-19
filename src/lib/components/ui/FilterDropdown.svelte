@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
-	import { cn } from '$lib/utils.js';
+	import { cn, focusRingClass, focusRingOpenClass } from '$lib/utils.js';
 
 	let {
 		label,
@@ -45,10 +45,8 @@
 
 <div bind:this={wrapper} style="position:relative;">
 	<button
-		class={cn(
-			'status-tab outline-none transition-[color,box-shadow] focus-visible:ring-3 focus-visible:ring-[var(--primary-soft)] focus-visible:border-ring',
-			open && 'ring-3 ring-[var(--primary-soft)]'
-		)}
+		class={cn('status-tab outline-none transition-[color,box-shadow]', focusRingClass, focusRingOpenClass)}
+		data-state={open ? 'open' : 'closed'}
 		class:active
 		style="background:transparent; border:1px solid {open ? 'var(--ring)' : active ? 'var(--primary)' : 'var(--border)'}; color:{active ? 'var(--primary)' : 'var(--muted-foreground)'}; padding:5px 11px;"
 		onclick={toggle}

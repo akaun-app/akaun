@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { cn } from '$lib/utils.js';
+	import { cn, focusRingClass, focusRingOpenClass } from '$lib/utils.js';
 	import XIcon from '@lucide/svelte/icons/x';
 
 	type Candidate = { id: number; legalName: string; score?: number };
@@ -28,8 +28,10 @@
 		onChange?: (v: { value: number | null; newName: string | null }) => void;
 	} = $props();
 
-	const controlClass =
-		'border-input focus-visible:border-ring focus-visible:ring-[var(--primary-soft)] h-9 w-full rounded-md border bg-card px-3 text-[13.5px] transition-[color,box-shadow] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50 flex items-center';
+	const controlClass = cn(
+		'border-input h-9 w-full rounded-md border bg-card px-3 text-[13.5px] transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 flex items-center',
+		focusRingClass
+	);
 
 	let open = $state(false);
 	let query = $state('');
@@ -115,6 +117,7 @@
 		<button
 			type="button"
 			class={cn(controlClass, 'justify-between gap-2 text-left cursor-pointer')}
+			data-state={open ? 'open' : 'closed'}
 			{disabled}
 			onclick={() => (open = true)}
 		>
@@ -140,11 +143,8 @@
 		</button>
 	{:else}
 		<input
-			class={cn(
-				controlClass,
-				'placeholder:text-muted-foreground',
-				open && 'border-ring ring-3 ring-[var(--primary-soft)]'
-			)}
+			class={cn(controlClass, 'placeholder:text-muted-foreground', open && focusRingOpenClass)}
+			data-state={open ? 'open' : 'closed'}
 			type="text"
 			{placeholder}
 			{disabled}

@@ -33,7 +33,8 @@
 	let orModels = $state<ORModel[]>([]);
 	let orFetching = $state(false);
 	let orError = $state('');
-	let showFreeOnly = $state(false);
+	// svelte-ignore state_referenced_locally
+	let showFreeOnly = $state(data.autoImportFreeModelsOnly);
 
 	const filteredModels = $derived(showFreeOnly ? orModels.filter((m) => m.isFree) : orModels);
 
@@ -91,6 +92,7 @@
 			aiModel = data.autoImportModel;
 			aiParallelTasks = data.autoImportParallelTasks;
 			aiCategoryHints = data.autoImportCategoryHints;
+			showFreeOnly = data.autoImportFreeModelsOnly;
 			toast.success('Settings saved');
 		}
 	});
@@ -194,6 +196,7 @@
 					</div>
 					<form method="POST" action="?/saveIntelligence" use:enhance={() => ({ update }) => update({ reset: false })}>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
+					<input type="hidden" name="freeModelsOnly" value={String(showFreeOnly)} />
 						<div class="set-rows">
 							<div class="set-row">
 								<div>

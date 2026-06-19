@@ -194,6 +194,7 @@
 		flex-shrink: 0;
 	}
 
+
 	.drawer-logo {
 		width: 30px;
 		height: 30px;
@@ -327,4 +328,9 @@
 	.drawer-item.danger { color: var(--red); }
 
 	form { display: contents; }
+
+	@media (display-mode: standalone) {
+		.drawer-brand { padding-top: calc(20px + env(safe-area-inset-top)); }
+		.drawer-groups { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+	}
 </style>

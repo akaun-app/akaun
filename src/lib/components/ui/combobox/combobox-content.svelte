@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Select as SelectPrimitive } from "bits-ui";
-	import SelectPortal from "./select-portal.svelte";
-	import SelectScrollUpButton from "./select-scroll-up-button.svelte";
-	import SelectScrollDownButton from "./select-scroll-down-button.svelte";
+	import { Combobox as ComboboxPrimitive } from "bits-ui";
+	import ComboboxPortal from "./combobox-portal.svelte";
+	import ComboboxScrollUpButton from "./combobox-scroll-up-button.svelte";
+	import ComboboxScrollDownButton from "./combobox-scroll-down-button.svelte";
 	import { cn, type WithoutChild } from "$lib/utils.js";
 	import type { ComponentProps } from "svelte";
 	import type { WithoutChildrenOrChild } from "$lib/utils.js";
@@ -14,30 +14,28 @@
 		align = "start",
 		portalProps,
 		children,
-		preventScroll = true,
 		...restProps
-	}: WithoutChild<SelectPrimitive.ContentProps> & {
-		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof SelectPortal>>;
+	}: WithoutChild<ComboboxPrimitive.ContentProps> & {
+		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof ComboboxPortal>>;
 	} = $props();
 </script>
 
-<SelectPortal {...portalProps}>
-	<SelectPrimitive.Content
+<ComboboxPortal {...portalProps}>
+	<ComboboxPrimitive.Content
 		bind:ref
 		{sideOffset}
 		{align}
-		{preventScroll}
-		data-slot="select-content"
+		data-slot="combobox-content"
 		class={cn(
 			"bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ring-foreground/10 min-w-(--bits-floating-anchor-width) max-w-[min(var(--bits-floating-available-width),28rem)] max-h-(--bits-floating-available-height) rounded-lg shadow-md ring-1 duration-100 data-[side=inline-start]:slide-in-from-right-2 data-[side=inline-end]:slide-in-from-left-2 relative isolate z-50 overflow-x-hidden overflow-y-auto",
 			className
 		)}
 		{...restProps}
 	>
-		<SelectScrollUpButton />
-		<SelectPrimitive.Viewport class={cn("w-full min-w-(--bits-floating-anchor-width) scroll-my-1")}>
+		<ComboboxScrollUpButton />
+		<ComboboxPrimitive.Viewport class={cn("w-full min-w-(--bits-floating-anchor-width) scroll-my-1")}>
 			{@render children?.()}
-		</SelectPrimitive.Viewport>
-		<SelectScrollDownButton />
-	</SelectPrimitive.Content>
-</SelectPortal>
+		</ComboboxPrimitive.Viewport>
+		<ComboboxScrollDownButton />
+	</ComboboxPrimitive.Content>
+</ComboboxPortal>

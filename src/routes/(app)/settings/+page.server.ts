@@ -38,6 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const autoImportModel = getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
 	const autoImportParallelTasks = parseInt(getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
 	const autoImportCategoryHints = (getSetting(db, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
+	const autoImportFreeModelsOnly = (getSetting(db, SETTING_KEYS.autoImportFreeModelsOnly) ?? 'false') === 'true';
 
 	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
 
@@ -50,6 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		autoImportModel,
 		autoImportParallelTasks,
 		autoImportCategoryHints,
+		autoImportFreeModelsOnly,
 		godModeEnabled
 	};
 };
@@ -88,6 +90,7 @@ export const actions: Actions = {
 		const model = String(data.get('model') ?? 'anthropic/claude-3.5-sonnet').trim();
 		const parallelTasks = Math.min(10, Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10)));
 		const categoryHints = data.get('categoryHints') === 'true';
+		const freeModelsOnly = data.get('freeModelsOnly') === 'true';
 
 		if (!model) return fail(400, { error: 'Model is required' });
 
@@ -95,6 +98,7 @@ export const actions: Actions = {
 		setSetting(db, SETTING_KEYS.autoImportModel, model);
 		setSetting(db, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
 		setSetting(db, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
+		setSetting(db, SETTING_KEYS.autoImportFreeModelsOnly, String(freeModelsOnly));
 
 		return { success: true };
 	},

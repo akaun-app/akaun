@@ -11,6 +11,7 @@ export const SETTING_KEYS = {
 	autoImportEnabled: 'autoImport.enabled',
 	autoImportParallelTasks: 'autoImport.parallelTasks',
 	autoImportCategoryHints: 'autoImport.categoryHints',
+	autoImportFreeModelsOnly: 'autoImport.freeModelsOnly',
 	godModeEnabled: 'godMode.enabled'
 } as const;
 

@@ -11,6 +11,7 @@
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
@@ -533,17 +534,14 @@
 										Amount
 										{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
 									</span>
-									<div class="amount-input sm">
-										<span class="amount-prefix">RM</span>
-										<input
-											class="amount-field"
-											value={formatMoney(editedValue(job, 'amount') as number)}
-											oninput={(e) => {
-												const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
-												if (!isNaN(v)) updateEdit(job.id, 'amount', v);
-											}}
-										/>
-									</div>
+									<AmountInput
+										wrapperClass="sm"
+										value={formatMoney(editedValue(job, 'amount') as number)}
+										oninput={(e) => {
+											const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
+											if (!isNaN(v)) updateEdit(job.id, 'amount', v);
+										}}
+									/>
 								</div>
 
 								<!-- Category -->

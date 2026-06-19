@@ -110,6 +110,7 @@
 /* ===================== Base styles ===================== */
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+html, body { overscroll-behavior: none; }
 body {
   font-family: "Geist", "Geist Fallback", system-ui, sans-serif;
   background: var(--background);
@@ -166,7 +167,7 @@ body {
 
 /* ===================== App layout ===================== */
 #svelte { height: 100%; }
-.app { display: flex; height: 100vh; overflow: hidden; }
+.app { display: flex; height: 100dvh; overflow: hidden; }
 
 /* ---------- Sidebar ---------- */
 .sidebar {
@@ -727,6 +728,7 @@ th.sortable:hover .th-idle { opacity: .5; }
   .main {
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior-y: contain;
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
   }
 
@@ -1091,10 +1093,8 @@ th.sortable:hover .th-idle { opacity: .5; }
    PWA / Standalone Mode
    ============================================================ */
 
-/* Prevent pull-to-refresh rubber-banding when installed as PWA */
+/* Account for status bar/Dynamic Island when running without browser chrome */
 @media (display-mode: standalone) {
-  body { overscroll-behavior: none; }
-  /* Account for status bar when running without browser chrome */
   .topbar { padding-top: env(safe-area-inset-top); }
 }
 

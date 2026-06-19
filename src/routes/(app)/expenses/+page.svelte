@@ -27,6 +27,7 @@
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
@@ -372,15 +373,9 @@
 								{#if amountMin || amountMax}<button onclick={() => { amountMin = ''; amountMax = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600; padding:0;">Clear</button>{/if}
 							</div>
 							<div style="display:flex; align-items:center; gap:8px;">
-								<div class="amount-input" style="width:120px;">
-									<span class="amount-prefix">RM</span>
-									<input class="amount-field" inputmode="decimal" placeholder="Min" bind:value={amountMin} style="width:84px;" />
-								</div>
+								<AmountInput wrapperStyle="width:120px;" placeholder="Min" bind:value={amountMin} style="width:84px;" />
 								<span style="color:var(--muted-foreground);">–</span>
-								<div class="amount-input" style="width:120px;">
-									<span class="amount-prefix">RM</span>
-									<input class="amount-field" inputmode="decimal" placeholder="Max" bind:value={amountMax} style="width:84px;" />
-								</div>
+								<AmountInput wrapperStyle="width:120px;" placeholder="Max" bind:value={amountMax} style="width:84px;" />
 							</div>
 						</div>
 					</FilterDropdown>
@@ -562,15 +557,9 @@
 					{#if amountMin || amountMax}<button onclick={() => { amountMin = ''; amountMax = ''; }} style="border:none; background:none; color:var(--primary); cursor:pointer; font-size:11px; font-weight:600;">Clear</button>{/if}
 				</div>
 				<div style="display:flex; align-items:center; gap:8px;">
-					<div class="amount-input" style="flex:1;">
-						<span class="amount-prefix">RM</span>
-						<input class="amount-field" inputmode="decimal" placeholder="Min" bind:value={amountMin} style="flex:1;" />
-					</div>
+					<AmountInput wrapperStyle="flex:1;" placeholder="Min" bind:value={amountMin} style="flex:1;" />
 					<span style="color:var(--muted-foreground);">–</span>
-					<div class="amount-input" style="flex:1;">
-						<span class="amount-prefix">RM</span>
-						<input class="amount-field" inputmode="decimal" placeholder="Max" bind:value={amountMax} style="flex:1;" />
-					</div>
+					<AmountInput wrapperStyle="flex:1;" placeholder="Max" bind:value={amountMax} style="flex:1;" />
 				</div>
 			</div>
 			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>
@@ -693,10 +682,7 @@
 					</div>
 					<div>
 						<label class="field-label" for="amount">Amount (RM) *</label>
-						<div class="amount-input">
-							<span class="amount-prefix">RM</span>
-							<input id="amount" name="amount" class="amount-field" inputmode="decimal" placeholder="0.00" required />
-						</div>
+						<AmountInput id="amount" name="amount" placeholder="0.00" required />
 					</div>
 				</div>
 
