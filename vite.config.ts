@@ -42,9 +42,37 @@ export default defineConfig({
 			adapter: adapter()
 		})
 	],
-	// bun:sqlite is a Bun runtime builtin — keep the import external so it
-	// resolves at runtime instead of being bundled by Rollup.
-	ssr: { external: ['bun:sqlite'] },
+	// Pre-transform all Svelte files at startup so Vite discovers transitive deps
+	// (icons from income/claims/etc.) before the first browser request.
+	server: {
+		warmup: {
+			clientFiles: ['./src/routes/**/*.svelte', './src/lib/components/**/*.svelte']
+		}
+	},
+	optimizeDeps: {
+		include: [
+			// Root layout — loaded on every page
+			'mode-watcher',
+			'svelte-sonner',
+			'@lucide/svelte/icons/*', // glob covers all subpaths: toast icons + calendar/select/sheet/checkbox icons
+
+			// Expenses page — first post-login page
+			'bits-ui',
+			'@internationalized/date', // DatePicker transitive dep
+			'tailwind-variants',
+			'@lucide/svelte', // named icon imports
+
+			// Utilities used across almost every component
+			'tailwind-merge',
+			'clsx',
+
+			// Dashboard charts — large bundle, worth pre-bundling explicitly
+			'chart.js'
+		]
+	},
+	// bun:sqlite is a Bun builtin; unpdf and tesseract.js skip Vite SSR transform
+	// so the first request isn't interrupted by dep optimization.
+	ssr: { external: ['bun:sqlite', 'unpdf', 'tesseract.js'] },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [
