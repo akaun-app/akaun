@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, inArray, sql, getTableColumns } from 'drizzle-orm';
+import { and, eq, gte, lte, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { expenses, expenseAttachments, expenseSearchText, contacts } from '../db/schema.js';
@@ -64,20 +64,10 @@ type ExpenseRow = typeof expenses.$inferSelect;
 
 const expenseWithContact = { ...getTableColumns(expenses), contactName: contacts.legalName };
 
-export function listExpenses(db: Db, filters: ExpenseFilters = {}) {
-	const {
-		status,
-		category,
-		dateFrom,
-		dateTo,
-		amountMin,
-		amountMax,
-		search,
-		limit = 100,
-		offset = 0
-	} = filters;
-
-	const conditions = [];
+/** Shared WHERE-clause builder for expense list + count queries. */
+function expenseConditions(filters: ExpenseFilters): SQL[] {
+	const { status, category, dateFrom, dateTo, amountMin, amountMax, search } = filters;
+	const conditions: SQL[] = [];
 	if (status !== undefined) conditions.push(eq(expenses.status, status));
 	if (category) conditions.push(eq(expenses.category, category));
 	if (dateFrom) conditions.push(gte(expenses.date, dateFrom));
@@ -90,6 +80,12 @@ export function listExpenses(db: Db, filters: ExpenseFilters = {}) {
 			sql`EXISTS (SELECT 1 FROM ${expenseSearchText} WHERE ${expenseSearchText.expenseId} = ${expenses.id} AND ${expenseSearchText.text} LIKE ${term})`
 		);
 	}
+	return conditions;
+}
+
+export function listExpenses(db: Db, filters: ExpenseFilters = {}) {
+	const { limit = 100, offset = 0 } = filters;
+	const conditions = expenseConditions(filters);
 
 	return db
 		.select(expenseWithContact)
@@ -99,6 +95,17 @@ export function listExpenses(db: Db, filters: ExpenseFilters = {}) {
 		.limit(limit)
 		.offset(offset)
 		.all();
+}
+
+/** Count expenses matching the same filters as listExpenses, without fetching rows. */
+export function countExpenses(db: Db, filters: ExpenseFilters = {}): number {
+	const conditions = expenseConditions(filters);
+	const row = db
+		.select({ count: sql<number>`count(*)` })
+		.from(expenses)
+		.where(conditions.length ? and(...conditions) : undefined)
+		.get();
+	return row?.count ?? 0;
 }
 
 export function getExpense(db: Db, id: number) {
