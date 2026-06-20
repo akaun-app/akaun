@@ -783,7 +783,7 @@ th.sortable:hover .th-idle { opacity: .5; }
     align-items: center;
     padding: calc(12px + var(--safe-top)) 16px 10px;
     padding-left: calc(52px + var(--safe-left)); /* room for hamburger button */
-    min-height: 55px; /* consistent height: 32px content + 12px top pad + 10px bot pad + 1px border */
+    min-height: calc(55px + var(--safe-top)); /* 55px content row (32px content + 12px top + 10px bot + 1px border) plus the PWA status-bar inset on top */
     gap: 10px;
     position: sticky;
     top: 0;
@@ -1117,6 +1117,17 @@ th.sortable:hover .th-idle { opacity: .5; }
      document doesn't scroll. Keep 100vh here (not 100dvh) — this is the value
      that anchors the fixed bottom nav flush to the screen bottom in the PWA. */
   .app { height: 100vh; }
+
+  /* Full-height bottom sheets (add / detail / edit drawers) are height:100dvh
+     with no padding on the content element, so they run edge-to-edge. Inset
+     them for the status bar / Dynamic Island (top) and home indicator (bottom).
+     The bottom *filter* sheets set an inline `padding` shorthand which (being
+     inline) overrides these longhands, so they keep their own bottom-only
+     handling and are unaffected. */
+  [data-slot="sheet-content"][data-side="bottom"] {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
 }
 
 ::view-transition-old(root),
