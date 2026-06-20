@@ -117,7 +117,7 @@
 
 /* ===================== Base styles ===================== */
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; width: 100%; overflow: hidden; position: fixed; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
 html, body { overscroll-behavior: none; }
 body {
   font-family: "Geist", "Geist Fallback", system-ui, sans-serif;
@@ -969,7 +969,7 @@ th.sortable:hover .th-idle { opacity: .5; }
   /* ---------- Bulk bar: fixed above bottom nav ---------- */
   .bulkbar {
     position: fixed;
-    bottom: calc(22px + 56px);
+    bottom: calc(22px + 56px + var(--safe-bottom));
     left: 50%;
     transform: translate(-50%, calc(100% + 40px));
   }
