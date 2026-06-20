@@ -175,7 +175,7 @@ body {
 
 /* ===================== App layout ===================== */
 #svelte { height: 100%; }
-.app { display: flex; height: 100vh; overflow: hidden; }
+.app { display: flex; height: 100dvh; overflow: hidden; }
 
 /* ---------- Sidebar ---------- */
 .sidebar {
@@ -1112,6 +1112,11 @@ th.sortable:hover .th-idle { opacity: .5; }
     --safe-left: env(safe-area-inset-left);
     --safe-right: env(safe-area-inset-right);
   }
+
+  /* No browser toolbar in standalone, so 100vh == the visible height and the
+     document doesn't scroll. Keep 100vh here (not 100dvh) — this is the value
+     that anchors the fixed bottom nav flush to the screen bottom in the PWA. */
+  .app { height: 100vh; }
 }
 
 ::view-transition-old(root),
