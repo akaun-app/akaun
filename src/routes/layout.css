@@ -142,7 +142,7 @@ body {
 .btn, .btn-primary, .btn-ghost, .btn-outline {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   font-family: inherit; font-weight: 500; font-size: 13.5px; cursor: pointer; white-space: nowrap;
-  border-radius: 8px; border: 1px solid transparent; transition: background .12s, border-color .12s, opacity .12s, box-shadow .12s;
+  border-radius: 8px; border: 1px solid transparent; transition: background .12s, border-color .12s, opacity .12s, box-shadow .12s, transform .08s;
   padding: 0 14px; height: 36px; text-decoration: none;
 }
 .btn:focus-visible, .btn-primary:focus-visible, .btn-ghost:focus-visible, .btn-outline:focus-visible {
@@ -151,7 +151,10 @@ body {
 .btn:disabled, .btn-primary:disabled, .btn-ghost:disabled, .btn-outline:disabled { opacity: .5; cursor: not-allowed; }
 .btn-sm { height: 32px; padding: 0 11px; font-size: 13px; }
 .btn-primary { background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-sm); }
-.btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in oklch, var(--primary) 94%, white); }
+/* Touch press feedback — taps are acknowledged instantly (hover never fires on touch). */
+.btn:active:not(:disabled), .btn-primary:active:not(:disabled),
+.btn-ghost:active:not(:disabled), .btn-outline:active:not(:disabled) { transform: scale(.97); }
 .btn-outline { background: var(--card); border-color: var(--border); color: var(--foreground); }
 .btn-outline:hover:not(:disabled) { background: var(--accent); }
 .btn-ghost { background: none; color: var(--foreground); border-color: transparent; }
@@ -325,6 +328,7 @@ th.sortable:hover .th-idle { opacity: .5; }
 .density-compact .exp-row td { padding: 8px 14px; }
 .exp-row:last-child td { border-bottom: none; }
 .exp-row:hover { background: var(--accent); }
+.exp-row:active { background: var(--accent); }
 .exp-row.selected { background: var(--primary-soft); }
 .exp-row.selected:hover { background: var(--primary-soft); }
 .td-check { width: 42px; padding-left: 16px !important; padding-right: 0 !important; }
@@ -1002,8 +1006,14 @@ th.sortable:hover .th-idle { opacity: .5; }
     background: var(--card);
     box-shadow: var(--shadow-sm);
     cursor: pointer;
+    /* Skip layout/paint for off-screen card rows so long lists stay smooth on
+       mobile. `auto` remembers each row's real height after first render; the
+       fallback keeps the scrollbar stable before then. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 68px;
   }
   .exp-row:hover { background: var(--card); } /* override desktop hover on mobile */
+  .exp-row:active { background: var(--accent); } /* but still acknowledge taps */
 
   /* Reset all cell padding */
   .exp-row td { padding: 0; border-bottom: none; }

@@ -1,21 +1,84 @@
-import { onMount, onDestroy } from 'svelte';
+import { onMount } from 'svelte';
 
 /**
- * Opens an EventSource for the lifetime of the component and routes each parsed
- * message to `onMessage`. Encapsulates the onMount-open / onDestroy-close
- * lifecycle every streaming list page repeats.
+ * Shared EventSource registry.
  *
- * Per the SSE-only architecture (see CLAUDE.md), the connection is opened in
- * `onMount` and closed in `onDestroy` — never in `$effect`, which would tear it
- * down on reactive dependency changes. Call this once at component init.
+ * Every streaming list page opens its stream in `onMount` and closes it in
+ * `onDestroy`. Without sharing, navigating away and straight back — or having
+ * the same stream open in two places — tears the connection down and
+ * reconnects from scratch, which on mobile shows up as a lag before live
+ * updates resume. Instead we keep one `EventSource` per URL, fan its messages
+ * out to all subscribers, and hold the connection open for a short grace period
+ * after the last subscriber leaves so quick back-navigation reuses it.
+ *
+ * Per the SSE-only architecture (see CLAUDE.md), the subscription is still tied
+ * to `onMount` (browser-only) — never to `$effect`, which would resubscribe on
+ * reactive dependency changes.
+ */
+
+type Subscriber = (data: unknown) => void;
+
+type Entry = {
+	es: EventSource;
+	subscribers: Set<Subscriber>;
+	idleTimer: ReturnType<typeof setTimeout> | null;
+};
+
+const registry = new Map<string, Entry>();
+
+// How long to keep an idle (subscriber-less) connection open before closing it,
+// so navigating away and back reuses the live stream instead of reconnecting.
+const GRACE_MS = 45_000;
+
+function subscribe(url: string, onMessage: Subscriber): () => void {
+	let entry = registry.get(url);
+	if (!entry) {
+		const created: Entry = {
+			es: new EventSource(url),
+			subscribers: new Set(),
+			idleTimer: null
+		};
+		created.es.onmessage = (e) => {
+			let data: unknown;
+			try {
+				data = JSON.parse(e.data);
+			} catch {
+				return; // ignore non-JSON frames (e.g. heartbeats)
+			}
+			for (const fn of created.subscribers) fn(data);
+		};
+		registry.set(url, created);
+		entry = created;
+	}
+
+	// Reclaim a connection that was waiting out its grace period.
+	if (entry.idleTimer) {
+		clearTimeout(entry.idleTimer);
+		entry.idleTimer = null;
+	}
+	entry.subscribers.add(onMessage);
+
+	return () => {
+		const current = registry.get(url);
+		if (!current) return;
+		current.subscribers.delete(onMessage);
+		if (current.subscribers.size === 0 && current.idleTimer === null) {
+			current.idleTimer = setTimeout(() => {
+				current.es.close();
+				registry.delete(url);
+			}, GRACE_MS);
+		}
+	};
+}
+
+/**
+ * Subscribe to an SSE stream for the lifetime of the component and route each
+ * parsed message to `onMessage`. Connections are shared by URL across
+ * components and navigations (see registry above). Call this once at component
+ * init; the returned cleanup runs automatically on destroy.
  */
 export function createResourceStream<T>(url: string, onMessage: (data: T) => void): void {
-	let es: EventSource | null = null;
-	onMount(() => {
-		es = new EventSource(url);
-		es.onmessage = (e) => onMessage(JSON.parse(e.data) as T);
-	});
-	onDestroy(() => es?.close());
+	onMount(() => subscribe(url, onMessage as Subscriber));
 }
 
 /**

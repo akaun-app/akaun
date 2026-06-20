@@ -57,10 +57,9 @@
 			bottom: 0;
 			left: 0;
 			right: 0;
-			height: calc(56px + var(--safe-bottom));
-			padding-left: var(--safe-left);
-			padding-right: var(--safe-right);
-			padding-bottom: var(--safe-bottom);
+			height: 56px;
+			padding-left: env(safe-area-inset-left);
+			padding-right: env(safe-area-inset-right);
 			background: var(--sidebar);
 			border-top: 1px solid var(--sidebar-border);
 			z-index: 50;
@@ -106,6 +105,11 @@
 			display: flex;
 			align-items: center;
 			justify-content: center;
+			transition: transform 0.1s ease;
+		}
+
+		.bottom-nav-tab:active .bottom-nav-icon {
+			transform: scale(0.86);
 		}
 
 		.bottom-nav-badge {

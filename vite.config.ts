@@ -20,14 +20,6 @@ export default defineConfig({
 						urlPattern: /^\/api\//,
 						handler: 'NetworkFirst',
 						options: { cacheName: 'api-cache', networkTimeoutSeconds: 3 }
-					},
-					{
-						urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com/,
-						handler: 'CacheFirst',
-						options: {
-							cacheName: 'google-fonts',
-							expiration: { maxAgeSeconds: 60 * 60 * 24 * 365 }
-						}
 					}
 				]
 			}

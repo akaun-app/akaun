@@ -9,9 +9,7 @@
 		TrendingDown,
 		ChevronDown
 	} from '@lucide/svelte';
-	import BarChart from '$lib/components/charts/BarChart.svelte';
-	import DonutChart from '$lib/components/charts/DonutChart.svelte';
-	import TrendBars from '$lib/components/charts/TrendBars.svelte';
+	import LazyChart from '$lib/components/ui/LazyChart.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import { formatMoney, formatMoneyRM, formatDateShort } from '$lib/format.js';
 	import type { PageData } from './$types.js';
@@ -167,7 +165,7 @@
 						>
 					</div>
 				</div>
-				<BarChart data={data.cashFlow} />
+				<LazyChart load={() => import('$lib/components/charts/BarChart.svelte')} data={data.cashFlow} />
 			</div>
 
 			<div class="panel">
@@ -178,7 +176,7 @@
 					</div>
 				</div>
 				{#if data.categoryData.length > 0}
-					<DonutChart data={data.categoryData} />
+					<LazyChart load={() => import('$lib/components/charts/DonutChart.svelte')} data={data.categoryData} />
 				{:else}
 					<EmptyState title="No expense data yet" sub="Add expenses to see your spending breakdown." style="padding:20px;" />
 				{/if}
@@ -194,7 +192,7 @@
 						<div class="panel-sub">Monthly surplus / deficit · last 6 months</div>
 					</div>
 				</div>
-				<TrendBars data={data.trendData} />
+				<LazyChart load={() => import('$lib/components/charts/TrendBars.svelte')} data={data.trendData} />
 			</div>
 
 			<div class="panel">
