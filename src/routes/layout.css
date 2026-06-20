@@ -117,7 +117,7 @@
 
 /* ===================== Base styles ===================== */
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; }
+html, body { margin: 0; height: 100%; }
 html, body { overscroll-behavior: none; }
 body {
   font-family: "Geist", "Geist Fallback", system-ui, sans-serif;
@@ -175,7 +175,7 @@ body {
 
 /* ===================== App layout ===================== */
 #svelte { height: 100%; }
-.app { display: flex; height: 100dvh; overflow: hidden; }
+.app { display: flex; height: 100vh; overflow: hidden; }
 
 /* ---------- Sidebar ---------- */
 .sidebar {
