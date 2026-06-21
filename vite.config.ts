@@ -14,6 +14,9 @@ export default defineConfig({
 			manifest: false,
 			workbox: {
 				globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+				// opencv.js (~9 MB) exceeds the 2 MiB precache limit; it's runtime-cached
+				// via the CacheFirst rule below instead of precached.
+				globIgnores: ['**/opencv.js'],
 				navigateFallback: null,
 				runtimeCaching: [
 					{
