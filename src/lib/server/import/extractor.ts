@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { extractText as pdfExtractText, getDocumentProxy, extractImages } from 'unpdf';
 import { createWorker } from 'tesseract.js';
-import { createCanvas, ImageData } from '@napi-rs/canvas';
+import { PNG } from 'pngjs';
 
 export async function extractText(absPath: string, mimeType: string): Promise<string> {
 	if (mimeType === 'application/pdf' || absPath.toLowerCase().endsWith('.pdf')) {
@@ -31,25 +31,23 @@ async function extractFromPdf(absPath: string): Promise<string> {
 }
 
 // Encodes a decoded image's raw samples (1/3/4 channels) to a PNG buffer
-// tesseract.js can read, expanding to RGBA since canvas ImageData requires it.
+// tesseract.js can read, expanding to RGBA. Uses pngjs (pure JS) instead of a
+// native canvas so it runs on CPUs without AVX (e.g. low-power NAS hardware).
 function imageObjectToPngBuffer(data: Uint8ClampedArray, width: number, height: number, channels: 1 | 3 | 4): Buffer {
-	const rgba = new Uint8ClampedArray(width * height * 4);
+	const png = new PNG({ width, height });
+	const out = png.data; // RGBA Buffer, length width * height * 4
 	for (let i = 0, p = 0; p < width * height; i += channels, p++) {
 		const o = p * 4;
 		if (channels === 1) {
-			rgba[o] = rgba[o + 1] = rgba[o + 2] = data[i];
+			out[o] = out[o + 1] = out[o + 2] = data[i];
 		} else {
-			rgba[o] = data[i];
-			rgba[o + 1] = data[i + 1];
-			rgba[o + 2] = data[i + 2];
+			out[o] = data[i];
+			out[o + 1] = data[i + 1];
+			out[o + 2] = data[i + 2];
 		}
-		rgba[o + 3] = channels === 4 ? data[i + 3] : 255;
+		out[o + 3] = channels === 4 ? data[i + 3] : 255;
 	}
-
-	const canvas = createCanvas(width, height);
-	const ctx = canvas.getContext('2d');
-	ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
-	return canvas.toBuffer('image/png');
+	return PNG.sync.write(png);
 }
 
 async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promise<string> {

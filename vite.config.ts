@@ -79,7 +79,7 @@ export default defineConfig({
 	},
 	// bun:sqlite is a Bun builtin; unpdf and tesseract.js skip Vite SSR transform
 	// so the first request isn't interrupted by dep optimization.
-	ssr: { external: ['bun:sqlite', 'unpdf', 'tesseract.js'] },
+	ssr: { external: ['bun:sqlite', 'unpdf', 'tesseract.js', 'pngjs'] },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [
