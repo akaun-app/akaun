@@ -10,5 +10,9 @@ services:
       - ORIGIN=http://localhost:6969
       - PUID=1000   # Set to $(id -u) to match your host user
       - PGID=1000   # Set to $(id -g) to match your host group
+      - BODY_SIZE_LIMIT=15M
       # - ADMIN_PASSWORD=  # Only read on first boot to seed the admin account password
       # - LOG_LEVEL=info
+      # - SSL_ENABLED=true
+      # - SSL_KEY_PATH=/app/data/ssl/key.pem
+      # - SSL_CERT_PATH=/app/data/ssl/cert.pem

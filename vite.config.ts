@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
@@ -5,8 +7,21 @@ import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Lets `bun run dev`/`preview` serve HTTPS locally using the same env vars as production.
+// SSL_KEY_PATH/SSL_CERT_PATH are optional in dev — when omitted, basicSsl() generates and
+// caches a self-signed cert automatically (browsers will show an untrusted-cert warning).
+const sslEnabled = process.env.SSL_ENABLED === 'true';
+const hasCustomCert = !!(process.env.SSL_KEY_PATH && process.env.SSL_CERT_PATH);
+const httpsOptions = hasCustomCert
+	? {
+			key: fs.readFileSync(process.env.SSL_KEY_PATH!),
+			cert: fs.readFileSync(process.env.SSL_CERT_PATH!)
+		}
+	: undefined;
+
 export default defineConfig({
 	plugins: [
+		sslEnabled && !hasCustomCert ? basicSsl() : null,
 		tailwindcss(),
 		VitePWA({
 			registerType: 'autoUpdate',
@@ -52,9 +67,13 @@ export default defineConfig({
 	// Pre-transform all Svelte files at startup so Vite discovers transitive deps
 	// (icons from income/claims/etc.) before the first browser request.
 	server: {
+		https: httpsOptions,
 		warmup: {
 			clientFiles: ['./src/routes/**/*.svelte', './src/lib/components/**/*.svelte']
 		}
+	},
+	preview: {
+		https: httpsOptions
 	},
 	optimizeDeps: {
 		include: [
