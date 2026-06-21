@@ -7,13 +7,17 @@
 		Check,
 		X,
 		AlertTriangle,
-		RotateCcw
+		RotateCcw,
+		Camera
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
+	import { loadOpenCv } from '$lib/scanner/cv';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
 	import type { PageData } from './$types.js';
 
@@ -91,6 +95,40 @@
 
 	let drag = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
+
+	const screen = useIsMobile();
+	const isMobile = $derived(screen.current);
+	let showScanner = $state(false);
+	let scanInitialDataUrl = $state('');
+	let scanInputEl: HTMLInputElement | null = $state(null);
+
+	// Trigger the OS camera directly from the FAB's own tap — a hidden input's
+	// .click() only reliably opens the picker when called synchronously inside
+	// a real user gesture, so this can't wait on opencv.js loading first.
+	// Kick that load off now instead; it runs in the background while the user
+	// is in the camera app, ready by the time EditView needs it.
+	function openScanCamera() {
+		loadOpenCv();
+		scanInputEl?.click();
+	}
+
+	function handleScanFileSelected(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			scanInitialDataUrl = reader.result as string;
+			showScanner = true;
+		};
+		reader.readAsDataURL(file);
+	}
+
+	function handleScanFinish(file: File) {
+		showScanner = false;
+		uploadFiles([file]);
+	}
 
 	const PIPE_STATES = ['queued', 'extracting', 'processing'];
 	const PIPE_FILL: Record<string, number> = { queued: 10, extracting: 45, processing: 78 };
@@ -659,3 +697,59 @@
 		{/if}
 	</div>
 </div>
+
+{#if isMobile}
+	<button type="button" class="scan-fab" onclick={openScanCamera} aria-label="Scan a document">
+		<Camera size={20} />
+		<span>Scan</span>
+	</button>
+	<input
+		bind:this={scanInputEl}
+		type="file"
+		accept="image/*"
+		capture="environment"
+		style="display:none"
+		onchange={handleScanFileSelected}
+	/>
+{/if}
+
+{#if showScanner}
+	<ScannerOverlay
+		initialDataUrl={scanInitialDataUrl}
+		onclose={() => (showScanner = false)}
+		onfinish={handleScanFinish}
+	/>
+{/if}
+
+<style>
+	.scan-fab {
+		position: fixed;
+		right: 16px;
+		bottom: calc(56px + var(--safe-bottom) + 16px);
+		z-index: 60;
+		display: flex;
+		height: 48px;
+		gap: 8px;
+		padding: 0 18px 0 16px;
+		align-items: center;
+		justify-content: center;
+		border-radius: 999px;
+		background: var(--primary);
+		color: var(--primary-foreground);
+		font-size: 14px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		box-shadow: var(--shadow-lg);
+		transition: transform 0.15s, background-color 0.15s;
+	}
+
+	@media (hover: hover) {
+		.scan-fab:hover {
+			background: color-mix(in oklch, var(--primary) 94%, white);
+		}
+	}
+
+	.scan-fab:active {
+		transform: scale(0.96);
+	}
+</style>

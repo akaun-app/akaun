@@ -20,6 +20,18 @@ export default defineConfig({
 						urlPattern: /^\/api\//,
 						handler: 'NetworkFirst',
 						options: { cacheName: 'api-cache', networkTimeoutSeconds: 3 }
+					},
+					{
+						// opencv.js (~9 MB) is too large to precache (exceeds workbox's 2 MB
+						// limit), so cache it at runtime: fetched once, then served from cache
+						// on every later scanner open and offline.
+						urlPattern: ({ url }) => url.pathname === '/opencv.js',
+						handler: 'CacheFirst',
+						options: {
+							cacheName: 'opencv',
+							expiration: { maxEntries: 1, maxAgeSeconds: 60 * 60 * 24 * 365 },
+							cacheableResponse: { statuses: [0, 200] }
+						}
 					}
 				]
 			}
