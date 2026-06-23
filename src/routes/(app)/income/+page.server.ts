@@ -2,7 +2,7 @@ import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
 import { listIncomes } from '$lib/server/queries/income.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
-import { createIncome } from '$lib/server/services/income.js';
+import { createIncome, removeIncome } from '$lib/server/services/income.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
@@ -71,5 +71,17 @@ export const actions: Actions = {
 		});
 
 		return { success: true, id: income.id };
+	},
+
+	delete: async ({ locals, request }) => {
+		if (!hasPermission(locals, 'income', 'delete')) return fail(403, { error: 'Forbidden' });
+		const data = await request.formData();
+		const id = parseInt(String(data.get('id') ?? '0'));
+		if (!id) return fail(400, { error: 'Invalid income' });
+
+		const ok = removeIncome(db, id);
+		if (!ok) return fail(404, { error: 'Income not found' });
+
+		return { success: true };
 	}
 };

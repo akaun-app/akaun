@@ -1,11 +1,10 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
-import { listContacts } from '$lib/server/queries/contacts.js';
+import { listContacts, getContactUsageCounts } from '$lib/server/queries/contacts.js';
 import {
 	createContact,
 	patchContact,
 	replaceContactRoles,
-	deactivateContact,
 	deleteContact,
 	mergeContacts
 } from '$lib/server/services/contacts.js';
@@ -15,8 +14,12 @@ import { hasPermission } from '$lib/server/permissions.js';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!hasPermission(locals, 'contacts', 'view')) throw redirect(302, '/dashboard');
 
+	const contacts = listContacts(db, {});
+	const usage = getContactUsageCounts(db, contacts.map((c) => c.id));
+
 	return {
-		contacts: listContacts(db, { includeInactive: true }),
+		contacts,
+		usage,
 		perms: {
 			add: hasPermission(locals, 'contacts', 'add'),
 			change: hasPermission(locals, 'contacts', 'change'),
@@ -78,23 +81,13 @@ export const actions: Actions = {
 		return { success: true, id };
 	},
 
-	deactivate: async ({ locals, request }) => {
-		if (!hasPermission(locals, 'contacts', 'delete')) return fail(403, { error: 'Forbidden' });
-		const userId = locals.user!.id;
-		const data = await request.formData();
-		const id = parseInt(String(data.get('id') ?? '0'));
-		if (!id) return fail(400, { error: 'Invalid contact' });
-		deactivateContact(db, id, userId);
-		return { success: true };
-	},
-
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'contacts', 'delete')) return fail(403, { error: 'Forbidden' });
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid contact' });
 		const ok = deleteContact(db, id);
-		if (!ok) return fail(409, { error: 'Contact is referenced by records; deactivate instead.' });
+		if (!ok) return fail(409, { error: 'Contact is referenced by records and cannot be deleted.' });
 		return { success: true };
 	},
 

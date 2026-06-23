@@ -1,9 +1,10 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
-import { listExpenses } from '$lib/server/queries/expenses.js';
+import { listExpenses, getExpense } from '$lib/server/queries/expenses.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
-import { createExpense, patchExpense } from '$lib/server/services/expenses.js';
+import { createExpense, patchExpense, removeExpense } from '$lib/server/services/expenses.js';
 import { createClaim } from '$lib/server/services/claims.js';
+import { canEditAmount } from '$lib/server/locking.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { ExpenseStatus, Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
@@ -21,7 +22,7 @@ const DEFAULT_CATEGORIES = [
 	'Other'
 ];
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'expenses', 'view')) throw redirect(302, '/dashboard');
 	const allExpenses = listExpenses(db, { limit: 1000 });
 
@@ -35,7 +36,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const catSetting = getSetting(db, SETTING_KEYS.expenseCategories);
 	const categories: string[] = catSetting ? JSON.parse(catSetting) : DEFAULT_CATEGORIES;
 
-	return { expenses: allExpenses, counts, categories };
+	const openExpenseId = parseInt(url.searchParams.get('expenseId') ?? '') || null;
+
+	return { expenses: allExpenses, counts, categories, openExpenseId };
 };
 
 /** Resolve the submitted contact intent (numeric id or a typed new name) → contactId. */
@@ -92,6 +95,25 @@ export const actions: Actions = {
 		const ids = String(data.get('ids') ?? '').split(',').map(Number).filter(Boolean);
 		const date = new Date().toISOString().slice(0, 10);
 		createClaim(db, userId, { date, expenseIds: ids });
+		return { success: true };
+	},
+
+	delete: async ({ locals, request }) => {
+		if (!hasPermission(locals, 'expenses', 'delete')) return fail(403, { error: 'Forbidden' });
+		const data = await request.formData();
+		const id = parseInt(String(data.get('id') ?? '0'));
+		if (!id) return fail(400, { error: 'Invalid expense' });
+
+		const expense = getExpense(db, id);
+		if (!expense) return fail(404, { error: 'Expense not found' });
+
+		if (!canEditAmount(expense)) {
+			return fail(409, {
+				error: `Expense "${expense.expenseNumber}" is linked to claim ${expense.claimNumber} and cannot be deleted until it's removed from the claim.`
+			});
+		}
+
+		removeExpense(db, id);
 		return { success: true };
 	}
 };

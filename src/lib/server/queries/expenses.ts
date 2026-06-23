@@ -1,7 +1,7 @@
 import { and, eq, gte, lte, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { expenses, expenseAttachments, expenseSearchText, contacts } from '../db/schema.js';
+import { expenses, expenseAttachments, expenseSearchText, contacts, claims } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 import { ExpenseStatus } from '$lib/enums.js';
 
@@ -110,9 +110,15 @@ export function countExpenses(db: Db, filters: ExpenseFilters = {}): number {
 
 export function getExpense(db: Db, id: number) {
 	const expense = db
-		.select(expenseWithContact)
+		.select({
+			...expenseWithContact,
+			claimNumber: claims.claimNumber,
+			claimStatus: claims.status,
+			claimDate: claims.date
+		})
 		.from(expenses)
 		.leftJoin(contacts, eq(contacts.id, expenses.contactId))
+		.leftJoin(claims, eq(claims.id, expenses.claimId))
 		.where(eq(expenses.id, id))
 		.get();
 

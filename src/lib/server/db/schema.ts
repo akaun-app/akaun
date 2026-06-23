@@ -98,7 +98,6 @@ export const contacts = sqliteTable('contacts', {
 	phone: text('phone'),
 	address: text('address'),
 	remark: text('remark'),
-	isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
 	createdBy: integer('created_by').references(() => users.id),
 	updatedBy: integer('updated_by').references(() => users.id),
 	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),

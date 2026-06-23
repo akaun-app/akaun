@@ -6,7 +6,8 @@ import {
 	contactRoles,
 	contactSearchText,
 	expenses,
-	incomes
+	incomes,
+	importQueue
 } from '../db/schema.js';
 import { EntityType, Role, RoleLabels, EntityTypeLabels } from '$lib/enums.js';
 
@@ -17,7 +18,6 @@ export type ContactFilters = {
 	role?: number;
 	entityType?: number;
 	search?: string;
-	includeInactive?: boolean;
 	limit?: number;
 	offset?: number;
 };
@@ -33,7 +33,7 @@ export type ContactCreate = {
 	roles?: number[];
 };
 
-export type ContactPatch = Partial<Omit<ContactCreate, 'roles'>> & { isActive?: boolean };
+export type ContactPatch = Partial<Omit<ContactCreate, 'roles'>>;
 
 /** Lowercase, trim, collapse punctuation/whitespace — used for dedupe + matching. */
 export function normalizeName(name: string): string {
@@ -86,10 +86,9 @@ function withLabels<T extends { entityType: number }>(c: T, roles: number[]) {
 }
 
 export function listContacts(db: Db, filters: ContactFilters = {}) {
-	const { role, entityType, search, includeInactive = false, limit = 200, offset = 0 } = filters;
+	const { role, entityType, search, limit = 200, offset = 0 } = filters;
 
 	const conditions = [];
-	if (!includeInactive) conditions.push(eq(contacts.isActive, true));
 	if (entityType !== undefined) conditions.push(eq(contacts.entityType, entityType));
 	if (role !== undefined) {
 		conditions.push(
@@ -184,9 +183,32 @@ export function isContactReferenced(db: Db, id: number): boolean {
 	return !!i;
 }
 
-/** Soft-deactivate (normal retire path). */
-export function softDeleteContact(db: Db, id: number, actingUserId: number) {
-	return updateContact(db, id, actingUserId, { isActive: false });
+/** Per-contact expense/income counts — surfaced in the merge-comparison UI. */
+export function getContactUsageCounts(
+	db: Db,
+	ids: number[]
+): Record<number, { expenses: number; incomes: number }> {
+	const out: Record<number, { expenses: number; incomes: number }> = {};
+	if (ids.length === 0) return out;
+	for (const id of ids) out[id] = { expenses: 0, incomes: 0 };
+
+	const expenseRows = db
+		.select({ contactId: expenses.contactId, n: sql<number>`count(*)` })
+		.from(expenses)
+		.where(inArray(expenses.contactId, ids))
+		.groupBy(expenses.contactId)
+		.all();
+	for (const r of expenseRows) if (r.contactId != null) out[r.contactId].expenses = Number(r.n);
+
+	const incomeRows = db
+		.select({ contactId: incomes.contactId, n: sql<number>`count(*)` })
+		.from(incomes)
+		.where(inArray(incomes.contactId, ids))
+		.groupBy(incomes.contactId)
+		.all();
+	for (const r of incomeRows) if (r.contactId != null) out[r.contactId].incomes = Number(r.n);
+
+	return out;
 }
 
 /** Hard delete — refuses if referenced. Returns false when blocked / missing. */
@@ -196,22 +218,91 @@ export function hardDeleteContact(db: Db, id: number): boolean {
 	return !!result;
 }
 
-/** Cluster contacts whose normalized legal_name collides (the cleanup tool). */
+type MatchSignal = 'name' | 'email' | 'phone' | 'registrationNo';
+
+/** Digits-only phone key — ignores spacing/punctuation/country-code formatting differences. */
+function normalizePhone(phone: string): string {
+	return phone.replace(/\D/g, '');
+}
+
+/**
+ * Cluster contacts that share ANY of: normalized legal name, email,
+ * phone, or registration number. Deliberately does NOT consider entityType
+ * or contactRoles — a Customer and Supplier sharing a name/email/phone/regNo
+ * are surfaced together so the user can decide; type/role is shown in the
+ * comparison UI instead of being used to filter candidates.
+ */
 export function findDuplicates(db: Db) {
-	const rows = db.select().from(contacts).where(eq(contacts.isActive, true)).all();
-	const clusters = new Map<string, typeof rows>();
-	for (const r of rows) {
-		const key = normalizeName(r.legalName);
-		if (!key) continue;
-		(clusters.get(key) ?? clusters.set(key, []).get(key)!).push(r);
+	const rows = db.select().from(contacts).all();
+
+	// Union-find over contact ids.
+	const parent = new Map<number, number>();
+	function find(id: number): number {
+		let r = id;
+		while (parent.get(r) !== r) r = parent.get(r)!;
+		parent.set(id, r);
+		return r;
 	}
+	function union(a: number, b: number) {
+		const ra = find(a);
+		const rb = find(b);
+		if (ra !== rb) parent.set(ra, rb);
+	}
+	for (const r of rows) parent.set(r.id, r.id);
+
+	const signalMatches = new Map<number, Set<MatchSignal>>();
+	for (const r of rows) signalMatches.set(r.id, new Set());
+
+	function applySignal(key: (r: (typeof rows)[number]) => string | null, signal: MatchSignal) {
+		const groups = new Map<string, (typeof rows)[number][]>();
+		for (const r of rows) {
+			const k = key(r);
+			if (!k) continue;
+			(groups.get(k) ?? groups.set(k, []).get(k)!).push(r);
+		}
+		for (const group of groups.values()) {
+			if (group.length < 2) continue;
+			for (const r of group) signalMatches.get(r.id)!.add(signal);
+			for (let i = 1; i < group.length; i++) union(group[0].id, group[i].id);
+		}
+	}
+
+	applySignal((r) => normalizeName(r.legalName) || null, 'name');
+	applySignal((r) => r.email?.trim().toLowerCase() || null, 'email');
+	applySignal((r) => normalizePhone(r.phone ?? '') || null, 'phone');
+	applySignal((r) => r.registrationNo?.trim().toLowerCase() || null, 'registrationNo');
+
+	const groupsByRoot = new Map<number, (typeof rows)[number][]>();
+	for (const r of rows) {
+		const root = find(r.id);
+		(groupsByRoot.get(root) ?? groupsByRoot.set(root, []).get(root)!).push(r);
+	}
+
 	const roleMap = rolesForContacts(db, rows.map((r) => r.id));
-	return [...clusters.entries()]
-		.filter(([, group]) => group.length > 1)
-		.map(([normalized, group]) => ({
-			normalized,
-			contacts: group.map((c) => withLabels(c, roleMap[c.id] ?? []))
-		}));
+	const ids = rows.map((r) => r.id);
+	const usageMap = getContactUsageCounts(db, ids);
+
+	return [...groupsByRoot.values()]
+		.filter((group) => group.length > 1)
+		.map((group) => {
+			const matchedOn = [...new Set(group.flatMap((r) => [...signalMatches.get(r.id)!]))];
+			const nameCounts = new Map<string, number>();
+			for (const r of group) {
+				const n = normalizeName(r.legalName);
+				nameCounts.set(n, (nameCounts.get(n) ?? 0) + 1);
+			}
+			const normalized =
+				[...nameCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
+				normalizeName(group[0].legalName);
+			return {
+				normalized,
+				matchedOn,
+				contacts: group.map((c) => ({
+					...withLabels(c, roleMap[c.id] ?? []),
+					usage: usageMap[c.id] ?? { expenses: 0, incomes: 0 }
+				}))
+			};
+		});
 }
 
 /**
@@ -234,6 +325,10 @@ export function mergeContacts(
 		// a/b. Repoint references — extend this block per new contact FK (invoices, payroll…).
 		tx.update(expenses).set({ contactId: survivorId }).where(inArray(expenses.contactId, losers)).run();
 		tx.update(incomes).set({ contactId: survivorId }).where(inArray(incomes.contactId, losers)).run();
+		tx.update(importQueue)
+			.set({ matchedContactId: survivorId })
+			.where(inArray(importQueue.matchedContactId, losers))
+			.run();
 
 		// c. Union losers' roles into survivor BEFORE the delete (cascade would wipe them).
 		tx.run(
@@ -313,12 +408,11 @@ export function findContactByName(db: Db, name: string, role: number) {
 		.select({
 			id: contacts.id,
 			legalName: contacts.legalName,
-			entityType: contacts.entityType,
-			isActive: contacts.isActive
+			entityType: contacts.entityType
 		})
 		.from(contacts)
 		.innerJoin(contactRoles, eq(contactRoles.contactId, contacts.id))
-		.where(and(eq(contactRoles.role, role), eq(contacts.isActive, true)))
+		.where(eq(contactRoles.role, role))
 		.all();
 
 	// Exact match first.
@@ -347,7 +441,7 @@ export function resolveContactCandidates(
 		.select({ id: contacts.id, legalName: contacts.legalName })
 		.from(contacts)
 		.innerJoin(contactRoles, eq(contactRoles.contactId, contacts.id))
-		.where(and(eq(contactRoles.role, role), eq(contacts.isActive, true)))
+		.where(eq(contactRoles.role, role))
 		.all();
 
 	const norm = normalizeName(trimmed);

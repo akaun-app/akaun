@@ -2,7 +2,6 @@ import {
 	createContact as _create,
 	updateContact as _update,
 	setContactRoles as _setRoles,
-	softDeleteContact as _softDelete,
 	hardDeleteContact as _hardDelete,
 	mergeContacts as _merge,
 	getContact,
@@ -30,12 +29,6 @@ export function patchContact(db: Db, id: number, actingUserId: number, patch: Co
 export function replaceContactRoles(db: Db, id: number, actingUserId: number, roles: number[]) {
 	_setRoles(db, id, roles);
 	const contact = getContact(db, id);
-	if (contact) contactEvents.emit('contact-update', { item: contact });
-	return contact;
-}
-
-export function deactivateContact(db: Db, id: number, actingUserId: number) {
-	const contact = _softDelete(db, id, actingUserId);
 	if (contact) contactEvents.emit('contact-update', { item: contact });
 	return contact;
 }

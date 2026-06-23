@@ -1,7 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { getContact } from '$lib/server/queries/contacts.js';
-import { patchContact, deactivateContact, deleteContact } from '$lib/server/services/contacts.js';
+import { patchContact, deleteContact } from '$lib/server/services/contacts.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -20,7 +20,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json();
 	const patch: Record<string, unknown> = {};
-	for (const f of ['entityType', 'legalName', 'registrationNo', 'email', 'phone', 'address', 'remark', 'isActive']) {
+	for (const f of ['entityType', 'legalName', 'registrationNo', 'email', 'phone', 'address', 'remark']) {
 		if (body[f] !== undefined) patch[f] = body[f];
 	}
 
@@ -28,24 +28,17 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	return Response.json(updated);
 };
 
-export const DELETE: RequestHandler = async ({ locals, params, url }) => {
+export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'contacts', 'delete')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
 	const id = parseInt(params.id!);
 	if (!getContact(db, id)) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	if (url.searchParams.get('hard') === '1') {
-		const ok = deleteContact(db, id);
-		if (!ok) {
-			return Response.json(
-				{ error: 'Contact is referenced by existing records; deactivate instead.' },
-				{ status: 409 }
-			);
-		}
-		return new Response(null, { status: 204 });
+	const ok = deleteContact(db, id);
+	if (!ok) {
+		return Response.json(
+			{ error: 'Contact is referenced by existing records and cannot be deleted.' },
+			{ status: 409 }
+		);
 	}
-
-	// Soft delete (default): deactivate.
-	deactivateContact(db, id, user.id);
 	return new Response(null, { status: 204 });
 };

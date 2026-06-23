@@ -3,13 +3,26 @@
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
-	import { Plus, Search, X, Users, Merge, SlidersHorizontal, Building2, EyeOff } from '@lucide/svelte';
+	import {
+		Plus,
+		Search,
+		X,
+		Users,
+		Merge,
+		SlidersHorizontal,
+		Building2,
+		Trash2
+	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
+	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
+	import ContactMergeCompare from '$lib/components/ContactMergeCompare.svelte';
 	import { EntityType, Role, EntityTypeLabels, RoleLabels } from '$lib/enums.js';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -21,11 +34,30 @@
 	let contacts = $state<Contact[]>(data.contacts);
 	$effect(() => { contacts = data.contacts; });
 
+	// svelte-ignore state_referenced_locally
+	let usage = $state(data.usage);
+	$effect(() => { usage = data.usage; });
+
+	function isInUse(id: number): boolean {
+		const u = usage[id];
+		return !!u && (u.expenses > 0 || u.incomes > 0);
+	}
+
+	let deleteTarget = $state<Contact | null>(null);
+	let deleteDialogOpen = $state(false);
+	let deleteFormEl = $state<HTMLFormElement | null>(null);
+
+	function requestDelete(c: Contact) {
+		deleteTarget = c;
+		deleteDialogOpen = true;
+	}
+
+	$effect(() => { if (form?.success) deleteDialogOpen = false; });
+
 	let searchRaw = $state('');
 	let search = $state('');
 	let roleFilter = $state<number | 0>(0);
 	let entityFilter = $state<number | 0>(0);
-	let showInactive = $state(false);
 
 	// Mobile UI state
 	let mobileSearchOpen = $state(false);
@@ -47,7 +79,7 @@
 	const ROLE_OPTIONS = [Role.Customer, Role.Supplier, Role.Employee];
 
 	const counts = $derived.by(() => {
-		const base = showInactive ? contacts : contacts.filter((c) => c.isActive);
+		const base = contacts;
 		return {
 			all: base.length,
 			customer: base.filter((c) => c.roles.includes(Role.Customer)).length,
@@ -58,7 +90,6 @@
 
 	const filtered = $derived.by(() => {
 		let rows = contacts.slice();
-		if (!showInactive) rows = rows.filter((c) => c.isActive);
 		if (entityFilter) rows = rows.filter((c) => c.entityType === entityFilter);
 		if (roleFilter) rows = rows.filter((c) => c.roles.includes(roleFilter));
 		if (search.trim()) {
@@ -73,16 +104,88 @@
 		return rows.sort((a, b) => a.legalName.localeCompare(b.legalName));
 	});
 
-	const activeFilterCount = $derived(
-		(entityFilter ? 1 : 0) + (showInactive ? 1 : 0) + (search.trim() ? 1 : 0)
-	);
+	const activeFilterCount = $derived((entityFilter ? 1 : 0) + (search.trim() ? 1 : 0));
 
 	function clearAllFilters() {
 		roleFilter = 0;
 		entityFilter = 0;
-		showInactive = false;
 		searchRaw = '';
 	}
+
+	// --- Manual multi-select / merge ---
+	let selected = $state(new Set<number>());
+	const allSelected = $derived(filtered.length > 0 && filtered.every((c) => selected.has(c.id)));
+	const someSelected = $derived(filtered.some((c) => selected.has(c.id)) && !allSelected);
+	const selectedContacts = $derived(filtered.filter((c) => selected.has(c.id)));
+
+	function toggleAll() {
+		if (allSelected) {
+			filtered.forEach((c) => selected.delete(c.id));
+		} else {
+			filtered.forEach((c) => selected.add(c.id));
+		}
+		selected = new Set(selected);
+	}
+	function toggleOne(id: number) {
+		if (selected.has(id)) selected.delete(id);
+		else selected.add(id);
+		selected = new Set(selected);
+	}
+	function clearSel() {
+		selected = new Set();
+	}
+
+	let showManualMerge = $state(false);
+	// Snapshot of *which* ids are being merged, taken once at open time — does not
+	// change as the sheet stays open. Field values still stay fresh: re-derived from
+	// the live `contacts` array on every render, so an SSE update is reflected, but a
+	// concurrent delete drops that id out cleanly via the `.filter(Boolean)` below.
+	let manualMergeIds = $state<number[]>([]);
+	let manualMergeUsage = $state<Record<number, { expenses: number; incomes: number }>>({});
+	let manualMergeError = $state('');
+
+	const manualMergeContacts = $derived(
+		manualMergeIds
+			.map((id) => contacts.find((c) => c.id === id))
+			.filter((c): c is Contact => !!c)
+			.map((c) => ({ ...c, usage: manualMergeUsage[c.id] ?? { expenses: 0, incomes: 0 } }))
+	);
+
+	async function openManualMerge() {
+		manualMergeError = '';
+		const ids = selectedContacts.map((c) => c.id);
+		const res = await fetch('/api/contacts/merge/preview', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ contactIds: ids })
+		});
+		if (!res.ok) {
+			manualMergeError = 'Could not load selected contacts.';
+			return;
+		}
+		const data2 = await res.json();
+		manualMergeUsage = Object.fromEntries(
+			data2.contacts.map((c: { id: number; usage: { expenses: number; incomes: number } }) => [
+				c.id,
+				c.usage
+			])
+		);
+		manualMergeIds = ids;
+		showManualMerge = true;
+	}
+
+	function onManualMerged() {
+		showManualMerge = false;
+		clearSel();
+	}
+
+	// Auto-close if a concurrent merge/delete drops the selection below 2 while open.
+	$effect(() => {
+		if (showManualMerge && manualMergeContacts.length < 2) {
+			showManualMerge = false;
+			manualMergeError = 'Selection changed — fewer than 2 contacts remain.';
+		}
+	});
 
 	// --- Create / edit sheet ---
 	let showForm = $state(false);
@@ -102,24 +205,38 @@
 		fRoles = [...c.roles];
 		showForm = true;
 	}
+	const editingLive = $derived(editing ? contacts.find((c) => c.id === editing!.id) ?? editing : null);
 	function toggleRole(r: number) {
 		fRoles = fRoles.includes(r) ? fRoles.filter((x) => x !== r) : [...fRoles, r];
 	}
 
-	$effect(() => { if (form?.success) { showForm = false; showMerge = false; } });
+	$effect(() => { if (form?.success) showForm = false; });
 
 	// --- Duplicates / merge ---
-	type Cluster = { normalized: string; contacts: Contact[] };
+	type Cluster = {
+		normalized: string;
+		matchedOn: string[];
+		contacts: (Contact & { usage: { expenses: number; incomes: number } })[];
+	};
 	let showMerge = $state(false);
 	let clusters = $state<Cluster[]>([]);
-	let survivorByCluster = $state<Record<string, number>>({});
 
 	async function loadDuplicates() {
 		const res = await fetch('/api/contacts/duplicates');
 		clusters = res.ok ? await res.json() : [];
-		survivorByCluster = {};
 		showMerge = true;
 	}
+
+	function dismissCluster(cl: Cluster) {
+		clusters = clusters.filter((c) => c !== cl);
+	}
+
+	const MATCH_LABELS: Record<string, string> = {
+		name: 'Same name',
+		email: 'Same email',
+		phone: 'Same phone',
+		registrationNo: 'Same registration no.'
+	};
 
 	// --- SSE ---
 	type ContactStreamMsg =
@@ -127,7 +244,10 @@
 		| { type: 'contact-delete'; id: number };
 	createResourceStream<ContactStreamMsg>('/api/contacts/stream', (msg) => {
 		if (msg.type === 'contact-update') contacts = mergeById(contacts, [msg.item]);
-		else if (msg.type === 'contact-delete') contacts = contacts.filter((c) => c.id !== msg.id);
+		else if (msg.type === 'contact-delete') {
+			contacts = contacts.filter((c) => c.id !== msg.id);
+			if (selected.delete(msg.id)) selected = new Set(selected);
+		}
 	});
 </script>
 
@@ -140,7 +260,7 @@
 	<header class="topbar">
 		<div class="topbar-left">
 			<h1 class="page-title">Contacts</h1>
-			<p class="page-sub">{contacts.filter(c => c.isActive).length} active · {contacts.length} total</p>
+			<p class="page-sub">{contacts.length} total</p>
 		</div>
 		<div class="topbar-right">
 			<div class="search-box">
@@ -244,28 +364,6 @@
 							{/each}
 						</div>
 					</FilterDropdown>
-
-					<FilterDropdown label="Inactive" active={showInactive} align="right">
-						{#snippet icon()}<EyeOff size={14} />{/snippet}
-						<div style="padding:5px;">
-							<div style="display:flex; align-items:center; justify-content:space-between; padding:6px 8px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);">
-								<span>Visibility</span>
-							</div>
-							<button
-								onclick={() => (showInactive = !showInactive)}
-								style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
-								onmouseover={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
-								onmouseout={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
-								onfocus={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
-								onblur={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
-							>
-								<span style="width:16px; height:16px; border-radius:4px; border:1.5px solid {showInactive ? 'var(--primary)' : 'var(--border-strong)'}; background:{showInactive ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;">
-									{#if showInactive}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
-								</span>
-								Show inactive contacts
-							</button>
-						</div>
-					</FilterDropdown>
 				</div>
 			</div>
 
@@ -281,20 +379,33 @@
 				<table class="exp-table">
 					<thead>
 						<tr>
+							{#if data.perms.change && data.perms.delete}
+								<th class="td-check">
+									<Checkbox
+										checked={allSelected}
+										indeterminate={someSelected}
+										onCheckedChange={toggleAll}
+										aria-label="Select all"
+									/>
+								</th>
+							{/if}
 							<th>Name</th>
 							<th>Type</th>
 							<th>Roles</th>
 							<th>Email</th>
-							<th></th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each filtered as c (c.id)}
-							<tr class="exp-row" class:inactive={!c.isActive} onclick={() => { if (data.perms.change) openEdit(c); }}>
+							<tr class="exp-row" class:selected={selected.has(c.id)} onclick={() => { if (data.perms.change) openEdit(c); }}>
+								{#if data.perms.change && data.perms.delete}
+									<td class="td-check" onclick={(ev) => { ev.stopPropagation(); toggleOne(c.id); }}>
+										<Checkbox checked={selected.has(c.id)} aria-label="Select {c.legalName}" />
+									</td>
+								{/if}
 								<td class="td-primary" data-label="Name">
 									<div class="cell-item">
 										<span class="cell-itemname">{c.legalName}</span>
-										{#if !c.isActive}<span class="cell-itemnum">inactive</span>{/if}
 									</div>
 								</td>
 								<td data-label="Type" style="font-size:13px; color:var(--muted-foreground);">
@@ -310,14 +421,6 @@
 									{/if}
 								</td>
 								<td data-label="Email" style="color:var(--muted-foreground); font-size:13px;">{c.email ?? '—'}</td>
-								<td class="td-actions" onclick={(ev) => ev.stopPropagation()}>
-									{#if data.perms.delete && c.isActive}
-										<form method="POST" action="?/deactivate" use:enhance style="display:inline">
-											<input type="hidden" name="id" value={c.id} />
-											<button class="link-danger" type="submit">Deactivate</button>
-										</form>
-									{/if}
-								</td>
 							</tr>
 						{:else}
 							<tr class="empty-row">
@@ -340,6 +443,35 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Bulk action bar -->
+	{#if data.perms.change && data.perms.delete}
+		<BulkActionBar show={selected.size > 0} count={selected.size} onclear={clearSel}>
+			{#snippet actions()}
+				<button
+					type="button"
+					disabled={selected.size < 2}
+					onclick={openManualMerge}
+					style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{selected.size < 2 ? 0.5 : 1};"
+				>
+					<Merge size={14} /> Merge selected ({selected.size})
+				</button>
+			{/snippet}
+		</BulkActionBar>
+	{/if}
+
+	<!-- Hidden delete form, submitted after ConfirmDialog confirmation -->
+	<form method="POST" action="?/delete" use:enhance style="display:none" bind:this={deleteFormEl}>
+		<input type="hidden" name="id" value={deleteTarget?.id ?? ''} />
+	</form>
+	<ConfirmDialog
+		bind:open={deleteDialogOpen}
+		title="Delete {deleteTarget?.legalName ?? 'contact'}?"
+		description="This permanently removes the contact and can't be undone."
+		confirmLabel="Delete contact"
+		danger
+		onConfirm={() => deleteFormEl?.requestSubmit()}
+	/>
 </div>
 
 <!-- Mobile filter sheet -->
@@ -374,15 +506,6 @@
 					{/each}
 				</div>
 			</div>
-			<div style="margin-bottom:20px;">
-				<div style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:10px;">Visibility</div>
-				<div style="display:flex; flex-wrap:wrap; gap:7px;">
-					<button
-						onclick={() => (showInactive = !showInactive)}
-						style="border:1px solid {showInactive ? 'var(--primary)' : 'var(--border)'}; background:{showInactive ? 'var(--primary-soft)' : 'var(--card)'}; color:{showInactive ? 'var(--primary)' : 'var(--foreground)'}; font-family:inherit; font-size:13px; padding:5px 12px; border-radius:999px; cursor:pointer;"
-					>Show inactive</button>
-				</div>
-			</div>
 			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>
 				Show results
 			</Button>
@@ -394,7 +517,7 @@
 <Sheet.Root open={showForm} onOpenChange={(o) => (showForm = o)}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
 					<div class="sheet-eyebrow">{editing ? 'Edit' : 'New'}</div>
@@ -402,10 +525,15 @@
 				</div>
 				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
 			</div>
-			<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-				{#if form?.error}<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>{/if}
-				<form method="POST" action={editing ? '?/update' : '?/create'} use:enhance>
-					{#if editing}<input type="hidden" name="id" value={editing.id} />{/if}
+			<form
+				method="POST"
+				action={editing ? '?/update' : '?/create'}
+				use:enhance
+				style="flex:1; display:flex; flex-direction:column; overflow:hidden;"
+			>
+				{#if editing}<input type="hidden" name="id" value={editing.id} />{/if}
+				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+					{#if form?.error}<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>{/if}
 
 					<div class="field">
 						<span class="field-label">Entity type *</span>
@@ -456,17 +584,30 @@
 						<label class="field-label" for="remark">Remark</label>
 						<Textarea id="remark" name="remark" rows={2} value={editing?.remark ?? ''} class="leading-relaxed" />
 					</div>
-
-					<div style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:8px;">
-						<button type="button" onclick={() => (showForm = false)} style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;">
+				</div>
+				<div class="sheet-foot">
+					<div class="sheet-foot-actions">
+						{#if editingLive && data.perms.delete}
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								style="margin-right:auto;"
+								disabled={isInUse(editingLive.id)}
+								title={isInUse(editingLive.id) ? 'Has expense or income records — cannot be deleted' : undefined}
+								onclick={() => requestDelete(editingLive)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+						{/if}
+						<button type="button" class="sheet-btn" onclick={() => (showForm = false)}>
 							Cancel
 						</button>
-						<button type="submit" disabled={!fEntityType} style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{!fEntityType ? 0.5 : 1};">
+						<button type="submit" class="sheet-btn sheet-btn-primary" disabled={!fEntityType}>
 							{editing ? 'Save changes' : 'Create contact'}
 						</button>
 					</div>
-				</form>
-			</div>
+				</div>
+			</form>
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
@@ -475,7 +616,7 @@
 <Sheet.Root open={showMerge} onOpenChange={(o) => (showMerge = o)}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
 					<div class="sheet-eyebrow">Contacts</div>
@@ -491,26 +632,20 @@
 				{/if}
 				{#each clusters as cl}
 					<div class="cluster">
-						<div class="cluster-name">"{cl.normalized}"</div>
-						<form method="POST" action="?/merge" use:enhance>
-							{#each cl.contacts as c}
-								<label class="cluster-row">
-									<input type="radio" name="survivor-{cl.normalized}" value={c.id}
-										onchange={() => (survivorByCluster[cl.normalized] = c.id)} />
-									<span>{c.legalName} <span style="color:var(--muted-foreground);">#{c.id}</span></span>
-								</label>
-							{/each}
-							<input type="hidden" name="survivorId" value={survivorByCluster[cl.normalized] ?? ''} />
-							<input type="hidden" name="loserIds"
-								value={cl.contacts.map((c) => c.id).filter((id) => id !== survivorByCluster[cl.normalized]).join(',')} />
-							<button
-								type="submit"
-								disabled={!survivorByCluster[cl.normalized]}
-								style="display:inline-flex; align-items:center; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; margin-top:8px; opacity:{!survivorByCluster[cl.normalized] ? 0.5 : 1};"
-							>
-								Merge into selected
-							</button>
-						</form>
+						<div class="cluster-head">
+							<div>
+								<div class="cluster-name">"{cl.normalized}"</div>
+								<div class="cluster-matched">
+									{cl.matchedOn.map((m) => MATCH_LABELS[m] ?? m).join(' · ')}
+								</div>
+							</div>
+							<button type="button" class="link-btn" onclick={() => dismissCluster(cl)}>Not duplicates</button>
+						</div>
+						<ContactMergeCompare
+							contacts={cl.contacts}
+							formAction="?/merge"
+							onMerged={() => dismissCluster(cl)}
+						/>
 					</div>
 				{/each}
 			</div>
@@ -518,13 +653,57 @@
 	</Sheet.Portal>
 </Sheet.Root>
 
+<!-- Manual multi-select merge sheet -->
+<Sheet.Root open={showManualMerge} onOpenChange={(o) => (showManualMerge = o)}>
+	<Sheet.Portal>
+		<Sheet.Overlay />
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
+			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
+				<div>
+					<div class="sheet-eyebrow">Contacts</div>
+					<div class="sheet-title-text">Merge selected contacts</div>
+				</div>
+				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
+			</div>
+			<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+				{#if manualMergeError}
+					<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{manualMergeError}</div>
+				{/if}
+				{#if manualMergeContacts.length >= 2}
+					<ContactMergeCompare
+						contacts={manualMergeContacts}
+						formAction="?/merge"
+						onMerged={onManualMerged}
+					/>
+				{/if}
+			</div>
+		</Sheet.Content>
+	</Sheet.Portal>
+</Sheet.Root>
+
 <style>
-	.inactive { opacity: 0.55; }
 	.badge-warn { display: inline-flex; align-items: center; font-size: 11.5px; background: var(--amber-soft); color: var(--amber); padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-	.td-actions { text-align: right; white-space: nowrap; }
-	.link-danger { background: none; border: none; color: var(--red); cursor: pointer; font-size: 13px; font-family: inherit; padding: 0 6px; }
-	.link-danger:hover { text-decoration: underline; }
-	.cluster { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
-	.cluster-name { font-weight: 600; margin-bottom: 8px; font-size: 13.5px; }
-	.cluster-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13.5px; cursor: pointer; }
+	.cluster { margin-bottom: 16px; }
+	.cluster-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+	.cluster-name { font-weight: 600; font-size: 13.5px; }
+	.cluster-matched { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; }
+
+	/* This is a mobile-first PWA — unlike expenses/income, keep the bulk-select
+	   checkbox visible on the mobile card layout instead of inheriting the
+	   shared ".exp-row .td-check { display:none }" desktop-only rule. The extra
+	   ".table-card" ancestor class gives this override enough specificity to win
+	   regardless of stylesheet load order, scoped to this page only. */
+	@media (max-width: 767px) {
+		.table-card .exp-row .td-check {
+			display: flex !important;
+			order: 1;
+			flex: 0 0 auto;
+			align-self: center;
+			min-width: 44px;
+			min-height: 44px;
+			align-items: center;
+			justify-content: center;
+			margin-right: 2px;
+		}
+	}
 </style>

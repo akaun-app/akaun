@@ -50,7 +50,6 @@ CREATE TABLE `contacts` (
 	`phone` text,
 	`address` text,
 	`remark` text,
-	`is_active` integer DEFAULT true NOT NULL,
 	`created_by` integer,
 	`updated_by` integer,
 	`created_at` text DEFAULT (datetime('now')) NOT NULL,
@@ -197,6 +196,15 @@ CREATE TABLE `user_groups` (
 	PRIMARY KEY(`user_id`, `group_id`),
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`group_id`) REFERENCES `groups`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `user_nav_preferences` (
+	`user_id` integer NOT NULL,
+	`item_id` text NOT NULL,
+	`sort_order` integer NOT NULL,
+	`show_on_mobile` integer DEFAULT true NOT NULL,
+	PRIMARY KEY(`user_id`, `item_id`),
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE TABLE `user_permissions` (

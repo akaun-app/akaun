@@ -17,11 +17,15 @@
 		Lock,
 		FileText,
 		Wallet,
-		Upload
+		Upload,
+		Trash2,
+		Receipt,
+		ChevronRight
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
@@ -34,7 +38,10 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import { ExpenseStatus, Role } from '$lib/enums.js';
+	import { ExpenseStatus, ClaimStatus, Role } from '$lib/enums.js';
+	import { goto, replaceState } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { onMount } from 'svelte';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -68,8 +75,15 @@
 	let sort = $state({ key: 'date', dir: 'desc' as 'asc' | 'desc' });
 	let selected = $state(new Set<number>());
 	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
-	type FullExpense = (typeof data.expenses)[0] & { attachments: Attachment[] };
+	type FullExpense = (typeof data.expenses)[0] & {
+		attachments: Attachment[];
+		claimNumber?: string | null;
+		claimStatus?: number | null;
+		claimDate?: string | null;
+	};
 	let detailExpense = $state<FullExpense | null>(null);
+	let deleteDialogOpen = $state(false);
+	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let showNew = $state(false);
 	let mobileFilterOpen = $state(false);
 	let mobileSearchOpen = $state(false);
@@ -224,6 +238,19 @@
 		const res = await fetch(`/api/expenses/${e.id}`);
 		if (res.ok) detailExpense = await res.json();
 	}
+
+	onMount(() => {
+		if (data.openExpenseId) {
+			const found = expenses.find((e) => e.id === data.openExpenseId);
+			if (found) openExpense(found);
+			const qs = window.location.search
+				.slice(1)
+				.split('&')
+				.filter((p) => p && !p.startsWith('expenseId='))
+				.join('&');
+			replaceState(resolve(`/expenses${qs ? `?${qs}` : ''}`), {});
+		}
+	});
 
 </script>
 
@@ -573,7 +600,7 @@
 <Sheet.Root open={!!detailExpense} onOpenChange={(o) => { if (!o) detailExpense = null; }}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			{#if detailExpense}
 				<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 					<div>
@@ -594,9 +621,6 @@
 					</div>
 					<div class="detail-statusrow">
 						<StatusBadge status={detailExpense.status} />
-						{#if detailExpense.claimId}
-							<span style="font-size:11.5px; color:var(--muted-foreground);">Linked to claim</span>
-						{/if}
 					</div>
 					<div class="detail-list">
 						{#if detailExpense.contactName}
@@ -626,18 +650,81 @@
 							</div>
 						{/if}
 					</div>
+					{#if detailExpense.claimId}
+						<div class="detail-section-label">Linked claim</div>
+						<button
+							type="button"
+							class="linked-claim-card related-link"
+							onclick={() => goto(resolve(`/claims?claimId=${detailExpense?.claimId}`))}
+						>
+							<div class="linked-claim-icon"><Receipt size={16} /></div>
+							<div class="linked-claim-meta">
+								<div class="linked-claim-title">
+									Claim {detailExpense.claimNumber}
+									<StatusBadge
+										status={detailExpense.claimStatus === ClaimStatus.Done ? 'claimed' : 'pending'}
+									/>
+								</div>
+								{#if detailExpense.claimDate}
+									<div class="linked-claim-sub">{formatDate(detailExpense.claimDate)}</div>
+								{/if}
+							</div>
+							<ChevronRight size={14} class="linked-claim-chevron" />
+						</button>
+					{/if}
 					<AttachmentManager apiBase={`/api/expenses/${detailExpense.id}`} bind:attachments={detailExpense.attachments} />
+				</div>
+				<div class="sheet-foot">
+					{#if detailExpense.claimId}
+						<div class="sheet-foot-note">
+							Linked to claim {detailExpense.claimNumber} — remove it from the claim to delete.
+						</div>
+					{/if}
+					<div class="sheet-foot-actions">
+						<button
+							type="button"
+							class="sheet-btn sheet-btn-delete"
+							disabled={!!detailExpense.claimId}
+							title={detailExpense.claimId ? `Linked to claim ${detailExpense.claimNumber}` : undefined}
+							onclick={() => (deleteDialogOpen = true)}
+						>
+							<Trash2 size={14} /> Delete
+						</button>
+					</div>
 				</div>
 			{/if}
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
 
+{#if detailExpense}
+	<ConfirmDialog
+		bind:open={deleteDialogOpen}
+		title="Delete expense?"
+		description={`This will permanently delete ${detailExpense.expenseNumber} and its ${detailExpense.attachments.length} attachment(s). This can't be undone.`}
+		confirmLabel="Delete"
+		danger
+		onConfirm={() => deleteFormEl?.requestSubmit()}
+	/>
+	<form
+		method="POST"
+		action="?/delete"
+		bind:this={deleteFormEl}
+		use:enhance={() => async ({ result, update }) => {
+			if (result.type === 'success') { deleteDialogOpen = false; detailExpense = null; }
+			await update();
+		}}
+		style="display:none"
+	>
+		<input type="hidden" name="id" value={detailExpense.id} />
+	</form>
+{/if}
+
 <!-- New expense sheet -->
 <Sheet.Root bind:open={showNew}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
 					<div class="sheet-eyebrow">New</div>

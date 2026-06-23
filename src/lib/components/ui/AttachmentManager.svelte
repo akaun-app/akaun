@@ -62,12 +62,20 @@
 	{#if attachments.length > 0}
 		<div class="attach-list">
 			{#each attachments as att (att.id)}
-				<div class="attach-item">
-					<div class="attach-thumb"><Paperclip size={14} /></div>
-					<div class="attach-meta">
-						<a href="/api/files/{att.filename}" target="_blank" rel="noopener" class="attach-name attach-link">{att.displayName}</a>
-						<div class="attach-sub">{att.addedDate}</div>
-					</div>
+				<div class="attach-item related-link">
+					<a
+						href="/api/files/{att.filename}"
+						target="_blank"
+						rel="noopener"
+						class="attach-link-area"
+						aria-label="Open {att.displayName}"
+					>
+						<div class="attach-thumb"><Paperclip size={16} /></div>
+						<div class="attach-meta">
+							<div class="attach-name">{att.displayName}</div>
+							<div class="attach-sub">{att.addedDate}</div>
+						</div>
+					</a>
 					<button type="button" class="attach-del" onclick={() => remove(att.id)}>
 						<X size={14} />
 					</button>

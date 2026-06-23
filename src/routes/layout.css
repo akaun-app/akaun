@@ -461,10 +461,22 @@ th.sortable:hover .th-idle { opacity: .5; }
 }
 .sheet-close:hover { background: var(--accent); color: var(--foreground); }
 
+/* ---------- Sheet footer ---------- */
+.sheet-foot { border-top: 1px solid var(--border); padding: 16px 22px; display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
+.sheet-foot-note { font-size: 12px; color: var(--muted-foreground); line-height: 1.5; }
+.sheet-foot-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---------- Sheet footer buttons ---------- */
+.sheet-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 1px solid var(--border); background: var(--card); color: var(--foreground); border-radius: 8px; font-family: inherit; font-size: 13px; cursor: pointer; }
+.sheet-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.sheet-btn-delete { padding: 0 12px; }
+.sheet-btn-primary { border: none; background: var(--primary); color: var(--primary-foreground); font-weight: 500; }
+.sheet-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ---------- Detail/Sheet custom styles ---------- */
 .sheet-eyebrow { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted-foreground); font-family: "Geist Mono", monospace; }
 .sheet-title-text { margin: 5px 0 0; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
-.detail-amount { display: flex; align-items: baseline; gap: 7px; margin: 16px 0 12px; }
+.detail-amount { display: flex; align-items: baseline; gap: 7px; margin: 2px 0 12px; }
 .detail-amount-cur { font-size: 14px; color: var(--muted-foreground); font-weight: 500; font-family: "Geist Mono", monospace; }
 .detail-amount-val { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; }
 .detail-amount-val.inc { color: var(--green); }
@@ -476,15 +488,14 @@ th.sortable:hover .th-idle { opacity: .5; }
 .detail-val { flex: 1; font-size: 13.5px; }
 .detail-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground); margin: 24px 0 10px; }
 .attach-list { display: flex; flex-direction: column; gap: 8px; }
-.attach-item { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; }
+.attach-item { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 9px; padding: 0; background: var(--card); }
+.attach-link-area { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; padding: 10px 12px; color: inherit; text-decoration: none; }
 .attach-thumb { width: 34px; height: 34px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--muted-foreground); flex-shrink: 0; }
 .attach-meta { flex: 1; min-width: 0; }
 .attach-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.attach-sub { font-size: 11.5px; color: var(--muted-foreground); }
+.attach-sub { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; }
 .attach-empty { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 13px; padding: 14px; border: 1px dashed var(--border); border-radius: 9px; justify-content: center; }
-.attach-link { color: var(--foreground); text-decoration: none; }
-.attach-link:hover { color: var(--primary); text-decoration: underline; }
-.attach-del { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; background: none; border: none; cursor: pointer; color: var(--muted-foreground); border-radius: 6px; flex-shrink: 0; }
+.attach-del { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; background: none; border: none; cursor: pointer; color: var(--muted-foreground); border-radius: 6px; flex-shrink: 0; margin-right: 8px; }
 .attach-del:hover { background: var(--accent); color: var(--destructive); }
 .attach-upload-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: 1px dashed var(--border); border-radius: 7px; font-size: 12.5px; color: var(--muted-foreground); cursor: pointer; margin-top: 10px; font-family: inherit; }
 .attach-upload-btn:hover { border-color: var(--primary); color: var(--primary); }
@@ -572,13 +583,29 @@ th.sortable:hover .th-idle { opacity: .5; }
 .inc-row.selected:hover { background: var(--green-soft); }
 .td-ref .ref-num { font-family: "Geist Mono", monospace; font-size: 12.5px; color: var(--foreground); }
 
+/* ===================== Cross-feature relation cards ===================== */
+/* Shared interaction contract for single-action "click to view the related record" cards/rows. See CLAUDE.md "Cross-Feature Relation Cards". */
+.related-link { cursor: pointer; transition: border-color .12s, background .12s; }
+.related-link:hover { border-color: var(--primary); background: var(--accent); }
+
 /* ===================== Claims ===================== */
 .claim-exp-list { display: flex; flex-direction: column; gap: 8px; }
-.claim-exp { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; }
+.claim-exp { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; width: 100%; background: var(--card); font-family: inherit; text-align: left; }
 .claim-exp-main { flex: 1; min-width: 0; }
 .claim-exp-name { font-size: 13px; font-weight: 500; }
 .claim-exp-sub { font-size: 11.5px; color: var(--muted-foreground); }
 .claim-exp-amt { font-weight: 600; font-size: 13px; }
+.claim-exp-chevron { color: var(--muted-foreground); flex-shrink: 0; }
+.list-expand-btn { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; margin-top: 4px; border: none; background: none; font-family: inherit; font-size: 12px; font-weight: 500; color: var(--muted-foreground); cursor: pointer; padding: 2px 0; }
+.list-expand-btn:hover { color: var(--primary); }
+
+/* ---------- Linked-claim card (expense detail sheet) ---------- */
+.linked-claim-card { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; width: 100%; background: var(--card); font-family: inherit; text-align: left; }
+.linked-claim-icon { width: 34px; height: 34px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--muted-foreground); flex-shrink: 0; }
+.linked-claim-meta { flex: 1; min-width: 0; }
+.linked-claim-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
+.linked-claim-sub { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; }
+.linked-claim-chevron { color: var(--muted-foreground); flex-shrink: 0; }
 
 /* ===================== Import ===================== */
 .proc-pill { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted-foreground); background: var(--accent); padding: 6px 12px; border-radius: 999px; }

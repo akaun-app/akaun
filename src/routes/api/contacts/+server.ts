@@ -13,8 +13,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 	const results = listContacts(db, {
 		role: roleRaw ? parseInt(roleRaw) : undefined,
 		entityType: entityRaw ? parseInt(entityRaw) : undefined,
-		search: p.get('search') ?? undefined,
-		includeInactive: p.get('includeInactive') === '1'
+		search: p.get('search') ?? undefined
 	});
 
 	return Response.json(results);

@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1781604218162,
-      "tag": "0000_optimal_harrier",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1781875139196,
-      "tag": "0001_long_silvermane",
+      "when": 1782203526985,
+      "tag": "0000_youthful_moonstone",
       "breakpoints": true
     }
   ]

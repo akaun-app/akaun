@@ -15,7 +15,8 @@
 		unpaid: { label: 'Unpaid', tone: 'red' },
 		pending: { label: 'Pending', tone: 'amber' },
 		paid: { label: 'Paid', tone: 'green' },
-		claimed: { label: 'Claimed', tone: 'green' }
+		claimed: { label: 'Claimed', tone: 'green' },
+		received: { label: 'Received', tone: 'green' }
 	};
 
 	const m = $derived(

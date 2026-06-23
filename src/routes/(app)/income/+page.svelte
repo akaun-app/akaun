@@ -12,15 +12,18 @@
 		SlidersHorizontal,
 		X,
 		Paperclip,
-		Upload
+		Upload,
+		Trash2
 	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
+	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
@@ -62,6 +65,8 @@
 	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
 	type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
 	let detailIncome = $state<FullIncome | null>(null);
+	let deleteDialogOpen = $state(false);
+	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let selected = $state(new Set<number>());
 	let newIncomeFiles = $state<File[]>([]);
 	let newIncomeDrag = $state(false);
@@ -512,24 +517,24 @@
 <Sheet.Root open={!!detailIncome} onOpenChange={(o) => { if (!o) detailIncome = null; }}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			{#if detailIncome}
 				<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 					<div>
 						<div class="sheet-eyebrow">{detailIncome.incomeNumber}</div>
 						<div class="sheet-title-text">{detailIncome.contactName ?? '—'}</div>
 					</div>
-					<div style="display:flex; align-items:center; gap:8px;">
-						<span class="statusbadge tone-green"><span class="statusdot"></span>Received</span>
-						<Sheet.Close class="sheet-close">
-							<X size={16} />
-						</Sheet.Close>
-					</div>
+					<Sheet.Close class="sheet-close">
+						<X size={16} />
+					</Sheet.Close>
 				</div>
 				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 					<div class="detail-amount">
 						<span class="detail-amount-cur">RM</span>
 						<span class="detail-amount-val inc">+{formatMoney(detailIncome.amount)}</span>
+					</div>
+					<div class="detail-statusrow">
+						<StatusBadge status="received" />
 					</div>
 					<div class="detail-list">
 						<div class="detail-row">
@@ -565,16 +570,50 @@
 					</div>
 					<AttachmentManager apiBase={`/api/income/${detailIncome.id}`} bind:attachments={detailIncome.attachments} />
 				</div>
+				<div class="sheet-foot">
+					<div class="sheet-foot-actions">
+						<button
+							type="button"
+							class="sheet-btn sheet-btn-delete"
+							onclick={() => (deleteDialogOpen = true)}
+						>
+							<Trash2 size={14} /> Delete
+						</button>
+					</div>
+				</div>
 			{/if}
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
 
+{#if detailIncome}
+	<ConfirmDialog
+		bind:open={deleteDialogOpen}
+		title="Delete income record?"
+		description={`This will permanently delete ${detailIncome.incomeNumber} and its ${detailIncome.attachments.length} attachment(s). This can't be undone.`}
+		confirmLabel="Delete"
+		danger
+		onConfirm={() => deleteFormEl?.requestSubmit()}
+	/>
+	<form
+		method="POST"
+		action="?/delete"
+		bind:this={deleteFormEl}
+		use:enhance={() => async ({ result, update }) => {
+			if (result.type === 'success') { deleteDialogOpen = false; detailIncome = null; }
+			await update();
+		}}
+		style="display:none"
+	>
+		<input type="hidden" name="id" value={detailIncome.id} />
+	</form>
+{/if}
+
 <!-- New income sheet -->
 <Sheet.Root bind:open={showNew}>
 	<Sheet.Portal>
 		<Sheet.Overlay />
-		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:460px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
+		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
 					<div class="sheet-eyebrow">New</div>
@@ -704,3 +743,4 @@
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
+

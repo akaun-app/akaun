@@ -62,8 +62,18 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'expenses', 'delete')) return new Response('Forbidden', { status: 403 });
 	const id = parseInt(params.id!);
 
-	const deleted = removeExpense(db, id);
-	if (!deleted) return Response.json({ error: 'Not found' }, { status: 404 });
+	const expense = getExpense(db, id);
+	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
 
+	if (!canEditAmount(expense)) {
+		return Response.json(
+			{
+				error: `Expense "${expense.expenseNumber}" is linked to claim ${expense.claimNumber} and cannot be deleted until it's removed from the claim.`
+			},
+			{ status: 409 }
+		);
+	}
+
+	removeExpense(db, id);
 	return new Response(null, { status: 204 });
 };

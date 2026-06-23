@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount } from 'svelte';
+	import { goto, replaceState } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
-	import { Plus, X, Search, ChevronRight, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload } from '@lucide/svelte';
+	import { Plus, X, Search, ChevronRight, ChevronDown, ChevronUp, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload, Trash2 } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -39,6 +43,9 @@
 	let mobileSearchOpen = $state(false);
 	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	let detailClaim = $state<FullClaim | null>(null);
+	let expensesExpanded = $state(false);
+	let deleteDialogOpen = $state(false);
+	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let showNew = $state(false);
 	let newSelIds = $state(new Set<number>());
 	let newClaimFiles = $state<File[]>([]);
@@ -80,6 +87,15 @@
 	const newSelList = $derived(data.unpaidExpenses.filter((e) => newSelIds.has(e.id)));
 	const newTotal = $derived(newSelList.reduce((s, e) => s + e.amount, 0));
 
+	const deleteDescription = $derived.by(() => {
+		if (!detailClaim) return '';
+		const count = detailClaim.expenses.length;
+		const expensePhrase = `${count} linked expense${count !== 1 ? 's' : ''}`;
+		return detailClaim.status === ClaimStatus.Done
+			? `Delete ${detailClaim.claimNumber}? This claim was marked reimbursed — its ${expensePhrase} will revert to Unpaid, undoing that. This can't be undone.`
+			: `Delete ${detailClaim.claimNumber}? Its ${expensePhrase} will revert to Unpaid. This can't be undone.`;
+	});
+
 	// SSE — real-time updates from server
 	type ClaimStreamMsg =
 		| { type: 'claim-update'; item: (typeof data.claims)[0] }
@@ -93,10 +109,23 @@
 	async function openDetail(id: number) {
 		const found = claims.find((c) => c.id === id);
 		if (!found) return;
+		expensesExpanded = false;
 		detailClaim = { ...found, attachments: [] };
 		const res = await fetch(`/api/claims/${id}`);
 		if (res.ok) detailClaim = await res.json();
 	}
+
+	onMount(() => {
+		if (data.openClaimId) {
+			openDetail(data.openClaimId);
+			const qs = window.location.search
+				.slice(1)
+				.split('&')
+				.filter((p) => p && !p.startsWith('claimId='))
+				.join('&');
+			replaceState(resolve(`/claims${qs ? `?${qs}` : ''}`), {});
+		}
+	});
 
 
 	function toggleNewSel(id: number) {
@@ -270,7 +299,7 @@
 		<Sheet.Overlay />
 		<Sheet.Content
 			side={panelSide}
-			style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}
+			style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}
 		>
 			{#if detailClaim}
 				<div
@@ -301,8 +330,12 @@
 						Expenses in this claim ({detailClaim.expenses.length})
 					</div>
 					<div class="claim-exp-list">
-						{#each detailClaim.expenses as e (e.id)}
-							<div class="claim-exp">
+						{#each detailClaim.expenses.slice(0, expensesExpanded ? undefined : 5) as e (e.id)}
+							<button
+								type="button"
+								class="claim-exp related-link"
+								onclick={() => goto(resolve(`/expenses?expenseId=${e.id}`))}
+							>
 								<div class="claim-exp-main">
 									<div class="claim-exp-name">{e.itemName}</div>
 									<div class="claim-exp-sub">
@@ -311,7 +344,8 @@
 								</div>
 								<StatusBadge status={e.status} />
 								<div class="claim-exp-amt num">{formatMoney(e.amount)}</div>
-							</div>
+								<ChevronRight size={13} class="claim-exp-chevron" />
+							</button>
 						{/each}
 						{#if detailClaim.expenses.length === 0}
 							<div
@@ -321,6 +355,19 @@
 							</div>
 						{/if}
 					</div>
+					{#if detailClaim.expenses.length > 5}
+						<button
+							type="button"
+							class="list-expand-btn"
+							onclick={() => (expensesExpanded = !expensesExpanded)}
+						>
+							{#if expensesExpanded}
+								Show less <ChevronUp size={13} />
+							{:else}
+								Show all ({detailClaim.expenses.length}) <ChevronDown size={13} />
+							{/if}
+						</button>
+					{/if}
 					<div>
 						<AttachmentManager apiBase={`/api/claims/${detailClaim.id}`} bind:attachments={detailClaim.attachments} />
 					</div>
@@ -332,23 +379,13 @@
 							: 'All expenses in this claim are reimbursed and locked.'}
 					</div>
 					<div class="sheet-foot-actions">
-						<form
-							method="POST"
-							action="?/delete"
-							use:enhance={() =>
-								async ({ result, update }) => {
-									if (result.type === 'success') detailClaim = null;
-									await update();
-								}}
+						<button
+							type="button"
+							class="sheet-btn sheet-btn-delete"
+							onclick={() => (deleteDialogOpen = true)}
 						>
-							<input type="hidden" name="id" value={detailClaim.id} />
-							<button
-								type="submit"
-								style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 12px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;"
-							>
-								Delete
-							</button>
-						</form>
+							<Trash2 size={14} /> Delete
+						</button>
 						<form
 							method="POST"
 							action="?/markDone"
@@ -361,8 +398,8 @@
 							<input type="hidden" name="id" value={detailClaim.id} />
 							<button
 								type="submit"
+								class="sheet-btn sheet-btn-primary"
 								disabled={detailClaim.status === ClaimStatus.Done}
-								style="display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{detailClaim.status === ClaimStatus.Done ? 0.5 : 1};"
 							>
 								<CheckCircle size={14} />
 								{detailClaim.status === ClaimStatus.Done ? 'Claimed' : 'Mark as claimed'}
@@ -374,6 +411,29 @@
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
+
+{#if detailClaim}
+	<ConfirmDialog
+		bind:open={deleteDialogOpen}
+		title="Delete claim?"
+		description={deleteDescription}
+		confirmLabel="Delete"
+		danger
+		onConfirm={() => deleteFormEl?.requestSubmit()}
+	/>
+	<form
+		method="POST"
+		action="?/delete"
+		bind:this={deleteFormEl}
+		use:enhance={() => async ({ result, update }) => {
+			if (result.type === 'success') { deleteDialogOpen = false; detailClaim = null; }
+			await update();
+		}}
+		style="display:none"
+	>
+		<input type="hidden" name="id" value={detailClaim.id} />
+	</form>
+{/if}
 
 <!-- New claim sheet -->
 <Sheet.Root bind:open={showNew}>
@@ -555,23 +615,6 @@
 		border-radius: 6px;
 		padding: 2px 9px;
 	}
-	.sheet-foot {
-		border-top: 1px solid var(--border);
-		padding: 16px 22px;
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-	.sheet-foot-note {
-		font-size: 12px;
-		color: var(--muted-foreground);
-	}
-	.sheet-foot-actions {
-		display: flex;
-		gap: 8px;
-		justify-content: flex-end;
-	}
-
 	@media (max-width: 767px) {
 		.td-chevron { display: none; }
 	}

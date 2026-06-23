@@ -7,11 +7,12 @@ import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'claims', 'view')) throw redirect(302, '/dashboard');
 	const allClaims = listClaims(db);
 	const unpaidExpenses = listExpenses(db, { status: ExpenseStatus.Unpaid, limit: 500 });
-	return { claims: allClaims, unpaidExpenses };
+	const openClaimId = parseInt(url.searchParams.get('claimId') ?? '') || null;
+	return { claims: allClaims, unpaidExpenses, openClaimId };
 };
 
 export const actions: Actions = {
@@ -42,6 +43,7 @@ export const actions: Actions = {
 	},
 
 	delete: async ({ locals, request }) => {
+		if (!hasPermission(locals, 'claims', 'delete')) return fail(403, { error: 'Forbidden' });
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
