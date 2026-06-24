@@ -120,4 +120,4 @@ See `CLAUDE.md` for the project's architecture conventions (real-time update pat
 
 ## License
 
-Akaun is licensed under the **Business Source License 1.1 (BUSL-1.1)**. In short: you're free to self-host Akaun for personal or commercial use, and to modify it. What's not permitted is offering Akaun (or a derivative of it) to others as a hosted/managed service (i.e. running it as a SaaS product for third parties). See [`LICENSE`](./LICENSE) for the full terms.
+Akaun is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. You're free to self-host, use, and modify it for personal or commercial purposes. The AGPL's key condition is that if you run a modified version of Akaun as a network service for others, you must make the complete source code of your modified version available to those users. See [`LICENSE`](./LICENSE) for the full terms.
