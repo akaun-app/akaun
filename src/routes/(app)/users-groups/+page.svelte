@@ -54,7 +54,7 @@
 		{ id: 'income', label: 'Income' },
 		{ id: 'claims', label: 'Claims' },
 		{ id: 'import', label: 'Auto Import' },
-		{ id: 'categories', label: 'Categories' }
+		{ id: 'contacts', label: 'Contacts' }
 	] as const;
 	const ACTIONS = ['view', 'add', 'change', 'delete'] as const;
 
@@ -1409,6 +1409,7 @@
 	.ax-detail-name:focus { border-bottom-color: var(--primary); }
 	.ax-detail-name:disabled { opacity: 0.7; cursor: not-allowed; }
 	.ax-detail-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+	.ax-gdetail-content { display: flex; flex-direction: column; gap: 14px; }
 	.ax-meta-text {
 		display: inline-flex;
 		align-items: center;
@@ -1539,9 +1540,6 @@
 		.ax-permcard { overflow-x: auto; }
 		.ax-userperm { overflow-x: auto; }
 		.ax-perm { min-width: 500px; }
-
-		/* Group body inside sheet: use sheet's gap, no extra padding */
-		.ax-gdetail-content { display: flex; flex-direction: column; gap: 14px; }
 
 		/* .set-row collides with the global Settings-page class of the same
 		   name, which stacks it vertically on mobile; keep it left-aligned

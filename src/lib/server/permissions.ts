@@ -11,7 +11,6 @@ export type ResourceName =
 	| 'income'
 	| 'claims'
 	| 'import'
-	| 'categories'
 	| 'contacts';
 export type ActionName = 'view' | 'add' | 'change' | 'delete';
 export type PermissionSet = Record<ActionName, boolean>;
@@ -23,7 +22,6 @@ const ALL_RESOURCES: ResourceName[] = [
 	'income',
 	'claims',
 	'import',
-	'categories',
 	'contacts'
 ];
 

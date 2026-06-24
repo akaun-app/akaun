@@ -1,12 +1,12 @@
 <script lang="ts">
-	import ExpensesPage from '$lib/components/expenses/ExpensesPage.svelte';
+	import ContactsPage from '$lib/components/contacts/ContactsPage.svelte';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 </script>
 
 <svelte:head>
-	<title>Expenses - Akaun</title>
+	<title>Contacts - Akaun</title>
 </svelte:head>
 
-<ExpensesPage {data} {form} openId={null} />
+<ContactsPage {data} {form} openId={data.openContactId} />

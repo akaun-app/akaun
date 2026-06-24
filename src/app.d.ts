@@ -7,6 +7,9 @@ declare global {
 			permissions: EffectivePermissions | null;
 			isSuperuser: boolean;
 		}
+		interface PageState {
+			viaPush?: boolean;
+		}
 	}
 }
 

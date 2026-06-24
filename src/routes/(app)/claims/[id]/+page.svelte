@@ -9,4 +9,4 @@
 	<title>Claims - Akaun</title>
 </svelte:head>
 
-<ClaimsPage {data} openId={null} />
+<ClaimsPage {data} openId={data.openClaimId} />

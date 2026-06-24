@@ -9,4 +9,4 @@
 	<title>Expenses - Akaun</title>
 </svelte:head>
 
-<ExpensesPage {data} {form} openId={null} />
+<ExpensesPage {data} {form} openId={data.openExpenseId} />

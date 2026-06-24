@@ -67,7 +67,6 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			claims: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			import: { canView: true, canAdd: true, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: true, canDelete: false },
 			contacts: { canView: true, canAdd: true, canChange: true, canDelete: false }
 		}
 	},
@@ -80,7 +79,6 @@ const SEED_GROUPS = [
 			income: { canView: false, canAdd: true, canChange: false, canDelete: false },
 			claims: { canView: false, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: false, canAdd: true, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			contacts: { canView: true, canAdd: true, canChange: false, canDelete: false }
 		}
 	},
@@ -93,7 +91,6 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			claims: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: true, canAdd: false, canChange: false, canDelete: false },
-			categories: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			contacts: { canView: true, canAdd: false, canChange: false, canDelete: false }
 		}
 	}
