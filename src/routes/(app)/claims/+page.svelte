@@ -123,7 +123,7 @@
 				.split('&')
 				.filter((p) => p && !p.startsWith('claimId='))
 				.join('&');
-			replaceState(resolve(`/claims${qs ? `?${qs}` : ''}`), {});
+			replaceState(`${resolve('/claims')}${qs ? `?${qs}` : ''}`, {});
 		}
 	});
 

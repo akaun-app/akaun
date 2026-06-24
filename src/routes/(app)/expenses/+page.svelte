@@ -248,7 +248,7 @@
 				.split('&')
 				.filter((p) => p && !p.startsWith('expenseId='))
 				.join('&');
-			replaceState(resolve(`/expenses${qs ? `?${qs}` : ''}`), {});
+			replaceState(`${resolve('/expenses')}${qs ? `?${qs}` : ''}`, {});
 		}
 	});
 
