@@ -11,7 +11,7 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'currency' | 'intelligence' | 'categories' | 'advanced';
+	type Tab = 'general' | 'intelligence' | 'categories' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Currency settings state
@@ -147,7 +147,6 @@
 
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
-		{ id: 'currency', label: 'Currency' },
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'categories', label: 'Categories' },
 		{ id: 'advanced', label: 'Advanced' }
@@ -193,29 +192,14 @@
 							<div class="set-row-label">Username</div>
 							<div class="set-row-value">{data.username}</div>
 						</div>
-						<div class="set-row">
-							<div class="set-row-label">Currency</div>
-							<div class="set-row-value">
-								<span class="cat-chip">{data.currency}</span>
-								<span style="font-size:12px; margin-left:8px; opacity:0.7;">Change under the Currency tab</span>
-							</div>
-						</div>
-					</div>
-				</div>
-
-			{:else if activeTab === 'currency'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Currency</h2>
-						<p class="set-section-sub">Your main currency. Foreign-currency records are converted to it for all totals and reports.</p>
 					</div>
 					<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
 						<input type="hidden" name="currencyCode" value={mainCur} />
-						<div class="set-rows">
+						<div class="set-rows" style="margin-top:8px;">
 							<div class="set-row">
 								<div>
-									<div class="set-row-label">Main currency</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency</div>
+									<div class="set-row-label">Currency</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
 								</div>
 								<Select.Root type="single" name="mainCurrencyDisplay" bind:value={mainCur}>
 									<Select.Trigger class="set-input-right set-input-wide">{curLabel}</Select.Trigger>
