@@ -4,8 +4,8 @@ import { getExchangeRate } from '$lib/server/currency/rates.js';
 import type { RequestHandler } from './$types.js';
 
 // Live rate lookup for the create/edit forms. Returns the main-currency rate per 1 unit
-// of `from` on the given date, or `{ rate: null }` when unavailable (no key / API error)
-// so the client can prompt for manual entry.
+// of `from` on the given date, or `{ rate: null }` when unavailable (unsupported currency
+// / API error) so the client can prompt for manual entry.
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!locals.user) return new Response('Unauthorized', { status: 401 });
 

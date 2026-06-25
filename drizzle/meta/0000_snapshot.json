@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "941be972-79ef-4736-9a27-d13fbe3fb7cb",
+  "id": "2c8d8654-4312-42f4-91e1-5f7cb3483ced",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "app_sequences": {
@@ -426,8 +426,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "code": {
-          "name": "code",
+        "base": {
+          "name": "base",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "quote": {
+          "name": "quote",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -452,12 +459,13 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "exchange_rates_date_code_pk": {
+        "exchange_rates_date_base_quote_pk": {
           "columns": [
             "date",
-            "code"
+            "base",
+            "quote"
           ],
-          "name": "exchange_rates_date_code_pk"
+          "name": "exchange_rates_date_base_quote_pk"
         }
       },
       "uniqueConstraints": {},

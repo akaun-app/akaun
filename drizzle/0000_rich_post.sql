@@ -60,10 +60,11 @@ CREATE TABLE `contacts` (
 --> statement-breakpoint
 CREATE TABLE `exchange_rates` (
 	`date` text NOT NULL,
-	`code` text NOT NULL,
+	`base` text NOT NULL,
+	`quote` text NOT NULL,
 	`rate` real NOT NULL,
 	`fetched_at` text DEFAULT (datetime('now')) NOT NULL,
-	PRIMARY KEY(`date`, `code`)
+	PRIMARY KEY(`date`, `base`, `quote`)
 );
 --> statement-breakpoint
 CREATE TABLE `expense_attachments` (

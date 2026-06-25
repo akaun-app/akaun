@@ -30,7 +30,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const expCatRaw = getSetting(db, SETTING_KEYS.expenseCategories);
 	const incCatRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
-	const exchangeApiKey = getSetting(db, SETTING_KEYS.exchangeApiKey) ?? '';
 
 	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
 	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
@@ -47,7 +46,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		expenseCategories,
 		incomeCategories,
 		currency,
-		exchangeApiKey,
 		username: locals.user!.username,
 		autoImportApiKey,
 		autoImportModel,
@@ -88,14 +86,10 @@ export const actions: Actions = {
 	saveCurrency: async ({ request }) => {
 		const data = await request.formData();
 		const code = String(data.get('currencyCode') ?? '').trim().toUpperCase();
-		const apiKey = String(data.get('exchangeApiKey') ?? '').trim();
 
 		if (!/^[A-Z]{3}$/.test(code)) return fail(400, { error: 'Invalid currency code' });
 
 		setSetting(db, SETTING_KEYS.currencyCode, code);
-		// Only overwrite the key when a value is supplied, so re-saving the currency with a
-		// blank field doesn't wipe an existing key (matches the API-key handling above).
-		if (apiKey) setSetting(db, SETTING_KEYS.exchangeApiKey, apiKey);
 
 		return { success: true };
 	},

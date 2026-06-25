@@ -245,19 +245,22 @@ export const settings = sqliteTable('settings', {
 	value: text('value').notNull()
 });
 
-// Cache of historical exchange rates fetched from CurrencyFreaks. Stores the raw
-// USD-based rate (units of `code` per 1 USD) for a given date so any currency pair on
-// that date is computed from at most two rows — same-day transactions reuse it and
-// avoid extra API calls. Rows are immutable (historical rates don't change); no TTL.
+// Cache of historical exchange rates, stored in the provider's native pair shape: each
+// row is `rate` = `quote` units per 1 `base` on `date`. Rows are self-describing, so a
+// later main-currency change needs no invalidation — new lookups simply use a different
+// `base` and old rows remain valid historical facts. Same-day same-pair transactions
+// reuse a row and avoid extra API calls. Rows are immutable (historical rates don't
+// change); no TTL.
 export const exchangeRates = sqliteTable(
 	'exchange_rates',
 	{
 		date: text('date').notNull(),
-		code: text('code').notNull(),
+		base: text('base').notNull(),
+		quote: text('quote').notNull(),
 		rate: real('rate').notNull(),
 		fetchedAt: text('fetched_at').notNull().default(sql`(datetime('now'))`)
 	},
-	(t) => [primaryKey({ columns: [t.date, t.code] })]
+	(t) => [primaryKey({ columns: [t.date, t.base, t.quote] })]
 );
 
 export const importQueue = sqliteTable('import_queue', {

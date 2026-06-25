@@ -17,8 +17,6 @@
 	// Currency settings state
 	// svelte-ignore state_referenced_locally
 	let mainCur = $state(data.currency);
-	// svelte-ignore state_referenced_locally
-	let exchangeKey = $state(data.exchangeApiKey);
 
 	const curLabel = $derived(
 		(() => {
@@ -108,7 +106,6 @@
 			aiCategoryHints = data.autoImportCategoryHints;
 			showFreeOnly = data.autoImportFreeModelsOnly;
 			mainCur = data.currency;
-			exchangeKey = data.exchangeApiKey;
 			toast.success('Settings saved');
 		}
 	});
@@ -229,22 +226,8 @@
 									</Select.Content>
 								</Select.Root>
 							</div>
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">CurrencyFreaks API key</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Used to auto-fetch exchange rates by transaction date</div>
-								</div>
-								<Input
-									class="set-input-right shrink-0"
-									type="password"
-									name="exchangeApiKey"
-									placeholder="Enter API key…"
-									value={exchangeKey}
-									oninput={(e) => (exchangeKey = (e.target as HTMLInputElement).value)}
-								/>
-							</div>
 						</div>
-						<p class="set-section-sub" style="margin-top:12px;">If no key is set, you'll enter the exchange rate manually when recording a foreign-currency item.</p>
+						<p class="set-section-sub" style="margin-top:12px;">Exchange rates are fetched automatically by transaction date from <a href="https://frankfurter.dev" target="_blank" rel="noreferrer">Frankfurter</a> (free, no API key). When a rate is unavailable, you'll enter it manually.</p>
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>

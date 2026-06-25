@@ -18,9 +18,9 @@ export function mainCurrencyCode(db: Db): string {
  * Resolve the currency + exchange rate for a record being created from form data.
  * - Same as main currency → rate 1.
  * - Foreign with a manual rate supplied → use it (server is source of truth, but trusts
- *   a positive client-supplied rate, e.g. when no API key is configured).
- * - Foreign with no rate → fetch from CurrencyFreaks for the transaction date; if still
- *   unavailable, returns an error so the caller can prompt for a manual rate.
+ *   a positive client-supplied rate, e.g. when the auto-fetch was unavailable).
+ * - Foreign with no rate → fetch from the exchange-rate provider for the transaction
+ *   date; if still unavailable, returns an error so the caller can prompt for a manual rate.
  */
 export async function resolveRecordCurrency(
 	db: Db,
