@@ -2,12 +2,10 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { exchangeRates } from '../db/schema.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
-import { createLogger } from '../logger.js';
+import { getActiveProvider } from './provider.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<any>;
-
-const log = createLogger('currency:rates');
 
 export type RateResult = {
 	/** Main-currency units per 1 unit of `from`. Null when it could not be resolved. */
@@ -44,7 +42,8 @@ export async function getExchangeRate(
 	const apiKey = getSetting(db, SETTING_KEYS.exchangeApiKey);
 	if (!apiKey) return { rate: null, source: 'unavailable' };
 
-	const fetched = await fetchUsdRates(apiKey, date, [f, t]);
+	const codes = [f, t].filter((c) => c !== USD);
+	const fetched = await getActiveProvider().fetchUsdRates({ date, codes, apiKey });
 	if (!fetched) return { rate: null, source: 'unavailable' };
 
 	// Merge fetched into the full picture (cache + USD-is-1) and cache new rows.
@@ -82,49 +81,4 @@ function upsertRates(db: Db, date: string, rates: Record<string, number>): void 
 			})
 			.run();
 	}
-}
-
-async function fetchUsdRates(
-	apiKey: string,
-	date: string,
-	codes: string[]
-): Promise<Record<string, number> | null> {
-	const symbols = codes.filter((c) => c !== USD).join(',');
-	const url = `https://api.currencyfreaks.com/v2.0/rates/historical?apikey=${encodeURIComponent(
-		apiKey
-	)}&date=${encodeURIComponent(date)}&symbols=${encodeURIComponent(symbols)}`;
-
-	for (let attempt = 0; attempt < 3; attempt++) {
-		try {
-			const res = await fetch(url);
-			const bodyText = await res.text();
-			if (res.status === 429 || res.status >= 500) {
-				log.warn({ status: res.status, attempt }, 'CurrencyFreaks rate limit/server error, retrying');
-				await sleep(Math.pow(2, attempt) * 1000);
-				continue;
-			}
-			if (!res.ok) {
-				// 4xx (bad key, plan limit, bad date) — not retryable. Fall back to manual entry.
-				log.warn({ status: res.status, body: bodyText.slice(0, 200) }, 'CurrencyFreaks request failed');
-				return null;
-			}
-			const data = JSON.parse(bodyText) as { rates?: Record<string, string> };
-			if (!data.rates) return null;
-			const out: Record<string, number> = {};
-			for (const [code, val] of Object.entries(data.rates)) {
-				const n = parseFloat(val);
-				if (!isNaN(n) && n > 0) out[code.toUpperCase()] = n;
-			}
-			return out;
-		} catch (err) {
-			log.warn({ err, attempt }, 'CurrencyFreaks fetch error');
-			if (attempt === 2) return null;
-			await sleep(Math.pow(2, attempt) * 1000);
-		}
-	}
-	return null;
-}
-
-function sleep(ms: number) {
-	return new Promise((r) => setTimeout(r, ms));
 }
