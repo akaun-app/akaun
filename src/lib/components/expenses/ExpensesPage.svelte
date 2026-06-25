@@ -38,7 +38,7 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
-	import { CURRENCIES, currencySymbol, formatCurrencyAmount } from '$lib/currency.js';
+	import { CURRENCIES, currencySymbol, currencyDecimals, formatCurrencyAmount } from '$lib/currency.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { ExpenseStatus, ClaimStatus, Role } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
@@ -105,6 +105,7 @@
 	// svelte-ignore state_referenced_locally
 	let newCurrency = $state(mainCurrency());
 	let newAmount = $state<string>('');
+	let newForeignAmount = $state<string>('');
 	let newRate = $state<string>('');
 	let newDate = $state<string>(todayISO());
 	let rateFetching = $state(false);
@@ -136,12 +137,17 @@
 	});
 
 	const isForeign = $derived(showForeign && newCurrency !== mainCurrency());
-	const convertedPreview = $derived.by(() => {
-		const a = parseFloat(newAmount);
+	// Main-currency value derived from the foreign amount × rate (shown read-only in the
+	// main amount field while a foreign currency is active).
+	const convertedMain = $derived.by(() => {
+		const a = parseFloat(newForeignAmount);
 		const r = parseFloat(newRate);
 		if (!isForeign || isNaN(a) || isNaN(r) || r <= 0) return null;
 		return a * r;
 	});
+	const convertedDisplay = $derived(
+		convertedMain != null ? convertedMain.toFixed(currencyDecimals(mainCurrency())) : ''
+	);
 	// Foreign entry needs a positive rate before it can be submitted.
 	const foreignRateMissing = $derived(isForeign && !(parseFloat(newRate) > 0));
 
@@ -161,7 +167,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
+	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newForeignAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
@@ -831,19 +837,17 @@
 						<DatePicker name="date" bind:value={newDate} />
 					</div>
 					<div>
-						<label class="field-label" for="amount">Amount{isForeign ? ` (${newCurrency})` : ''} *</label>
-						<AmountInput
-							id="amount"
-							name="amount"
-							placeholder="0.00"
-							required
-							bind:value={newAmount}
-							prefix={isForeign ? currencySymbol(newCurrency) : undefined}
-						/>
+						<label class="field-label" for="amount">Amount{isForeign ? ` (${mainCurrency()})` : ''} *</label>
+						{#if isForeign}
+							<AmountInput id="amount" placeholder="0.00" readonly value={convertedDisplay} />
+						{:else}
+							<AmountInput id="amount" placeholder="0.00" required bind:value={newAmount} />
+						{/if}
 					</div>
 				</div>
 
 				<!-- Foreign currency (advanced, hidden by default) -->
+				<input type="hidden" name="amount" value={isForeign ? newForeignAmount : newAmount} />
 				<input type="hidden" name="currency" value={isForeign ? newCurrency : mainCurrency()} />
 				<input type="hidden" name="exchangeRate" value={isForeign ? newRate : '1'} />
 				<div class="field">
@@ -855,21 +859,25 @@
 						<div class="foreign-box">
 							<div class="foreign-head">
 								<span class="field-label" style="margin:0;">Foreign currency</span>
-								<button type="button" class="foreign-close" onclick={() => { showForeign = false; newCurrency = mainCurrency(); newRate = ''; rateError = ''; }} aria-label="Remove foreign currency">
+								<button type="button" class="foreign-close" onclick={() => { showForeign = false; newCurrency = mainCurrency(); newForeignAmount = ''; newRate = ''; rateError = ''; }} aria-label="Remove foreign currency">
 									<X size={13} />
 								</button>
 							</div>
+							<div class="field" style="margin-bottom:10px;">
+								<label class="field-label" for="fx-cur">Currency</label>
+								<Select.Root type="single" bind:value={newCurrency}>
+									<Select.Trigger id="fx-cur" class="w-full">{newCurrency}</Select.Trigger>
+									<Select.Content>
+										{#each CURRENCIES as c (c.code)}
+											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
 							<div class="field-grid">
 								<div>
-									<label class="field-label" for="fx-cur">Currency</label>
-									<Select.Root type="single" bind:value={newCurrency}>
-										<Select.Trigger id="fx-cur" class="w-full">{newCurrency}</Select.Trigger>
-										<Select.Content>
-											{#each CURRENCIES as c (c.code)}
-												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-											{/each}
-										</Select.Content>
-									</Select.Root>
+									<label class="field-label" for="fx-amount">Amount{isForeign ? ` (${newCurrency})` : ''}</label>
+									<AmountInput id="fx-amount" placeholder="0.00" required={isForeign} bind:value={newForeignAmount} prefix={currencySymbol(newCurrency)} disabled={!isForeign} />
 								</div>
 								<div>
 									<label class="field-label" for="fx-rate">Rate (1 {newCurrency} = ? {mainCurrency()})</label>
@@ -882,8 +890,6 @@
 										Fetching rate…
 									{:else if rateError}
 										{rateError}
-									{:else if convertedPreview != null}
-										≈ {mainCurrencySymbol()} {formatMoney(convertedPreview)} in {mainCurrency()}
 									{/if}
 								</div>
 							{/if}

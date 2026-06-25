@@ -19,7 +19,7 @@
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
-	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
 	import type { PageData } from './$types.js';
 
@@ -619,21 +619,28 @@
 									{/if}
 								</div>
 
-								<!-- Amount -->
+								<!-- Amount (main currency; read-only & converted when foreign) -->
 								<div class="rfield">
 									<span class="rfield-label">
-										Amount{jobIsForeign(job) ? ` (${jobCurrency(job)})` : ''}
-										{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
+										Amount{jobIsForeign(job) ? ` (${mainCurrency()})` : ''}
+										{#if !jobIsForeign(job) && isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
 									</span>
-									<AmountInput
-										wrapperClass="sm"
-										prefix={jobIsForeign(job) ? currencySymbol(jobCurrency(job)) : undefined}
-										value={formatMoney(editedValue(job, 'amount') as number)}
-										oninput={(e) => {
-											const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
-											if (!isNaN(v)) updateEdit(job.id, 'amount', v);
-										}}
-									/>
+									{#if jobIsForeign(job)}
+										<AmountInput
+											wrapperClass="sm"
+											readonly
+											value={jobConverted(job) != null ? formatMoney(jobConverted(job)) : ''}
+										/>
+									{:else}
+										<AmountInput
+											wrapperClass="sm"
+											value={formatMoney(editedValue(job, 'amount') as number)}
+											oninput={(e) => {
+												const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
+												if (!isNaN(v)) updateEdit(job.id, 'amount', v);
+											}}
+										/>
+									{/if}
 								</div>
 
 								<!-- Currency + exchange rate (auto-shown when a foreign currency is detected) -->
@@ -654,6 +661,21 @@
 								</div>
 								{#if jobIsForeign(job)}
 									<div class="rfield">
+										<span class="rfield-label">
+											Amount ({jobCurrency(job)})
+											{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
+										</span>
+										<AmountInput
+											wrapperClass="sm"
+											prefix={currencySymbol(jobCurrency(job))}
+											value={formatMoney(editedValue(job, 'amount') as number)}
+											oninput={(e) => {
+												const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
+												if (!isNaN(v)) updateEdit(job.id, 'amount', v);
+											}}
+										/>
+									</div>
+									<div class="rfield">
 										<span class="rfield-label">Rate (1 {jobCurrency(job)} = ? {mainCurrency()})</span>
 										<input
 											class="form-input rinput"
@@ -662,13 +684,9 @@
 											value={jobRateStr(job)}
 											oninput={(e) => updateEdit(job.id, 'exchangeRate', (e.target as HTMLInputElement).value)}
 										/>
-										<span class="foreign-note">
-											{#if jobConverted(job) != null}
-												≈ {mainCurrencySymbol()} {formatMoney(jobConverted(job))} in {mainCurrency()}
-											{:else}
-												Enter the rate manually to convert to {mainCurrency()}.
-											{/if}
-										</span>
+										{#if jobConverted(job) == null}
+											<span class="foreign-note">Enter the rate manually to convert to {mainCurrency()}.</span>
+										{/if}
 									</div>
 								{/if}
 
