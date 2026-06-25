@@ -58,6 +58,14 @@ CREATE TABLE `contacts` (
 	FOREIGN KEY (`updated_by`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
+CREATE TABLE `exchange_rates` (
+	`date` text NOT NULL,
+	`code` text NOT NULL,
+	`rate` real NOT NULL,
+	`fetched_at` text DEFAULT (datetime('now')) NOT NULL,
+	PRIMARY KEY(`date`, `code`)
+);
+--> statement-breakpoint
 CREATE TABLE `expense_attachments` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`expense_id` integer NOT NULL,
@@ -84,6 +92,8 @@ CREATE TABLE `expenses` (
 	`status` integer DEFAULT 1 NOT NULL,
 	`date` text NOT NULL,
 	`amount` real NOT NULL,
+	`currency` text DEFAULT 'USD' NOT NULL,
+	`exchange_rate` real DEFAULT 1 NOT NULL,
 	`claim_id` integer,
 	`created_by` integer,
 	`updated_by` integer,
@@ -128,6 +138,8 @@ CREATE TABLE `import_queue` (
 	`match_candidates` text,
 	`date` text,
 	`amount` real,
+	`currency` text,
+	`exchange_rate` real,
 	`reference` text,
 	`category` text,
 	`remark` text,
@@ -169,6 +181,8 @@ CREATE TABLE `incomes` (
 	`category` text DEFAULT 'Other' NOT NULL,
 	`date` text NOT NULL,
 	`amount` real NOT NULL,
+	`currency` text DEFAULT 'USD' NOT NULL,
+	`exchange_rate` real DEFAULT 1 NOT NULL,
 	`created_by` integer,
 	`updated_by` integer,
 	`created_at` text DEFAULT (datetime('now')) NOT NULL,

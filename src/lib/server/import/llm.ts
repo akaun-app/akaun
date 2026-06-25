@@ -6,6 +6,7 @@ export type LLMResult = {
 	supplier: string;
 	date: string;
 	amount: number;
+	currency: string;
 	reference: string;
 	category: string;
 	remark: string;
@@ -21,11 +22,12 @@ const JSON_SCHEMA = {
 		supplier: { type: 'string' },
 		date: { type: 'string', description: 'YYYY-MM-DD' },
 		amount: { type: 'number' },
+		currency: { type: 'string', description: 'ISO-4217 code, e.g. USD, MYR, SGD' },
 		reference: { type: 'string' },
 		category: { type: 'string' },
 		remark: { type: 'string' }
 	},
-	required: ['document_type', 'item_name', 'supplier', 'date', 'amount', 'reference', 'category', 'remark']
+	required: ['document_type', 'item_name', 'supplier', 'date', 'amount', 'currency', 'reference', 'category', 'remark']
 };
 
 export async function callLLM(
@@ -33,7 +35,8 @@ export async function callLLM(
 	expenseCategories: string[],
 	incomeCategories: string[],
 	apiKey: string,
-	model: string
+	model: string,
+	mainCurrency: string
 ): Promise<LLMResult> {
 	const today = new Date().toISOString().slice(0, 10);
 	const systemPrompt = `You are a bookkeeping assistant that extracts structured data from a document.
@@ -48,6 +51,7 @@ Instructions:
 - For income: item_name = income source/payer, supplier = description of what the income is for, category = one of [${incomeCategories.join(', ')}]
 - date must be YYYY-MM-DD format. If unclear, use today (${today}).
 - amount must be a positive number (no currency symbol).
+- currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
 - reference = invoice/receipt/transaction number if present, else empty string.
 - remark = any useful notes, else empty string.
 - If a field cannot be determined, use an empty string or 0 for amount.
@@ -123,6 +127,7 @@ Respond with valid JSON only, matching the schema exactly. No markdown, no extra
 
 			parsed.amount = parseAmount(parsed.amount);
 			parsed.date = parseDate(parsed.date, today);
+			parsed.currency = parseCurrency(parsed.currency, mainCurrency);
 			log.debug({ documentType: parsed.document_type, amount: parsed.amount, date: parsed.date }, 'LLM extraction successful');
 			return parsed;
 		} catch (err) {
@@ -138,6 +143,11 @@ function parseAmount(v: unknown): number {
 	const s = String(v).replace(/[^0-9.]/g, '');
 	const n = parseFloat(s);
 	return isNaN(n) ? 0 : Math.abs(n);
+}
+
+function parseCurrency(v: unknown, fallback: string): string {
+	const s = String(v ?? '').trim().toUpperCase();
+	return /^[A-Z]{3}$/.test(s) ? s : fallback.toUpperCase();
 }
 
 function parseDate(v: unknown, fallback: string): string {

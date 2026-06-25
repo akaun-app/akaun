@@ -4,6 +4,7 @@ import { listIncomes } from '$lib/server/queries/income.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { createIncome, removeIncome } from '$lib/server/services/income.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { resolveRecordCurrency } from '$lib/server/currency/form.js';
 import { Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -30,10 +31,10 @@ export function loadIncomePage(locals: App.Locals, openIncomeId: number | null) 
 	const qStart = `${now.getFullYear()}-${String(Math.floor(now.getMonth() / 3) * 3 + 1).padStart(2, '0')}-01`;
 
 	const stats = {
-		thisMonth: allIncomes.filter((i) => i.date.startsWith(monthKey)).reduce((s, i) => s + i.amount, 0),
-		thisQuarter: allIncomes.filter((i) => i.date >= qStart).reduce((s, i) => s + i.amount, 0),
-		largest: allIncomes.length > 0 ? Math.max(...allIncomes.map((i) => i.amount)) : 0,
-		allTotal: allIncomes.reduce((s, i) => s + i.amount, 0),
+		thisMonth: allIncomes.filter((i) => i.date.startsWith(monthKey)).reduce((s, i) => s + i.mainAmount, 0),
+		thisQuarter: allIncomes.filter((i) => i.date >= qStart).reduce((s, i) => s + i.mainAmount, 0),
+		largest: allIncomes.length > 0 ? Math.max(...allIncomes.map((i) => i.mainAmount)) : 0,
+		allTotal: allIncomes.reduce((s, i) => s + i.mainAmount, 0),
 		count: allIncomes.length
 	};
 
@@ -65,11 +66,16 @@ export const incomeActions: Actions = {
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
+		const cur = await resolveRecordCurrency(db, data, date);
+		if (!cur.ok) return fail(400, { error: cur.message });
+
 		const income = createIncome(db, userId, {
 			contactId,
 			category,
 			date,
 			amount,
+			currency: cur.currency,
+			exchangeRate: cur.exchangeRate,
 			reference,
 			descriptionText
 		});

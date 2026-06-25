@@ -5,10 +5,18 @@
 	import Sidebar from '$lib/components/ui/Sidebar.svelte';
 	import BottomNav from '$lib/components/ui/BottomNav.svelte';
 	import MobileDrawer from '$lib/components/ui/MobileDrawer.svelte';
+	import { setMainCurrency } from '$lib/currency-state.svelte.js';
 	import type { LayoutData } from './$types.js';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 	let drawerOpen = $state(false);
+
+	// Make the global main currency available to formatMoney/AmountInput everywhere.
+	// Set synchronously (so SSR + first render are correct, top-down) and reactively
+	// (so changing it in Settings updates the UI without a reload).
+	// svelte-ignore state_referenced_locally
+	setMainCurrency(data.mainCurrency);
+	$effect(() => setMainCurrency(data.mainCurrency));
 
 	onNavigate((navigation) => {
 		if (!document.startViewTransition) return;

@@ -32,6 +32,8 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Role } from '$lib/enums.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
+	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { CURRENCIES, currencySymbol, formatCurrencyAmount } from '$lib/currency.js';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -79,6 +81,49 @@
 	let newIncomeDrag = $state(false);
 	let newIncomeFileInput = $state<HTMLInputElement | null>(null);
 
+	// --- Foreign-currency entry (hidden by default) ---
+	const todayISO = () => new Date().toISOString().slice(0, 10);
+	let showForeign = $state(false);
+	// svelte-ignore state_referenced_locally
+	let newCurrency = $state(mainCurrency());
+	let newAmount = $state<string>('');
+	let newRate = $state<string>('');
+	let newDate = $state<string>(todayISO());
+	let rateFetching = $state(false);
+	let rateError = $state('');
+
+	$effect(() => {
+		if (!showForeign) return;
+		const cur = newCurrency;
+		const d = newDate;
+		if (cur === mainCurrency() || !d) { rateError = ''; return; }
+		rateFetching = true;
+		rateError = '';
+		const t = setTimeout(async () => {
+			try {
+				const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`);
+				const json = await res.json();
+				if (json.rate != null) newRate = String(json.rate);
+				else { newRate = ''; rateError = 'No rate found — enter it manually'; }
+			} catch {
+				newRate = '';
+				rateError = 'Could not fetch rate — enter it manually';
+			} finally {
+				rateFetching = false;
+			}
+		}, 400);
+		return () => clearTimeout(t);
+	});
+
+	const isForeign = $derived(showForeign && newCurrency !== mainCurrency());
+	const convertedPreview = $derived.by(() => {
+		const a = parseFloat(newAmount);
+		const r = parseFloat(newRate);
+		if (!isForeign || isNaN(a) || isNaN(r) || r <= 0) return null;
+		return a * r;
+	});
+	const foreignRateMissing = $derived(isForeign && !(parseFloat(newRate) > 0));
+
 	// Mobile panel detection — full-screen bottom sheet on mobile
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -94,7 +139,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; newIncomeCategory = ''; } });
+	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; newIncomeCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
 
 	function toggleCat(cat: string) {
 		selectedCats = selectedCats.includes(cat)
@@ -108,8 +153,8 @@
 		if (selectedCats.length) list = list.filter((i) => selectedCats.includes(i.category));
 		const mn = amountMin !== '' ? parseFloat(amountMin) : null;
 		const mx = amountMax !== '' ? parseFloat(amountMax) : null;
-		if (mn != null) list = list.filter((i) => i.amount >= mn);
-		if (mx != null) list = list.filter((i) => i.amount <= mx);
+		if (mn != null) list = list.filter((i) => i.mainAmount >= mn);
+		if (mx != null) list = list.filter((i) => i.mainAmount <= mx);
 		if (dateFrom) list = list.filter((i) => i.date >= dateFrom);
 		if (dateTo) list = list.filter((i) => i.date <= dateTo);
 		if (search.trim()) {
@@ -151,9 +196,9 @@
 	}
 
 	const selTotal = $derived(
-		filtered.filter((i) => selected.has(i.id)).reduce((s, i) => s + i.amount, 0)
+		filtered.filter((i) => selected.has(i.id)).reduce((s, i) => s + i.mainAmount, 0)
 	);
-	const filteredTotal = $derived(filtered.reduce((s, i) => s + i.amount, 0));
+	const filteredTotal = $derived(filtered.reduce((s, i) => s + i.mainAmount, 0));
 	const allSelected = $derived(filtered.length > 0 && selected.size === filtered.length);
 	const someSelected = $derived(selected.size > 0 && selected.size < filtered.length);
 	const activeFilterCount = $derived(
@@ -178,10 +223,10 @@
 		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 		const qStart = `${now.getFullYear()}-${String(Math.floor(now.getMonth() / 3) * 3 + 1).padStart(2, '0')}-01`;
 		return {
-			thisMonth: incomes.filter((i) => i.date.startsWith(monthKey)).reduce((s, i) => s + i.amount, 0),
-			thisQuarter: incomes.filter((i) => i.date >= qStart).reduce((s, i) => s + i.amount, 0),
-			largest: incomes.length > 0 ? Math.max(...incomes.map((i) => i.amount)) : 0,
-			allTotal: incomes.reduce((s, i) => s + i.amount, 0),
+			thisMonth: incomes.filter((i) => i.date.startsWith(monthKey)).reduce((s, i) => s + i.mainAmount, 0),
+			thisQuarter: incomes.filter((i) => i.date >= qStart).reduce((s, i) => s + i.mainAmount, 0),
+			largest: incomes.length > 0 ? Math.max(...incomes.map((i) => i.mainAmount)) : 0,
+			allTotal: incomes.reduce((s, i) => s + i.mainAmount, 0),
 			count: incomes.length,
 		};
 	});
@@ -275,10 +320,10 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip">
-		<StatCard tone="green" label="This month" cur="+RM" value={formatMoney(stats.thisMonth)} />
-		<StatCard label="This quarter" cur="+RM" value={formatMoney(stats.thisQuarter)} />
-		<StatCard label="Largest payment" cur="+RM" value={formatMoney(stats.largest)} />
-		<StatCard tone="green" label="All received" cur="+RM" value={formatMoney(stats.allTotal)} />
+		<StatCard tone="green" label="This month" cur={'+' + mainCurrencySymbol()} value={formatMoney(stats.thisMonth)} />
+		<StatCard label="This quarter" cur={'+' + mainCurrencySymbol()} value={formatMoney(stats.thisQuarter)} />
+		<StatCard label="Largest payment" cur={'+' + mainCurrencySymbol()} value={formatMoney(stats.largest)} />
+		<StatCard tone="green" label="All received" cur={'+' + mainCurrencySymbol()} value={formatMoney(stats.allTotal)} />
 	</div>
 
 	<div class="work">
@@ -439,7 +484,10 @@
 									{formatDateShort(inc.date)}<span class="td-year">{inc.date.slice(0, 4)}</span>
 								</td>
 								<td class="td-amount" data-label="Amount">
-									<span class="amount-num" style="color:var(--green);">+RM {formatMoney(inc.amount)}</span>
+									<span class="amount-num" style="color:var(--green);">+{mainCurrencySymbol()} {formatMoney(inc.mainAmount)}</span>
+									{#if inc.currency !== mainCurrency()}
+										<span class="amount-orig">{inc.currency} {formatCurrencyAmount(inc.amount, inc.currency)}</span>
+									{/if}
 								</td>
 								<td class="row-break"></td>
 							</tr>
@@ -473,7 +521,7 @@
 	</div>
 
 	<!-- Bulk action bar -->
-	<BulkActionBar show={selected.size > 0} count={selected.size} total={`+RM ${formatMoney(selTotal)}`} onclear={clearSel}>
+	<BulkActionBar show={selected.size > 0} count={selected.size} total={`+${mainCurrencySymbol()} ${formatMoney(selTotal)}`} onclear={clearSel}>
 		{#snippet actions()}
 			<button class="bulk-actions-ghost" onclick={clearSel} style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;">
 				Deselect all
@@ -552,9 +600,15 @@
 				</div>
 				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 					<div class="detail-amount">
-						<span class="detail-amount-cur">RM</span>
-						<span class="detail-amount-val inc">+{formatMoney(detailIncome.amount)}</span>
+						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
+						<span class="detail-amount-val inc">+{formatMoney(detailIncome.mainAmount)}</span>
 					</div>
+					{#if detailIncome.currency !== mainCurrency()}
+						<div class="detail-orig">
+							Original: {detailIncome.currency} {formatCurrencyAmount(detailIncome.amount, detailIncome.currency)}
+							· rate {detailIncome.exchangeRate}
+						</div>
+					{/if}
 					<div class="detail-statusrow">
 						<StatusBadge status="received" />
 					</div>
@@ -683,12 +737,67 @@
 				<div class="field-grid field">
 					<div>
 						<label class="field-label" for="date">Date *</label>
-						<DatePicker name="date" defaultToday />
+						<DatePicker name="date" bind:value={newDate} />
 					</div>
 					<div>
-						<label class="field-label" for="amount">Amount (RM) *</label>
-						<AmountInput id="amount" name="amount" placeholder="0.00" required />
+						<label class="field-label" for="amount">Amount{isForeign ? ` (${newCurrency})` : ''} *</label>
+						<AmountInput
+							id="amount"
+							name="amount"
+							placeholder="0.00"
+							required
+							bind:value={newAmount}
+							prefix={isForeign ? currencySymbol(newCurrency) : undefined}
+						/>
 					</div>
+				</div>
+
+				<!-- Foreign currency (advanced, hidden by default) -->
+				<input type="hidden" name="currency" value={isForeign ? newCurrency : mainCurrency()} />
+				<input type="hidden" name="exchangeRate" value={isForeign ? newRate : '1'} />
+				<div class="field">
+					{#if !showForeign}
+						<button type="button" class="foreign-toggle" onclick={() => (showForeign = true)}>
+							<Plus size={13} /> Foreign currency
+						</button>
+					{:else}
+						<div class="foreign-box">
+							<div class="foreign-head">
+								<span class="field-label" style="margin:0;">Foreign currency</span>
+								<button type="button" class="foreign-close" onclick={() => { showForeign = false; newCurrency = mainCurrency(); newRate = ''; rateError = ''; }} aria-label="Remove foreign currency">
+									<X size={13} />
+								</button>
+							</div>
+							<div class="field-grid">
+								<div>
+									<label class="field-label" for="fx-cur">Currency</label>
+									<Select.Root type="single" bind:value={newCurrency}>
+										<Select.Trigger id="fx-cur" class="w-full">{newCurrency}</Select.Trigger>
+										<Select.Content>
+											{#each CURRENCIES as c (c.code)}
+												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+								<div>
+									<label class="field-label" for="fx-rate">Rate (1 {newCurrency} = ? {mainCurrency()})</label>
+									<Input id="fx-rate" type="text" inputmode="decimal" placeholder="0.0000" bind:value={newRate} disabled={!isForeign} />
+								</div>
+							</div>
+							{#if isForeign}
+								<div class="foreign-note">
+									{#if rateFetching}
+										Fetching rate…
+									{:else if rateError}
+										{rateError}
+									{:else if convertedPreview != null}
+										≈ +{mainCurrencySymbol()} {formatMoney(convertedPreview)} in {mainCurrency()}
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 
 				<div class="field">
@@ -757,7 +866,7 @@
 					<button type="button" onclick={() => (showNew = false)} style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;">
 						Cancel
 					</button>
-					<button type="submit" style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;">
+					<button type="submit" disabled={foreignRateMissing} title={foreignRateMissing ? 'Enter an exchange rate first' : undefined} style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{foreignRateMissing ? 0.5 : 1};">
 						Record income
 					</button>
 				</div>

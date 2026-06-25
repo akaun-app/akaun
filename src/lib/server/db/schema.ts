@@ -152,6 +152,11 @@ export const expenses = sqliteTable('expenses', {
 	status: integer('status').notNull().default(1),
 	date: text('date').notNull(),
 	amount: real('amount').notNull(),
+	// The currency `amount` is denominated in. Main-currency value = amount * exchangeRate.
+	currency: text('currency').notNull().default('USD'),
+	// Main-currency units per 1 unit of `currency`. 1 when the record is already in the
+	// main currency; locked at transaction time so historical conversions never drift.
+	exchangeRate: real('exchange_rate').notNull().default(1),
 	claimId: integer('claim_id').references(() => claims.id, { onDelete: 'set null' }),
 	createdBy: integer('created_by').references(() => users.id),
 	updatedBy: integer('updated_by').references(() => users.id),
@@ -170,6 +175,9 @@ export const incomes = sqliteTable('incomes', {
 	category: text('category').notNull().default('Other'),
 	date: text('date').notNull(),
 	amount: real('amount').notNull(),
+	// See expenses.currency / expenses.exchangeRate.
+	currency: text('currency').notNull().default('USD'),
+	exchangeRate: real('exchange_rate').notNull().default(1),
 	createdBy: integer('created_by').references(() => users.id),
 	updatedBy: integer('updated_by').references(() => users.id),
 	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
@@ -237,6 +245,21 @@ export const settings = sqliteTable('settings', {
 	value: text('value').notNull()
 });
 
+// Cache of historical exchange rates fetched from CurrencyFreaks. Stores the raw
+// USD-based rate (units of `code` per 1 USD) for a given date so any currency pair on
+// that date is computed from at most two rows — same-day transactions reuse it and
+// avoid extra API calls. Rows are immutable (historical rates don't change); no TTL.
+export const exchangeRates = sqliteTable(
+	'exchange_rates',
+	{
+		date: text('date').notNull(),
+		code: text('code').notNull(),
+		rate: real('rate').notNull(),
+		fetchedAt: text('fetched_at').notNull().default(sql`(datetime('now'))`)
+	},
+	(t) => [primaryKey({ columns: [t.date, t.code] })]
+);
+
 export const importQueue = sqliteTable('import_queue', {
 	id: text('id').primaryKey(),
 	// Who uploaded the file; used for `created_by` on the resulting contact/record,
@@ -261,6 +284,10 @@ export const importQueue = sqliteTable('import_queue', {
 	matchCandidates: text('match_candidates'),
 	date: text('date'),
 	amount: real('amount'),
+	// Detected currency (ISO-4217) and its rate to the main currency. Null until the
+	// LLM/worker resolve them; rate stays null when no API key (manual entry at review).
+	currency: text('currency'),
+	exchangeRate: real('exchange_rate'),
 	reference: text('reference'),
 	category: text('category'),
 	remark: text('remark'),

@@ -29,6 +29,10 @@ export type ExpenseCreate = {
 	status?: number;
 	date: string;
 	amount: number;
+	// Currency `amount` is in, and the rate to the main currency. Default to main/1 in
+	// callers; when omitted here the DB column defaults apply.
+	currency?: string;
+	exchangeRate?: number;
 };
 
 export type ExpensePatch = Partial<ExpenseCreate & { claimId: number | null }>;
@@ -62,7 +66,13 @@ function reindex(db: Db, expenseId: number, row: ExpenseRow) {
 
 type ExpenseRow = typeof expenses.$inferSelect;
 
-const expenseWithContact = { ...getTableColumns(expenses), contactName: contacts.legalName };
+// `mainAmount` is the converted main-currency value (amount × exchangeRate). All
+// display and aggregation use it; `amount`/`currency` are kept for the "original" line.
+const expenseWithContact = {
+	...getTableColumns(expenses),
+	contactName: contacts.legalName,
+	mainAmount: sql<number>`${expenses.amount} * ${expenses.exchangeRate}`
+};
 
 /** Shared WHERE-clause builder for expense list + count queries. */
 function expenseConditions(filters: ExpenseFilters): SQL[] {
@@ -148,6 +158,8 @@ export function createExpense(db: Db, actingUserId: number, data: ExpenseCreate)
 			status: data.status ?? ExpenseStatus.Unpaid,
 			date: data.date,
 			amount: data.amount,
+			currency: data.currency ?? undefined,
+			exchangeRate: data.exchangeRate ?? undefined,
 			createdBy: actingUserId,
 			updatedBy: actingUserId
 		})

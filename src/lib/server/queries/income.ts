@@ -26,6 +26,9 @@ export type IncomeCreate = {
 	category?: string;
 	date: string;
 	amount: number;
+	// See ExpenseCreate.currency / exchangeRate.
+	currency?: string;
+	exchangeRate?: number;
 };
 
 export type IncomePatch = Partial<IncomeCreate>;
@@ -61,7 +64,12 @@ function reindex(db: Db, incomeId: number, row: IncomeRow) {
 		.run();
 }
 
-const incomeWithContact = { ...getTableColumns(incomes), contactName: contacts.legalName };
+// `mainAmount` = amount × exchangeRate (converted main-currency value). See expenses.ts.
+const incomeWithContact = {
+	...getTableColumns(incomes),
+	contactName: contacts.legalName,
+	mainAmount: sql<number>`${incomes.amount} * ${incomes.exchangeRate}`
+};
 
 export function listIncomes(db: Db, filters: IncomeFilters = {}) {
 	const { category, dateFrom, dateTo, amountMin, amountMax, search, limit = 100, offset = 0 } =
@@ -123,6 +131,8 @@ export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
 			category: data.category ?? 'Other',
 			date: data.date,
 			amount: data.amount,
+			currency: data.currency ?? undefined,
+			exchangeRate: data.exchangeRate ?? undefined,
 			createdBy: actingUserId,
 			updatedBy: actingUserId
 		})

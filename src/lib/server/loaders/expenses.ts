@@ -6,6 +6,7 @@ import { createExpense, patchExpense, removeExpense } from '$lib/server/services
 import { createClaim } from '$lib/server/services/claims.js';
 import { canEditAmount } from '$lib/server/locking.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { resolveRecordCurrency } from '$lib/server/currency/form.js';
 import { ExpenseStatus, Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -67,6 +68,9 @@ export const expensesActions: Actions = {
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
 
+		const cur = await resolveRecordCurrency(db, data, date);
+		if (!cur.ok) return fail(400, { error: cur.message });
+
 		const contactId = resolveContactFromForm(data, userId);
 		const expense = createExpense(db, userId, {
 			itemName,
@@ -74,6 +78,8 @@ export const expensesActions: Actions = {
 			category,
 			date,
 			amount,
+			currency: cur.currency,
+			exchangeRate: cur.exchangeRate,
 			reference,
 			remark
 		});

@@ -6,12 +6,26 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { toast } from 'svelte-sonner';
+	import { CURRENCIES } from '$lib/currency.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'intelligence' | 'categories' | 'advanced';
+	type Tab = 'general' | 'currency' | 'intelligence' | 'categories' | 'advanced';
 	let activeTab = $state<Tab>('general');
+
+	// Currency settings state
+	// svelte-ignore state_referenced_locally
+	let mainCur = $state(data.currency);
+	// svelte-ignore state_referenced_locally
+	let exchangeKey = $state(data.exchangeApiKey);
+
+	const curLabel = $derived(
+		(() => {
+			const c = CURRENCIES.find((x) => x.code === mainCur);
+			return c ? `${c.code} — ${c.name}` : mainCur;
+		})()
+	);
 
 	// Expense categories state
 	// svelte-ignore state_referenced_locally
@@ -93,6 +107,8 @@
 			aiParallelTasks = data.autoImportParallelTasks;
 			aiCategoryHints = data.autoImportCategoryHints;
 			showFreeOnly = data.autoImportFreeModelsOnly;
+			mainCur = data.currency;
+			exchangeKey = data.exchangeApiKey;
 			toast.success('Settings saved');
 		}
 	});
@@ -134,6 +150,7 @@
 
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
+		{ id: 'currency', label: 'Currency' },
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'categories', label: 'Categories' },
 		{ id: 'advanced', label: 'Advanced' }
@@ -183,9 +200,53 @@
 							<div class="set-row-label">Currency</div>
 							<div class="set-row-value">
 								<span class="cat-chip">{data.currency}</span>
+								<span style="font-size:12px; margin-left:8px; opacity:0.7;">Change under the Currency tab</span>
 							</div>
 						</div>
 					</div>
+				</div>
+
+			{:else if activeTab === 'currency'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Currency</h2>
+						<p class="set-section-sub">Your main currency. Foreign-currency records are converted to it for all totals and reports.</p>
+					</div>
+					<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
+						<input type="hidden" name="currencyCode" value={mainCur} />
+						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Main currency</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency</div>
+								</div>
+								<Select.Root type="single" name="mainCurrencyDisplay" bind:value={mainCur}>
+									<Select.Trigger class="set-input-right set-input-wide">{curLabel}</Select.Trigger>
+									<Select.Content>
+										{#each CURRENCIES as c (c.code)}
+											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">CurrencyFreaks API key</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Used to auto-fetch exchange rates by transaction date</div>
+								</div>
+								<Input
+									class="set-input-right shrink-0"
+									type="password"
+									name="exchangeApiKey"
+									placeholder="Enter API key…"
+									value={exchangeKey}
+									oninput={(e) => (exchangeKey = (e.target as HTMLInputElement).value)}
+								/>
+							</div>
+						</div>
+						<p class="set-section-sub" style="margin-top:12px;">If no key is set, you'll enter the exchange rate manually when recording a foreign-currency item.</p>
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
 				</div>
 
 			{:else if activeTab === 'intelligence'}

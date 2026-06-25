@@ -20,7 +20,7 @@ export type PeriodTotals = { total: number; count: number };
 export function expenseTotals(db: Db, from: string, to: string): PeriodTotals {
 	const row = db
 		.select({
-			total: sql<number>`coalesce(sum(${expenses.amount}), 0)`,
+			total: sql<number>`coalesce(sum(${expenses.amount} * ${expenses.exchangeRate}), 0)`,
 			count: sql<number>`count(*)`
 		})
 		.from(expenses)
@@ -33,7 +33,7 @@ export function expenseTotals(db: Db, from: string, to: string): PeriodTotals {
 export function incomeTotals(db: Db, from: string, to: string): PeriodTotals {
 	const row = db
 		.select({
-			total: sql<number>`coalesce(sum(${incomes.amount}), 0)`,
+			total: sql<number>`coalesce(sum(${incomes.amount} * ${incomes.exchangeRate}), 0)`,
 			count: sql<number>`count(*)`
 		})
 		.from(incomes)
@@ -45,7 +45,7 @@ export function incomeTotals(db: Db, from: string, to: string): PeriodTotals {
 /** Total unpaid expense amount (all time). */
 export function outstandingTotal(db: Db): number {
 	const row = db
-		.select({ total: sql<number>`coalesce(sum(${expenses.amount}), 0)` })
+		.select({ total: sql<number>`coalesce(sum(${expenses.amount} * ${expenses.exchangeRate}), 0)` })
 		.from(expenses)
 		.where(eq(expenses.status, ExpenseStatus.Unpaid))
 		.get();
@@ -56,7 +56,7 @@ export function outstandingTotal(db: Db): number {
 function monthlyTotals(db: Db, table: typeof expenses | typeof incomes, from: string) {
 	const month = sql<string>`substr(${table.date}, 1, 7)`;
 	const rows = db
-		.select({ month, total: sql<number>`coalesce(sum(${table.amount}), 0)` })
+		.select({ month, total: sql<number>`coalesce(sum(${table.amount} * ${table.exchangeRate}), 0)` })
 		.from(table)
 		.where(gte(table.date, from))
 		.groupBy(month)
@@ -77,12 +77,12 @@ export function expenseCategoryBreakdown(
 	return db
 		.select({
 			label: expenses.category,
-			value: sql<number>`coalesce(sum(${expenses.amount}), 0)`
+			value: sql<number>`coalesce(sum(${expenses.amount} * ${expenses.exchangeRate}), 0)`
 		})
 		.from(expenses)
 		.where(and(gte(expenses.date, from), lte(expenses.date, to)))
 		.groupBy(expenses.category)
-		.orderBy(desc(sql`sum(${expenses.amount})`))
+		.orderBy(desc(sql`sum(${expenses.amount} * ${expenses.exchangeRate})`))
 		.limit(limit)
 		.all();
 }
@@ -94,7 +94,7 @@ export function recentExpenses(db: Db, limit: number) {
 			date: expenses.date,
 			name: expenses.itemName,
 			sub: contacts.legalName,
-			amount: expenses.amount,
+			amount: sql<number>`${expenses.amount} * ${expenses.exchangeRate}`,
 			status: expenses.status
 		})
 		.from(expenses)
@@ -111,7 +111,7 @@ export function recentIncomes(db: Db, limit: number) {
 			date: incomes.date,
 			name: contacts.legalName,
 			sub: incomes.descriptionText,
-			amount: incomes.amount
+			amount: sql<number>`${incomes.amount} * ${incomes.exchangeRate}`
 		})
 		.from(incomes)
 		.leftJoin(contacts, eq(contacts.id, incomes.contactId))

@@ -15,6 +15,8 @@ import { normalizeDate } from '$lib/server/date.js';
 import { createExpense } from '$lib/server/services/expenses.js';
 import { createIncome } from '$lib/server/services/income.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
+import { getExchangeRate } from '$lib/server/currency/rates.js';
+import { mainCurrencyCode } from '$lib/server/currency/form.js';
 import { ImportState, DocumentType, Role, documentTypeEnum } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -59,6 +61,27 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const category = (overrides.category as string) ?? row.category ?? 'Other';
 	const remark = (overrides.remark as string) ?? row.remark ?? '';
 
+	// Resolve currency + rate (overrides win, then the queued values). For a foreign
+	// currency with no rate yet, fetch for the date; if still unavailable, require one.
+	const main = mainCurrencyCode(db);
+	const currency = ((overrides.currency as string) ?? row.currency ?? main).toUpperCase();
+	let exchangeRate: number | null;
+	if (currency === main) {
+		exchangeRate = 1;
+	} else if (overrides.exchangeRate != null) {
+		exchangeRate = Number(overrides.exchangeRate);
+	} else if (row.exchangeRate != null) {
+		exchangeRate = row.exchangeRate;
+	} else {
+		exchangeRate = (await getExchangeRate(db, { from: currency, to: main, date })).rate;
+	}
+	if (exchangeRate == null || !(exchangeRate > 0)) {
+		return json(
+			{ error: `An exchange rate for ${currency} is required. Enter it manually.` },
+			{ status: 400 }
+		);
+	}
+
 	// Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
 	// Priority: explicit contactId → typed new name → confident match → raw extracted name.
 	const role = isIncome ? Role.Customer : Role.Supplier;
@@ -96,7 +119,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			remark,
 			category,
 			date,
-			amount
+			amount,
+			currency,
+			exchangeRate
 		});
 		resultId = inserted.id;
 		number = inserted.incomeNumber;
@@ -117,7 +142,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			remark,
 			category,
 			date,
-			amount
+			amount,
+			currency,
+			exchangeRate
 		});
 		resultId = inserted.id;
 		number = inserted.expenseNumber;

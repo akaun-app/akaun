@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { claims, claimAttachments, expenses, contacts } from '../db/schema.js';
@@ -19,6 +19,11 @@ function claimExpensesFor(db: Db, claimId: number) {
 			contactName: contacts.legalName,
 			status: expenses.status,
 			amount: expenses.amount,
+			currency: expenses.currency,
+			exchangeRate: expenses.exchangeRate,
+			// Converted main-currency value; claim totals sum this so a claim mixing
+			// currencies still totals correctly in the main currency.
+			mainAmount: sql<number>`${expenses.amount} * ${expenses.exchangeRate}`,
 			date: expenses.date
 		})
 		.from(expenses)
@@ -32,7 +37,7 @@ export function listClaims(db: Db) {
 
 	return rows.map((claim) => {
 		const claimExpenses = claimExpensesFor(db, claim.id);
-		const total = claimExpenses.reduce((sum, e) => sum + e.amount, 0);
+		const total = claimExpenses.reduce((sum, e) => sum + e.mainAmount, 0);
 
 		return { ...claim, total, expenseCount: claimExpenses.length, expenses: claimExpenses };
 	});

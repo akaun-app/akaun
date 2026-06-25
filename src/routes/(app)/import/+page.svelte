@@ -19,6 +19,8 @@
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
 	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
+	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -46,6 +48,8 @@
 		matchCandidates: Candidate[];
 		date: string | null;
 		amount: number | null;
+		currency: string | null;
+		exchangeRate: number | null;
 		reference: string | null;
 		category: string | null;
 		remark: string | null;
@@ -76,6 +80,8 @@
 			matchCandidates: candidates,
 			date: j.date,
 			amount: j.amount,
+			currency: j.currency ?? null,
+			exchangeRate: j.exchangeRate ?? null,
 			reference: j.reference,
 			category: j.category,
 			remark: j.remark,
@@ -233,6 +239,8 @@
 	async function confirmJob(jobId: string) {
 		const job = jobs.find((j) => j.id === jobId);
 		if (!job) return;
+		// A foreign-currency job can't be imported without a rate to convert it.
+		if (jobRateMissing(job)) return;
 
 		const overrides = job._edits && Object.keys(job._edits).length > 0 ? job._edits : undefined;
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
@@ -301,11 +309,56 @@
 		if (key === 'item_name') return job.itemName ?? '';
 		if (key === 'supplier') return job.supplier ?? '';
 		if (key === 'amount') return job.amount ?? 0;
+		if (key === 'currency') return (job.currency ?? mainCurrency()).toUpperCase();
+		if (key === 'exchangeRate') return job.exchangeRate ?? '';
 		if (key === 'category') return job.category ?? '';
 		if (key === 'date') return job.date ?? '';
 		if (key === 'reference') return job.reference ?? '';
 		if (key === 'remark') return job.remark ?? '';
 		return '';
+	}
+
+	// Effective currency / rate for a job (edit override → extracted value → default).
+	function jobCurrency(job: Job): string {
+		return String(editedValue(job, 'currency') || mainCurrency()).toUpperCase();
+	}
+	function jobIsForeign(job: Job): boolean {
+		return jobCurrency(job) !== mainCurrency();
+	}
+	function jobRateStr(job: Job): string {
+		const v = editedValue(job, 'exchangeRate');
+		return v === '' || v == null ? '' : String(v);
+	}
+	function jobRateMissing(job: Job): boolean {
+		return jobIsForeign(job) && !(parseFloat(jobRateStr(job)) > 0);
+	}
+	function jobConverted(job: Job): number | null {
+		const a = parseFloat(String(editedValue(job, 'amount')));
+		const r = parseFloat(jobRateStr(job));
+		if (!jobIsForeign(job) || isNaN(a) || isNaN(r) || r <= 0) return null;
+		return a * r;
+	}
+
+	// Fetch a rate for a job's foreign currency + date, storing it as an edit override.
+	async function fetchJobRate(jobId: string) {
+		const job = jobs.find((j) => j.id === jobId);
+		if (!job) return;
+		const cur = jobCurrency(job);
+		const date = String(editedValue(job, 'date'));
+		if (cur === mainCurrency() || !date) return;
+		try {
+			const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${date}`);
+			const json = await res.json();
+			if (json.rate != null) updateEdit(jobId, 'exchangeRate', String(json.rate));
+		} catch {
+			// leave blank for manual entry
+		}
+	}
+
+	function setJobCurrency(jobId: string, code: string) {
+		updateEdit(jobId, 'currency', code);
+		if (code === mainCurrency()) updateEdit(jobId, 'exchangeRate', '1');
+		else fetchJobRate(jobId);
 	}
 
 	function isEdited(job: Job, key: string): boolean {
@@ -343,7 +396,7 @@
 
 	function formatMoney(n: number | null): string {
 		if (n == null) return '—';
-		return new Intl.NumberFormat('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+		return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 	}
 </script>
 
@@ -569,11 +622,12 @@
 								<!-- Amount -->
 								<div class="rfield">
 									<span class="rfield-label">
-										Amount
+										Amount{jobIsForeign(job) ? ` (${jobCurrency(job)})` : ''}
 										{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
 									</span>
 									<AmountInput
 										wrapperClass="sm"
+										prefix={jobIsForeign(job) ? currencySymbol(jobCurrency(job)) : undefined}
 										value={formatMoney(editedValue(job, 'amount') as number)}
 										oninput={(e) => {
 											const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
@@ -581,6 +635,42 @@
 										}}
 									/>
 								</div>
+
+								<!-- Currency + exchange rate (auto-shown when a foreign currency is detected) -->
+								<div class="rfield">
+									<span class="rfield-label">Currency</span>
+									<Select.Root
+										type="single"
+										value={jobCurrency(job)}
+										onValueChange={(v) => setJobCurrency(job.id, v)}
+									>
+										<Select.Trigger class="rinput w-full">{jobCurrency(job)}</Select.Trigger>
+										<Select.Content>
+											{#each CURRENCIES as c (c.code)}
+												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+								{#if jobIsForeign(job)}
+									<div class="rfield">
+										<span class="rfield-label">Rate (1 {jobCurrency(job)} = ? {mainCurrency()})</span>
+										<input
+											class="form-input rinput"
+											inputmode="decimal"
+											placeholder="0.0000"
+											value={jobRateStr(job)}
+											oninput={(e) => updateEdit(job.id, 'exchangeRate', (e.target as HTMLInputElement).value)}
+										/>
+										<span class="foreign-note">
+											{#if jobConverted(job) != null}
+												≈ {mainCurrencySymbol()} {formatMoney(jobConverted(job))} in {mainCurrency()}
+											{:else}
+												Enter the rate manually to convert to {mainCurrency()}.
+											{/if}
+										</span>
+									</div>
+								{/if}
 
 								<!-- Category -->
 								<div class="rfield">
@@ -645,7 +735,7 @@
 								</span>
 								<div class="review-actions-btns">
 									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
-									<Button size="sm" onclick={() => confirmJob(job.id)}>
+									<Button size="sm" disabled={jobRateMissing(job)} onclick={() => confirmJob(job.id)}>
 										<Check size={15} /> {dup ? 'Import anyway' : 'Confirm & import'}
 									</Button>
 								</div>
@@ -671,7 +761,7 @@
 									<span>{displayTitle(job)}</span>
 								</div>
 								<span class="proc-type">Skipped{job.duplicateSignal ? ' · duplicate' : ''}</span>
-								<span class="skip-amt">RM {formatMoney(job.amount)}</span>
+								<span class="skip-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
 							</div>
 						{:else}
 							{@const importing = job.state === 'confirmed'}
@@ -688,7 +778,7 @@
 									</span>
 								</div>
 								<span class="bucket-path">{importing ? 'Importing…' : '→ ' + bucketPath(job)}</span>
-								<span class="imported-amt">RM {formatMoney(job.amount)}</span>
+								<span class="imported-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
 							</div>
 						{/if}
 					{/each}

@@ -10,6 +10,8 @@
 	import { Plus, X, Search, ChevronRight, ChevronDown, ChevronUp, Clock, CheckCircle, FileText, Calendar, Paperclip, Upload, Trash2 } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
+	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { formatCurrencyAmount } from '$lib/currency.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
@@ -88,7 +90,7 @@
 	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
 
 	const newSelList = $derived(data.unpaidExpenses.filter((e) => newSelIds.has(e.id)));
-	const newTotal = $derived(newSelList.reduce((s, e) => s + e.amount, 0));
+	const newTotal = $derived(newSelList.reduce((s, e) => s + e.mainAmount, 0));
 
 	const deleteDescription = $derived.by(() => {
 		if (!detailClaim) return '';
@@ -204,9 +206,9 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip" style="grid-template-columns:repeat(3,1fr);">
-		<StatCard tone="amber" label="Awaiting reimbursement" cur="RM" value={formatMoney(totals.pending)} sub="{counts.pending} pending claim{counts.pending !== 1 ? 's' : ''}" />
-		<StatCard tone="green" label="Reimbursed" cur="RM" value={formatMoney(totals.done)} sub="{counts.done} completed" />
-		<StatCard label="Total claimed" cur="RM" value={formatMoney(totals.all)} sub="{counts.all} claim{counts.all !== 1 ? 's' : ''}" />
+		<StatCard tone="amber" label="Awaiting reimbursement" cur={mainCurrencySymbol()} value={formatMoney(totals.pending)} sub="{counts.pending} pending claim{counts.pending !== 1 ? 's' : ''}" />
+		<StatCard tone="green" label="Reimbursed" cur={mainCurrencySymbol()} value={formatMoney(totals.done)} sub="{counts.done} completed" />
+		<StatCard label="Total claimed" cur={mainCurrencySymbol()} value={formatMoney(totals.all)} sub="{counts.all} claim{counts.all !== 1 ? 's' : ''}" />
 	</div>
 
 	<!-- Work area -->
@@ -319,7 +321,7 @@
 				</div>
 				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 					<div class="detail-amount">
-						<span class="detail-amount-cur">RM</span>
+						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
 						<span class="detail-amount-val">{formatMoney(detailClaim.total)}</span>
 					</div>
 					<div class="detail-statusrow">
@@ -347,7 +349,12 @@
 									</div>
 								</div>
 								<StatusBadge status={e.status} />
-								<div class="claim-exp-amt num">{formatMoney(e.amount)}</div>
+								<div class="claim-exp-amt num">
+									{mainCurrencySymbol()} {formatMoney(e.mainAmount)}
+									{#if e.currency !== mainCurrency()}
+										<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
+									{/if}
+								</div>
 								<ChevronRight size={13} class="claim-exp-chevron" />
 							</button>
 						{/each}
@@ -490,7 +497,7 @@
 						<span>Select expenses *</span>
 						{#if newSelIds.size > 0}
 							<span style="font-size:12px; color:var(--primary); font-weight:500;">
-								{newSelIds.size} selected · RM {formatMoney(newTotal)}
+								{newSelIds.size} selected · {mainCurrencySymbol()} {formatMoney(newTotal)}
 							</span>
 						{/if}
 					</div>
@@ -535,9 +542,12 @@
 										</div>
 									</div>
 									<div
-										style="font-size:13px; font-weight:600; font-family:'Geist Mono',monospace; white-space:nowrap; color:var(--foreground);"
+										style="font-size:13px; font-weight:600; font-family:'Geist Mono',monospace; white-space:nowrap; color:var(--foreground); text-align:right;"
 									>
-										RM {formatMoney(e.amount)}
+										{mainCurrencySymbol()} {formatMoney(e.mainAmount)}
+										{#if e.currency !== mainCurrency()}
+											<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
+										{/if}
 									</div>
 								</button>
 							{/each}

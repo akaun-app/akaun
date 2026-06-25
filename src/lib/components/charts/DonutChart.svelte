@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
+	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 
 	Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
 
@@ -18,10 +19,11 @@
 	let canvas: HTMLCanvasElement;
 	let chart: Chart | null = null;
 
-	const fmt = new Intl.NumberFormat('en-MY', {
+	const fmt = new Intl.NumberFormat('en-US', {
 		minimumFractionDigits: 0,
 		maximumFractionDigits: 0
 	});
+	const sym = $derived(mainCurrencySymbol());
 
 	function buildConfig(d: typeof data) {
 		return {
@@ -46,7 +48,7 @@
 					tooltip: {
 						callbacks: {
 							label: (ctx: { label: string; parsed: number }) =>
-								` ${ctx.label}: RM ${fmt.format(ctx.parsed)}`
+								` ${ctx.label}: ${mainCurrencySymbol()} ${fmt.format(ctx.parsed)}`
 						}
 					}
 				}
@@ -80,7 +82,7 @@
 		<div
 			style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none;"
 		>
-			<div class="num" style="font-size:14px; font-weight:600;">RM {fmt.format(total)}</div>
+			<div class="num" style="font-size:14px; font-weight:600;">{sym} {fmt.format(total)}</div>
 			<div style="font-size:10px; color:var(--muted-foreground); margin-top:1px;">total</div>
 		</div>
 	</div>
@@ -93,7 +95,7 @@
 				<span style="flex:1; color:var(--foreground); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
 					>{item.label}</span
 				>
-				<span class="num" style="color:var(--muted-foreground);">RM {fmt.format(item.value)}</span>
+				<span class="num" style="color:var(--muted-foreground);">{sym} {fmt.format(item.value)}</span>
 			</div>
 		{/each}
 		{#if data.length === 0}

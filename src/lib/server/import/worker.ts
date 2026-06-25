@@ -9,6 +9,8 @@ import { callLLM } from './llm.js';
 import { detectDuplicate } from './duplicate-detector.js';
 import { importEvents } from './events.js';
 import { resolveContactCandidates } from '../queries/contacts.js';
+import { getExchangeRate } from '../currency/rates.js';
+import { mainCurrencyCode } from '../currency/form.js';
 import { ImportState, DocumentType, Role, documentTypeEnum } from '$lib/enums.js';
 import { join } from 'path';
 
@@ -85,6 +87,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		const incCatsRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 		const expenseCategories: string[] = expCatsRaw ? JSON.parse(expCatsRaw) : [];
 		const incomeCategories: string[] = incCatsRaw ? JSON.parse(incCatsRaw) : [];
+		const mainCurrency = mainCurrencyCode(db);
 
 		log.info({ jobId: job.id, filename: job.originalFilename, model }, 'Processing job');
 
@@ -124,7 +127,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		let result;
 		try {
-			result = await callLLM(text, expenseCategories, incomeCategories, apiKey, model);
+			result = await callLLM(text, expenseCategories, incomeCategories, apiKey, model, mainCurrency);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			log.error({ jobId: job.id, err }, 'LLM extraction failed');
@@ -152,6 +155,16 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		const partyName = docType === DocumentType.Income ? result.item_name : result.supplier;
 		const { matchedId, candidates } = resolveContactCandidates(db, partyName ?? '', role);
 
+		// Resolve the exchange rate up front when the detected currency is foreign, so the
+		// review card shows a converted preview. Left null when no API key / unavailable —
+		// the reviewer then enters it manually.
+		const detectedCurrency = result.currency.toUpperCase();
+		let exchangeRate: number | null = detectedCurrency === mainCurrency ? 1 : null;
+		if (exchangeRate === null) {
+			const rate = await getExchangeRate(db, { from: detectedCurrency, to: mainCurrency, date: result.date });
+			exchangeRate = rate.rate;
+		}
+
 		const now = new Date().toISOString();
 		db.update(importQueue)
 			.set({
@@ -163,6 +176,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 				matchCandidates: candidates.length ? JSON.stringify(candidates) : null,
 				date: result.date,
 				amount: result.amount,
+				currency: detectedCurrency,
+				exchangeRate,
 				reference: result.reference,
 				category: result.category,
 				remark: result.remark,

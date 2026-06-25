@@ -37,6 +37,8 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
+	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { CURRENCIES, currencySymbol, formatCurrencyAmount } from '$lib/currency.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { ExpenseStatus, ClaimStatus, Role } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
@@ -97,6 +99,52 @@
 	let newExpenseDrag = $state(false);
 	let newExpenseFileInput = $state<HTMLInputElement | null>(null);
 
+	// --- Foreign-currency entry (hidden by default) ---
+	const todayISO = () => new Date().toISOString().slice(0, 10);
+	let showForeign = $state(false);
+	// svelte-ignore state_referenced_locally
+	let newCurrency = $state(mainCurrency());
+	let newAmount = $state<string>('');
+	let newRate = $state<string>('');
+	let newDate = $state<string>(todayISO());
+	let rateFetching = $state(false);
+	let rateError = $state('');
+
+	// Auto-fetch the rate when a foreign currency / date is chosen. Editable afterwards;
+	// left blank with a hint when no API key or lookup fails (manual entry).
+	$effect(() => {
+		if (!showForeign) return;
+		const cur = newCurrency;
+		const d = newDate;
+		if (cur === mainCurrency() || !d) { rateError = ''; return; }
+		rateFetching = true;
+		rateError = '';
+		const t = setTimeout(async () => {
+			try {
+				const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`);
+				const json = await res.json();
+				if (json.rate != null) newRate = String(json.rate);
+				else { newRate = ''; rateError = 'No rate found — enter it manually'; }
+			} catch {
+				newRate = '';
+				rateError = 'Could not fetch rate — enter it manually';
+			} finally {
+				rateFetching = false;
+			}
+		}, 400);
+		return () => clearTimeout(t);
+	});
+
+	const isForeign = $derived(showForeign && newCurrency !== mainCurrency());
+	const convertedPreview = $derived.by(() => {
+		const a = parseFloat(newAmount);
+		const r = parseFloat(newRate);
+		if (!isForeign || isNaN(a) || isNaN(r) || r <= 0) return null;
+		return a * r;
+	});
+	// Foreign entry needs a positive rate before it can be submitted.
+	const foreignRateMissing = $derived(isForeign && !(parseFloat(newRate) > 0));
+
 	// Mobile panel detection — full-screen bottom sheet on mobile
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -113,7 +161,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; } });
+	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
@@ -122,8 +170,8 @@
 		if (selectedCats.length) rows = rows.filter((e) => selectedCats.includes(e.category));
 		const mn = amountMin !== '' ? parseFloat(amountMin) : null;
 		const mx = amountMax !== '' ? parseFloat(amountMax) : null;
-		if (mn != null) rows = rows.filter((e) => e.amount >= mn);
-		if (mx != null) rows = rows.filter((e) => e.amount <= mx);
+		if (mn != null) rows = rows.filter((e) => e.mainAmount >= mn);
+		if (mx != null) rows = rows.filter((e) => e.mainAmount <= mx);
 		if (dateFrom) rows = rows.filter((e) => e.date >= dateFrom);
 		if (dateTo) rows = rows.filter((e) => e.date <= dateTo);
 		if (search.trim()) {
@@ -147,14 +195,14 @@
 		return rows;
 	});
 
-	const filteredTotal = $derived(filtered.reduce((s, e) => s + e.amount, 0));
+	const filteredTotal = $derived(filtered.reduce((s, e) => s + e.mainAmount, 0));
 	const activeFilterCount = $derived(
 		selectedCats.length + (amountMin || amountMax ? 1 : 0) + (dateFrom || dateTo ? 1 : 0) + (search.trim() ? 1 : 0)
 	);
 	const allSelected = $derived(filtered.length > 0 && filtered.every((e) => selected.has(e.id)));
 	const someSelected = $derived(filtered.some((e) => selected.has(e.id)) && !allSelected);
 	const selectedList = $derived(filtered.filter((e) => selected.has(e.id)));
-	const selTotal = $derived(selectedList.reduce((s, e) => s + e.amount, 0));
+	const selTotal = $derived(selectedList.reduce((s, e) => s + e.mainAmount, 0));
 	const claimable = $derived(selectedList.length > 0 && selectedList.every((e) => e.status === ExpenseStatus.Unpaid));
 
 	const counts = $derived.by(() => ({
@@ -172,12 +220,12 @@
 		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 		const thisMonth = expenses.filter((e) => e.date.startsWith(monthKey));
 		return {
-			outstanding: unpaid.reduce((s, e) => s + e.amount, 0),
+			outstanding: unpaid.reduce((s, e) => s + e.mainAmount, 0),
 			outstandingCount: unpaid.length,
-			pendingTotal: pending.reduce((s, e) => s + e.amount, 0),
-			monthTotal: thisMonth.reduce((s, e) => s + e.amount, 0),
+			pendingTotal: pending.reduce((s, e) => s + e.mainAmount, 0),
+			monthTotal: thisMonth.reduce((s, e) => s + e.mainAmount, 0),
 			monthCount: thisMonth.length,
-			allTotal: expenses.reduce((s, e) => s + e.amount, 0)
+			allTotal: expenses.reduce((s, e) => s + e.mainAmount, 0)
 		};
 	});
 
@@ -317,10 +365,10 @@
 
 	<!-- Stat strip -->
 	<div class="stat-strip">
-		<StatCard tone="red" label="Outstanding" cur="RM" value={formatMoney(stats.outstanding)} sub="{stats.outstandingCount} unpaid" />
-		<StatCard tone="amber" label="Pending claims" cur="RM" value={formatMoney(stats.pendingTotal)} sub="Awaiting reimbursement" />
-		<StatCard label="This month" cur="RM" value={formatMoney(stats.monthTotal)} sub="{stats.monthCount} records" />
-		<StatCard label="All recorded" cur="RM" value={formatMoney(stats.allTotal)} sub="{counts.all} expenses" />
+		<StatCard tone="red" label="Outstanding" cur={mainCurrencySymbol()} value={formatMoney(stats.outstanding)} sub="{stats.outstandingCount} unpaid" />
+		<StatCard tone="amber" label="Pending claims" cur={mainCurrencySymbol()} value={formatMoney(stats.pendingTotal)} sub="Awaiting reimbursement" />
+		<StatCard label="This month" cur={mainCurrencySymbol()} value={formatMoney(stats.monthTotal)} sub="{stats.monthCount} records" />
+		<StatCard label="All recorded" cur={mainCurrencySymbol()} value={formatMoney(stats.allTotal)} sub="{counts.all} expenses" />
 	</div>
 
 	<div class="work">
@@ -492,7 +540,10 @@
 									{formatDateShort(e.date)}<span class="td-year">{e.date.slice(0, 4)}</span>
 								</td>
 								<td class="td-amount" data-label="Amount">
-									<span class="amount-num">RM {formatMoney(e.amount)}</span>
+									<span class="amount-num">{mainCurrencySymbol()} {formatMoney(e.mainAmount)}</span>
+									{#if e.currency !== mainCurrency()}
+										<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
+									{/if}
 								</td>
 								<td class="row-break"></td>
 							</tr>
@@ -526,7 +577,7 @@
 	</div>
 
 	<!-- Bulk action bar -->
-	<BulkActionBar show={selected.size > 0} count={selected.size} total={`RM ${formatMoney(selTotal)}`} onclear={clearSel}>
+	<BulkActionBar show={selected.size > 0} count={selected.size} total={`${mainCurrencySymbol()} ${formatMoney(selTotal)}`} onclear={clearSel}>
 		{#snippet actions()}
 			<form method="POST" action="?/markPaid" use:enhance={() => () => { clearSel(); }}>
 				<input type="hidden" name="ids" value={[...selected].join(',')} />
@@ -619,12 +670,18 @@
 				</div>
 				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 					<div class="detail-amount">
-						<span class="detail-amount-cur">RM</span>
-						<span class="detail-amount-val">{formatMoney(detailExpense.amount)}</span>
+						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
+						<span class="detail-amount-val">{formatMoney(detailExpense.mainAmount)}</span>
 						{#if detailExpense.claimId}
 							<span class="detail-amount-lock" title="Amount locked (linked to a claim)"><Lock size={15} /></span>
 						{/if}
 					</div>
+					{#if detailExpense.currency !== mainCurrency()}
+						<div class="detail-orig">
+							Original: {detailExpense.currency} {formatCurrencyAmount(detailExpense.amount, detailExpense.currency)}
+							· rate {detailExpense.exchangeRate}
+						</div>
+					{/if}
 					<div class="detail-statusrow">
 						<StatusBadge status={detailExpense.status} />
 					</div>
@@ -771,12 +828,67 @@
 				<div class="field-grid field">
 					<div>
 						<label class="field-label" for="date">Date *</label>
-						<DatePicker name="date" defaultToday />
+						<DatePicker name="date" bind:value={newDate} />
 					</div>
 					<div>
-						<label class="field-label" for="amount">Amount (RM) *</label>
-						<AmountInput id="amount" name="amount" placeholder="0.00" required />
+						<label class="field-label" for="amount">Amount{isForeign ? ` (${newCurrency})` : ''} *</label>
+						<AmountInput
+							id="amount"
+							name="amount"
+							placeholder="0.00"
+							required
+							bind:value={newAmount}
+							prefix={isForeign ? currencySymbol(newCurrency) : undefined}
+						/>
 					</div>
+				</div>
+
+				<!-- Foreign currency (advanced, hidden by default) -->
+				<input type="hidden" name="currency" value={isForeign ? newCurrency : mainCurrency()} />
+				<input type="hidden" name="exchangeRate" value={isForeign ? newRate : '1'} />
+				<div class="field">
+					{#if !showForeign}
+						<button type="button" class="foreign-toggle" onclick={() => (showForeign = true)}>
+							<Plus size={13} /> Foreign currency
+						</button>
+					{:else}
+						<div class="foreign-box">
+							<div class="foreign-head">
+								<span class="field-label" style="margin:0;">Foreign currency</span>
+								<button type="button" class="foreign-close" onclick={() => { showForeign = false; newCurrency = mainCurrency(); newRate = ''; rateError = ''; }} aria-label="Remove foreign currency">
+									<X size={13} />
+								</button>
+							</div>
+							<div class="field-grid">
+								<div>
+									<label class="field-label" for="fx-cur">Currency</label>
+									<Select.Root type="single" bind:value={newCurrency}>
+										<Select.Trigger id="fx-cur" class="w-full">{newCurrency}</Select.Trigger>
+										<Select.Content>
+											{#each CURRENCIES as c (c.code)}
+												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+								<div>
+									<label class="field-label" for="fx-rate">Rate (1 {newCurrency} = ? {mainCurrency()})</label>
+									<Input id="fx-rate" type="text" inputmode="decimal" placeholder="0.0000" bind:value={newRate} disabled={!isForeign} />
+								</div>
+							</div>
+							{#if isForeign}
+								<div class="foreign-note">
+									{#if rateFetching}
+										Fetching rate…
+									{:else if rateError}
+										{rateError}
+									{:else if convertedPreview != null}
+										≈ {mainCurrencySymbol()} {formatMoney(convertedPreview)} in {mainCurrency()}
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 
 				<div class="field">
@@ -857,7 +969,7 @@
 					<button type="button" onclick={() => (showNew = false)} style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;">
 						Cancel
 					</button>
-					<button type="submit" style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;">
+					<button type="submit" disabled={foreignRateMissing} title={foreignRateMissing ? 'Enter an exchange rate first' : undefined} style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{foreignRateMissing ? 0.5 : 1};">
 						Add expense
 					</button>
 				</div>

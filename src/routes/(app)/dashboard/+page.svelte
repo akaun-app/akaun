@@ -11,7 +11,8 @@
 	} from '@lucide/svelte';
 	import LazyChart from '$lib/components/ui/LazyChart.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
-	import { formatMoney, formatMoneyRM, formatDateShort } from '$lib/format.js';
+	import { formatMoney, formatDateShort } from '$lib/format.js';
+	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -110,7 +111,7 @@
 					<span class="kpi-icon"><TrendingUp size={16} /></span>
 					<span class="kpi-label">Income</span>
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">RM</span>{formatMoney(data.incTotal)}</div>
+				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.incTotal)}</div>
 				<div class="kpi-sub">{data.incCount} records · {periodLabel}</div>
 			</div>
 			<div class="kpi">
@@ -118,7 +119,7 @@
 					<span class="kpi-icon"><Wallet size={16} /></span>
 					<span class="kpi-label">Expenses</span>
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">RM</span>{formatMoney(data.expTotal)}</div>
+				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.expTotal)}</div>
 				<div class="kpi-sub">{data.expCount} records · {periodLabel}</div>
 			</div>
 			<div class="kpi" class:tone-primary={data.net >= 0} class:tone-red={data.net < 0}>
@@ -133,7 +134,7 @@
 					<span class="kpi-label">Net</span>
 				</div>
 				<div class="kpi-value">
-					<span class="kpi-cur">RM</span>{formatMoney(Math.abs(data.net))}
+					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(Math.abs(data.net))}
 					{#if data.net < 0}<span style="font-size:14px; color:var(--red)"> deficit</span>{/if}
 				</div>
 				<div class="kpi-sub">Income − expenses</div>
@@ -143,7 +144,7 @@
 					<span class="kpi-icon"><FileText size={16} /></span>
 					<span class="kpi-label">Outstanding</span>
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">RM</span>{formatMoney(data.outstanding)}</div>
+				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}</div>
 				<div class="kpi-sub">Unpaid · all time</div>
 			</div>
 		</div>
@@ -215,7 +216,7 @@
 								<div class="activity-sub">{item.sub || ''} · {formatDateShort(item.date)}</div>
 							</div>
 							<div class="activity-amt {item.kind}">
-								{item.kind === 'income' ? '+' : '−'}RM {formatMoney(item.amount)}
+								{item.kind === 'income' ? '+' : '−'}{mainCurrencySymbol()} {formatMoney(item.amount)}
 							</div>
 						</div>
 					{/each}

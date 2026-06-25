@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "82690e95-f9c3-4ede-af66-28f6c104476b",
+  "id": "941be972-79ef-4736-9a27-d13fbe3fb7cb",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "app_sequences": {
@@ -416,6 +416,53 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "exchange_rates": {
+      "name": "exchange_rates",
+      "columns": {
+        "date": {
+          "name": "date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rate": {
+          "name": "rate",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(datetime('now'))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "exchange_rates_date_code_pk": {
+          "columns": [
+            "date",
+            "code"
+          ],
+          "name": "exchange_rates_date_code_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "expense_attachments": {
       "name": "expense_attachments",
       "columns": {
@@ -590,6 +637,22 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'USD'"
+        },
+        "exchange_rate": {
+          "name": "exchange_rate",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
         },
         "claim_id": {
           "name": "claim_id",
@@ -910,6 +973,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "exchange_rate": {
+          "name": "exchange_rate",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "reference": {
           "name": "reference",
           "type": "text",
@@ -1196,6 +1273,22 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'USD'"
+        },
+        "exchange_rate": {
+          "name": "exchange_rate",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
         },
         "created_by": {
           "name": "created_by",

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip } from 'chart.js';
+	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 
 	Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip);
 
@@ -43,7 +44,7 @@
 							maxTicksLimit: 4,
 							font: { family: '"Geist Mono", monospace', size: 11 },
 							callback: (v: number | string) =>
-								'RM ' + (typeof v === 'number' ? v.toLocaleString() : v)
+								mainCurrencySymbol() + ' ' + (typeof v === 'number' ? v.toLocaleString() : v)
 						},
 						border: { display: false }
 					}
