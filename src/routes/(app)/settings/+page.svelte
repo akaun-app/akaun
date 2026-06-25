@@ -191,10 +191,6 @@
 						<input type="hidden" name="currencyCode" value={mainCur} />
 						<div class="set-rows">
 							<div class="set-row">
-								<div class="set-row-label">Username</div>
-								<div class="set-row-value">{data.username}</div>
-							</div>
-							<div class="set-row">
 								<div>
 									<div class="set-row-label">Currency</div>
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
