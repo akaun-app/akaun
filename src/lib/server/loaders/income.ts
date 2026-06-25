@@ -4,7 +4,8 @@ import { listIncomes } from '$lib/server/queries/income.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { createIncome, removeIncome } from '$lib/server/services/income.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
-import { resolveRecordCurrency } from '$lib/server/currency/form.js';
+import { getUserPreference, setUserPreference, USER_PREF_KEYS } from '$lib/server/userPreferences.js';
+import { resolveRecordCurrency, mainCurrencyCode } from '$lib/server/currency/form.js';
 import { Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -42,14 +43,20 @@ export function loadIncomePage(locals: App.Locals, openIncomeId: number | null) 
 		throw redirect(302, '/income');
 	}
 
-	return { incomes: allIncomes, categories, stats, openIncomeId };
+	const lastForeignCurrency = getUserPreference(
+		db,
+		locals.user!.id,
+		USER_PREF_KEYS.lastForeignCurrencyIncome
+	);
+
+	return { incomes: allIncomes, categories, stats, openIncomeId, lastForeignCurrency };
 }
 
 export const incomeActions: Actions = {
 	create: async ({ locals, request }) => {
 		const userId = locals.user!.id;
 		const data = await request.formData();
-		const category = String(data.get('category') ?? 'Other').trim();
+		const category = String(data.get('category') ?? '').trim();
 		const date = String(data.get('date') ?? '').trim();
 		const amount = parseFloat(String(data.get('amount') ?? '0'));
 		const reference = String(data.get('reference') ?? '').trim();
@@ -63,11 +70,16 @@ export const incomeActions: Actions = {
 		else if (newName) contactId = resolveOrCreateContact(db, newName, Role.Customer, userId);
 
 		if (!contactId) return fail(400, { error: 'Customer is required' });
+		if (!category) return fail(400, { error: 'Category is required' });
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
+		if (!reference) return fail(400, { error: 'Reference is required' });
 
 		const cur = await resolveRecordCurrency(db, data, date);
 		if (!cur.ok) return fail(400, { error: cur.message });
+		if (cur.currency !== mainCurrencyCode(db)) {
+			setUserPreference(db, userId, USER_PREF_KEYS.lastForeignCurrencyIncome, cur.currency);
+		}
 
 		const income = createIncome(db, userId, {
 			contactId,

@@ -1,7 +1,15 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
+import { expenses, incomes } from '$lib/server/db/schema.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { fail } from '@sveltejs/kit';
+import { sql } from 'drizzle-orm';
+
+function hasAnyTransactions(): boolean {
+	const expenseCount = db.select({ n: sql<number>`count(*)` }).from(expenses).get()!.n;
+	const incomeCount = db.select({ n: sql<number>`count(*)` }).from(incomes).get()!.n;
+	return expenseCount + incomeCount > 0;
+}
 
 const DEFAULT_EXPENSE_CATEGORIES = [
 	'Food & Beverage',
@@ -30,6 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const expCatRaw = getSetting(db, SETTING_KEYS.expenseCategories);
 	const incCatRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
+	const currencyLocked = hasAnyTransactions();
 
 	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
 	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
@@ -46,6 +55,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		expenseCategories,
 		incomeCategories,
 		currency,
+		currencyLocked,
 		username: locals.user!.username,
 		autoImportApiKey,
 		autoImportModel,
@@ -88,6 +98,7 @@ export const actions: Actions = {
 		const code = String(data.get('currencyCode') ?? '').trim().toUpperCase();
 
 		if (!/^[A-Z]{3}$/.test(code)) return fail(400, { error: 'Invalid currency code' });
+		if (hasAnyTransactions()) return fail(400, { error: 'Currency is locked once transactions exist' });
 
 		setSetting(db, SETTING_KEYS.currencyCode, code);
 

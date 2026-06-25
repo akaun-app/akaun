@@ -187,26 +187,41 @@
 						<h2 class="set-section-title">General</h2>
 						<p class="set-section-sub">Account and display settings</p>
 					</div>
-					<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
-						<input type="hidden" name="currencyCode" value={mainCur} />
+					{#if data.currencyLocked}
 						<div class="set-rows">
 							<div class="set-row">
 								<div>
 									<div class="set-row-label">Currency</div>
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
 								</div>
-								<Select.Root type="single" name="mainCurrencyDisplay" bind:value={mainCur}>
-									<Select.Trigger class="set-input-right set-input-wide">{curLabel}</Select.Trigger>
-									<Select.Content>
-										{#each CURRENCIES as c (c.code)}
-											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-										{/each}
-									</Select.Content>
-								</Select.Root>
+								<div class="set-input-right" style="display:flex; align-items:center; color:var(--muted-foreground);">{curLabel}</div>
 							</div>
 						</div>
-						<Button type="submit" class="mt-4">Save</Button>
-					</form>
+						<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:8px;">
+							<Lock size={13} /> Currency is locked once transactions exist — changing it would silently corrupt historical amounts.
+						</p>
+					{:else}
+						<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
+							<input type="hidden" name="currencyCode" value={mainCur} />
+							<div class="set-rows">
+								<div class="set-row">
+									<div>
+										<div class="set-row-label">Currency</div>
+										<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
+									</div>
+									<Select.Root type="single" name="mainCurrencyDisplay" bind:value={mainCur}>
+										<Select.Trigger class="set-input-right set-input-wide">{curLabel}</Select.Trigger>
+										<Select.Content>
+											{#each CURRENCIES as c (c.code)}
+												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+							</div>
+							<Button type="submit" class="mt-4">Save</Button>
+						</form>
+					{/if}
 				</div>
 
 			{:else if activeTab === 'intelligence'}

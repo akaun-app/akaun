@@ -75,6 +75,19 @@ export const userNavPreferences = sqliteTable(
 	(t) => [primaryKey({ columns: [t.userId, t.itemId] })]
 );
 
+// Per-user scalar preferences (KV), the per-user mirror of the global `settings` table.
+export const userPreferences = sqliteTable(
+	'user_preferences',
+	{
+		userId: integer('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		key: text('key').notNull(),
+		value: text('value').notNull()
+	},
+	(t) => [primaryKey({ columns: [t.userId, t.key] })]
+);
+
 export const sessions = sqliteTable('sessions', {
 	id: text('id').primaryKey(),
 	userId: integer('user_id')

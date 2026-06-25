@@ -85,7 +85,7 @@
 	const todayISO = () => new Date().toISOString().slice(0, 10);
 	let showForeign = $state(false);
 	// svelte-ignore state_referenced_locally
-	let newCurrency = $state(mainCurrency());
+	let newCurrency = $state(data.lastForeignCurrency ?? mainCurrency());
 	let newAmount = $state<string>('');
 	let newForeignAmount = $state<string>('');
 	let newRate = $state<string>('');
@@ -145,7 +145,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; newIncomeCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newForeignAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
+	$effect(() => { if (!showNew) { newIncomeFiles = []; newContactId = null; newContactName = null; newIncomeCategory = ''; showForeign = false; newCurrency = data.lastForeignCurrency ?? mainCurrency(); newAmount = ''; newForeignAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
 
 	function toggleCat(cat: string) {
 		selectedCats = selectedCats.includes(cat)
@@ -807,7 +807,7 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label" for="category">Category</label>
+					<label class="field-label" for="category">Category *</label>
 					<Select.Root type="single" name="category" bind:value={newIncomeCategory}>
 						<Select.Trigger id="category" class="w-full">
 							{newIncomeCategory || 'Select category'}
@@ -821,8 +821,8 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label" for="reference">Reference</label>
-					<Input id="reference" name="reference" type="text" placeholder="e.g. INV-001" />
+					<label class="field-label" for="reference">Reference *</label>
+					<Input id="reference" name="reference" type="text" required placeholder="e.g. INV-001" />
 				</div>
 
 				<div class="field">

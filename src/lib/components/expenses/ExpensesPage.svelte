@@ -103,7 +103,7 @@
 	const todayISO = () => new Date().toISOString().slice(0, 10);
 	let showForeign = $state(false);
 	// svelte-ignore state_referenced_locally
-	let newCurrency = $state(mainCurrency());
+	let newCurrency = $state(data.lastForeignCurrency ?? mainCurrency());
 	let newAmount = $state<string>('');
 	let newForeignAmount = $state<string>('');
 	let newRate = $state<string>('');
@@ -167,7 +167,7 @@
 	$effect(() => {
 		if (form?.success) showNew = false;
 	});
-	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; showForeign = false; newCurrency = mainCurrency(); newAmount = ''; newForeignAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
+	$effect(() => { if (!showNew) { newExpenseFiles = []; newContactId = null; newContactName = null; newExpenseCategory = ''; showForeign = false; newCurrency = data.lastForeignCurrency ?? mainCurrency(); newAmount = ''; newForeignAmount = ''; newRate = ''; rateError = ''; newDate = todayISO(); } });
 
 	// --- Derived ---
 	const filtered = $derived.by(() => {
@@ -898,7 +898,7 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label" for="supplier">Supplier</label>
+					<label class="field-label" for="supplier">Supplier *</label>
 					<ContactSelect
 						role={Role.Supplier}
 						bind:value={newContactId}
@@ -910,7 +910,7 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label" for="category">Category</label>
+					<label class="field-label" for="category">Category *</label>
 					<Select.Root type="single" name="category" bind:value={newExpenseCategory}>
 						<Select.Trigger id="category" class="w-full">
 							{newExpenseCategory || 'Select category'}
@@ -924,8 +924,8 @@
 				</div>
 
 				<div class="field">
-					<label class="field-label" for="reference">Reference</label>
-					<Input id="reference" name="reference" type="text" placeholder="e.g. INV-001" />
+					<label class="field-label" for="reference">Reference *</label>
+					<Input id="reference" name="reference" type="text" required placeholder="e.g. INV-001" />
 				</div>
 
 				<div class="field">

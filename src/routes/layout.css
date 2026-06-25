@@ -520,6 +520,9 @@ th.sortable:hover .th-idle { opacity: .5; }
 .amount-input:focus-within { border-color: var(--ring); box-shadow: 0 0 0 3px var(--primary-soft); }
 .amount-prefix { padding: 0 4px 0 11px; color: var(--muted-foreground); font-size: 13px; font-family: "Geist Mono", monospace; }
 .amount-field { border: none !important; box-shadow: none !important; height: 34px; padding-left: 4px; background: transparent; flex: 1; font-family: "Geist Mono", monospace; font-size: 13.5px; color: var(--foreground); outline: none; }
+.amount-input:has(.amount-field:disabled), .amount-input:has(.amount-field:read-only) { background: var(--muted); border-color: var(--input); cursor: not-allowed; }
+.amount-input:has(.amount-field:disabled):focus-within, .amount-input:has(.amount-field:read-only):focus-within { border-color: var(--input); box-shadow: none; }
+.amount-field:disabled, .amount-field:read-only { cursor: not-allowed; color: var(--muted-foreground); }
 
 /* ---------- Segmented control ---------- */
 .seg { display: inline-flex; background: var(--muted); border-radius: 9px; padding: 3px; gap: 2px; }

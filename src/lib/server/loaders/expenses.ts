@@ -6,7 +6,8 @@ import { createExpense, patchExpense, removeExpense } from '$lib/server/services
 import { createClaim } from '$lib/server/services/claims.js';
 import { canEditAmount } from '$lib/server/locking.js';
 import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
-import { resolveRecordCurrency } from '$lib/server/currency/form.js';
+import { getUserPreference, setUserPreference, USER_PREF_KEYS } from '$lib/server/userPreferences.js';
+import { resolveRecordCurrency, mainCurrencyCode } from '$lib/server/currency/form.js';
 import { ExpenseStatus, Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -41,7 +42,13 @@ export function loadExpensesPage(locals: App.Locals, openExpenseId: number | nul
 		throw redirect(302, '/expenses');
 	}
 
-	return { expenses: allExpenses, counts, categories, openExpenseId };
+	const lastForeignCurrency = getUserPreference(
+		db,
+		locals.user!.id,
+		USER_PREF_KEYS.lastForeignCurrencyExpense
+	);
+
+	return { expenses: allExpenses, counts, categories, openExpenseId, lastForeignCurrency };
 }
 
 /** Resolve the submitted contact intent (numeric id or a typed new name) → contactId. */
@@ -58,20 +65,26 @@ export const expensesActions: Actions = {
 		const userId = locals.user!.id;
 		const data = await request.formData();
 		const itemName = String(data.get('itemName') ?? '').trim();
-		const category = String(data.get('category') ?? 'Other').trim();
+		const category = String(data.get('category') ?? '').trim();
 		const date = String(data.get('date') ?? '').trim();
 		const amount = parseFloat(String(data.get('amount') ?? '0'));
 		const reference = String(data.get('reference') ?? '').trim();
 		const remark = String(data.get('remark') ?? '').trim();
 
 		if (!itemName) return fail(400, { error: 'Item name is required' });
+		if (!category) return fail(400, { error: 'Category is required' });
 		if (!date) return fail(400, { error: 'Date is required' });
 		if (isNaN(amount) || amount <= 0) return fail(400, { error: 'Valid amount is required' });
+		if (!reference) return fail(400, { error: 'Reference is required' });
 
 		const cur = await resolveRecordCurrency(db, data, date);
 		if (!cur.ok) return fail(400, { error: cur.message });
+		if (cur.currency !== mainCurrencyCode(db)) {
+			setUserPreference(db, userId, USER_PREF_KEYS.lastForeignCurrencyExpense, cur.currency);
+		}
 
 		const contactId = resolveContactFromForm(data, userId);
+		if (!contactId) return fail(400, { error: 'Supplier is required' });
 		const expense = createExpense(db, userId, {
 			itemName,
 			contactId,

@@ -105,7 +105,10 @@
 
 	onMount(() => {
 		const onDocClick = (e: MouseEvent) => {
-			if (rootEl && !rootEl.contains(e.target as Node)) open = false;
+			if (rootEl && !rootEl.contains(e.target as Node)) {
+				open = false;
+				if (!selectedLabel) query = '';
+			}
 		};
 		document.addEventListener('click', onDocClick);
 		return () => document.removeEventListener('click', onDocClick);
