@@ -18,7 +18,7 @@ export const frankfurterProvider: ExchangeRateProvider = {
 		const symbols = quotes.filter((q) => q && q !== base);
 		if (symbols.length === 0) return {};
 
-		const url = `${RATES_URL}?base=${encodeURIComponent(base)}&symbols=${encodeURIComponent(
+		const url = `${RATES_URL}?base=${encodeURIComponent(base)}&quotes=${encodeURIComponent(
 			symbols.join(',')
 		)}&date=${encodeURIComponent(date)}`;
 
