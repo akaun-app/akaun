@@ -187,15 +187,13 @@
 						<h2 class="set-section-title">General</h2>
 						<p class="set-section-sub">Account and display settings</p>
 					</div>
-					<div class="set-rows">
-						<div class="set-row">
-							<div class="set-row-label">Username</div>
-							<div class="set-row-value">{data.username}</div>
-						</div>
-					</div>
 					<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
 						<input type="hidden" name="currencyCode" value={mainCur} />
-						<div class="set-rows" style="margin-top:8px;">
+						<div class="set-rows">
+							<div class="set-row">
+								<div class="set-row-label">Username</div>
+								<div class="set-row-value">{data.username}</div>
+							</div>
 							<div class="set-row">
 								<div>
 									<div class="set-row-label">Currency</div>
@@ -211,7 +209,6 @@
 								</Select.Root>
 							</div>
 						</div>
-						<p class="set-section-sub" style="margin-top:12px;">Exchange rates are fetched automatically by transaction date from <a href="https://frankfurter.dev" target="_blank" rel="noreferrer">Frankfurter</a> (free, no API key). When a rate is unavailable, you'll enter it manually.</p>
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
