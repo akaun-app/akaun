@@ -60,6 +60,10 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
+			// SvelteKit's built-in Origin check has no knowledge of our Bearer-token auth and
+			// would block third-party API-token requests with non-JSON bodies (e.g. file uploads).
+			// hooks.server.ts implements the real CSRF check, scoped to cookie-session requests only.
+			csrf: { trustedOrigins: ['*'] },
 
 			adapter: adapter()
 		})

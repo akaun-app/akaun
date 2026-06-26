@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<!--
+  CSRF proof-of-concept for the Akaun app.
+
+  Purpose: prove that cookie-session CSRF protection (the custom Origin check in
+  src/hooks.server.ts) still blocks cross-site mutating requests after disabling
+  SvelteKit's built-in csrf.checkOrigin in vite.config.ts.
+
+  Usage:
+  1. Edit the `action` URL below to point at your running Akaun instance.
+  2. Log into the Akaun app normally in your browser (sets the httpOnly `session` cookie).
+  3. Serve THIS file from a different origin than the app, e.g.:
+       python3 -m http.server 9999
+     then open http://localhost:9999/csrf-poc.html in the SAME browser profile
+     (so the ambient session cookie is sent — sameSite=lax still allows this for a
+     top-level navigation/form POST).
+  4. Expected result: the form auto-submits and the app responds
+     403 Forbidden (CSRF origin check failed) — proving the custom Origin check in
+     hooks.server.ts is still active and doing its job.
+  5. Control: submit the same kind of request from a page served at the app's own
+     origin (or just use the app's normal UI) and confirm it succeeds — this shows
+     the block above is specifically the cross-origin Origin check, not something
+     else broken.
+  6. Separately, confirm a Bearer-token request (no cookies involved) succeeds, e.g.:
+       curl -X POST https://<akaun-host>/api/import \
+         -H "Authorization: Bearer <token>" \
+         -F file=@test.pdf
+     This proves API-token requests are unaffected by either CSRF mechanism.
+
+  This file is a manual-verification fixture, not part of the app source, build, or
+  test suite — it documents how to confirm the CSRF behavior described above.
+-->
+<body>
+  <h3>CSRF PoC &mdash; cross-site form submit using ambient cookies, no matching Origin</h3>
+  <p>This page will auto-submit a multipart form to the Akaun API below.</p>
+  <form id="f" method="POST" action="https://YOUR-AKAUN-HOST/api/import" enctype="multipart/form-data">
+    <input type="file" name="file" />
+  </form>
+  <script>
+    // Auto-submit on load to simulate a real CSRF attack page.
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('f').submit();
+    });
+  </script>
+</body>
+</html>
