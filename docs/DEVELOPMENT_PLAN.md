@@ -1,5 +1,7 @@
 # Akaun Web — SvelteKit Rebuild Plan
 
+> Last updated: 2026-06-26
+
 ## Context
 
 Rebuilding the SwiftUI personal finance tracker (Akaun) as a SvelteKit webapp hosted on a public VPS. The app tracks expenses, income, and reimbursement claims for a single user (freelancer/small business). Key requirements: web UI for daily use, REST API compatible with iOS Shortcuts for quick expense logging on mobile, SQLite now with a clean PostgreSQL migration path. Reference docs: `/Users/tanghaoquan/Code/Akaun/WEBAPP_REFERENCE.md`, `/Users/tanghaoquan/Code/Akaun/CLAUDE.md`.
