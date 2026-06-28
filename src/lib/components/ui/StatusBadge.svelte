@@ -18,13 +18,13 @@
 		claimed: { label: 'Claimed', tone: 'green' },
 		received: { label: 'Received', tone: 'green' },
 		// Quotation statuses (labels from QuotationStatusLabels in enums.ts)
-		draft: { label: 'Draft', tone: 'gray' },
-		sent: { label: 'Sent', tone: 'amber' },
+		draft: { label: 'Draft', tone: '' },
+		sent: { label: 'Sent', tone: 'blue' },
 		accepted: { label: 'Accepted', tone: 'green' },
 		declined: { label: 'Declined', tone: 'red' },
 		converted: { label: 'Converted', tone: 'blue' },
 		// Invoice-only
-		cancelled: { label: 'Cancelled', tone: 'gray' },
+		cancelled: { label: 'Cancelled', tone: 'red' },
 		// Derived statuses (never stored, computed at read time)
 		expired: { label: 'Expired', tone: 'amber' },
 		overdue: { label: 'Overdue', tone: 'red' }

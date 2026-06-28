@@ -12,7 +12,8 @@
 		FileText,
 		Trash2,
 		Printer,
-		ChevronRight
+		ChevronRight,
+		Receipt
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -162,7 +163,8 @@
 		sent: quotations.filter((q) => q.status === QuotationStatus.Sent).length,
 		accepted: quotations.filter((q) => q.status === QuotationStatus.Accepted).length,
 		declined: quotations.filter((q) => q.status === QuotationStatus.Declined).length,
-		converted: quotations.filter((q) => q.status === QuotationStatus.Converted).length
+		converted: quotations.filter((q) => q.status === QuotationStatus.Converted).length,
+		expired: quotations.filter((q) => q.isExpired).length
 	}));
 
 	// Stats
@@ -186,7 +188,11 @@
 	// Filtered + sorted list
 	const filtered = $derived.by(() => {
 		let rows = quotations.slice();
-		if (statusTab !== 'all') rows = rows.filter((q) => q.status === STATUS_CODE[statusTab]);
+		if (statusTab === 'expired') {
+			rows = rows.filter((q) => q.isExpired);
+		} else if (statusTab !== 'all') {
+			rows = rows.filter((q) => q.status === STATUS_CODE[statusTab]);
+		}
 		if (dateFrom) rows = rows.filter((q) => q.issueDate >= dateFrom);
 		if (dateTo) rows = rows.filter((q) => q.issueDate <= dateTo);
 		if (search.trim()) {
@@ -361,7 +367,7 @@
 		const res = await fetch(`/api/quotations/${id}/convert`, { method: 'POST' });
 		if (res.ok) {
 			const json = await res.json();
-			goto('/invoices/' + json.invoiceId);
+			goto(resolve('/(app)/invoices/[id]', { id: String(json.invoice.id) }));
 		}
 	}
 
@@ -469,7 +475,7 @@
 			<!-- Toolbar -->
 			<div class="toolbar">
 				<div class="status-tabs">
-					{#each [['all', 'All'], ['draft', 'Draft'], ['sent', 'Sent'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['converted', 'Converted']] as [id, label]}
+					{#each [['all', 'All'], ['draft', 'Draft'], ['sent', 'Sent'], ['accepted', 'Accepted'], ['declined', 'Declined'], ['converted', 'Converted'], ['expired', 'Expired']] as [id, label]}
 						<button
 							class="status-tab"
 							class:active={statusTab === id}
@@ -933,6 +939,24 @@
 							{/if}
 						</div>
 
+						<!-- Linked invoice relation card -->
+						{#if detailQuotation?.convertedInvoiceId}
+							<button
+								type="button"
+								class="linked-invoice-card related-link"
+								onclick={() => goto(resolve('/(app)/invoices/[id]', { id: String(detailQuotation!.convertedInvoiceId) }))}
+							>
+								<div class="linked-invoice-icon">
+									<Receipt size={16} />
+								</div>
+								<div class="linked-invoice-body">
+									<div class="linked-invoice-title">Invoice</div>
+									<div class="linked-invoice-sub">Converted from this quotation</div>
+								</div>
+								<ChevronRight size={14} style="color:var(--muted-foreground); flex-shrink:0;" />
+							</button>
+						{/if}
+
 						<!-- Line items (read-only) -->
 						{#if detailQuotation.lines.length > 0}
 							<div class="detail-section-label">Line Items</div>
@@ -994,14 +1018,14 @@
 								<Trash2 size={14} /> Delete
 							</button>
 							<a
-								href="/print/quotations/{detailQuotation.id}"
+								href="/quotations/{detailQuotation.id}/print"
 								target="_blank"
 								class="sheet-btn"
 								style="text-decoration:none;"
 							>
 								<Printer size={14} /> Print
 							</a>
-							{#if detailQuotation.status !== QuotationStatus.Converted}
+							{#if detailQuotation.status === QuotationStatus.Accepted}
 								<button
 									type="button"
 									class="sheet-btn"
@@ -1264,6 +1288,50 @@
 		font-size: 14px;
 		font-weight: 600;
 		color: var(--foreground);
+	}
+
+	.linked-invoice-card {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		width: 100%;
+		padding: 10px 12px;
+		margin-top: 12px;
+		margin-bottom: 4px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--background);
+		text-align: left;
+		font-family: inherit;
+	}
+
+	.linked-invoice-icon {
+		width: 34px;
+		height: 34px;
+		border-radius: 7px;
+		background: var(--accent);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		color: var(--foreground);
+	}
+
+	.linked-invoice-body {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.linked-invoice-title {
+		font-size: 13.5px;
+		font-weight: 500;
+		color: var(--foreground);
+	}
+
+	.linked-invoice-sub {
+		font-size: 12px;
+		color: var(--muted-foreground);
+		margin-top: 1px;
 	}
 
 	.result-total {

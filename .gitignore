@@ -33,3 +33,4 @@ node_modules/
 # Data directory (DB + file storage)
 /data/
 .vercel
+.superpowers/

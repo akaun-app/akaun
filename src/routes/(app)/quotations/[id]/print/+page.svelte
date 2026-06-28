@@ -2,7 +2,8 @@
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
-	const invoice = $derived(data.invoice);
+	const quotation = $derived(data.quotation);
+	const settings = $derived(data.settings);
 
 	function fmt(n: number): string {
 		return new Intl.NumberFormat('en-MY', {
@@ -20,15 +21,10 @@
 		];
 		return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
 	}
-
-	const today = new Date().toISOString().slice(0, 10);
-	const isOverdue = $derived(
-		invoice.dueDate !== null && invoice.dueDate < today && invoice.isOverdue
-	);
 </script>
 
 <svelte:head>
-	<title>{invoice.invoiceNumber} - Invoice</title>
+	<title>{quotation.quotationNumber} - Quotation</title>
 </svelte:head>
 
 <div class="page">
@@ -36,46 +32,53 @@
 
 	<header class="doc-header">
 		<div class="brand">
-			<div class="brand-name">Akaun</div>
+			{#if settings.companyName}
+				<div class="brand-name">{settings.companyName}</div>
+				{#if settings.companyAddress}
+					<div class="brand-address">{settings.companyAddress}</div>
+				{/if}
+				{#if settings.companyRegistrationNo}
+					<div class="brand-regno">Reg. No: {settings.companyRegistrationNo}</div>
+				{/if}
+			{:else}
+				<div class="brand-name">Akaun</div>
+			{/if}
 		</div>
 		<div class="doc-meta">
-			<div class="doc-type">INVOICE</div>
-			<div class="doc-number">{invoice.invoiceNumber}</div>
+			<div class="doc-type">QUOTATION</div>
+			<div class="doc-number">{quotation.quotationNumber}</div>
 		</div>
 	</header>
 
 	<div class="doc-info">
 		<div class="doc-info-col">
-			{#if invoice.contactName}
+			{#if quotation.contactName}
 				<div class="info-section">
 					<div class="info-label">Bill To</div>
-					<div class="info-value">{invoice.contactName}</div>
+					<div class="info-value">{quotation.contactName}</div>
 				</div>
 			{/if}
 		</div>
 		<div class="doc-info-col doc-info-right">
 			<div class="info-section">
 				<div class="info-label">Issue Date</div>
-				<div class="info-value">{formatDate(invoice.issueDate)}</div>
+				<div class="info-value">{formatDate(quotation.issueDate)}</div>
 			</div>
-			{#if invoice.dueDate}
+			{#if quotation.expiryDate}
 				<div class="info-section">
-					<div class="info-label">Due Date</div>
-					<div class="info-value" class:overdue={isOverdue}>
-						{formatDate(invoice.dueDate)}
-						{#if isOverdue}<span class="overdue-tag">OVERDUE</span>{/if}
-					</div>
+					<div class="info-label">Valid Until</div>
+					<div class="info-value">{formatDate(quotation.expiryDate)}</div>
 				</div>
 			{/if}
-			{#if invoice.reference}
+			{#if quotation.reference}
 				<div class="info-section">
 					<div class="info-label">Reference</div>
-					<div class="info-value">{invoice.reference}</div>
+					<div class="info-value">{quotation.reference}</div>
 				</div>
 			{/if}
 			<div class="info-section">
 				<div class="info-label">Currency</div>
-				<div class="info-value">{invoice.currency}</div>
+				<div class="info-value">{quotation.currency}</div>
 			</div>
 		</div>
 	</div>
@@ -90,7 +93,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each invoice.lines as line}
+			{#each quotation.lines as line}
 				<tr>
 					<td class="col-desc">{line.description}</td>
 					<td class="col-qty">{line.quantity}</td>
@@ -102,26 +105,26 @@
 		<tfoot>
 			<tr class="subtotal-row">
 				<td colspan="3" class="subtotal-label">Subtotal</td>
-				<td class="col-total">{fmt(invoice.subtotal)}</td>
+				<td class="col-total">{fmt(quotation.subtotal)}</td>
 			</tr>
 			<tr class="total-row">
-				<td colspan="3" class="total-label">Total ({invoice.currency})</td>
-				<td class="col-total total-val">{fmt(invoice.total)}</td>
+				<td colspan="3" class="total-label">Total ({quotation.currency})</td>
+				<td class="col-total total-val">{fmt(quotation.total)}</td>
 			</tr>
 		</tfoot>
 	</table>
 
-	{#if invoice.notes}
+	{#if quotation.notes}
 		<div class="doc-section">
 			<div class="section-label">Notes</div>
-			<div class="section-text">{invoice.notes}</div>
+			<div class="section-text">{quotation.notes}</div>
 		</div>
 	{/if}
 
-	{#if invoice.terms}
+	{#if quotation.terms}
 		<div class="doc-section">
 			<div class="section-label">Terms &amp; Conditions</div>
-			<div class="section-text">{invoice.terms}</div>
+			<div class="section-text">{quotation.terms}</div>
 		</div>
 	{/if}
 </div>
@@ -178,6 +181,20 @@
 		color: #111;
 	}
 
+	.brand-address {
+		font-size: 13px;
+		color: #555;
+		margin-top: 4px;
+		line-height: 1.4;
+		white-space: pre-line;
+	}
+
+	.brand-regno {
+		font-size: 12px;
+		color: #777;
+		margin-top: 4px;
+	}
+
 	.doc-type {
 		font-size: 11px;
 		font-weight: 600;
@@ -220,23 +237,6 @@
 		font-size: 14px;
 		color: #111;
 		line-height: 1.5;
-	}
-
-	.info-value.overdue {
-		color: #c0392b;
-		font-weight: 600;
-	}
-
-	.overdue-tag {
-		display: inline-block;
-		margin-left: 6px;
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		background: #fde8e8;
-		color: #c0392b;
-		padding: 1px 5px;
-		border-radius: 3px;
 	}
 
 	.lines-table {
