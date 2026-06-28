@@ -67,7 +67,10 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			claims: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			import: { canView: true, canAdd: true, canChange: false, canDelete: false },
-			contacts: { canView: true, canAdd: true, canChange: true, canDelete: false }
+			contacts: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+			quotations: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			invoices: { canView: true, canAdd: true, canChange: true, canDelete: false }
 		}
 	},
 	{
@@ -79,7 +82,10 @@ const SEED_GROUPS = [
 			income: { canView: false, canAdd: true, canChange: false, canDelete: false },
 			claims: { canView: false, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: false, canAdd: true, canChange: false, canDelete: false },
-			contacts: { canView: true, canAdd: true, canChange: false, canDelete: false }
+			contacts: { canView: true, canAdd: true, canChange: false, canDelete: false },
+			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+			quotations: { canView: false, canAdd: true, canChange: false, canDelete: false },
+			invoices: { canView: false, canAdd: true, canChange: false, canDelete: false }
 		}
 	},
 	{
@@ -91,7 +97,10 @@ const SEED_GROUPS = [
 			income: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			claims: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			import: { canView: true, canAdd: false, canChange: false, canDelete: false },
-			contacts: { canView: true, canAdd: false, canChange: false, canDelete: false }
+			contacts: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+			quotations: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			invoices: { canView: true, canAdd: false, canChange: false, canDelete: false }
 		}
 	}
 ];

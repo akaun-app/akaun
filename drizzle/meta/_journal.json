@@ -8,6 +8,13 @@
       "when": 1782615225032,
       "tag": "0000_steep_mojo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1782618166362,
+      "tag": "0001_curved_chimera",
+      "breakpoints": true
     }
   ]
 }

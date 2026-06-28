@@ -125,3 +125,29 @@ export const importStateEnum = makeEnum(ImportStateLabels);
 export const documentTypeEnum = makeEnum(DocumentTypeLabels);
 export const duplicateSignalEnum = makeEnum(DuplicateSignalLabels);
 export const resetScopeEnum = makeEnum(ResetScopeLabels);
+
+// --- quotations ---
+export const QuotationStatus = { Draft: 1, Sent: 2, Accepted: 3, Declined: 4, Converted: 5 } as const;
+// reserved (DERIVED, never stored): Expired — expiry_date < today && status ∈ {Draft, Sent}
+export type QuotationStatusCode = (typeof QuotationStatus)[keyof typeof QuotationStatus];
+export const QuotationStatusLabels: Record<number, string> = {
+	[QuotationStatus.Draft]: 'draft',
+	[QuotationStatus.Sent]: 'sent',
+	[QuotationStatus.Accepted]: 'accepted',
+	[QuotationStatus.Declined]: 'declined',
+	[QuotationStatus.Converted]: 'converted'
+};
+export const quotationStatusEnum = makeEnum(QuotationStatusLabels);
+
+// --- invoices ---
+export const InvoiceStatus = { Draft: 1, Sent: 2, Paid: 3, Cancelled: 4 } as const;
+// reserved (DERIVED, never stored): Overdue — due_date < today && status !== Paid
+// reserved (FUTURE): PartiallyPaid = 5
+export type InvoiceStatusCode = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+export const InvoiceStatusLabels: Record<number, string> = {
+	[InvoiceStatus.Draft]: 'draft',
+	[InvoiceStatus.Sent]: 'sent',
+	[InvoiceStatus.Paid]: 'paid',
+	[InvoiceStatus.Cancelled]: 'cancelled'
+};
+export const invoiceStatusEnum = makeEnum(InvoiceStatusLabels);

@@ -331,3 +331,79 @@ export const importQueue = sqliteTable('import_queue', {
 	confirmedAt: text('confirmed_at'),
 	completedAt: text('completed_at')
 });
+
+// ---------------------------------------------------------------------------
+// Phase 7 — Quotations & Invoicing
+// sourceQuotationId / convertedInvoiceId are plain integers (no cross-FK) to
+// avoid circular FK issues between the two tables. App logic enforces the link.
+// ---------------------------------------------------------------------------
+
+export const invoices = sqliteTable('invoices', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	invoiceNumber: text('invoice_number').notNull().unique(),
+	contactId: integer('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+	// InvoiceStatus code (1=Draft, 2=Sent, 3=Paid, 4=Cancelled). See enums.ts.
+	status: integer('status').notNull().default(1),
+	reference: text('reference'),
+	issueDate: text('issue_date').notNull(),
+	dueDate: text('due_date'),
+	currency: text('currency').notNull().default('USD'),
+	exchangeRate: real('exchange_rate').notNull().default(1),
+	subtotal: real('subtotal').notNull(),
+	taxAmount: real('tax_amount').notNull().default(0),
+	total: real('total').notNull(),
+	amountPaid: real('amount_paid').notNull().default(0),
+	notes: text('notes'),
+	terms: text('terms'),
+	// Plain integer — no FK to avoid circular reference with quotations.
+	sourceQuotationId: integer('source_quotation_id'),
+	resultIncomeId: integer('result_income_id').references(() => incomes.id, { onDelete: 'set null' }),
+	createdBy: integer('created_by').references(() => users.id),
+	updatedBy: integer('updated_by').references(() => users.id),
+	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+	updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`)
+});
+
+export const quotations = sqliteTable('quotations', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	quotationNumber: text('quotation_number').notNull().unique(),
+	contactId: integer('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+	// QuotationStatus code (1=Draft, 2=Sent, 3=Accepted, 4=Declined, 5=Converted). See enums.ts.
+	status: integer('status').notNull().default(1),
+	reference: text('reference'),
+	issueDate: text('issue_date').notNull(),
+	expiryDate: text('expiry_date'),
+	currency: text('currency').notNull().default('USD'),
+	exchangeRate: real('exchange_rate').notNull().default(1),
+	subtotal: real('subtotal').notNull(),
+	taxAmount: real('tax_amount').notNull().default(0),
+	total: real('total').notNull(),
+	notes: text('notes'),
+	terms: text('terms'),
+	// Plain integer — no FK to avoid circular reference with invoices.
+	convertedInvoiceId: integer('converted_invoice_id'),
+	createdBy: integer('created_by').references(() => users.id),
+	updatedBy: integer('updated_by').references(() => users.id),
+	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+	updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`)
+});
+
+export const quotationLines = sqliteTable('quotation_lines', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	quotationId: integer('quotation_id').notNull().references(() => quotations.id, { onDelete: 'cascade' }),
+	description: text('description').notNull(),
+	quantity: real('quantity').notNull(),
+	unitPrice: real('unit_price').notNull(),
+	lineTotal: real('line_total').notNull(),
+	sortOrder: integer('sort_order').notNull()
+});
+
+export const invoiceLines = sqliteTable('invoice_lines', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	invoiceId: integer('invoice_id').notNull().references(() => invoices.id, { onDelete: 'cascade' }),
+	description: text('description').notNull(),
+	quantity: real('quantity').notNull(),
+	unitPrice: real('unit_price').notNull(),
+	lineTotal: real('line_total').notNull(),
+	sortOrder: integer('sort_order').notNull()
+});

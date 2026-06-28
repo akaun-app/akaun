@@ -11,7 +11,9 @@ export type ResourceName =
 	| 'income'
 	| 'claims'
 	| 'import'
-	| 'contacts';
+	| 'contacts'
+	| 'quotations'
+	| 'invoices';
 export type ActionName = 'view' | 'add' | 'change' | 'delete';
 export type PermissionSet = Record<ActionName, boolean>;
 export type EffectivePermissions = Record<ResourceName, PermissionSet>;
@@ -22,7 +24,9 @@ const ALL_RESOURCES: ResourceName[] = [
 	'income',
 	'claims',
 	'import',
-	'contacts'
+	'contacts',
+	'quotations',
+	'invoices'
 ];
 
 function emptyPermissions(): EffectivePermissions {
