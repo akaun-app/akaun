@@ -363,6 +363,10 @@ th.sortable:hover .th-idle { opacity: .5; }
 .statusbadge.tone-amber .statusdot { background: var(--amber); }
 .statusbadge.tone-green { background: var(--green-soft); color: var(--green); }
 .statusbadge.tone-green .statusdot { background: var(--green); }
+.statusbadge.tone-gray { background: var(--muted); color: var(--muted-foreground); }
+.statusbadge.tone-gray .statusdot { background: var(--muted-foreground); }
+.statusbadge.tone-blue { background: var(--primary-soft); color: var(--primary); }
+.statusbadge.tone-blue .statusdot { background: var(--primary); }
 
 /* ---------- Bulk bar ---------- */
 .bulkbar { position: absolute; left: 50%; bottom: 22px; transform: translate(-50%, calc(100% + 40px)); transition: transform .26s cubic-bezier(.2,.8,.2,1); z-index: 40; pointer-events: none; }

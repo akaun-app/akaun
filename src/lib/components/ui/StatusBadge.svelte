@@ -16,7 +16,18 @@
 		pending: { label: 'Pending', tone: 'amber' },
 		paid: { label: 'Paid', tone: 'green' },
 		claimed: { label: 'Claimed', tone: 'green' },
-		received: { label: 'Received', tone: 'green' }
+		received: { label: 'Received', tone: 'green' },
+		// Quotation statuses (labels from QuotationStatusLabels in enums.ts)
+		draft: { label: 'Draft', tone: 'gray' },
+		sent: { label: 'Sent', tone: 'amber' },
+		accepted: { label: 'Accepted', tone: 'green' },
+		declined: { label: 'Declined', tone: 'red' },
+		converted: { label: 'Converted', tone: 'blue' },
+		// Invoice-only
+		cancelled: { label: 'Cancelled', tone: 'gray' },
+		// Derived statuses (never stored, computed at read time)
+		expired: { label: 'Expired', tone: 'amber' },
+		overdue: { label: 'Overdue', tone: 'red' }
 	};
 
 	const m = $derived(
