@@ -101,7 +101,7 @@
 	let editIssueDate = $state('');
 	let editExpiryDate = $state('');
 	let editContactId = $state<number | null>(null);
-	let editCurrency = $state('MYR');
+	let editCurrency = $state(mainCurrency());
 	let editExchangeRate = $state('1');
 	let editNotes = $state('');
 	let editTerms = $state('');
@@ -122,6 +122,8 @@
 	let newLines = $state<LineInput[]>([{ description: '', quantity: 1, unitPrice: 0 }]);
 	let newSaving = $state(false);
 	let newError = $state('');
+	let newRateFetching = $state(false);
+	let newRateError = $state('');
 
 	// Mobile panel detection
 	const screen = useIsMobile();
@@ -149,6 +151,28 @@
 			newLines = [{ description: '', quantity: 1, unitPrice: 0 }];
 			newError = '';
 		}
+	});
+
+	// Auto-fetch exchange rate for the new form when currency or date changes
+	$effect(() => {
+		const cur = newCurrency;
+		const d = newIssueDate;
+		if (cur === mainCurrency() || !d) { newExchangeRate = '1'; newRateError = ''; return; }
+		newRateFetching = true;
+		newRateError = '';
+		const t = setTimeout(async () => {
+			try {
+				const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`);
+				const json = await res.json();
+				if (json.rate != null) newExchangeRate = String(json.rate);
+				else { newRateError = 'No rate found — enter manually'; }
+			} catch {
+				newRateError = 'Could not fetch rate — enter manually';
+			} finally {
+				newRateFetching = false;
+			}
+		}, 400);
+		return () => clearTimeout(t);
 	});
 
 	// SSE — real-time updates from server
@@ -1160,9 +1184,13 @@
 								id="newRate"
 								type="text"
 								inputmode="decimal"
-								placeholder="1.0"
+								placeholder={newRateFetching ? 'Fetching…' : '1.0'}
+								disabled={newRateFetching}
 								bind:value={newExchangeRate}
 							/>
+							{#if newRateFetching || newRateError}
+								<p class="foreign-note">{newRateFetching ? 'Fetching rate…' : newRateError}</p>
+							{/if}
 						</div>
 					{/if}
 				</div>
@@ -1214,7 +1242,7 @@
 					</button>
 					<button
 						type="button"
-						class="sheet-btn-primary"
+						class="sheet-btn sheet-btn-primary"
 						onclick={handleCreate}
 						disabled={newSaving}
 					>
