@@ -9,7 +9,9 @@ import {
 	monthlyIncomeTotals,
 	expenseCategoryBreakdown,
 	recentExpenses,
-	recentIncomes
+	recentIncomes,
+	outstandingInvoicesSummary,
+	overdueInvoicesCount
 } from '$lib/server/queries/dashboard.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
@@ -82,6 +84,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Category breakdown for the period — GROUP BY category, top 6.
 	const categoryData = expenseCategoryBreakdown(db, periodStart, todayStr, 6);
 
+	// Invoice AR
+	const invoicesOutstanding = outstandingInvoicesSummary(db);
+	const invoicesOverdueCount = overdueInvoicesCount(db);
+
 	// Recent activity — 7 newest of each, merged and trimmed to 7.
 	const recentEx = recentExpenses(db, 7).map((e) => ({
 		kind: 'expense' as const,
@@ -114,6 +120,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		cashFlow,
 		categoryData,
 		trendData,
-		recent
+		recent,
+		invoicesOutstanding,
+		invoicesOverdueCount
 	};
 };

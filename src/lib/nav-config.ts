@@ -1,4 +1,4 @@
-import { LayoutDashboard, Wallet, TrendingUp, FileText, Upload, Users } from '@lucide/svelte';
+import { LayoutDashboard, Wallet, TrendingUp, FileText, Upload, Users, ScrollText, Receipt } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type { ResourceName } from '$lib/server/permissions.js';
 
@@ -15,6 +15,8 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
 	{ id: 'expenses', label: 'Expenses', href: '/expenses', Icon: Wallet, resource: 'expenses' },
 	{ id: 'income', label: 'Income', href: '/income', Icon: TrendingUp, resource: 'income' },
 	{ id: 'claims', label: 'Claims', href: '/claims', Icon: FileText, resource: 'claims' },
+	{ id: 'quotations', label: 'Quotations', href: '/quotations', Icon: ScrollText, resource: 'quotations' },
+	{ id: 'invoices', label: 'Invoices', href: '/invoices', Icon: Receipt, resource: 'invoices' },
 	{ id: 'contacts', label: 'Contacts', href: '/contacts', Icon: Users, resource: 'contacts' },
 	{ id: 'import', label: 'Auto Import', href: '/import', Icon: Upload, resource: 'import' }
 ];

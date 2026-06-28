@@ -7,7 +7,8 @@
 		ArrowUpRight,
 		FileText,
 		TrendingDown,
-		ChevronDown
+		ChevronDown,
+		Receipt
 	} from '@lucide/svelte';
 	import LazyChart from '$lib/components/ui/LazyChart.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -146,6 +147,20 @@
 				</div>
 				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}</div>
 				<div class="kpi-sub">Unpaid · all time</div>
+			</div>
+			<div
+				class="kpi"
+				class:tone-red={data.invoicesOverdueCount > 0}
+				class:tone-amber={data.invoicesOverdueCount === 0 && data.invoicesOutstanding.count > 0}
+			>
+				<div class="kpi-top">
+					<span class="kpi-icon"><Receipt size={16} /></span>
+					<span class="kpi-label">Invoice AR</span>
+				</div>
+				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.invoicesOutstanding.total)}</div>
+				<div class="kpi-sub">
+					{data.invoicesOutstanding.count} unpaid{data.invoicesOverdueCount > 0 ? ` · ${data.invoicesOverdueCount} overdue` : ''}
+				</div>
 			</div>
 		</div>
 

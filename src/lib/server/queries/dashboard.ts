@@ -1,8 +1,8 @@
-import { and, gte, lte, eq, sql, desc } from 'drizzle-orm';
+import { and, gte, lte, eq, ne, lt, isNotNull, sql, desc } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { expenses, incomes, contacts } from '../db/schema.js';
-import { ExpenseStatus } from '$lib/enums.js';
+import { expenses, incomes, contacts, invoices } from '../db/schema.js';
+import { ExpenseStatus, InvoiceStatus } from '$lib/enums.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -118,4 +118,34 @@ export function recentIncomes(db: Db, limit: number) {
 		.orderBy(desc(incomes.date))
 		.limit(limit)
 		.all();
+}
+
+/** COUNT and SUM(total) of all non-Paid invoices (all time). */
+export function outstandingInvoicesSummary(db: Db): { count: number; total: number } {
+	const row = db
+		.select({
+			count: sql<number>`count(*)`,
+			total: sql<number>`coalesce(sum(${invoices.total}), 0)`
+		})
+		.from(invoices)
+		.where(ne(invoices.status, InvoiceStatus.Paid))
+		.get();
+	return { count: row?.count ?? 0, total: row?.total ?? 0 };
+}
+
+/** COUNT of overdue invoices (due_date < today AND status != Paid AND due_date IS NOT NULL). */
+export function overdueInvoicesCount(db: Db): number {
+	const today = new Date().toISOString().slice(0, 10);
+	const row = db
+		.select({ count: sql<number>`count(*)` })
+		.from(invoices)
+		.where(
+			and(
+				isNotNull(invoices.dueDate),
+				lt(invoices.dueDate, today),
+				ne(invoices.status, InvoiceStatus.Paid)
+			)
+		)
+		.get();
+	return row?.count ?? 0;
 }

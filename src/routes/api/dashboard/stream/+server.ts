@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types.js';
-import { incomeEvents, expenseEvents, claimEvents } from '$lib/server/finance/events.js';
+import { incomeEvents, expenseEvents, claimEvents, quotationEvents, invoiceEvents } from '$lib/server/finance/events.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = ({ locals }) => {
@@ -30,6 +30,10 @@ export const GET: RequestHandler = ({ locals }) => {
 			expenseEvents.on('expense-delete', send);
 			claimEvents.on('claim-update', send);
 			claimEvents.on('claim-delete', send);
+			quotationEvents.on('quotation-update', send);
+			quotationEvents.on('quotation-delete', send);
+			invoiceEvents.on('invoice-update', send);
+			invoiceEvents.on('invoice-delete', send);
 
 			// 30-second heartbeat (dashboard is a summary view; less frequent than item pages)
 			const heartbeat = setInterval(() => {
@@ -48,6 +52,10 @@ export const GET: RequestHandler = ({ locals }) => {
 				expenseEvents.off('expense-delete', send);
 				claimEvents.off('claim-update', send);
 				claimEvents.off('claim-delete', send);
+				quotationEvents.off('quotation-update', send);
+				quotationEvents.off('quotation-delete', send);
+				invoiceEvents.off('invoice-update', send);
+				invoiceEvents.off('invoice-delete', send);
 			};
 		},
 		cancel() {
