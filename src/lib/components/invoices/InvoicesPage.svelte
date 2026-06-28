@@ -31,7 +31,7 @@
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
-	import { InvoiceStatus, InvoiceStatusLabels, Role } from '$lib/enums.js';
+	import { InvoiceStatus, InvoiceStatusLabels, Role, EntityType } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -103,6 +103,7 @@
 	let editIssueDate = $state('');
 	let editDueDate = $state('');
 	let editContactId = $state<number | null>(null);
+	let editContactName = $state<string | null>(null);
 	let editCurrency = $state(mainCurrency());
 	let editExchangeRate = $state('1');
 	let editNotes = $state('');
@@ -116,6 +117,7 @@
 	let newIssueDate = $state(todayISO());
 	let newDueDate = $state('');
 	let newContactId = $state<number | null>(null);
+	let newContactName = $state<string | null>(null);
 	let newCurrency = $state(mainCurrency());
 	let newExchangeRate = $state('1');
 	let newNotes = $state('');
@@ -145,6 +147,7 @@
 			newIssueDate = todayISO();
 			newDueDate = '';
 			newContactId = null;
+			newContactName = null;
 			newCurrency = mainCurrency();
 			newExchangeRate = '1';
 			newNotes = '';
@@ -306,6 +309,7 @@
 		editIssueDate = detailInvoice.issueDate;
 		editDueDate = detailInvoice.dueDate ?? '';
 		editContactId = detailInvoice.contactId;
+		editContactName = null;
 		editCurrency = detailInvoice.currency;
 		editExchangeRate = String(detailInvoice.exchangeRate);
 		editNotes = detailInvoice.notes ?? '';
@@ -325,13 +329,23 @@
 		saving = true;
 		saveError = '';
 		try {
+			let resolvedContactId = editContactId;
+			if (!resolvedContactId && editContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Customer] })
+				});
+				if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
+				resolvedContactId = (await cr.json()).id;
+			}
 			const res = await fetch(`/api/invoices/${detailInvoice.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					issueDate: editIssueDate,
 					dueDate: editDueDate || null,
-					contactId: editContactId,
+					contactId: resolvedContactId,
 					currency: editCurrency,
 					exchangeRate: parseFloat(editExchangeRate) || 1,
 					notes: editNotes || null,
@@ -356,6 +370,10 @@
 
 	// Create a new invoice via JSON API (line items can't be FormData)
 	async function handleCreate() {
+		if (!newContactId && !newContactName) {
+			newError = 'Customer is required';
+			return;
+		}
 		if (!newLines.some((l) => l.description.trim())) {
 			newError = 'At least one line item with a description is required';
 			return;
@@ -363,13 +381,23 @@
 		newSaving = true;
 		newError = '';
 		try {
+			let resolvedContactId = newContactId;
+			if (!resolvedContactId && newContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: newContactName, roles: [Role.Customer] })
+				});
+				if (!cr.ok) { newError = 'Failed to create contact — try again'; newSaving = false; return; }
+				resolvedContactId = (await cr.json()).id;
+			}
 			const res = await fetch('/api/invoices', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					issueDate: newIssueDate,
 					dueDate: newDueDate || null,
-					contactId: newContactId,
+					contactId: resolvedContactId,
 					currency: newCurrency,
 					exchangeRate: parseFloat(newExchangeRate) || 1,
 					notes: newNotes || null,
@@ -838,6 +866,7 @@
 							<ContactSelect
 								role={Role.Customer}
 								bind:value={editContactId}
+								bind:newName={editContactName}
 								placeholder="Select customer…"
 							/>
 						</div>
@@ -1215,6 +1244,7 @@
 					<ContactSelect
 						role={Role.Customer}
 						bind:value={newContactId}
+						bind:newName={newContactName}
 						placeholder="Search or select a customer…"
 					/>
 				</div>

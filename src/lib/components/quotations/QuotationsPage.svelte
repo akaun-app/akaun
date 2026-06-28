@@ -31,7 +31,7 @@
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
-	import { QuotationStatus, QuotationStatusLabels, Role } from '$lib/enums.js';
+	import { QuotationStatus, QuotationStatusLabels, Role, EntityType } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -101,6 +101,7 @@
 	let editIssueDate = $state('');
 	let editExpiryDate = $state('');
 	let editContactId = $state<number | null>(null);
+	let editContactName = $state<string | null>(null);
 	let editCurrency = $state(mainCurrency());
 	let editExchangeRate = $state('1');
 	let editNotes = $state('');
@@ -114,6 +115,7 @@
 	let newIssueDate = $state(todayISO());
 	let newExpiryDate = $state('');
 	let newContactId = $state<number | null>(null);
+	let newContactName = $state<string | null>(null);
 	let newCurrency = $state(mainCurrency());
 	let newExchangeRate = $state('1');
 	let newNotes = $state('');
@@ -143,6 +145,7 @@
 			newIssueDate = todayISO();
 			newExpiryDate = '';
 			newContactId = null;
+			newContactName = null;
 			newCurrency = mainCurrency();
 			newExchangeRate = '1';
 			newNotes = '';
@@ -300,6 +303,7 @@
 		editIssueDate = detailQuotation.issueDate;
 		editExpiryDate = detailQuotation.expiryDate ?? '';
 		editContactId = detailQuotation.contactId;
+		editContactName = null;
 		editCurrency = detailQuotation.currency;
 		editExchangeRate = String(detailQuotation.exchangeRate);
 		editNotes = detailQuotation.notes ?? '';
@@ -319,13 +323,24 @@
 		saving = true;
 		saveError = '';
 		try {
+			// If user typed a new contact name, create the contact first
+			let resolvedContactId = editContactId;
+			if (!resolvedContactId && editContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Customer] })
+				});
+				if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
+				resolvedContactId = (await cr.json()).id;
+			}
 			const res = await fetch(`/api/quotations/${detailQuotation.id}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					issueDate: editIssueDate,
 					expiryDate: editExpiryDate || null,
-					contactId: editContactId,
+					contactId: resolvedContactId,
 					currency: editCurrency,
 					exchangeRate: parseFloat(editExchangeRate) || 1,
 					notes: editNotes || null,
@@ -350,6 +365,10 @@
 
 	// Create a new quotation via JSON API (line items can't be FormData)
 	async function handleCreate() {
+		if (!newContactId && !newContactName) {
+			newError = 'Customer is required';
+			return;
+		}
 		if (!newLines.some((l) => l.description.trim())) {
 			newError = 'At least one line item with a description is required';
 			return;
@@ -357,13 +376,24 @@
 		newSaving = true;
 		newError = '';
 		try {
+			// If user typed a new contact name, create the contact first
+			let resolvedContactId = newContactId;
+			if (!resolvedContactId && newContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: newContactName, roles: [Role.Customer] })
+				});
+				if (!cr.ok) { newError = 'Failed to create contact — try again'; newSaving = false; return; }
+				resolvedContactId = (await cr.json()).id;
+			}
 			const res = await fetch('/api/quotations', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					issueDate: newIssueDate,
 					expiryDate: newExpiryDate || null,
-					contactId: newContactId,
+					contactId: resolvedContactId,
 					currency: newCurrency,
 					exchangeRate: parseFloat(newExchangeRate) || 1,
 					notes: newNotes || null,
@@ -812,6 +842,7 @@
 							<ContactSelect
 								role={Role.Customer}
 								bind:value={editContactId}
+								bind:newName={editContactName}
 								placeholder="Select customer…"
 							/>
 						</div>
@@ -1159,6 +1190,7 @@
 					<ContactSelect
 						role={Role.Customer}
 						bind:value={newContactId}
+						bind:newName={newContactName}
 						placeholder="Search or select a customer…"
 					/>
 				</div>
