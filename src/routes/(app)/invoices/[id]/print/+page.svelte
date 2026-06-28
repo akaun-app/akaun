@@ -40,16 +40,16 @@
 
 	<header class="doc-header">
 		<div class="company-block">
-			{#if settings['company_name']}
-				<div class="company-name">{settings['company_name']}</div>
+			{#if settings.companyName}
+				<div class="company-name">{settings.companyName}</div>
 			{:else}
 				<div class="company-name">Akaun</div>
 			{/if}
-			{#if settings['company_address']}
-				<div class="company-detail">{settings['company_address']}</div>
+			{#if settings.companyAddress}
+				<div class="company-detail">{settings.companyAddress}</div>
 			{/if}
-			{#if settings['company_reg_no']}
-				<div class="company-detail">Reg No: {settings['company_reg_no']}</div>
+			{#if settings.companyRegistrationNo}
+				<div class="company-detail">Reg No: {settings.companyRegistrationNo}</div>
 			{/if}
 		</div>
 		<div class="doc-meta">

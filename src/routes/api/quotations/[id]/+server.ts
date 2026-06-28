@@ -3,6 +3,8 @@ import { db } from '$lib/server/db/client.js';
 import { getQuotation } from '$lib/server/queries/quotations.js';
 import { canEditQuotation } from '$lib/server/locking.js';
 import { patchQuotation, removeQuotation } from '$lib/server/services/quotations.js';
+import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
+import { Role } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -30,6 +32,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const fields = ['contactId', 'reference', 'issueDate', 'expiryDate', 'currency', 'exchangeRate', 'notes', 'terms', 'status', 'lines'];
 	for (const f of fields) {
 		if (body[f] !== undefined) patch[f] = body[f];
+	}
+	if (!patch.contactId && body.newContactName) {
+		patch.contactId = resolveOrCreateContact(db, body.newContactName, Role.Customer, user.id);
 	}
 
 	const updated = patchQuotation(db, id, user.id, patch);

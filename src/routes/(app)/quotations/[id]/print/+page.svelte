@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PageData } from './$types.js';
+	import { onMount } from 'svelte';
 
 	let { data }: { data: PageData } = $props();
 	const quotation = $derived(data.quotation);
@@ -11,6 +12,8 @@
 			maximumFractionDigits: 2
 		}).format(n);
 	}
+
+	onMount(() => window.print());
 
 	function formatDate(iso: string): string {
 		if (!iso) return '';
@@ -106,6 +109,10 @@
 			<tr class="subtotal-row">
 				<td colspan="3" class="subtotal-label">Subtotal</td>
 				<td class="col-total">{fmt(quotation.subtotal)}</td>
+			</tr>
+			<tr class="tax-row">
+				<td colspan="3" class="subtotal-label">Tax</td>
+				<td class="col-total">{fmt(quotation.taxAmount)}</td>
 			</tr>
 			<tr class="total-row">
 				<td colspan="3" class="total-label">Total ({quotation.currency})</td>
@@ -275,6 +282,8 @@
 
 	.subtotal-row td { border-top: 1px solid #e5e5e5; color: #666; }
 	.subtotal-label { text-align: right; }
+
+	.tax-row td { color: #666; }
 
 	.total-row td { border-top: 2px solid #111; }
 	.total-label { text-align: right; font-weight: 600; }

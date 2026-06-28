@@ -24,6 +24,14 @@
 	const isMobile = $derived(screenState.current);
 	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
+	// Company settings state
+	// svelte-ignore state_referenced_locally
+	let companyName = $state(data.companyName);
+	// svelte-ignore state_referenced_locally
+	let companyAddress = $state(data.companyAddress);
+	// svelte-ignore state_referenced_locally
+	let companyRegistrationNo = $state(data.companyRegistrationNo);
+
 	// Currency settings state
 	// svelte-ignore state_referenced_locally
 	let mainCur = $state(data.currency);
@@ -54,6 +62,17 @@
 	// Advanced state
 	// svelte-ignore state_referenced_locally
 	let godMode = $state(data.godModeEnabled);
+
+	// Auto-save form refs (Intelligence + Advanced tabs)
+	let intelligenceFormEl = $state<HTMLFormElement | null>(null);
+	let advancedFormEl = $state<HTMLFormElement | null>(null);
+	let sliderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function handleSliderChange(v: number[]) {
+		aiParallelTasks = v[0];
+		if (sliderDebounceTimer) clearTimeout(sliderDebounceTimer);
+		sliderDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 400);
+	}
 
 	// --- Provider list state ---
 	type ProviderRow = (typeof data.providers)[0];
@@ -260,7 +279,7 @@
 				aiParallelTasks = data.autoImportParallelTasks;
 				aiCategoryHints = data.autoImportCategoryHints;
 			}
-			if (!action || action === 'saveCurrency') {
+			if (action === 'saveGeneral') {
 				mainCur = data.currency;
 			}
 			toast.success('Settings saved');
@@ -342,28 +361,22 @@
 						<h2 class="set-section-title">General</h2>
 						<p class="set-section-sub">Account and display settings</p>
 					</div>
-					{#if data.currencyLocked}
+					<form method="POST" action="?/saveGeneral" use:enhance={() => ({ update }) => update({ reset: false })}>
+						{#if !data.currencyLocked}
+							<input type="hidden" name="currencyCode" value={mainCur} />
+						{/if}
+						<p class="set-subsection-label">Display</p>
 						<div class="set-rows">
 							<div class="set-row">
 								<div>
 									<div class="set-row-label">Currency</div>
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
 								</div>
-								<div class="set-input-right" style="display:flex; align-items:center; color:var(--muted-foreground);">{curLabel}</div>
-							</div>
-						</div>
-						<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:8px;">
-							<Lock size={13} /> Currency is locked once transactions exist — changing it would silently corrupt historical amounts.
-						</p>
-					{:else}
-						<form method="POST" action="?/saveCurrency" use:enhance={() => ({ update }) => update({ reset: false })}>
-							<input type="hidden" name="currencyCode" value={mainCur} />
-							<div class="set-rows">
-								<div class="set-row">
-									<div>
-										<div class="set-row-label">Currency</div>
-										<div class="set-row-value" style="font-size:12px; margin-top:2px;">All amounts display in this currency; foreign records are converted to it</div>
+								{#if data.currencyLocked}
+									<div class="set-input-right" style="display:flex; align-items:center; gap:6px; color:var(--muted-foreground);">
+										{curLabel} <Lock size={12} />
 									</div>
+								{:else}
 									<Select.Root type="single" name="mainCurrencyDisplay" bind:value={mainCur}>
 										<Select.Trigger class="set-input-right set-input-wide">{curLabel}</Select.Trigger>
 										<Select.Content>
@@ -372,11 +385,49 @@
 											{/each}
 										</Select.Content>
 									</Select.Root>
-								</div>
+								{/if}
 							</div>
-							<Button type="submit" class="mt-4">Save</Button>
-						</form>
-					{/if}
+						</div>
+						{#if data.currencyLocked}
+							<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:6px; margin-bottom:0;">
+								Currency is locked once transactions exist — changing it would silently corrupt historical amounts.
+							</p>
+						{/if}
+
+						<p class="set-subsection-label">Company</p>
+						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">Shown on printed quotations and invoices</p>
+						<div class="set-rows">
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Company Name</div>
+								<Input
+									name="companyName"
+									bind:value={companyName}
+									placeholder="e.g. Acme Sdn Bhd"
+									class="set-input-full"
+								/>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Address</div>
+								<textarea
+									name="companyAddress"
+									bind:value={companyAddress}
+									placeholder="Street, City, State, Postcode"
+									rows="3"
+									class="set-textarea"
+								></textarea>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Registration No.</div>
+								<Input
+									name="companyRegistrationNo"
+									bind:value={companyRegistrationNo}
+									placeholder="e.g. 202301012345"
+									class="set-input-full"
+								/>
+							</div>
+						</div>
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
 				</div>
 
 			{:else if activeTab === 'intelligence'}
@@ -385,8 +436,14 @@
 						<h2 class="set-section-title">Intelligence</h2>
 						<p class="set-section-sub">Global settings for auto-import processing.</p>
 					</div>
-					<form method="POST" action="?/saveIntelligenceGlobal" use:enhance={() => ({ update }) => update({ reset: false })}>
+					<form
+						method="POST"
+						action="?/saveIntelligenceGlobal"
+						bind:this={intelligenceFormEl}
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
+						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
 						<div class="set-rows">
 							<div class="set-row">
 								<div>
@@ -394,14 +451,13 @@
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Process up to {aiParallelTasks} file{aiParallelTasks !== 1 ? 's' : ''} at once</div>
 								</div>
 								<div class="slider-row">
-									<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
 									<Slider
 										type="multiple"
 										min={1}
 										max={10}
 										step={1}
 										value={[aiParallelTasks]}
-										onValueChange={(v: number[]) => (aiParallelTasks = v[0])}
+										onValueChange={handleSliderChange}
 										style="width:140px;"
 									/>
 									<span class="slider-val num">{aiParallelTasks}</span>
@@ -417,14 +473,13 @@
 									class="toggle-btn"
 									aria-label="Category hints"
 									class:on={aiCategoryHints}
-									onclick={() => { aiCategoryHints = !aiCategoryHints; }}
+									onclick={() => { aiCategoryHints = !aiCategoryHints; intelligenceFormEl?.requestSubmit(); }}
 									aria-pressed={aiCategoryHints}
 								>
 									<span class="toggle-thumb"></span>
 								</button>
 							</div>
 						</div>
-						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 
@@ -509,11 +564,14 @@
 			{:else if activeTab === 'categories'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">Expense Categories</h2>
-						<p class="set-section-sub">Categories available when recording expenses</p>
+						<h2 class="set-section-title">Categories</h2>
+						<p class="set-section-sub">Categories available when recording expenses and income</p>
 					</div>
-					<form method="POST" action="?/saveExpenseCategories" use:enhance>
-						<input type="hidden" name="categories" value={JSON.stringify(expCats)} />
+					<form method="POST" action="?/saveCategories" use:enhance>
+						<input type="hidden" name="expenseCategories" value={JSON.stringify(expCats)} />
+						<input type="hidden" name="incomeCategories" value={JSON.stringify(incCats)} />
+
+						<p class="set-subsection-label">Expense</p>
 						<div class="cat-chips">
 							{#each expCats as cat (cat)}
 								<span class="cat-chip-removable">
@@ -528,17 +586,8 @@
 							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
 							<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
 						</div>
-						<Button type="submit" class="mt-4">Save</Button>
-					</form>
-				</div>
 
-				<div class="set-section" style="margin-top:32px;">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Income Categories</h2>
-						<p class="set-section-sub">Categories available when recording income</p>
-					</div>
-					<form method="POST" action="?/saveIncomeCategories" use:enhance>
-						<input type="hidden" name="categories" value={JSON.stringify(incCats)} />
+						<p class="set-subsection-label" style="margin-top:24px;">Income</p>
 						<div class="cat-chips">
 							{#each incCats as cat (cat)}
 								<span class="cat-chip-removable">
@@ -553,6 +602,7 @@
 							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
 							<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
 						</div>
+
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
@@ -563,7 +613,12 @@
 						<h2 class="set-section-title">Advanced</h2>
 						<p class="set-section-sub">Power-user controls. Use with care.</p>
 					</div>
-					<form method="POST" action="?/saveAdvanced" use:enhance={() => ({ update }) => update({ reset: false })}>
+					<form
+						method="POST"
+						action="?/saveAdvanced"
+						bind:this={advancedFormEl}
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
 						<input type="hidden" name="godMode" value={String(godMode)} />
 						<div class="set-rows">
 							<div class="set-row">
@@ -576,7 +631,7 @@
 									class="toggle-btn"
 									aria-label="God Mode"
 									class:on={godMode}
-									onclick={() => { godMode = !godMode; }}
+									onclick={() => { godMode = !godMode; advancedFormEl?.requestSubmit(); }}
 									aria-pressed={godMode}
 								>
 									<span class="toggle-thumb"></span>
@@ -588,7 +643,6 @@
 								</div>
 							{/if}
 						</div>
-						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 			{/if}

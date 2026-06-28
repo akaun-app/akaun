@@ -736,6 +736,12 @@ th.sortable:hover .th-idle { opacity: .5; }
 .set-row-value { font-size: 13.5px; color: var(--muted-foreground); }
 .set-input-right { width: 220px; }
 .set-input-wide { width: 260px; }
+.set-row-col { flex-direction: column; align-items: stretch; gap: 8px; }
+.set-subsection-label { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground); margin: 18px 0 8px; }
+.set-subsection-label:first-child { margin-top: 0; }
+.set-input-full { width: 100%; }
+.set-textarea { width: 100%; min-height: 72px; padding: 8px 10px; font-size: 13.5px; font-family: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--foreground); resize: vertical; outline: none; }
+.set-textarea:focus { border-color: var(--primary); }
 
 /* responsive */
 @media (max-width: 1180px) {

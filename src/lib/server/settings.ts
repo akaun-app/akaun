@@ -12,7 +12,10 @@ export const SETTING_KEYS = {
 	autoImportParallelTasks: 'autoImport.parallelTasks',
 	autoImportCategoryHints: 'autoImport.categoryHints',
 	autoImportFreeModelsOnly: 'autoImport.freeModelsOnly',
-	godModeEnabled: 'godMode.enabled'
+	godModeEnabled: 'godMode.enabled',
+	companyName: 'company.name',
+	companyAddress: 'company.address',
+	companyRegistrationNo: 'company.registrationNo'
 } as const;
 
 export function getSetting(

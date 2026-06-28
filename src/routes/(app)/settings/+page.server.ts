@@ -59,6 +59,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
 
+	const companyName = getSetting(db, SETTING_KEYS.companyName) ?? '';
+	const companyAddress = getSetting(db, SETTING_KEYS.companyAddress) ?? '';
+	const companyRegistrationNo = getSetting(db, SETTING_KEYS.companyRegistrationNo) ?? '';
+
 	const providers = getAllProviders(db).map((p) => ({
 		...p,
 		hasApiKey: p.apiKey.length > 0,
@@ -74,47 +78,45 @@ export const load: PageServerLoad = async ({ locals }) => {
 		autoImportParallelTasks,
 		autoImportCategoryHints,
 		godModeEnabled,
+		companyName,
+		companyAddress,
+		companyRegistrationNo,
 		providers
 	};
 };
 
 export const actions: Actions = {
-	saveExpenseCategories: async ({ request }) => {
-		const data = await request.formData();
-		const raw = String(data.get('categories') ?? '[]');
-		try {
-			const cats = JSON.parse(raw);
-			if (!Array.isArray(cats)) throw new Error('not array');
-			setSetting(db, SETTING_KEYS.expenseCategories, JSON.stringify(cats));
-			return { success: true };
-		} catch {
-			return fail(400, { error: 'Invalid categories data' });
-		}
-	},
-
-	saveIncomeCategories: async ({ request }) => {
-		const data = await request.formData();
-		const raw = String(data.get('categories') ?? '[]');
-		try {
-			const cats = JSON.parse(raw);
-			if (!Array.isArray(cats)) throw new Error('not array');
-			setSetting(db, SETTING_KEYS.incomeCategories, JSON.stringify(cats));
-			return { success: true };
-		} catch {
-			return fail(400, { error: 'Invalid categories data' });
-		}
-	},
-
-	saveCurrency: async ({ request }) => {
+	saveGeneral: async ({ request }) => {
 		const data = await request.formData();
 		const code = String(data.get('currencyCode') ?? '').trim().toUpperCase();
+		const companyName = String(data.get('companyName') ?? '').trim();
+		const companyAddress = String(data.get('companyAddress') ?? '').trim();
+		const companyRegistrationNo = String(data.get('companyRegistrationNo') ?? '').trim();
 
-		if (!/^[A-Z]{3}$/.test(code)) return fail(400, { error: 'Invalid currency code' });
-		if (hasAnyTransactions()) return fail(400, { error: 'Currency is locked once transactions exist' });
+		if (!hasAnyTransactions() && /^[A-Z]{3}$/.test(code)) {
+			setSetting(db, SETTING_KEYS.currencyCode, code);
+		}
+		setSetting(db, SETTING_KEYS.companyName, companyName);
+		setSetting(db, SETTING_KEYS.companyAddress, companyAddress);
+		setSetting(db, SETTING_KEYS.companyRegistrationNo, companyRegistrationNo);
 
-		setSetting(db, SETTING_KEYS.currencyCode, code);
+		return { success: true, action: 'saveGeneral' };
+	},
 
-		return { success: true };
+	saveCategories: async ({ request }) => {
+		const data = await request.formData();
+		const expRaw = String(data.get('expenseCategories') ?? '[]');
+		const incRaw = String(data.get('incomeCategories') ?? '[]');
+		try {
+			const expCats = JSON.parse(expRaw);
+			const incCats = JSON.parse(incRaw);
+			if (!Array.isArray(expCats) || !Array.isArray(incCats)) throw new Error('not array');
+			setSetting(db, SETTING_KEYS.expenseCategories, JSON.stringify(expCats));
+			setSetting(db, SETTING_KEYS.incomeCategories, JSON.stringify(incCats));
+			return { success: true, action: 'saveCategories' };
+		} catch {
+			return fail(400, { error: 'Invalid categories data' });
+		}
 	},
 
 	addProvider: async ({ request }) => {
@@ -207,5 +209,6 @@ export const actions: Actions = {
 		const godMode = data.get('godMode') === 'true';
 		setSetting(db, SETTING_KEYS.godModeEnabled, String(godMode));
 		return { success: true };
-	}
+	},
+
 };

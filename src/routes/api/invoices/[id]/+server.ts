@@ -3,6 +3,8 @@ import { db } from '$lib/server/db/client.js';
 import { getInvoice } from '$lib/server/queries/invoices.js';
 import { canEditInvoice } from '$lib/server/locking.js';
 import { patchInvoice, removeInvoice } from '$lib/server/services/invoices.js';
+import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
+import { Role } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -30,6 +32,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const fields = ['contactId', 'reference', 'issueDate', 'dueDate', 'currency', 'exchangeRate', 'notes', 'terms', 'status', 'lines'];
 	for (const f of fields) {
 		if (body[f] !== undefined) patch[f] = body[f];
+	}
+	if (!patch.contactId && body.newContactName) {
+		patch.contactId = resolveOrCreateContact(db, body.newContactName, Role.Customer, user.id);
 	}
 
 	const updated = patchInvoice(db, id, user.id, patch);

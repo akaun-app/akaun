@@ -2,6 +2,8 @@ import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { listInvoices } from '$lib/server/queries/invoices.js';
 import { createInvoice } from '$lib/server/services/invoices.js';
+import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
+import { Role } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
 import { isValidDate } from '$lib/server/date.js';
 
@@ -38,8 +40,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return Response.json({ error: 'lines must be a non-empty array' }, { status: 400 });
 	}
 
+	let contactId: number | null = body.contactId ?? null;
+	if (!contactId && body.newContactName) {
+		contactId = resolveOrCreateContact(db, body.newContactName, Role.Customer, user.id);
+	}
+
 	const invoice = createInvoice(db, user.id, {
-		contactId: body.contactId ?? null,
+		contactId,
 		reference: body.reference ?? null,
 		issueDate: body.issueDate,
 		dueDate: body.dueDate ?? null,
