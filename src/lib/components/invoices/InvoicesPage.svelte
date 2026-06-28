@@ -1119,7 +1119,7 @@
 								<Trash2 size={14} /> Delete
 							</button>
 							<a
-								href="/print/invoices/{detailInvoice.id}"
+								href="/api/invoices/{detailInvoice.id}/pdf"
 								target="_blank"
 								class="sheet-btn"
 								style="text-decoration:none;"

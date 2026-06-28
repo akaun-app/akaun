@@ -1073,7 +1073,7 @@
 								<Trash2 size={14} /> Delete
 							</button>
 							<a
-								href="/quotations/{detailQuotation.id}/print"
+								href="/api/quotations/{detailQuotation.id}/pdf"
 								target="_blank"
 								class="sheet-btn"
 								style="text-decoration:none;"
