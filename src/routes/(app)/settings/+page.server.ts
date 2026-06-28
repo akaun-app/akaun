@@ -2,6 +2,14 @@ import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
 import { expenses, incomes } from '$lib/server/db/schema.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import {
+	getAllProviders,
+	insertProvider,
+	updateProvider,
+	deleteProvider,
+	reorderProviders
+} from '$lib/server/llmProviders.js';
+import type { ProviderType } from '$lib/server/import/providers/index.js';
 import { fail } from '@sveltejs/kit';
 import { sql } from 'drizzle-orm';
 
@@ -34,7 +42,6 @@ const DEFAULT_INCOME_CATEGORIES = [
 ];
 
 export const load: PageServerLoad = async ({ locals }) => {
-
 	const expCatRaw = getSetting(db, SETTING_KEYS.expenseCategories);
 	const incCatRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
@@ -43,13 +50,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
 	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
 
-	const autoImportApiKey = getSetting(db, SETTING_KEYS.autoImportApiKey) ?? '';
-	const autoImportModel = getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
-	const autoImportParallelTasks = parseInt(getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10);
-	const autoImportCategoryHints = (getSetting(db, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
-	const autoImportFreeModelsOnly = (getSetting(db, SETTING_KEYS.autoImportFreeModelsOnly) ?? 'false') === 'true';
+	const autoImportParallelTasks = parseInt(
+		getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3',
+		10
+	);
+	const autoImportCategoryHints =
+		(getSetting(db, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
 
 	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
+
+	const providers = getAllProviders(db).map((p) => ({
+		...p,
+		hasApiKey: p.apiKey.length > 0,
+		apiKey: '' // never send actual key to browser
+	}));
 
 	return {
 		expenseCategories,
@@ -57,17 +71,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 		currency,
 		currencyLocked,
 		username: locals.user!.username,
-		autoImportApiKey,
-		autoImportModel,
 		autoImportParallelTasks,
 		autoImportCategoryHints,
-		autoImportFreeModelsOnly,
-		godModeEnabled
+		godModeEnabled,
+		providers
 	};
 };
 
 export const actions: Actions = {
-	saveExpenseCategories: async ({ locals, request }) => {
+	saveExpenseCategories: async ({ request }) => {
 		const data = await request.formData();
 		const raw = String(data.get('categories') ?? '[]');
 		try {
@@ -80,7 +92,7 @@ export const actions: Actions = {
 		}
 	},
 
-	saveIncomeCategories: async ({ locals, request }) => {
+	saveIncomeCategories: async ({ request }) => {
 		const data = await request.formData();
 		const raw = String(data.get('categories') ?? '[]');
 		try {
@@ -105,31 +117,95 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	saveIntelligence: async ({ locals, request }) => {
+	addProvider: async ({ request }) => {
 		const data = await request.formData();
-
+		const type = String(data.get('type') ?? '').trim();
+		const name = String(data.get('name') ?? '').trim();
 		const apiKey = String(data.get('apiKey') ?? '').trim();
-		const model = String(data.get('model') ?? 'anthropic/claude-3.5-sonnet').trim();
-		const parallelTasks = Math.min(10, Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10)));
-		const categoryHints = data.get('categoryHints') === 'true';
-		const freeModelsOnly = data.get('freeModelsOnly') === 'true';
+		const model = String(data.get('model') ?? '').trim();
+		const baseUrl = String(data.get('baseUrl') ?? '').trim() || null;
 
+		const VALID_TYPES: ProviderType[] = ['openrouter', 'google_ai_studio', 'groq'];
+		if (!VALID_TYPES.includes(type as ProviderType))
+			return fail(400, { error: 'Invalid provider type' });
+		if (!name) return fail(400, { error: 'Name is required' });
 		if (!model) return fail(400, { error: 'Model is required' });
 
-		if (apiKey) setSetting(db, SETTING_KEYS.autoImportApiKey, apiKey);
-		setSetting(db, SETTING_KEYS.autoImportModel, model);
-		setSetting(db, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
-		setSetting(db, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
-		setSetting(db, SETTING_KEYS.autoImportFreeModelsOnly, String(freeModelsOnly));
+		insertProvider(db, {
+			type: type as ProviderType,
+			name,
+			apiKey,
+			model,
+			baseUrl: baseUrl ?? undefined
+		});
 
-		return { success: true };
+		return { success: true, action: 'addProvider' };
 	},
 
-	saveAdvanced: async ({ locals, request }) => {
+	updateProvider: async ({ request }) => {
+		const data = await request.formData();
+		const id = String(data.get('id') ?? '').trim();
+		if (!id) return fail(400, { error: 'Provider ID is required' });
+
+		const updates: Record<string, unknown> = {};
+		const name = String(data.get('name') ?? '').trim();
+		const apiKey = String(data.get('apiKey') ?? '').trim();
+		const model = String(data.get('model') ?? '').trim();
+		const baseUrlRaw = data.get('baseUrl');
+		const enabledRaw = data.get('enabled');
+
+		if (name) updates.name = name;
+		if (model) updates.model = model;
+		if (apiKey) updates.apiKey = apiKey;
+		if (baseUrlRaw !== null) updates.baseUrl = String(baseUrlRaw).trim() || null;
+		if (enabledRaw !== null) updates.enabled = enabledRaw === 'true';
+
+		updateProvider(db, id, updates as Parameters<typeof updateProvider>[2]);
+
+		return { success: true, action: 'updateProvider' };
+	},
+
+	deleteProvider: async ({ request }) => {
+		const data = await request.formData();
+		const id = String(data.get('id') ?? '').trim();
+		if (!id) return fail(400, { error: 'Provider ID is required' });
+
+		deleteProvider(db, id);
+
+		return { success: true, action: 'deleteProvider' };
+	},
+
+	reorderProviders: async ({ request }) => {
+		const data = await request.formData();
+		const raw = String(data.get('orderedIds') ?? '[]');
+		try {
+			const ids = JSON.parse(raw);
+			if (!Array.isArray(ids)) throw new Error('not array');
+			reorderProviders(db, ids as string[]);
+			return { success: true, action: 'reorderProviders' };
+		} catch {
+			return fail(400, { error: 'Invalid order data' });
+		}
+	},
+
+	saveIntelligenceGlobal: async ({ request }) => {
+		const data = await request.formData();
+		const parallelTasks = Math.min(
+			10,
+			Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10))
+		);
+		const categoryHints = data.get('categoryHints') === 'true';
+
+		setSetting(db, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
+		setSetting(db, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
+
+		return { success: true, action: 'saveIntelligenceGlobal' };
+	},
+
+	saveAdvanced: async ({ request }) => {
 		const data = await request.formData();
 		const godMode = data.get('godMode') === 'true';
 		setSetting(db, SETTING_KEYS.godModeEnabled, String(godMode));
 		return { success: true };
-	},
-
+	}
 };

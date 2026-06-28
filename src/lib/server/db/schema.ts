@@ -276,6 +276,18 @@ export const exchangeRates = sqliteTable(
 	(t) => [primaryKey({ columns: [t.date, t.base, t.quote] })]
 );
 
+export const llmProviders = sqliteTable('llm_providers', {
+	id: text('id').primaryKey(),
+	type: text('type').notNull(),
+	name: text('name').notNull(),
+	apiKey: text('api_key').notNull().default(''),
+	model: text('model').notNull(),
+	baseUrl: text('base_url'),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	sortKey: text('sort_key').notNull(),
+	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+});
+
 export const importQueue = sqliteTable('import_queue', {
 	id: text('id').primaryKey(),
 	// Who uploaded the file; used for `created_by` on the resulting contact/record,

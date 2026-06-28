@@ -192,6 +192,18 @@ CREATE TABLE `incomes` (
 	FOREIGN KEY (`updated_by`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
+CREATE TABLE `llm_providers` (
+	`id` text PRIMARY KEY NOT NULL,
+	`type` text NOT NULL,
+	`name` text NOT NULL,
+	`api_key` text DEFAULT '' NOT NULL,
+	`model` text NOT NULL,
+	`base_url` text,
+	`enabled` integer DEFAULT true NOT NULL,
+	`sort_key` text NOT NULL,
+	`created_at` text DEFAULT (datetime('now')) NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` integer NOT NULL,
@@ -230,6 +242,14 @@ CREATE TABLE `user_permissions` (
 	`can_change` integer DEFAULT false NOT NULL,
 	`can_delete` integer DEFAULT false NOT NULL,
 	PRIMARY KEY(`user_id`, `resource`),
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `user_preferences` (
+	`user_id` integer NOT NULL,
+	`key` text NOT NULL,
+	`value` text NOT NULL,
+	PRIMARY KEY(`user_id`, `key`),
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint

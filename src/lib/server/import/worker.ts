@@ -4,8 +4,9 @@ import { importQueue, users } from '../db/schema.js';
 import { STORAGE_PATH } from '../env.js';
 import { createLogger } from '../logger.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
+import { getEnabledProviders, insertProvider } from '../llmProviders.js';
 import { extractText } from './extractor.js';
-import { callLLM } from './llm.js';
+import { callLLMWithProviders } from './llm.js';
 import { detectDuplicate } from './duplicate-detector.js';
 import { importEvents } from './events.js';
 import { resolveContactCandidates } from '../queries/contacts.js';
@@ -76,20 +77,40 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 			.get();
 		const userId = ownerUser?.id ?? job.createdBy;
 
-		const apiKey = getSetting(db, SETTING_KEYS.autoImportApiKey);
-		if (!apiKey) {
-			markFailed(job.id, userId, 'No OpenRouter API key configured. Go to Settings → Intelligence to add one.');
+		// Load enabled providers; auto-migrate from legacy settings on first run
+		let providers = getEnabledProviders(db);
+		if (!providers.length) {
+			const legacyKey = getSetting(db, SETTING_KEYS.autoImportApiKey);
+			if (legacyKey) {
+				const legacyModel =
+					getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
+				insertProvider(db, {
+					type: 'openrouter',
+					name: 'OpenRouter',
+					apiKey: legacyKey,
+					model: legacyModel
+				});
+				providers = getEnabledProviders(db);
+				log.info('Migrated legacy OpenRouter settings to llm_providers table');
+			}
+		}
+
+		if (!providers.length) {
+			markFailed(
+				job.id,
+				userId,
+				'No LLM providers configured. Go to Settings → Intelligence to add one.'
+			);
 			return;
 		}
 
-		const model = getSetting(db, SETTING_KEYS.autoImportModel) ?? 'anthropic/claude-3.5-sonnet';
 		const expCatsRaw = getSetting(db, SETTING_KEYS.expenseCategories);
 		const incCatsRaw = getSetting(db, SETTING_KEYS.incomeCategories);
 		const expenseCategories: string[] = expCatsRaw ? JSON.parse(expCatsRaw) : [];
 		const incomeCategories: string[] = incCatsRaw ? JSON.parse(incCatsRaw) : [];
 		const mainCurrency = mainCurrencyCode(db);
 
-		log.info({ jobId: job.id, filename: job.originalFilename, model }, 'Processing job');
+		log.info({ jobId: job.id, filename: job.originalFilename, providerCount: providers.length }, 'Processing job');
 
 		// Extracting
 		db.update(importQueue)
@@ -127,10 +148,13 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		let result;
 		try {
-			result = await callLLM(text, expenseCategories, incomeCategories, apiKey, model, mainCurrency);
+			result = await callLLMWithProviders(
+				{ text, expenseCategories, incomeCategories, mainCurrency },
+				providers
+			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			log.error({ jobId: job.id, err }, 'LLM extraction failed');
+			log.error({ jobId: job.id, msg }, 'LLM extraction failed');
 			markFailed(job.id, userId, `AI extraction failed: ${msg}`);
 			return;
 		}

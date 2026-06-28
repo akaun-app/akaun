@@ -1,18 +1,28 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Plus, X, Lock } from '@lucide/svelte';
+	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
+	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { toast } from 'svelte-sonner';
 	import { CURRENCIES } from '$lib/currency.js';
+	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
+	import { dndzone } from 'svelte-dnd-action';
+	import type { DndEvent } from 'svelte-dnd-action';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'intelligence' | 'categories' | 'advanced';
+	type Tab = 'general' | 'intelligence' | 'providers' | 'categories' | 'advanced';
 	let activeTab = $state<Tab>('general');
+
+	// Mobile detection for Sheet side
+	const screenState = useIsMobile();
+	const isMobile = $derived(screenState.current);
+	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// Currency settings state
 	// svelte-ignore state_referenced_locally
@@ -30,40 +40,232 @@
 	let expCats = $state<string[]>([...data.expenseCategories]);
 	let newExpCat = $state('');
 
-	// Intelligence settings state
-	// svelte-ignore state_referenced_locally
-	let aiApiKey = $state(data.autoImportApiKey);
-	// svelte-ignore state_referenced_locally
-	let aiModel = $state(data.autoImportModel);
-	// svelte-ignore state_referenced_locally
-	let aiParallelTasks = $state(data.autoImportParallelTasks);
-	// svelte-ignore state_referenced_locally
-	let aiCategoryHints = $state(data.autoImportCategoryHints);
-
-	// OpenRouter model fetching
-	type ORModel = { id: string; name: string; isFree: boolean };
-	let orModels = $state<ORModel[]>([]);
-	let orFetching = $state(false);
-	let orError = $state('');
-	// svelte-ignore state_referenced_locally
-	let showFreeOnly = $state(data.autoImportFreeModelsOnly);
-
-	const filteredModels = $derived(showFreeOnly ? orModels.filter((m) => m.isFree) : orModels);
-
-	$effect(() => {
-		if (filteredModels.length > 0 && !filteredModels.find((m) => m.id === aiModel)) {
-			aiModel = filteredModels[0].id;
-		}
-	});
-
 	// Income categories state
 	// svelte-ignore state_referenced_locally
 	let incCats = $state<string[]>([...data.incomeCategories]);
 	let newIncCat = $state('');
 
+	// Global intelligence settings
+	// svelte-ignore state_referenced_locally
+	let aiParallelTasks = $state(data.autoImportParallelTasks);
+	// svelte-ignore state_referenced_locally
+	let aiCategoryHints = $state(data.autoImportCategoryHints);
+
 	// Advanced state
 	// svelte-ignore state_referenced_locally
 	let godMode = $state(data.godModeEnabled);
+
+	// --- Provider list state ---
+	type ProviderRow = (typeof data.providers)[0];
+	// svelte-ignore state_referenced_locally
+	let providers = $state<ProviderRow[]>([...data.providers]);
+
+	const reducedMotion =
+		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const flipDurationMs = reducedMotion ? 0 : 200;
+
+	let reorderFormEl = $state<HTMLFormElement | null>(null);
+	let reorderInputEl = $state<HTMLInputElement | null>(null);
+
+	function handleDndConsider(e: CustomEvent<DndEvent<ProviderRow>>) {
+		providers = e.detail.items;
+	}
+
+	function handleDndFinalize(e: CustomEvent<DndEvent<ProviderRow>>) {
+		providers = e.detail.items;
+		if (reorderInputEl) reorderInputEl.value = JSON.stringify(providers.map((p) => p.id));
+		reorderFormEl?.requestSubmit();
+	}
+
+	// --- Provider Sheet state ---
+	let sheetOpen = $state(false);
+	let editingProvider = $state<ProviderRow | null>(null);
+
+	let sfType = $state('openrouter');
+	let sfName = $state('');
+	let sfApiKey = $state('');
+	let sfModel = $state('');
+	let sfShowFreeOnly = $state(false);
+
+	type ModelInfo = { id: string; name: string; isFree: boolean };
+	let sfModels = $state<ModelInfo[]>([]);
+	let sfFetching = $state(false);
+	let sfError = $state('');
+
+	const sfFilteredModels = $derived(sfShowFreeOnly ? sfModels.filter((m) => m.isFree) : sfModels);
+
+	$effect(() => {
+		if (sfFilteredModels.length > 0 && !sfFilteredModels.find((m) => m.id === sfModel)) {
+			sfModel = sfFilteredModels[0].id;
+		}
+	});
+
+	$effect(() => {
+		const key = sfApiKey;
+		const type = sfType;
+		if (!key) {
+			// When editing, keep the server-fetched model list; only clear for add mode.
+			if (!editingProvider) {
+				sfModels = [];
+				sfError = '';
+			}
+			return;
+		}
+		const t = setTimeout(() => fetchSheetModels(key, type), 600);
+		return () => clearTimeout(t);
+	});
+
+	async function fetchSheetModels(key: string, type: string) {
+		sfFetching = true;
+		sfError = '';
+		try {
+			if (type === 'google_ai_studio') {
+				const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+					headers: { 'x-goog-api-key': key }
+				});
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const json = await res.json();
+				const raw: { name: string; displayName: string; supportedGenerationMethods: string[] }[] =
+					json.models ?? [];
+				sfModels = raw
+					.filter((m) => m.supportedGenerationMethods.includes('generateContent'))
+					.map((m) => ({
+						id: m.name.replace('models/', ''),
+						name: m.displayName,
+						isFree: false
+					}))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			} else if (type === 'groq') {
+				const res = await fetch('https://api.groq.com/openai/v1/models', {
+					headers: { Authorization: `Bearer ${key}` }
+				});
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const json = await res.json();
+				const raw: { id: string }[] = json.data ?? [];
+				sfModels = raw
+					.map((m) => ({ id: m.id, name: m.id, isFree: false }))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			} else {
+				const res = await fetch('https://openrouter.ai/api/v1/models', {
+					headers: { Authorization: `Bearer ${key}` }
+				});
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const json = await res.json();
+				const raw: { id: string; name: string; pricing?: { prompt?: string } }[] = json.data ?? [];
+				sfModels = raw
+					.map((m) => ({
+						id: m.id,
+						name: m.name,
+						isFree: parseFloat(m.pricing?.prompt ?? '1') === 0
+					}))
+					.sort((a, b) => a.name.localeCompare(b.name));
+			}
+		} catch (err) {
+			sfError = err instanceof Error ? err.message : 'Failed to fetch models';
+		} finally {
+			sfFetching = false;
+		}
+	}
+
+	const PROVIDER_LABELS: Record<string, string> = {
+		openrouter: 'OpenRouter',
+		google_ai_studio: 'Google AI Studio',
+		groq: 'Groq'
+	};
+
+	const PROVIDER_DEFAULT_NAMES: Record<string, string> = {
+		openrouter: 'OpenRouter',
+		google_ai_studio: 'Google AI Studio',
+		groq: 'Groq'
+	};
+
+	function openAddSheet() {
+		editingProvider = null;
+		sfType = 'openrouter';
+		sfName = PROVIDER_DEFAULT_NAMES['openrouter'];
+		sfApiKey = '';
+		sfModel = '';
+		sfModels = [];
+		sfError = '';
+		sfShowFreeOnly = false;
+		sheetOpen = true;
+	}
+
+	$effect(() => {
+		if (!editingProvider) {
+			sfName = PROVIDER_DEFAULT_NAMES[sfType] ?? sfType;
+			sfModels = [];
+		}
+	});
+
+	function openEditSheet(prov: ProviderRow) {
+		editingProvider = prov;
+		sfType = prov.type;
+		sfName = prov.name;
+		sfApiKey = '';
+		sfModel = prov.model;
+		sfModels = [];
+		sfError = '';
+		sfShowFreeOnly = false;
+		sheetOpen = true;
+		if (prov.hasApiKey) fetchServerModels(prov.id);
+	}
+
+	async function fetchServerModels(providerId: string) {
+		sfFetching = true;
+		sfError = '';
+		try {
+			const res = await fetch(`/api/providers/${providerId}/models`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const data = await res.json();
+			sfModels = data.models ?? [];
+		} catch (err) {
+			sfError = err instanceof Error ? err.message : 'Failed to fetch models';
+		} finally {
+			sfFetching = false;
+		}
+	}
+
+	function closeSheet() {
+		sheetOpen = false;
+	}
+
+	let deleteConfirmOpen = $state(false);
+	let deleteTarget = $state<ProviderRow | null>(null);
+	let deleteFormEl = $state<HTMLFormElement | null>(null);
+
+	function requestDeleteProvider(prov: ProviderRow) {
+		deleteTarget = prov;
+		deleteConfirmOpen = true;
+	}
+
+	function confirmDeleteProvider() {
+		deleteFormEl?.requestSubmit();
+		deleteConfirmOpen = false;
+	}
+
+	function truncateModel(model: string, max = 32): string {
+		if (model.length <= max) return model;
+		return model.slice(0, max - 1) + '…';
+	}
+
+	$effect(() => {
+		if (form?.success) {
+			const action = (form as { action?: string }).action;
+			if (action === 'addProvider' || action === 'updateProvider' || action === 'deleteProvider' || action === 'reorderProviders') {
+				providers = [...data.providers];
+				if (action !== 'reorderProviders') closeSheet();
+			}
+			if (action === 'saveIntelligenceGlobal') {
+				aiParallelTasks = data.autoImportParallelTasks;
+				aiCategoryHints = data.autoImportCategoryHints;
+			}
+			if (!action || action === 'saveCurrency') {
+				mainCur = data.currency;
+			}
+			toast.success('Settings saved');
+		}
+	});
 
 	function addExpCat() {
 		const v = newExpCat.trim();
@@ -97,57 +299,10 @@
 		if (e.key === 'Enter') { e.preventDefault(); addIncCat(); }
 	}
 
-	// Re-sync local AI state after successful save
-	$effect(() => {
-		if (form?.success) {
-			aiApiKey = data.autoImportApiKey;
-			aiModel = data.autoImportModel;
-			aiParallelTasks = data.autoImportParallelTasks;
-			aiCategoryHints = data.autoImportCategoryHints;
-			showFreeOnly = data.autoImportFreeModelsOnly;
-			mainCur = data.currency;
-			toast.success('Settings saved');
-		}
-	});
-
-	// Fetch OpenRouter models when API key changes (debounced)
-	$effect(() => {
-		const key = aiApiKey;
-		if (!key) { orModels = []; orError = ''; return; }
-		const t = setTimeout(() => fetchModels(key), 600);
-		return () => clearTimeout(t);
-	});
-
-	async function fetchModels(key: string) {
-		orFetching = true;
-		orError = '';
-		try {
-			const res = await fetch('https://openrouter.ai/api/v1/models', {
-				headers: { Authorization: `Bearer ${key}` }
-			});
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			const json = await res.json();
-			const raw: { id: string; name: string; pricing?: { prompt?: string } }[] = json.data ?? [];
-			orModels = raw
-				.map((m) => ({
-					id: m.id,
-					name: m.name,
-					isFree: parseFloat(m.pricing?.prompt ?? '1') === 0
-				}))
-				.sort((a, b) => a.name.localeCompare(b.name));
-			if (!orModels.find((m) => m.id === aiModel)) {
-				aiModel = orModels[0]?.id ?? aiModel;
-			}
-		} catch (err) {
-			orError = err instanceof Error ? err.message : 'Failed to fetch models';
-		} finally {
-			orFetching = false;
-		}
-	}
-
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
 		{ id: 'intelligence', label: 'Intelligence' },
+		{ id: 'providers', label: 'Providers' },
 		{ id: 'categories', label: 'Categories' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
@@ -168,7 +323,7 @@
 	<div class="set-layout">
 		<!-- Left nav -->
 		<nav class="set-nav">
-			{#each TABS as tab}
+			{#each TABS as tab (tab.id)}
 				<button
 					class="set-nav-item"
 					class:active={activeTab === tab.id}
@@ -228,70 +383,11 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Intelligence</h2>
-						<p class="set-section-sub">Auto-import reads receipts with OCR and an LLM to fill fields.</p>
+						<p class="set-section-sub">Global settings for auto-import processing.</p>
 					</div>
-					<form method="POST" action="?/saveIntelligence" use:enhance={() => ({ update }) => update({ reset: false })}>
+					<form method="POST" action="?/saveIntelligenceGlobal" use:enhance={() => ({ update }) => update({ reset: false })}>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
-					<input type="hidden" name="freeModelsOnly" value={String(showFreeOnly)} />
 						<div class="set-rows">
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">API key</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">OpenRouter key used for document understanding</div>
-								</div>
-								<Input
-									class="set-input-right shrink-0"
-									type="password"
-									name="apiKey"
-									placeholder="sk-or-v1-…"
-									value={aiApiKey}
-									oninput={(e) => (aiApiKey = (e.target as HTMLInputElement).value)}
-								/>
-							</div>
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">Model</div>
-									{#if orFetching}
-										<div class="set-row-value" style="font-size:12px; margin-top:2px; display:flex; align-items:center; gap:6px;">
-											<span class="spinner sm"></span> Fetching models…
-										</div>
-									{:else if orError}
-										<div class="set-row-value" style="font-size:12px; margin-top:2px; color:var(--red);">{orError}</div>
-									{:else if aiApiKey && orModels.length === 0}
-										<div class="set-row-value" style="font-size:12px; margin-top:2px;">Enter API key to load models</div>
-									{/if}
-								</div>
-								<div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
-									<Select.Root type="single" name="model" bind:value={aiModel} disabled={orModels.length === 0}>
-										<Select.Trigger class="set-input-right set-input-wide">
-											{orModels.length === 0
-												? 'Enter API key to load models'
-												: filteredModels.find((m) => m.id === aiModel)?.name ?? 'Select model'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each filteredModels as m (m.id)}
-												<Select.Item value={m.id} label={m.name} />
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-							</div>
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">Free models only</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Only show models with no usage cost</div>
-								</div>
-								<button
-									type="button"
-									class="toggle-btn"
-									aria-label="Free models only"
-									class:on={showFreeOnly}
-									onclick={() => { showFreeOnly = !showFreeOnly; }}
-									aria-pressed={showFreeOnly}
-								>
-									<span class="toggle-thumb"></span>
-								</button>
-							</div>
 							<div class="set-row">
 								<div>
 									<div class="set-row-label">Parallel tasks</div>
@@ -332,6 +428,84 @@
 					</form>
 				</div>
 
+			{:else if activeTab === 'providers'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">LLM Providers</h2>
+						<p class="set-section-sub">AI models used for receipt extraction. Providers are tried in priority order — drag to reorder.</p>
+					</div>
+
+					<div class="prov-header">
+						<span class="set-row-label" style="margin:0;">Configured providers</span>
+						<button type="button" class="sheet-btn sheet-btn-primary" style="padding:6px 12px; font-size:13px;" onclick={openAddSheet}>
+							<Plus size={14} /> Add provider
+						</button>
+					</div>
+
+					<!-- Hidden reorder form -->
+					<form
+						bind:this={reorderFormEl}
+						method="POST"
+						action="?/reorderProviders"
+						use:enhance={() => ({ update }) => update({ reset: false })}
+						style="display:none;"
+					>
+						<input bind:this={reorderInputEl} type="hidden" name="orderedIds" value={JSON.stringify(providers.map((p) => p.id))} />
+					</form>
+
+					{#if providers.length === 0}
+						<div class="prov-empty">
+							<Zap size={20} style="opacity:0.3;" />
+							<span>No providers configured — add one to enable auto-import.</span>
+						</div>
+					{:else}
+						<div
+							class="prov-list"
+							use:dndzone={{ items: providers, flipDurationMs, dropTargetStyle: {}, dragDisabled: providers.length <= 1 }}
+							onconsider={handleDndConsider}
+							onfinalize={handleDndFinalize}
+						>
+							{#each providers as prov (prov.id)}
+								<div class="prov-row" class:prov-row-disabled={!prov.enabled}>
+									<span class="prov-handle" aria-hidden="true" class:prov-handle-hidden={providers.length <= 1}><GripVertical size={15} /></span>
+									<span class="prov-type-badge">{PROVIDER_LABELS[prov.type] ?? prov.type}</span>
+									<div class="prov-info">
+										<span class="prov-name">{prov.name}</span>
+										<span class="prov-model">{truncateModel(prov.model)}</span>
+									</div>
+									<form
+										method="POST"
+										action="?/updateProvider"
+										use:enhance={({ formData }) => {
+											const newEnabled = formData.get('enabled') === 'true';
+											providers = providers.map((p) =>
+												p.id === prov.id ? { ...p, enabled: newEnabled } : p
+											);
+											return async ({ update }) => update({ reset: false });
+										}}
+										style="display:contents;"
+									>
+										<input type="hidden" name="id" value={prov.id} />
+										<input type="hidden" name="enabled" value={String(!prov.enabled)} />
+										<button
+											type="submit"
+											class="toggle-btn"
+											class:on={prov.enabled}
+											aria-pressed={prov.enabled}
+											aria-label={prov.enabled ? 'Disable provider' : 'Enable provider'}
+										>
+											<span class="toggle-thumb"></span>
+										</button>
+									</form>
+									<button type="button" class="prov-edit-btn" title="Edit provider" onclick={() => openEditSheet(prov)}>
+										<Pencil size={13} />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
 			{:else if activeTab === 'categories'}
 				<div class="set-section">
 					<div class="set-section-head">
@@ -341,7 +515,7 @@
 					<form method="POST" action="?/saveExpenseCategories" use:enhance>
 						<input type="hidden" name="categories" value={JSON.stringify(expCats)} />
 						<div class="cat-chips">
-							{#each expCats as cat}
+							{#each expCats as cat (cat)}
 								<span class="cat-chip-removable">
 									{cat}
 									<button type="button" class="chip-remove" onclick={() => removeExpCat(cat)} aria-label="Remove {cat}">
@@ -366,7 +540,7 @@
 					<form method="POST" action="?/saveIncomeCategories" use:enhance>
 						<input type="hidden" name="categories" value={JSON.stringify(incCats)} />
 						<div class="cat-chips">
-							{#each incCats as cat}
+							{#each incCats as cat (cat)}
 								<span class="cat-chip-removable">
 									{cat}
 									<button type="button" class="chip-remove" onclick={() => removeIncCat(cat)} aria-label="Remove {cat}">
@@ -422,6 +596,191 @@
 	</div>
 </div>
 
+<!-- Add / Edit Provider Sheet -->
+<Sheet.Root
+	open={sheetOpen}
+	onOpenChange={(o) => { if (!o) closeSheet(); }}
+>
+	<Sheet.Portal>
+		<Sheet.Overlay />
+		<Sheet.Content
+			side={panelSide}
+			style={isMobile
+				? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;'
+				: 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}
+		>
+			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
+				<div>
+					<div class="sheet-eyebrow">LLM Provider</div>
+					<div class="sheet-title-text">{editingProvider ? editingProvider.name : 'Add provider'}</div>
+				</div>
+				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
+			</div>
+
+			<form
+				method="POST"
+				action={editingProvider ? '?/updateProvider' : '?/addProvider'}
+				use:enhance={() => ({ update }) => update({ reset: false })}
+				style="flex:1; display:flex; flex-direction:column; overflow:hidden;"
+			>
+				{#if editingProvider}
+					<input type="hidden" name="id" value={editingProvider.id} />
+				{/if}
+
+				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+					{#if form?.error}
+						<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+					{/if}
+
+					<div class="field">
+						<label class="field-label" for="sf-type">Provider type</label>
+						<Select.Root type="single" name="type" bind:value={sfType}>
+							<Select.Trigger id="sf-type" class="w-full">
+								{PROVIDER_LABELS[sfType] ?? sfType}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="openrouter" label="OpenRouter" />
+								<Select.Item value="google_ai_studio" label="Google AI Studio" />
+								<Select.Item value="groq" label="Groq" />
+							</Select.Content>
+						</Select.Root>
+						<span style="font-size:11px; color:var(--muted-foreground); margin-top:4px; display:block;">
+							{#if sfType === 'openrouter'}
+								Unified API gateway — access hundreds of models with one key. <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style="color:var(--primary);">Get a key ↗</a>
+							{:else if sfType === 'google_ai_studio'}
+								Direct access to Gemini models. <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style="color:var(--primary);">Get a key ↗</a>
+							{:else if sfType === 'groq'}
+								Fast open-source model inference (Llama, Mixtral and more). <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" style="color:var(--primary);">Get a key ↗</a>
+							{/if}
+						</span>
+					</div>
+
+					<div class="field">
+						<label class="field-label" for="sf-name">Name</label>
+						<Input
+							id="sf-name"
+							name="name"
+							class="w-full"
+							placeholder="e.g. OpenRouter"
+							value={sfName}
+							oninput={(e) => (sfName = (e.target as HTMLInputElement).value)}
+							required
+						/>
+					</div>
+
+					<div class="field">
+						<label class="field-label" for="sf-apikey">API key</label>
+						<Input
+							id="sf-apikey"
+							name="apiKey"
+							type="password"
+							class="w-full"
+							placeholder={editingProvider?.hasApiKey
+								? 'Leave blank to keep current key'
+								: sfType === 'google_ai_studio' ? 'AQ…' : sfType === 'groq' ? 'gsk_…' : 'sk-or-v1-…'}
+							value={sfApiKey}
+							oninput={(e) => (sfApiKey = (e.target as HTMLInputElement).value)}
+						/>
+					</div>
+
+					{#if sfType === 'openrouter'}
+						<div class="field" style="flex-direction:row; align-items:center; justify-content:space-between; gap:12px;">
+							<div>
+								<span class="field-label" style="margin-bottom:0;">Free models only</span>
+								<span style="font-size:11px; color:var(--muted-foreground); display:block;">Only show models with no usage cost</span>
+							</div>
+							<button
+								type="button"
+								class="toggle-btn"
+								aria-label="Free models only"
+								class:on={sfShowFreeOnly}
+								onclick={() => { sfShowFreeOnly = !sfShowFreeOnly; }}
+								aria-pressed={sfShowFreeOnly}
+							>
+								<span class="toggle-thumb"></span>
+							</button>
+						</div>
+					{/if}
+
+					<div class="field">
+						<label class="field-label" for="sf-model">Model</label>
+						{#if sfFetching}
+							<div style="font-size:12px; color:var(--muted-foreground); display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+								<span class="spinner sm"></span> Fetching models…
+							</div>
+						{:else if sfError}
+							<div style="font-size:12px; color:var(--red); margin-bottom:6px;">{sfError}</div>
+						{/if}
+
+						{#if sfFilteredModels.length > 0}
+							<input type="hidden" name="model" value={sfModel} />
+							<Select.Root type="single" bind:value={sfModel}>
+								<Select.Trigger id="sf-model" class="w-full">
+									{(sfFilteredModels.find((m) => m.id === sfModel)?.name ?? sfModel) || 'Select model'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each sfFilteredModels as m (m.id)}
+										<Select.Item value={m.id} label={m.name} />
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						{:else}
+							{@const fallbackModel = editingProvider !== null ? (editingProvider?.model ?? '') : ''}
+							<input type="hidden" name="model" value={sfModel || fallbackModel} />
+							<div style="font-size:12px; color:var(--muted-foreground); padding:8px 12px; border:1px solid var(--border); border-radius:6px; background:var(--muted);">
+								{fallbackModel || 'Enter API key to load available models'}
+							</div>
+						{/if}
+					</div>
+				</div>
+
+				<div class="sheet-foot">
+					<div class="sheet-foot-actions">
+						{#if editingProvider}
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								style="margin-right:auto;"
+								onclick={() => editingProvider && requestDeleteProvider(editingProvider)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+						{/if}
+						<button type="button" class="sheet-btn" onclick={closeSheet}>Cancel</button>
+						<button
+							type="submit"
+							class="sheet-btn sheet-btn-primary"
+							disabled={!sfName || (!sfModel && !editingProvider)}
+						>
+							{editingProvider ? 'Save changes' : 'Add provider'}
+						</button>
+					</div>
+				</div>
+			</form>
+		</Sheet.Content>
+	</Sheet.Portal>
+</Sheet.Root>
+
+{#if deleteTarget}
+	<ConfirmDialog
+		bind:open={deleteConfirmOpen}
+		title="Delete provider"
+		description="Remove {deleteTarget.name}? This cannot be undone."
+		confirmLabel="Delete"
+		danger
+		onConfirm={confirmDeleteProvider}
+	/>
+	<form
+		bind:this={deleteFormEl}
+		method="POST"
+		action="?/deleteProvider"
+		use:enhance={() => ({ update }) => update({ reset: false })}
+		style="display:none;"
+	>
+		<input type="hidden" name="id" value={deleteTarget.id} />
+	</form>
+{/if}
+
 <style>
 	.cat-add-row {
 		display: flex;
@@ -467,5 +826,130 @@
 		color: oklch(0.75 0.1 85);
 	}
 
+	/* Provider list */
+	.prov-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 12px;
+	}
 
+	.prov-empty {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 20px 16px;
+		border: 1px dashed var(--border);
+		border-radius: 10px;
+		font-size: 13px;
+		color: var(--muted-foreground);
+		margin-bottom: 4px;
+	}
+
+	.prov-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.prov-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 10px 12px;
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		background: var(--card);
+		transition: border-color 0.15s;
+	}
+
+	.prov-row:hover {
+		border-color: var(--primary);
+	}
+
+	.prov-row-disabled {
+		opacity: 0.55;
+	}
+
+	.prov-handle {
+		cursor: grab;
+		color: var(--muted-foreground);
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+	}
+
+	.prov-handle:active {
+		cursor: grabbing;
+	}
+
+	.prov-handle-hidden {
+		visibility: hidden;
+		cursor: default;
+	}
+
+	.prov-type-badge {
+		flex-shrink: 0;
+		font-size: 11px;
+		font-weight: 600;
+		padding: 2px 8px;
+		border-radius: 20px;
+		background: color-mix(in srgb, var(--primary) 12%, transparent);
+		color: var(--primary);
+		letter-spacing: 0.01em;
+	}
+
+	.prov-info {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.prov-name {
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--foreground);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.prov-model {
+		font-size: 11px;
+		color: var(--muted-foreground);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-family: var(--font-mono, monospace);
+	}
+
+	.prov-edit-btn {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		transition: background 0.12s, color 0.12s;
+	}
+
+	.prov-edit-btn:hover {
+		background: var(--accent);
+		color: var(--foreground);
+	}
+
+	/* Sheet field spacing */
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-bottom: 16px;
+	}
 </style>
