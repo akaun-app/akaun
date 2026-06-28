@@ -96,6 +96,7 @@
 	let saving = $state(false);
 	let saveError = $state('');
 	let markingPaid = $state(false);
+	let payConfirmOpen = $state(false);
 
 	// Edit form state
 	type LineInput = { description: string; quantity: number; unitPrice: number };
@@ -886,9 +887,9 @@
 							<button
 								type="button"
 								class="sheet-btn sheet-btn-delete"
-								disabled={detailInvoice.status === InvoiceStatus.Paid}
-								title={detailInvoice.status === InvoiceStatus.Paid
-									? 'Paid invoices cannot be deleted'
+								disabled={!canEdit(detailInvoice)}
+								title={!canEdit(detailInvoice)
+									? 'Paid or cancelled invoices cannot be deleted'
 									: undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
@@ -976,9 +977,29 @@
 								<button
 									type="button"
 									class="linked-claim-card related-link"
-									onclick={() => goto('/quotations/' + detailInvoice!.sourceQuotationId)}
+									onclick={() => goto(resolve('/(app)/quotations/[id]', { id: String(detailInvoice!.sourceQuotationId) }))}
 								>
-									<span>View source quotation</span>
+									<span class="rel-card-icon"><FileText size={16} /></span>
+									<span class="rel-card-body">
+										<span class="rel-card-title">Source Quotation</span>
+									</span>
+									<ChevronRight size={13} color="var(--muted-foreground)" />
+								</button>
+							</div>
+						{/if}
+
+						<!-- Linked income record -->
+						{#if detailInvoice.resultIncomeId}
+							<div style="margin-top:8px;">
+								<button
+									type="button"
+									class="linked-claim-card related-link"
+									onclick={() => goto(resolve('/(app)/income/[id]', { id: String(detailInvoice!.resultIncomeId) }))}
+								>
+									<span class="rel-card-icon"><CreditCard size={16} /></span>
+									<span class="rel-card-body">
+										<span class="rel-card-title">Income Record</span>
+									</span>
 									<ChevronRight size={13} color="var(--muted-foreground)" />
 								</button>
 							</div>
@@ -1036,9 +1057,9 @@
 							<button
 								type="button"
 								class="sheet-btn sheet-btn-delete"
-								disabled={detailInvoice.status === InvoiceStatus.Paid}
-								title={detailInvoice.status === InvoiceStatus.Paid
-									? 'Paid invoices cannot be deleted'
+								disabled={!canEdit(detailInvoice)}
+								title={!canEdit(detailInvoice)
+									? 'Paid or cancelled invoices cannot be deleted'
 									: undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
@@ -1052,14 +1073,14 @@
 							>
 								<Printer size={14} /> Print
 							</a>
-							{#if canEdit(detailInvoice) && detailInvoice.status !== InvoiceStatus.Cancelled}
+							{#if detailInvoice.status === InvoiceStatus.Sent}
 								<button
 									type="button"
 									class="sheet-btn"
-									onclick={() => markPaid(detailInvoice!.id)}
+									onclick={() => (payConfirmOpen = true)}
 									disabled={markingPaid}
 								>
-									<CreditCard size={14} /> {markingPaid ? 'Marking…' : 'Mark as Paid'}
+									<CreditCard size={14} /> {markingPaid ? 'Marking…' : 'Record Payment'}
 								</button>
 							{/if}
 							{#if canEdit(detailInvoice)}
@@ -1095,6 +1116,13 @@
 		confirmLabel="Delete"
 		danger
 		onConfirm={() => deleteFormEl?.requestSubmit()}
+	/>
+	<ConfirmDialog
+		bind:open={payConfirmOpen}
+		title="Record payment?"
+		description={`Mark ${detailInvoice.invoiceNumber} as paid? This will create a linked income record and cannot be undone.`}
+		confirmLabel="Record Payment"
+		onConfirm={() => markPaid(detailInvoice!.id)}
 	/>
 	<form
 		method="POST"
@@ -1322,18 +1350,28 @@
 		color: var(--muted-foreground);
 	}
 
-	.linked-claim-card {
+	.rel-card-icon {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		padding: 10px 14px;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		background: var(--card);
-		width: 100%;
+		justify-content: center;
+		width: 34px;
+		height: 34px;
+		border-radius: 7px;
+		background: var(--accent);
+		color: var(--muted-foreground);
+		flex-shrink: 0;
+	}
+
+	.rel-card-body {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.rel-card-title {
 		font-size: 13.5px;
-		font-family: inherit;
+		font-weight: 500;
 		color: var(--foreground);
 	}
 
