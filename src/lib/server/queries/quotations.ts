@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, like, lte, or, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, like, lte, or, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { quotations, quotationLines, invoices, invoiceLines, contacts } from '../db/schema.js';
@@ -132,7 +132,7 @@ export function getQuotation(db: Db, id: number) {
 		.select()
 		.from(quotationLines)
 		.where(eq(quotationLines.quotationId, id))
-		.orderBy(quotationLines.sortOrder)
+		.orderBy(asc(quotationLines.sortOrder))
 		.all();
 
 	return { ...row, lines, isExpired: deriveExpired(row) };
@@ -235,21 +235,14 @@ export function updateQuotation(db: Db, id: number, userId: number, patch: Quota
 // Delete
 // ---------------------------------------------------------------------------
 
-export function deleteQuotation(
-	db: Db,
-	id: number
-): { ok: boolean; reason?: 'converted' | 'not_found' } {
-	const existing = db
-		.select({ status: quotations.status })
-		.from(quotations)
-		.where(eq(quotations.id, id))
-		.get();
-
-	if (!existing) return { ok: false, reason: 'not_found' };
-	if (existing.status === QuotationStatus.Converted) return { ok: false, reason: 'converted' };
-
-	db.delete(quotations).where(eq(quotations.id, id)).run();
-	return { ok: true };
+export function deleteQuotation(db: Db, id: number): { ok: boolean; reason?: 'converted' | 'not_found' } {
+	return db.transaction((tx) => {
+		const existing = tx.select({ status: quotations.status }).from(quotations).where(eq(quotations.id, id)).get();
+		if (!existing) return { ok: false, reason: 'not_found' };
+		if (existing.status === QuotationStatus.Converted) return { ok: false, reason: 'converted' };
+		tx.delete(quotations).where(eq(quotations.id, id)).run();
+		return { ok: true };
+	});
 }
 
 // ---------------------------------------------------------------------------
