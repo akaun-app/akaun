@@ -154,11 +154,6 @@
 	type QuotationStreamMsg =
 		| { type: 'quotation-update'; item: (typeof data.quotations)[0] }
 		| { type: 'quotation-delete'; id: number };
-	createResourceStream<QuotationStreamMsg>('/api/quotations/stream', (msg) => {
-		if (msg.type === 'quotation-update') quotations = mergeById(quotations, [msg.item]);
-		else if (msg.type === 'quotation-delete')
-			quotations = quotations.filter((q) => q.id !== msg.id);
-	});
 
 	// Derived counts (from local state for real-time accuracy)
 	const counts = $derived.by(() => ({
@@ -371,10 +366,17 @@
 	}
 
 	onMount(() => {
+		// Deep-link: open the quotation if openId was passed via direct navigation
 		if (openId) {
 			const found = quotations.find((q) => q.id === openId);
 			if (found) openQuotation(found, { push: false });
 		}
+		// SSE subscription — cleanup is handled internally by createResourceStream
+		createResourceStream<QuotationStreamMsg>('/api/quotations/stream', (msg) => {
+			if (msg.type === 'quotation-update') quotations = mergeById(quotations, [msg.item]);
+			else if (msg.type === 'quotation-delete')
+				quotations = quotations.filter((q) => q.id !== msg.id);
+		});
 	});
 </script>
 
@@ -643,7 +645,7 @@
 								</td>
 							</tr>
 						{/each}
-						{#if counts.all === 0}
+						{#if quotations.length === 0}
 							<tr class="empty-row">
 								<td colspan="5">
 									<EmptyState
@@ -1175,22 +1177,22 @@
 						bind:value={newTerms}
 					/>
 				</div>
+			</div>
 
-				<div
-					style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:auto;"
-				>
+			<div class="sheet-foot">
+				<div class="sheet-foot-actions">
 					<button
 						type="button"
+						class="sheet-btn"
 						onclick={() => (showNew = false)}
-						style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;"
 					>
 						Cancel
 					</button>
 					<button
 						type="button"
+						class="sheet-btn-primary"
 						onclick={handleCreate}
 						disabled={newSaving}
-						style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{newSaving ? 0.5 : 1};"
 					>
 						{newSaving ? 'Creating…' : 'Create quotation'}
 					</button>
