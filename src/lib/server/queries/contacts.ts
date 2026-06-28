@@ -7,7 +7,9 @@ import {
 	contactSearchText,
 	expenses,
 	incomes,
-	importQueue
+	importQueue,
+	quotations,
+	invoices
 } from '../db/schema.js';
 import { EntityType, Role, RoleLabels, EntityTypeLabels } from '$lib/enums.js';
 
@@ -180,17 +182,25 @@ export function isContactReferenced(db: Db, id: number): boolean {
 	const e = db.select({ id: expenses.id }).from(expenses).where(eq(expenses.contactId, id)).get();
 	if (e) return true;
 	const i = db.select({ id: incomes.id }).from(incomes).where(eq(incomes.contactId, id)).get();
-	return !!i;
+	if (i) return true;
+
+	const quotationRef = db.select({ id: quotations.id }).from(quotations).where(eq(quotations.contactId, id)).get();
+	if (quotationRef) return true;
+
+	const invoiceRef = db.select({ id: invoices.id }).from(invoices).where(eq(invoices.contactId, id)).get();
+	if (invoiceRef) return true;
+
+	return false;
 }
 
-/** Per-contact expense/income counts — surfaced in the merge-comparison UI. */
+/** Per-contact expense/income/quotation/invoice counts — surfaced in the merge-comparison UI. */
 export function getContactUsageCounts(
 	db: Db,
 	ids: number[]
-): Record<number, { expenses: number; incomes: number }> {
-	const out: Record<number, { expenses: number; incomes: number }> = {};
+): Record<number, { expenses: number; incomes: number; quotations: number; invoices: number }> {
+	const out: Record<number, { expenses: number; incomes: number; quotations: number; invoices: number }> = {};
 	if (ids.length === 0) return out;
-	for (const id of ids) out[id] = { expenses: 0, incomes: 0 };
+	for (const id of ids) out[id] = { expenses: 0, incomes: 0, quotations: 0, invoices: 0 };
 
 	const expenseRows = db
 		.select({ contactId: expenses.contactId, n: sql<number>`count(*)` })
@@ -207,6 +217,22 @@ export function getContactUsageCounts(
 		.groupBy(incomes.contactId)
 		.all();
 	for (const r of incomeRows) if (r.contactId != null) out[r.contactId].incomes = Number(r.n);
+
+	const quotationRows = db
+		.select({ contactId: quotations.contactId, n: sql<number>`count(*)` })
+		.from(quotations)
+		.where(inArray(quotations.contactId, ids))
+		.groupBy(quotations.contactId)
+		.all();
+	for (const r of quotationRows) if (r.contactId != null) out[r.contactId].quotations = Number(r.n);
+
+	const invoiceRows = db
+		.select({ contactId: invoices.contactId, n: sql<number>`count(*)` })
+		.from(invoices)
+		.where(inArray(invoices.contactId, ids))
+		.groupBy(invoices.contactId)
+		.all();
+	for (const r of invoiceRows) if (r.contactId != null) out[r.contactId].invoices = Number(r.n);
 
 	return out;
 }
@@ -299,7 +325,7 @@ export function findDuplicates(db: Db) {
 				matchedOn,
 				contacts: group.map((c) => ({
 					...withLabels(c, roleMap[c.id] ?? []),
-					usage: usageMap[c.id] ?? { expenses: 0, incomes: 0 }
+					usage: usageMap[c.id] ?? { expenses: 0, incomes: 0, quotations: 0, invoices: 0 }
 				}))
 			};
 		});
@@ -322,12 +348,20 @@ export function mergeContacts(
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(db as any).transaction((tx: Db) => {
-		// a/b. Repoint references — extend this block per new contact FK (invoices, payroll…).
+		// a/b. Repoint references — extend this block per new contact FK.
 		tx.update(expenses).set({ contactId: survivorId }).where(inArray(expenses.contactId, losers)).run();
 		tx.update(incomes).set({ contactId: survivorId }).where(inArray(incomes.contactId, losers)).run();
 		tx.update(importQueue)
 			.set({ matchedContactId: survivorId })
 			.where(inArray(importQueue.matchedContactId, losers))
+			.run();
+		tx.update(quotations)
+			.set({ contactId: survivorId })
+			.where(inArray(quotations.contactId, losers))
+			.run();
+		tx.update(invoices)
+			.set({ contactId: survivorId })
+			.where(inArray(invoices.contactId, losers))
 			.run();
 
 		// c. Union losers' roles into survivor BEFORE the delete (cascade would wipe them).
