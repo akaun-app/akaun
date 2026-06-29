@@ -3,13 +3,15 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { hash } from 'argon2';
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
-import { users, groups, groupPermissions, userGroups } from './schema.js';
+import { users, groups, groupPermissions, userGroups, documentTemplates } from './schema.js';
+import { TemplateDocumentType, TemplateFont } from '$lib/enums.js';
+import { makeDefaultLayout } from '../pdf/template-types.js';
 
 const log = createLogger('db');
 
@@ -104,6 +106,22 @@ const SEED_GROUPS = [
 		}
 	}
 ];
+
+export function ensureDefaultTemplate(): void {
+	const total = (db.select({ n: count() }).from(documentTemplates).get() as { n: number }).n;
+	if (total > 0) return;
+	db.insert(documentTemplates)
+		.values({
+			uuid: crypto.randomUUID(),
+			name: 'Default',
+			documentType: TemplateDocumentType.Both,
+			isDefault: 1,
+			themeColor: '#1a56db',
+			themeFont: TemplateFont.Inter,
+			layoutJson: JSON.stringify(makeDefaultLayout())
+		})
+		.run();
+}
 
 export function ensureGroupSeed(): void {
 	// Seed default groups
