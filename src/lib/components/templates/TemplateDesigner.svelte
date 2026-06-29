@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { Save, Star, Trash2 } from '@lucide/svelte';
-	import type { BlockDef, BlockType, TemplateLayout, TemplateRow, ZoneRow } from '$lib/pdf/template-types.js';
-	import { migrateLayout } from '$lib/pdf/template-types.js';
+	import type { BlockType, GridCell, TemplateLayout, TemplateRow } from '$lib/pdf/template-types.js';
+	import { migrateLayout, GRID_COLUMNS } from '$lib/pdf/template-types.js';
 	import BlockPalette from './BlockPalette.svelte';
 	import TemplateCanvas from './TemplateCanvas.svelte';
 	import BlockInspector from './BlockInspector.svelte';
@@ -28,168 +28,130 @@
 	let saving = $state(false);
 	let sidebarTab = $state<'blocks' | 'theme'>('blocks');
 
-	const selectedBlock = $derived(findBlock(layout, selectedBlockId));
+	const columns = $derived(layout.columns || GRID_COLUMNS);
+	const selectedBlock = $derived(findCell(layout, selectedBlockId));
 
-	// zone string: "header:0" | "body:0" | "footer:0" | "header:NEW:1" | etc.
-	const selectedBlockZone = $derived((): string | null => {
-		if (!selectedBlockId) return null;
-		for (let ri = 0; ri < layout.header.rows.length; ri++) {
-			if (layout.header.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `header:${ri}`;
-		}
-		for (let ri = 0; ri < layout.body.rows.length; ri++) {
-			if (layout.body.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `body:${ri}`;
-		}
-		for (let ri = 0; ri < layout.footer.rows.length; ri++) {
-			if (layout.footer.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `footer:${ri}`;
-		}
-		return null;
-	});
-
-	function allBlocks(l: TemplateLayout): BlockDef[] {
-		return [
-			...l.header.rows.flatMap((r) => r.blocks),
-			...l.body.rows.flatMap((r) => r.blocks),
-			...l.footer.rows.flatMap((r) => r.blocks)
-		];
-	}
-
-	function findBlock(l: TemplateLayout, id: string | null): BlockDef | null {
+	function findCell(l: TemplateLayout, id: string | null): GridCell | null {
 		if (!id) return null;
-		return allBlocks(l).find((b) => b.id === id) ?? null;
+		return l.cells.find((c) => c.id === id) ?? null;
 	}
 
-	// Parse "header:0" → { section, rowIdx, newRow }
-	// Parse "body:NEW:2" → { section: 'body', rowIdx: 2, newRow: true }
-	function parseZone(zone: string): { section: string; rowIdx: number; newRow: boolean } {
-		const parts = zone.split(':');
-		if (parts[1] === 'NEW') {
-			return { section: parts[0], rowIdx: parseInt(parts[2] ?? '0') || 0, newRow: true };
+	function maxRow(cells: GridCell[]): number {
+		return cells.reduce((m, c) => Math.max(m, c.row + c.rowSpan), 0);
+	}
+
+	// Two grid rectangles overlap if they intersect on both axes.
+	function overlaps(a: GridCell, b: GridCell): boolean {
+		const colsClash = a.col < b.col + b.colSpan && b.col < a.col + a.colSpan;
+		const rowsClash = a.row < b.row + b.rowSpan && b.row < a.row + a.rowSpan;
+		return colsClash && rowsClash;
+	}
+
+	// Keep `movedId` fixed; push every other cell that collides straight down,
+	// processing top-to-bottom so a single downward pass resolves all clashes.
+	function resolveOverlaps(cells: GridCell[], movedId: string): GridCell[] {
+		const moved = cells.find((c) => c.id === movedId);
+		if (!moved) return cells;
+		const rest = cells
+			.filter((c) => c.id !== movedId)
+			.sort((a, b) => a.row - b.row || a.col - b.col);
+		const locked: GridCell[] = [moved];
+		for (const cell of rest) {
+			let c = cell;
+			while (locked.some((l) => overlaps(l, c))) c = { ...c, row: c.row + 1 };
+			locked.push(c);
 		}
-		return { section: parts[0], rowIdx: parseInt(parts[1] ?? '0') || 0, newRow: false };
+		return locked;
 	}
 
-	function getSectionRows(l: TemplateLayout, section: string): ZoneRow[] {
-		if (section === 'body') return l.body.rows;
-		if (section === 'header') return l.header.rows;
-		if (section === 'footer') return l.footer.rows;
-		return [];
-	}
-
-	function getZoneBlocks(zone: string): BlockDef[] {
-		const { section, rowIdx, newRow } = parseZone(zone);
-		if (newRow) return [];
-		return getSectionRows(layout, section)[rowIdx]?.blocks ?? [];
-	}
-
-	function applyZoneBlocks(zone: string, blocks: BlockDef[], base?: TemplateLayout): TemplateLayout {
-		const l = base ?? layout;
-		const { section, rowIdx, newRow } = parseZone(zone);
-
-		function applyToSection(rows: ZoneRow[]): ZoneRow[] {
-			if (newRow) {
-				const next = [...rows];
-				next.splice(rowIdx, 0, { blocks });
-				return next;
+	// Gravity: pull every cell up to its topmost non-overlapping slot, preserving
+	// order. Removes the empty rows left behind by moves/deletes so the grid stays
+	// compact (use spacer/divider blocks for intentional gaps).
+	function compact(cells: GridCell[]): GridCell[] {
+		const sorted = [...cells].sort((a, b) => a.row - b.row || a.col - b.col);
+		const placed: GridCell[] = [];
+		for (const cell of sorted) {
+			let c = cell;
+			while (c.row > 0) {
+				const up = { ...c, row: c.row - 1 };
+				if (placed.some((p) => overlaps(p, up))) break;
+				c = up;
 			}
-			return rows.map((r, i): ZoneRow => (i === rowIdx ? { blocks } : r));
+			placed.push(c);
 		}
-
-		if (section === 'body') return { ...l, body: { rows: applyToSection(l.body.rows) } };
-		if (section === 'header') return { ...l, header: { rows: applyToSection(l.header.rows) } };
-		if (section === 'footer') return { ...l, footer: { rows: applyToSection(l.footer.rows) } };
-		return l;
+		return placed;
 	}
 
-	function cleanEmptyRows(l: TemplateLayout): TemplateLayout {
-		const clean = (rows: ZoneRow[]): ZoneRow[] => {
-			const kept = rows.filter((r) => r.blocks.length > 0);
-			return kept.length > 0 ? kept : [{ blocks: [] }];
-		};
-		return {
-			...l,
-			header: { rows: clean(l.header.rows) },
-			body: { rows: clean(l.body.rows) },
-			footer: { rows: clean(l.footer.rows) }
-		};
+	function commit(cells: GridCell[], movedId: string) {
+		layout = { ...layout, cells: compact(resolveOverlaps(cells, movedId)) };
 	}
 
 	function addBlockToBody(type: BlockType) {
-		const newBlock: BlockDef = { id: crypto.randomUUID(), type, config: {}, style: {} };
-		// Append to last body row if it exists and is non-full, otherwise new row
-		const lastRow = layout.body.rows[layout.body.rows.length - 1];
-		if (lastRow) {
-			const rows = [...layout.body.rows];
-			rows[rows.length - 1] = { blocks: [...lastRow.blocks, newBlock] };
-			layout = { ...layout, body: { rows } };
-		} else {
-			layout = { ...layout, body: { rows: [{ blocks: [newBlock] }] } };
-		}
-		selectedBlockId = newBlock.id;
+		// Palette click → full-width cell appended below everything (gravity settles it).
+		addCell(type, 0, maxRow(layout.cells), columns);
 	}
 
-	function addBlockAt(type: BlockType, zone: string, idx: number) {
-		const newBlock: BlockDef = { id: crypto.randomUUID(), type, config: {}, style: {} };
-		const zoneBlocks = [...getZoneBlocks(zone)];
-		zoneBlocks.splice(idx, 0, newBlock);
-		layout = applyZoneBlocks(zone, zoneBlocks);
-		selectedBlockId = newBlock.id;
+	function addCell(type: BlockType, col: number, row: number, colSpan = columns) {
+		const c = Math.min(Math.max(col, 0), columns - 1);
+		const span = Math.min(Math.max(colSpan, 1), columns - c);
+		const cell: GridCell = {
+			id: crypto.randomUUID(),
+			type,
+			config: {},
+			style: {},
+			col: c,
+			row: Math.max(row, 0),
+			colSpan: span,
+			rowSpan: 1
+		};
+		commit([...layout.cells, cell], cell.id);
+		selectedBlockId = cell.id;
 	}
 
-	function moveBlock(fromZone: string, fromIdx: number, toZone: string, toIdx: number) {
-		if (fromZone === toZone && fromIdx === toIdx) return;
-
-		const srcBlocks = [...getZoneBlocks(fromZone)];
-		const [moved] = srcBlocks.splice(fromIdx, 1);
-
-		if (fromZone === toZone) {
-			srcBlocks.splice(toIdx, 0, moved);
-			layout = cleanEmptyRows(applyZoneBlocks(fromZone, srcBlocks));
-		} else {
-			const dstBlocks = [...getZoneBlocks(toZone)];
-			dstBlocks.splice(toIdx, 0, moved);
-			let next = applyZoneBlocks(fromZone, srcBlocks);
-			next = applyZoneBlocks(toZone, dstBlocks, next);
-			layout = cleanEmptyRows(next);
-		}
+	function moveCell(id: string, col: number, row: number) {
+		const target = layout.cells.find((c) => c.id === id);
+		if (!target) return;
+		const c = Math.min(Math.max(col, 0), columns - target.colSpan);
+		const next = layout.cells.map((cell) =>
+			cell.id === id ? { ...cell, col: c, row: Math.max(row, 0) } : cell
+		);
+		commit(next, id);
 	}
 
-	function updateSelectedBlock(patch: Partial<BlockDef>) {
+	function resizeCell(id: string, colSpan: number, rowSpan: number) {
+		const target = layout.cells.find((c) => c.id === id);
+		if (!target) return;
+		const span = Math.min(Math.max(colSpan, 1), columns - target.col);
+		const rspan = Math.max(rowSpan, 1);
+		const next = layout.cells.map((cell) =>
+			cell.id === id ? { ...cell, colSpan: span, rowSpan: rspan } : cell
+		);
+		commit(next, id);
+	}
+
+	function updateSelectedBlock(patch: Partial<GridCell>) {
 		if (!selectedBlockId) return;
-		function patchIn(blocks: BlockDef[]): BlockDef[] {
-			return blocks.map((b) =>
-				b.id === selectedBlockId
-					? { ...b, ...patch, config: { ...b.config, ...patch.config }, style: { ...b.style, ...patch.style } }
-					: b
-			);
-		}
 		layout = {
 			...layout,
-			header: { rows: layout.header.rows.map((r) => ({ blocks: patchIn(r.blocks) })) },
-			body: { rows: layout.body.rows.map((r) => ({ blocks: patchIn(r.blocks) })) },
-			footer: { rows: layout.footer.rows.map((r) => ({ blocks: patchIn(r.blocks) })) }
+			cells: layout.cells.map((c) =>
+				c.id === selectedBlockId
+					? { ...c, ...patch, config: { ...c.config, ...patch.config }, style: { ...c.style, ...patch.style } }
+					: c
+			)
 		};
 	}
 
-	function deleteSelectedBlock() {
-		if (!selectedBlockId) return;
-		function removeFrom(blocks: BlockDef[]): BlockDef[] {
-			return blocks.filter((b) => b.id !== selectedBlockId);
-		}
-		layout = cleanEmptyRows({
-			...layout,
-			header: { rows: layout.header.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) },
-			body: { rows: layout.body.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) },
-			footer: { rows: layout.footer.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) }
-		});
-		selectedBlockId = null;
+	function resizeSelected(colSpan: number, rowSpan: number) {
+		if (selectedBlockId) resizeCell(selectedBlockId, colSpan, rowSpan);
 	}
 
-	function deleteRow(section: 'header' | 'body' | 'footer', rowIdx: number) {
-		const row = layout[section].rows[rowIdx];
-		if (row.blocks.length > 0 && !window.confirm('Delete this row and all its blocks?')) return;
-		if (selectedBlockId && row.blocks.some((b) => b.id === selectedBlockId)) selectedBlockId = null;
-		const rows = layout[section].rows.filter((_, i) => i !== rowIdx);
-		layout = { ...layout, [section]: { rows: rows.length > 0 ? rows : [{ blocks: [] }] } };
+	function deleteCell(id: string) {
+		layout = { ...layout, cells: compact(layout.cells.filter((c) => c.id !== id)) };
+		if (selectedBlockId === id) selectedBlockId = null;
+	}
+
+	function deleteSelectedBlock() {
+		if (selectedBlockId) deleteCell(selectedBlockId);
 	}
 
 	async function save() {
@@ -274,10 +236,10 @@
 				{selectedBlockId}
 				{themeColor}
 				onSelectBlock={(id) => (selectedBlockId = id)}
-				onMoveBlock={moveBlock}
-				onDeleteBlock={(id) => { selectedBlockId = id; deleteSelectedBlock(); }}
-				onDropFromPalette={addBlockAt}
-				onDeleteRow={deleteRow}
+				onAddCell={addCell}
+				onMoveCell={moveCell}
+				onResizeCell={resizeCell}
+				onDeleteBlock={deleteCell}
 			/>
 		</main>
 
@@ -286,7 +248,9 @@
 			{#if selectedBlock}
 				<BlockInspector
 					block={selectedBlock}
+					{columns}
 					onUpdate={updateSelectedBlock}
+					onResize={resizeSelected}
 					onDelete={deleteSelectedBlock}
 				/>
 			{:else}

@@ -52,13 +52,25 @@ export type BlockDef = {
 	style?: BlockStyle;
 };
 
-// A single horizontal row of blocks (used in all zones).
-export type ZoneRow = { blocks: BlockDef[] };
+// ---------------------------------------------------------------------------
+// Grid model
+// ---------------------------------------------------------------------------
+
+// Number of columns in the design grid. Blocks snap to 1..GRID_COLUMNS columns.
+export const GRID_COLUMNS = 6;
+
+// A placed block: a BlockDef plus its grid rectangle.
+// col/row are 0-based; colSpan in 1..GRID_COLUMNS; rowSpan >= 1.
+export type GridCell = BlockDef & {
+	col: number;
+	row: number;
+	colSpan: number;
+	rowSpan: number;
+};
 
 export type TemplateLayout = {
-	header: { rows: ZoneRow[] };
-	body: { rows: ZoneRow[] };
-	footer: { rows: ZoneRow[] };
+	columns: number; // = GRID_COLUMNS (stored for forward-compat)
+	cells: GridCell[];
 };
 
 export type ThemeData = {
@@ -89,108 +101,65 @@ export const CUSTOM_BLOCKS: BlockType[] = ['text', 'image', 'divider', 'spacer']
 
 export function makeDefaultLayout(): TemplateLayout {
 	const id = () => crypto.randomUUID();
+	const cell = (
+		type: BlockType,
+		col: number,
+		row: number,
+		colSpan: number,
+		config: Record<string, unknown> = {}
+	): GridCell => ({ id: id(), type, config, style: {}, col, row, colSpan, rowSpan: 1 });
+
+	const half = GRID_COLUMNS / 2; // 3
+	const full = GRID_COLUMNS; // 6
 	return {
-		header: {
-			rows: [
-				{
-					blocks: [
-						{ id: id(), type: 'company-name', config: {} },
-						{ id: id(), type: 'document-title', config: {} }
-					]
-				},
-				{
-					blocks: [
-						{ id: id(), type: 'company-address', config: {} },
-						{ id: id(), type: 'document-meta', config: { showTitle: false, showReference: true } }
-					]
-				},
-				{
-					blocks: [
-						{ id: id(), type: 'company-reg-info', config: {} }
-					]
-				}
-			]
-		},
-		body: {
-			rows: [
-				{ blocks: [{ id: id(), type: 'customer-block', config: {} }] },
-				{ blocks: [{ id: id(), type: 'line-items-table', config: { showUnitPrice: true, showQty: true } }] },
-				{ blocks: [{ id: id(), type: 'totals-block', config: { showTaxRow: true } }] },
-				{ blocks: [{ id: id(), type: 'notes', config: { label: 'Notes' } }] }
-			]
-		},
-		footer: { rows: [{ blocks: [] }] }
+		columns: GRID_COLUMNS,
+		cells: [
+			cell('company-name', 0, 0, half),
+			cell('document-title', half, 0, half),
+			cell('company-address', 0, 1, half),
+			cell('document-meta', half, 1, half, { showTitle: false, showReference: true }),
+			cell('company-reg-info', 0, 2, full),
+			cell('divider', 0, 3, full),
+			cell('customer-block', 0, 4, full),
+			cell('line-items-table', 0, 5, full, { showUnitPrice: true, showQty: true }),
+			cell('totals-block', 0, 6, full, { showTaxRow: true }),
+			cell('notes', 0, 7, full, { label: 'Notes' })
+		]
 	};
 }
 
 // ---------------------------------------------------------------------------
-// Migration helper — converts old formats to current { rows } shape
+// Grid normalizer — coerces a stored layout to a valid grid.
+// (No legacy-shape migration: the DB only ever holds the grid shape.)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function migrateBlock(b: any): any[] {
-	// company-header → three granular blocks
-	if (b?.type === 'company-header') {
-		const newId = () => crypto.randomUUID();
-		return [
-			{ id: newId(), type: 'company-name',     config: {}, style: {} },
-			{ id: newId(), type: 'company-address',  config: {}, style: {} },
-			{ id: newId(), type: 'company-reg-info', config: {}, style: {} }
-		];
-	}
-	// Strip legacy marginTop/marginBottom from style
-	if (b?.style) {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		const { marginTop, marginBottom, ...rest } = b.style;
-		b = { ...b, style: Object.keys(rest).length ? rest : undefined };
-	}
-	return [b];
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+	const n = Math.floor(Number(value));
+	if (!Number.isFinite(n)) return fallback;
+	return Math.min(max, Math.max(min, n));
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function migrateLayout(raw: unknown): TemplateLayout {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const l = raw as any;
+	if (!l || !Array.isArray(l.cells)) return makeDefaultLayout();
 
-	// Old: { columns: ColumnDef[] } → flatten into single row
-	if (l?.header?.columns) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		l.header = { rows: [{ blocks: l.header.columns.flatMap((c: any) => c.blocks ?? []) }] };
-	}
-	if (l?.footer?.columns) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		l.footer = { rows: [{ blocks: l.footer.columns.flatMap((c: any) => c.blocks ?? []) }] };
-	}
-
-	// Previous flat: { blocks: BlockDef[] } → wrap in single row
-	if (Array.isArray(l?.header?.blocks)) {
-		l.header = { rows: [{ blocks: l.header.blocks }] };
-	}
-	if (Array.isArray(l?.footer?.blocks)) {
-		l.footer = { rows: [{ blocks: l.footer.blocks }] };
-	}
-
-	// Old flat body: { blocks: [] } → each block becomes its own row
-	if (Array.isArray(l?.body?.blocks)) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		l.body = { rows: l.body.blocks.map((b: any) => ({ blocks: [b] })) };
-	}
-
-	// Migrate blocks in every row of every zone (company-header split + strip margins)
+	const columns = clampInt(l.columns, 1, 24, GRID_COLUMNS);
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	function migrateRows(rows: any[]): any[] {
-		return rows.map((row: any) => ({
-			blocks: row.blocks.flatMap(migrateBlock)
-		}));
-	}
-	if (Array.isArray(l?.header?.rows)) l.header.rows = migrateRows(l.header.rows);
-	if (Array.isArray(l?.body?.rows))   l.body.rows   = migrateRows(l.body.rows);
-	if (Array.isArray(l?.footer?.rows)) l.footer.rows = migrateRows(l.footer.rows);
+	const cells: GridCell[] = l.cells.map((c: any): GridCell => {
+		const col = clampInt(c?.col, 0, columns - 1, 0);
+		const colSpan = clampInt(c?.colSpan, 1, columns - col, 1);
+		return {
+			id: typeof c?.id === 'string' ? c.id : crypto.randomUUID(),
+			type: c?.type as BlockType,
+			config: c?.config && typeof c.config === 'object' ? c.config : {},
+			style: c?.style && typeof c.style === 'object' ? c.style : {},
+			col,
+			colSpan,
+			row: clampInt(c?.row, 0, Number.MAX_SAFE_INTEGER, 0),
+			rowSpan: clampInt(c?.rowSpan, 1, Number.MAX_SAFE_INTEGER, 1)
+		};
+	});
 
-	// Ensure at least one row exists in every zone
-	if (!l?.header?.rows?.length) l.header = { rows: [{ blocks: [] }] };
-	if (!l?.body?.rows?.length) l.body = { rows: [{ blocks: [] }] };
-	if (!l?.footer?.rows?.length) l.footer = { rows: [{ blocks: [] }] };
-
-	return l as TemplateLayout;
+	return { columns, cells };
 }

@@ -1,28 +1,43 @@
 <script lang="ts">
-	import { GripVertical, Trash2 } from '@lucide/svelte';
-	import type { BlockDef, BlockType, TemplateLayout } from '$lib/pdf/template-types.js';
+	import { flip } from 'svelte/animate';
+	import { scale } from 'svelte/transition';
+	import { GripVertical } from '@lucide/svelte';
+	import type { BlockType, GridCell, TemplateLayout } from '$lib/pdf/template-types.js';
 
 	type Props = {
 		layout: TemplateLayout;
 		selectedBlockId: string | null;
 		themeColor: string;
 		onSelectBlock: (id: string) => void;
-		onMoveBlock: (fromZone: string, fromIdx: number, toZone: string, toIdx: number) => void;
+		onAddCell: (type: BlockType, col: number, row: number, colSpan?: number) => void;
+		onMoveCell: (id: string, col: number, row: number) => void;
+		onResizeCell: (id: string, colSpan: number, rowSpan: number) => void;
 		onDeleteBlock: (id: string) => void;
-		onDropFromPalette: (type: BlockType, zone: string, idx: number) => void;
-		onDeleteRow: (section: 'header' | 'body' | 'footer', rowIdx: number) => void;
 	};
 
 	let {
 		layout, selectedBlockId, themeColor,
-		onSelectBlock, onMoveBlock, onDeleteBlock, onDropFromPalette, onDeleteRow
+		onSelectBlock, onAddCell, onMoveCell, onResizeCell, onDeleteBlock
 	}: Props = $props();
 
-	let dragSrc = $state<{ zone: string; idx: number } | null>(null);
-	let dragOverKey = $state<string | null>(null);
+	const GAP = 8;
+	const ROW_UNIT = 54; // nominal px per grid row, used for resize/hit-test deltas
+	const columns = $derived(layout.columns || 6);
 
-	function blockLabel(type: BlockDef['type']): string {
-		const LABELS: Record<BlockDef['type'], string> = {
+	let gridEl = $state<HTMLDivElement | null>(null);
+
+	// Pointer-drag (move) state
+	let drag = $state<{ id: string; colSpan: number; label: string; ghostX: number; ghostY: number } | null>(null);
+	let dropTarget = $state<{ col: number; row: number; colSpan: number } | null>(null);
+	// Pending interaction before threshold is crossed (click vs drag)
+	let pending: { id: string; startX: number; startY: number; moved: boolean } | null = null;
+	// Resize state (read in markup → must be reactive)
+	let resize = $state<{ id: string; axis: 'x' | 'y' | 'xy'; startX: number; startY: number; startCols: number; startRows: number } | null>(null);
+	// HTML5 palette drop target
+	let paletteTarget = $state<{ col: number; row: number } | null>(null);
+
+	function blockLabel(type: GridCell['type']): string {
+		const LABELS: Record<GridCell['type'], string> = {
 			'company-name':    'Company Name',
 			'company-address': 'Company Address',
 			'company-reg-info':'Reg Info',
@@ -42,166 +57,259 @@
 		return LABELS[type] ?? type;
 	}
 
-	function handleDragStart(zone: string, idx: number) {
-		dragSrc = { zone, idx };
+	// ── Geometry: map a client point to a grid (col, row) ──────────────────────
+	function colFromX(clientX: number): number {
+		if (!gridEl) return 0;
+		const rect = gridEl.getBoundingClientRect();
+		const stride = (rect.width + GAP) / columns;
+		return Math.min(columns - 1, Math.max(0, Math.floor((clientX - rect.left) / stride)));
 	}
 
-	function handleDrop(e: DragEvent, toZone: string, toIdx: number) {
-		dragOverKey = null;
-		if (dragSrc) {
-			onMoveBlock(dragSrc.zone, dragSrc.idx, toZone, toIdx);
-			dragSrc = null;
-		} else {
-			const type = e.dataTransfer?.getData('application/x-block-type') as BlockType | undefined;
-			if (type) onDropFromPalette(type, toZone, toIdx);
+	function rowFromY(clientY: number): number {
+		if (!gridEl) return 0;
+		const rect = gridEl.getBoundingClientRect();
+		const styles = getComputedStyle(gridEl);
+		const tracks = styles.gridTemplateRows.split(' ').map((v) => parseFloat(v)).filter((n) => !Number.isNaN(n));
+		const gap = parseFloat(styles.rowGap) || GAP;
+		let y = rect.top;
+		for (let i = 0; i < tracks.length; i++) {
+			if (clientY < y + tracks[i]) return i;
+			y += tracks[i] + gap;
+		}
+		return tracks.length; // below the last track → a fresh row
+	}
+
+	// ── Move (pointer) ─────────────────────────────────────────────────────────
+	function onCellPointerDown(e: PointerEvent, cell: GridCell) {
+		if (e.button !== 0) return;
+		pending = { id: cell.id, startX: e.clientX, startY: e.clientY, moved: false };
+		window.addEventListener('pointermove', onWindowPointerMove);
+		window.addEventListener('pointerup', onWindowPointerUp);
+	}
+
+	function beginDrag(cell: GridCell, e: PointerEvent) {
+		drag = {
+			id: cell.id,
+			colSpan: cell.colSpan,
+			label: blockLabel(cell.type),
+			ghostX: e.clientX,
+			ghostY: e.clientY
+		};
+	}
+
+	function onWindowPointerMove(e: PointerEvent) {
+		if (resize) {
+			const dCols = Math.round((e.clientX - resize.startX) / colTrackPx());
+			const dRows = Math.round((e.clientY - resize.startY) / ROW_UNIT);
+			const cols = resize.axis === 'y' ? resize.startCols : resize.startCols + dCols;
+			const rows = resize.axis === 'x' ? resize.startRows : resize.startRows + dRows;
+			onResizeCell(resize.id, cols, rows);
+			return;
+		}
+		if (!pending) return;
+		const cell = layout.cells.find((c) => c.id === pending!.id);
+		if (!cell) return;
+		const dist = Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY);
+		if (!drag && dist > 4) {
+			pending.moved = true;
+			beginDrag(cell, e);
+		}
+		if (drag) {
+			drag.ghostX = e.clientX;
+			drag.ghostY = e.clientY;
+			const col = Math.min(colFromX(e.clientX), columns - drag.colSpan);
+			dropTarget = { col: Math.max(0, col), row: rowFromY(e.clientY), colSpan: drag.colSpan };
 		}
 	}
 
-	type Section = 'header' | 'body' | 'footer';
-
-	function zoneRows(section: Section) {
-		if (section === 'header') return layout.header.rows;
-		if (section === 'body') return layout.body.rows;
-		return layout.footer.rows;
+	function onWindowPointerUp() {
+		if (drag && dropTarget) {
+			onMoveCell(drag.id, dropTarget.col, dropTarget.row);
+		} else if (pending && !pending.moved) {
+			onSelectBlock(pending.id);
+		}
+		drag = null;
+		dropTarget = null;
+		pending = null;
+		window.removeEventListener('pointermove', onWindowPointerMove);
+		window.removeEventListener('pointerup', onWindowPointerUp);
 	}
+
+	// ── Resize (pointer) ─────────────────────────────────────────────────────
+	function colTrackPx(): number {
+		if (!gridEl) return 80;
+		return (gridEl.getBoundingClientRect().width + GAP) / columns;
+	}
+
+	function onResizePointerDown(e: PointerEvent, cell: GridCell, axis: 'x' | 'y' | 'xy') {
+		e.preventDefault();
+		e.stopPropagation();
+		resize = {
+			id: cell.id,
+			axis,
+			startX: e.clientX,
+			startY: e.clientY,
+			startCols: cell.colSpan,
+			startRows: cell.rowSpan
+		};
+		window.addEventListener('pointermove', onWindowPointerMove);
+		window.addEventListener('pointerup', onResizePointerUp);
+	}
+
+	function onResizePointerUp() {
+		resize = null;
+		window.removeEventListener('pointermove', onWindowPointerMove);
+		window.removeEventListener('pointerup', onResizePointerUp);
+	}
+
+	// ── Palette drop (HTML5 DnD) ───────────────────────────────────────────────
+	function onGridDragOver(e: DragEvent) {
+		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
+		e.preventDefault();
+		paletteTarget = { col: colFromX(e.clientX), row: rowFromY(e.clientY) };
+	}
+
+	function onGridDrop(e: DragEvent) {
+		const type = e.dataTransfer?.getData('application/x-block-type') as BlockType | undefined;
+		if (type && paletteTarget) {
+			onAddCell(type, paletteTarget.col, paletteTarget.row, columns);
+		}
+		paletteTarget = null;
+	}
+
+	const placeholder = $derived(
+		dropTarget ?? (paletteTarget ? { col: paletteTarget.col, row: paletteTarget.row, colSpan: columns } : null)
+	);
 </script>
 
 <div class="canvas">
-	{#each (['header', 'body', 'footer'] as Section[]) as section}
-		<div class="canvas-section">
-			<p class="canvas-zone-label">{section}</p>
-			{#each zoneRows(section) as row, ri (ri)}
-				<!-- Gap above row ri — drop here creates a new row at position ri -->
-				<div class="canvas-row-gap"
-					class:drag-over={dragOverKey === `gap:${section}:${ri}`}
-					role="region"
-					aria-label="Drop to create new row"
-					ondragover={(e) => { e.preventDefault(); dragOverKey = `gap:${section}:${ri}`; }}
-					ondragleave={() => { if (dragOverKey === `gap:${section}:${ri}`) dragOverKey = null; }}
-					ondrop={(e) => { e.stopPropagation(); handleDrop(e, `${section}:NEW:${ri}`, 0); }}>
-				</div>
+	<div
+		class="grid"
+		bind:this={gridEl}
+		role="application"
+		aria-label="Template grid"
+		style="grid-template-columns: repeat({columns}, 1fr); --theme: {themeColor};"
+		ondragover={onGridDragOver}
+		ondragleave={() => (paletteTarget = null)}
+		ondrop={onGridDrop}
+	>
+		{#each layout.cells as cell (cell.id)}
+			<div
+				class="cell"
+				class:selected={cell.id === selectedBlockId}
+				class:dragging={drag?.id === cell.id}
+				class:resizing={resize?.id === cell.id}
+				style="grid-column: {cell.col + 1} / span {cell.colSpan}; grid-row: {cell.row + 1} / span {cell.rowSpan};"
+				animate:flip={{ duration: 200 }}
+				in:scale={{ duration: 150, start: 0.85 }}
+				role="button"
+				tabindex="0"
+				onpointerdown={(e) => onCellPointerDown(e, cell)}
+				onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectBlock(cell.id); } }}
+			>
+				<span class="cell-grip"><GripVertical size={12} /></span>
+				<span class="cell-label">{blockLabel(cell.type)}</span>
+				<button class="cell-del" title="Remove block"
+					onpointerdown={(e) => e.stopPropagation()}
+					onclick={(e) => { e.stopPropagation(); onDeleteBlock(cell.id); }}>×</button>
 
-				<div class="canvas-row-wrapper">
-					<!-- Row zone: dropping on empty flex space appends to this row -->
-					<div class="canvas-row-zone" role="region"
-						style={section === 'header' && ri === 0 ? `border-top: 3px solid ${themeColor}` : ''}
-						ondragover={(e) => { e.preventDefault(); }}
-						ondrop={(e) => { handleDrop(e, `${section}:${ri}`, row.blocks.length); }}>
-
-						{#if row.blocks.length === 0}
-							<div class="canvas-drop-empty" role="region"
-								class:drag-over={dragOverKey === `empty:${section}:${ri}`}
-								ondragover={(e) => { e.preventDefault(); dragOverKey = `empty:${section}:${ri}`; }}
-								ondragleave={() => { if (dragOverKey === `empty:${section}:${ri}`) dragOverKey = null; }}
-								ondrop={(e) => { e.stopPropagation(); dragOverKey = null; handleDrop(e, `${section}:${ri}`, 0); }}>
-								Drop here
-							</div>
-						{:else}
-							{#each row.blocks as block, bi (block.id)}
-								<button class="canvas-block canvas-row-item"
-									class:selected={block.id === selectedBlockId}
-									class:drag-over={dragOverKey === `rb:${section}:${ri}:${bi}`}
-									draggable="true"
-									ondragstart={() => handleDragStart(`${section}:${ri}`, bi)}
-									ondragover={(e) => { e.preventDefault(); dragOverKey = `rb:${section}:${ri}:${bi}`; }}
-									ondragleave={() => { if (dragOverKey === `rb:${section}:${ri}:${bi}`) dragOverKey = null; }}
-									ondrop={(e) => { e.stopPropagation(); dragOverKey = null; handleDrop(e, `${section}:${ri}`, bi); }}
-									onclick={() => onSelectBlock(block.id)}>
-									<span class="canvas-grip"><GripVertical size={11} /></span>
-									<span class="canvas-block-label">{blockLabel(block.type)}</span>
-									<span class="canvas-block-del" role="button" tabindex="0" title="Remove block"
-										onclick={(e) => { e.stopPropagation(); onDeleteBlock(block.id); }}
-										onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onDeleteBlock(block.id); } }}>×</span>
-								</button>
-							{/each}
-						{/if}
-					</div>
-
-					{#if zoneRows(section).length > 1}
-						<button class="canvas-row-del-btn" title="Remove row"
-							onclick={() => onDeleteRow(section, ri)}>
-							<Trash2 size={11} />
-						</button>
-					{/if}
-				</div>
-			{/each}
-
-			<!-- Gap after the last row — drop here creates a new row at the end -->
-			<div class="canvas-row-gap"
-				class:drag-over={dragOverKey === `gap:${section}:${zoneRows(section).length}`}
-				role="region"
-				aria-label="Drop to create new row at end"
-				ondragover={(e) => { e.preventDefault(); dragOverKey = `gap:${section}:${zoneRows(section).length}`; }}
-				ondragleave={() => { if (dragOverKey === `gap:${section}:${zoneRows(section).length}`) dragOverKey = null; }}
-				ondrop={(e) => { e.stopPropagation(); handleDrop(e, `${section}:NEW:${zoneRows(section).length}`, 0); }}>
+				<!-- Resize handles -->
+				<span class="rh rh-right" role="separator" aria-label="Resize width" title="Resize width"
+					onpointerdown={(e) => onResizePointerDown(e, cell, 'x')}></span>
+				<span class="rh rh-bottom" role="separator" aria-label="Resize height" title="Resize height"
+					onpointerdown={(e) => onResizePointerDown(e, cell, 'y')}></span>
+				<span class="rh rh-corner" role="separator" aria-label="Resize block" title="Resize"
+					onpointerdown={(e) => onResizePointerDown(e, cell, 'xy')}></span>
 			</div>
+		{/each}
+
+		{#if placeholder}
+			<div class="placeholder"
+				style="grid-column: {placeholder.col + 1} / span {placeholder.colSpan}; grid-row: {placeholder.row + 1} / span 1;"></div>
+		{/if}
+
+		{#if layout.cells.length === 0 && !placeholder}
+			<div class="grid-empty">Drag blocks here or click one in the palette</div>
+		{/if}
+	</div>
+
+	{#if drag}
+		<div class="drag-ghost" style="left: {drag.ghostX}px; top: {drag.ghostY}px;">
+			<GripVertical size={12} /> {drag.label}
 		</div>
-	{/each}
+	{/if}
 </div>
 
 <style>
-	.canvas { display: flex; flex-direction: column; gap: 12px; }
-	.canvas-section { display: flex; flex-direction: column; }
-	.canvas-zone-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); margin-bottom: 2px; }
+	.canvas { display: flex; flex-direction: column; }
 
-	/* Gap zone between rows — expands on dragover to show drop target */
-	.canvas-row-gap {
-		height: 8px; border-radius: 4px;
-		border: 1px dashed transparent;
-		transition: height 0.15s, border-color 0.15s, background 0.15s;
-	}
-	.canvas-row-gap.drag-over {
-		height: 28px;
-		border-color: var(--primary);
-		background: color-mix(in srgb, var(--primary) 10%, transparent);
+	.grid {
+		display: grid;
+		grid-auto-rows: minmax(46px, auto);
+		gap: 8px;
+		position: relative;
+		border-top: 3px solid var(--theme, var(--primary));
+		padding: 14px 0 40px;
+		min-height: 320px;
 	}
 
-	/* Multi-row wrapper — row zone + optional delete button */
-	.canvas-row-wrapper { display: flex; align-items: center; gap: 4px; }
-	.canvas-row-zone {
-		flex: 1; display: flex; align-items: stretch; gap: 4px;
-		border: 1px solid var(--border); border-radius: 6px;
-		padding: 8px; min-height: 48px;
+	.cell {
+		position: relative;
+		display: flex; align-items: center; gap: 6px;
+		padding: 8px 26px 8px 10px;
+		border-radius: 6px; border: 1px solid var(--border); background: var(--background);
+		font-size: 12px; color: var(--foreground);
+		cursor: grab; user-select: none; touch-action: none;
+		transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+		overflow: hidden;
 	}
-	.canvas-row-del-btn {
-		flex-shrink: 0; width: 22px; height: 22px; padding: 0;
-		display: flex; align-items: center; justify-content: center;
-		border: 1px solid var(--border); border-radius: 4px; background: none;
-		color: var(--muted-foreground); cursor: pointer;
-	}
-	.canvas-row-del-btn:hover { border-color: var(--destructive); color: var(--destructive); background: color-mix(in srgb, var(--destructive) 8%, transparent); }
-
-	.canvas-row-item { flex: 1; min-width: 60px; }
-
-	/* Empty row drop target */
-	.canvas-drop-empty {
-		flex: 1; padding: 6px; border-radius: 4px;
-		border: 1px dashed var(--border);
-		font-size: 11px; color: var(--muted-foreground); text-align: center;
-		display: flex; align-items: center; justify-content: center;
-	}
-	.canvas-drop-empty.drag-over {
-		border-color: var(--primary);
-		background: color-mix(in srgb, var(--primary) 10%, transparent);
-		color: var(--primary);
-	}
-
-	/* Shared block button */
-	.canvas-block {
-		display: flex; align-items: center; gap: 6px; padding: 7px 10px;
-		border-radius: 5px; border: 1px solid var(--border); background: var(--background);
-		font-size: 12px; color: var(--foreground); cursor: grab; text-align: left; width: 100%;
-	}
-	.canvas-block:hover { border-color: var(--primary); background: var(--accent); }
-	.canvas-block.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--background)); }
-	.canvas-block.drag-over { border-color: var(--primary); border-style: dashed; }
-	.canvas-grip { color: var(--muted-foreground); flex-shrink: 0; }
-	.canvas-block-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.canvas-block-del {
-		flex-shrink: 0; background: none; border: none; padding: 0 2px;
+	.cell:hover { border-color: var(--primary); background: var(--accent); }
+	.cell.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--background)); box-shadow: 0 0 0 1px var(--primary); }
+	.cell.dragging { opacity: 0.35; }
+	.cell.resizing { border-color: var(--primary); border-style: dashed; }
+	.cell-grip { color: var(--muted-foreground); flex-shrink: 0; }
+	.cell-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.cell-del {
+		position: absolute; top: 4px; right: 6px;
+		background: none; border: none; padding: 0 2px;
 		font-size: 16px; line-height: 1; color: var(--muted-foreground);
 		cursor: pointer; opacity: 0; transition: opacity 0.1s;
 	}
-	.canvas-block:hover .canvas-block-del { opacity: 1; }
-	.canvas-block-del:hover { color: var(--destructive); }
+	.cell:hover .cell-del { opacity: 1; }
+	.cell-del:hover { color: var(--destructive); }
+
+	/* Resize handles */
+	.rh { position: absolute; opacity: 0; transition: opacity 0.1s; }
+	.cell:hover .rh, .cell.resizing .rh { opacity: 1; }
+	.rh-right { top: 20%; bottom: 20%; right: 0; width: 7px; cursor: ew-resize; border-right: 2px solid var(--primary); }
+	.rh-bottom { left: 20%; right: 20%; bottom: 0; height: 7px; cursor: ns-resize; border-bottom: 2px solid var(--primary); }
+	.rh-corner { right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; border-right: 2px solid var(--primary); border-bottom: 2px solid var(--primary); border-bottom-right-radius: 6px; }
+
+	/* Drop placeholder */
+	.placeholder {
+		border: 2px dashed var(--primary);
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--primary) 10%, transparent);
+		pointer-events: none;
+		animation: ph-pulse 0.9s ease-in-out infinite alternate;
+	}
+	@keyframes ph-pulse { from { opacity: 0.55; } to { opacity: 1; } }
+
+	.grid-empty {
+		grid-column: 1 / -1;
+		display: flex; align-items: center; justify-content: center;
+		min-height: 120px; border: 1px dashed var(--border); border-radius: 8px;
+		font-size: 12px; color: var(--muted-foreground);
+	}
+
+	/* Floating drag ghost */
+	.drag-ghost {
+		position: fixed; z-index: 50; pointer-events: none;
+		transform: translate(-50%, -50%);
+		display: flex; align-items: center; gap: 6px;
+		padding: 7px 12px; border-radius: 6px;
+		border: 1px solid var(--primary); background: var(--background);
+		font-size: 12px; color: var(--foreground);
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+	}
 </style>

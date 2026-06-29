@@ -2,7 +2,8 @@ import PDFDocument from 'pdfkit';
 import type { BlockDef, TemplateLayout, ThemeData } from './template-types.js';
 import { TemplateFont } from '$lib/enums.js';
 import { M, CW } from './layout.js';
-import { renderRow } from './multi-column.js';
+import { renderGrid } from './multi-column.js';
+import { GRID_COLUMNS, migrateLayout } from './template-types.js';
 
 // Block renderer imports
 import { render as renderCompanyName }    from './blocks/company-name.js';
@@ -87,34 +88,12 @@ export function buildPdfFromTemplate(
 	const doc = new (PDFDocument as any)({ size: 'A4', margin: 0, info: { Title: title } });
 	const fonts = fontsForTheme(theme);
 
-	let y = M;
-
-	// ── HEADER ───────────────────────────────────────────────────────────────
-	for (const row of layout.header.rows) {
-		y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
-		y += 6;
-	}
-	y += 6;
-
-	// Horizontal rule after header
-	doc.moveTo(M, y).lineTo(M + CW, y).lineWidth(2).strokeColor('#111111').stroke();
-	y += 24;
-
-	// ── BODY ─────────────────────────────────────────────────────────────────
-	for (const row of layout.body.rows) {
-		y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
-		y += 4;
-	}
-
-	// ── FOOTER ───────────────────────────────────────────────────────────────
-	const hasFooter = layout.footer.rows.some((r) => r.blocks.length > 0);
-	if (hasFooter) {
-		y += 12;
-		for (const row of layout.footer.rows) {
-			y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
-			y += 6;
-		}
-	}
+	// One flat grid — no header/body/footer regions. Cells flow via a
+	// column-bottom sweep; users compose structure with divider/spacer blocks.
+	// Normalize on the way in so any non-grid / partial JSON renders safely.
+	const grid = migrateLayout(layout);
+	const columns = grid.columns || GRID_COLUMNS;
+	renderGrid(doc, grid.cells, columns, data, theme, { x: M, y: M, width: CW }, fonts);
 
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
