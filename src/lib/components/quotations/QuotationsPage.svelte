@@ -425,18 +425,18 @@
 		}
 	}
 
+	createResourceStream<QuotationStreamMsg>('/api/quotations/stream', (msg) => {
+		if (msg.type === 'quotation-update') quotations = mergeById(quotations, [msg.item]);
+		else if (msg.type === 'quotation-delete')
+			quotations = quotations.filter((q) => q.id !== msg.id);
+	});
+
 	onMount(() => {
 		// Deep-link: open the quotation if openId was passed via direct navigation
 		if (openId) {
 			const found = quotations.find((q) => q.id === openId);
 			if (found) openQuotation(found, { push: false });
 		}
-		// SSE subscription — cleanup is handled internally by createResourceStream
-		createResourceStream<QuotationStreamMsg>('/api/quotations/stream', (msg) => {
-			if (msg.type === 'quotation-update') quotations = mergeById(quotations, [msg.item]);
-			else if (msg.type === 'quotation-delete')
-				quotations = quotations.filter((q) => q.id !== msg.id);
-		});
 	});
 </script>
 

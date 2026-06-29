@@ -18,12 +18,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		companyRegistrationNo: getSetting(db, 'company.registrationNo') ?? ''
 	};
 
-	const buffer = await buildQuotationPdf(quotation, settings);
-
-	return new Response(new Uint8Array(buffer), {
-		headers: {
-			'Content-Type': 'application/pdf',
-			'Content-Disposition': `inline; filename="${quotation.quotationNumber}.pdf"`
-		}
-	});
+	try {
+		const buffer = await buildQuotationPdf(quotation, settings);
+		return new Response(new Uint8Array(buffer), {
+			headers: {
+				'Content-Type': 'application/pdf',
+				'Content-Disposition': `inline; filename="${quotation.quotationNumber}.pdf"`
+			}
+		});
+	} catch (err) {
+		console.error('PDF generation failed for quotation', id, err);
+		return new Response('PDF generation failed', { status: 500 });
+	}
 };
