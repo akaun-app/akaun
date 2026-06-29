@@ -56,8 +56,10 @@ export type BlockDef = {
 // Grid model
 // ---------------------------------------------------------------------------
 
-// Number of columns in the design grid. Blocks snap to 1..GRID_COLUMNS columns.
-export const GRID_COLUMNS = 6;
+// Number of columns in the design grid. A high count keeps gutter-drag resizing
+// smooth (each step ≈ 1/24 ≈ 4%) while spans stay integers for clean placement.
+// 24 divides evenly by 2/3/4/6/8/12, so common even splits are exact.
+export const GRID_COLUMNS = 24;
 
 // A placed block: a BlockDef plus its grid rectangle.
 // col/row are 0-based; colSpan in 1..GRID_COLUMNS; rowSpan >= 1.

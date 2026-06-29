@@ -4,15 +4,10 @@
 
 	type Props = {
 		block: GridCell;
-		columns: number;
 		onUpdate: (patch: Partial<GridCell>) => void;
-		onResize: (colSpan: number, rowSpan: number) => void;
 		onDelete: () => void;
 	};
-	let { block, columns, onUpdate, onResize, onDelete }: Props = $props();
-
-	// How many columns the block can still grow into from its current start column.
-	const maxColSpan = $derived(columns - block.col);
+	let { block, onUpdate, onDelete }: Props = $props();
 
 	function setConfig(key: string, value: unknown) {
 		onUpdate({ config: { ...block.config, [key]: value } });
@@ -42,35 +37,7 @@
 		</div>
 	</div>
 
-	<!-- Size — column / row span -->
-	<div class="insp-row">
-		<p class="insp-label">Size</p>
-		<div class="insp-span">
-			<div class="insp-span-field">
-				<span class="insp-span-cap">Width (cols)</span>
-				<div class="insp-stepper">
-					<button class="insp-step-btn" title="Narrower"
-						disabled={block.colSpan <= 1}
-						onclick={() => onResize(block.colSpan - 1, block.rowSpan)}>−</button>
-					<span class="insp-step-val">{block.colSpan}</span>
-					<button class="insp-step-btn" title="Wider"
-						disabled={block.colSpan >= maxColSpan}
-						onclick={() => onResize(block.colSpan + 1, block.rowSpan)}>+</button>
-				</div>
-			</div>
-			<div class="insp-span-field">
-				<span class="insp-span-cap">Height (rows)</span>
-				<div class="insp-stepper">
-					<button class="insp-step-btn" title="Shorter"
-						disabled={block.rowSpan <= 1}
-						onclick={() => onResize(block.colSpan, block.rowSpan - 1)}>−</button>
-					<span class="insp-step-val">{block.rowSpan}</span>
-					<button class="insp-step-btn" title="Taller"
-						onclick={() => onResize(block.colSpan, block.rowSpan + 1)}>+</button>
-				</div>
-			</div>
-		</div>
-	</div>
+	<p class="insp-hint">Drag the block on the canvas to move it, and drag the divider between two blocks to adjust their width.</p>
 
 	{#if block.type === 'text'}
 		<div class="insp-row">
@@ -129,20 +96,8 @@
 	}
 	.insp-align-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
-	.insp-span { display: flex; gap: 8px; }
-	.insp-span-field { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-	.insp-span-cap { font-size: 10px; color: var(--muted-foreground); }
-	.insp-stepper {
-		display: flex; align-items: center; border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
-	}
-	.insp-step-btn {
-		width: 26px; padding: 4px 0; border: none; background: none; cursor: pointer;
-		font-size: 15px; line-height: 1; color: var(--foreground);
-	}
-	.insp-step-btn:hover:not(:disabled) { background: var(--accent); }
-	.insp-step-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-	.insp-step-val { flex: 1; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 	.insp-info { font-size: 11px; color: var(--muted-foreground); line-height: 1.4; }
+	.insp-hint { font-size: 11px; color: var(--muted-foreground); line-height: 1.4; padding: 2px 0; }
 	.insp-delete {
 		display: flex; align-items: center; gap: 6px; margin-top: 8px;
 		padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border);

@@ -3,38 +3,45 @@
 	import { scale } from 'svelte/transition';
 	import { GripVertical } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout } from '$lib/pdf/template-types.js';
+	import { insertInto, moveBlock, setGutter, newCell } from './grid-ops.js';
+
+	type Target = { row: number; index: number; newRow: boolean };
 
 	type Props = {
 		layout: TemplateLayout;
+		columns: number;
 		selectedBlockId: string | null;
 		themeColor: string;
 		onSelectBlock: (id: string) => void;
-		onAddCell: (type: BlockType, col: number, row: number, colSpan?: number) => void;
-		onMoveCell: (id: string, col: number, row: number) => void;
-		onResizeCell: (id: string, colSpan: number, rowSpan: number) => void;
+		onApply: (cells: GridCell[]) => void;
 		onDeleteBlock: (id: string) => void;
 	};
 
 	let {
-		layout, selectedBlockId, themeColor,
-		onSelectBlock, onAddCell, onMoveCell, onResizeCell, onDeleteBlock
+		layout, columns, selectedBlockId, themeColor,
+		onSelectBlock, onApply, onDeleteBlock
 	}: Props = $props();
 
-	const GAP = 8;
-	const ROW_UNIT = 54; // nominal px per grid row, used for resize/hit-test deltas
-	const columns = $derived(layout.columns || 6);
+	const PREVIEW_ID = '__preview__';
 
 	let gridEl = $state<HTMLDivElement | null>(null);
 
-	// Pointer-drag (move) state
-	let drag = $state<{ id: string; colSpan: number; label: string; ghostX: number; ghostY: number } | null>(null);
-	let dropTarget = $state<{ col: number; row: number; colSpan: number } | null>(null);
-	// Pending interaction before threshold is crossed (click vs drag)
-	let pending: { id: string; startX: number; startY: number; moved: boolean } | null = null;
-	// Resize state (read in markup → must be reactive)
-	let resize = $state<{ id: string; axis: 'x' | 'y' | 'xy'; startX: number; startY: number; startCols: number; startRows: number } | null>(null);
-	// HTML5 palette drop target
-	let paletteTarget = $state<{ col: number; row: number } | null>(null);
+	// Drag (move existing cell, or drop from palette)
+	let drag = $state<
+		| null
+		| { mode: 'move' | 'palette'; id?: string; type?: BlockType; ghostX: number; ghostY: number }
+	>(null);
+	let target = $state<Target | null>(null);
+	// Pre-threshold pointer info for a potential move (distinguishes click vs drag)
+	let pending: { id: string; type: BlockType; startX: number; startY: number } | null = null;
+
+	// Gutter resize
+	let gutter: { leftId: string; rightId: string; startX: number; startLeft: number; base: GridCell[] } | null = null;
+
+	// Geometry snapshot of the committed layout, captured when a drag begins so
+	// hit-testing stays stable while the preview reflows. Indexed by dense band order.
+	type BandSnap = { top: number; bottom: number; cells: { id: string; left: number; right: number }[] };
+	let snapshot: BandSnap[] = [];
 
 	function blockLabel(type: GridCell['type']): string {
 		const LABELS: Record<GridCell['type'], string> = {
@@ -57,129 +64,171 @@
 		return LABELS[type] ?? type;
 	}
 
-	// ── Geometry: map a client point to a grid (col, row) ──────────────────────
-	function colFromX(clientX: number): number {
-		if (!gridEl) return 0;
-		const rect = gridEl.getBoundingClientRect();
-		const stride = (rect.width + GAP) / columns;
-		return Math.min(columns - 1, Math.max(0, Math.floor((clientX - rect.left) / stride)));
+	// ── Render source: committed cells, or a live make-room preview while dragging ──
+	const baseCells = $derived(
+		drag?.mode === 'move' && drag.id
+			? layout.cells.filter((c) => c.id !== drag!.id)
+			: layout.cells
+	);
+	const previewCells = $derived.by(() => {
+		if (!drag || !target) return layout.cells;
+		const placeholder: GridCell = {
+			id: PREVIEW_ID,
+			type: drag.type ?? 'text',
+			config: {},
+			style: {},
+			col: 0,
+			row: 0,
+			colSpan: columns,
+			rowSpan: 1
+		};
+		return insertInto(baseCells, placeholder, target.row, target.index, columns, target.newRow);
+	});
+	const displayCells = $derived(drag && target ? previewCells : layout.cells);
+
+	function rightNeighborId(cell: GridCell): string | null {
+		const n = displayCells.find(
+			(c) => c.id !== cell.id && c.row === cell.row && c.col === cell.col + cell.colSpan
+		);
+		return n?.id ?? null;
 	}
 
-	function rowFromY(clientY: number): number {
-		if (!gridEl) return 0;
-		const rect = gridEl.getBoundingClientRect();
-		const styles = getComputedStyle(gridEl);
-		const tracks = styles.gridTemplateRows.split(' ').map((v) => parseFloat(v)).filter((n) => !Number.isNaN(n));
-		const gap = parseFloat(styles.rowGap) || GAP;
-		let y = rect.top;
-		for (let i = 0; i < tracks.length; i++) {
-			if (clientY < y + tracks[i]) return i;
-			y += tracks[i] + gap;
+	// ── Snapshot + hit-testing ─────────────────────────────────────────────────
+	function captureSnapshot(excludeId?: string) {
+		snapshot = [];
+		if (!gridEl) return;
+		const rows: Record<number, { id: string; left: number; right: number; top: number; bottom: number }[]> = {};
+		for (const el of Array.from(gridEl.querySelectorAll<HTMLElement>('.cell'))) {
+			const id = el.dataset.id;
+			if (!id || id === PREVIEW_ID || id === excludeId) continue;
+			const r = parseInt(el.dataset.row ?? '0');
+			const rect = el.getBoundingClientRect();
+			(rows[r] ??= []).push({ id, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
 		}
-		return tracks.length; // below the last track → a fresh row
+		snapshot = Object.keys(rows)
+			.map(Number)
+			.sort((a, b) => a - b)
+			.map((r) => {
+				const cs = rows[r].sort((a, b) => a.left - b.left);
+				return {
+					top: Math.min(...cs.map((c) => c.top)),
+					bottom: Math.max(...cs.map((c) => c.bottom)),
+					cells: cs.map((c) => ({ id: c.id, left: c.left, right: c.right }))
+				};
+			});
+	}
+
+	function computeTarget(x: number, y: number): Target {
+		if (!snapshot.length) return { row: 0, index: 0, newRow: true };
+		for (let i = 0; i < snapshot.length; i++) {
+			const b = snapshot[i];
+			// In the gap above this band → open a new row here.
+			if (y < b.top) return { row: i, index: 0, newRow: true };
+			// Inside the band → join it; pick the insert slot by x.
+			if (y <= b.bottom) {
+				let index = b.cells.length;
+				for (let j = 0; j < b.cells.length; j++) {
+					const mid = (b.cells[j].left + b.cells[j].right) / 2;
+					if (x < mid) { index = j; break; }
+				}
+				return { row: i, index, newRow: false };
+			}
+		}
+		return { row: snapshot.length, index: 0, newRow: true };
 	}
 
 	// ── Move (pointer) ─────────────────────────────────────────────────────────
 	function onCellPointerDown(e: PointerEvent, cell: GridCell) {
-		if (e.button !== 0) return;
-		pending = { id: cell.id, startX: e.clientX, startY: e.clientY, moved: false };
-		window.addEventListener('pointermove', onWindowPointerMove);
-		window.addEventListener('pointerup', onWindowPointerUp);
+		if (e.button !== 0 || cell.id === PREVIEW_ID) return;
+		pending = { id: cell.id, type: cell.type, startX: e.clientX, startY: e.clientY };
+		window.addEventListener('pointermove', onMovePointerMove);
+		window.addEventListener('pointerup', onMovePointerUp);
 	}
 
-	function beginDrag(cell: GridCell, e: PointerEvent) {
-		drag = {
-			id: cell.id,
-			colSpan: cell.colSpan,
-			label: blockLabel(cell.type),
-			ghostX: e.clientX,
-			ghostY: e.clientY
-		};
-	}
-
-	function onWindowPointerMove(e: PointerEvent) {
-		if (resize) {
-			const dCols = Math.round((e.clientX - resize.startX) / colTrackPx());
-			const dRows = Math.round((e.clientY - resize.startY) / ROW_UNIT);
-			const cols = resize.axis === 'y' ? resize.startCols : resize.startCols + dCols;
-			const rows = resize.axis === 'x' ? resize.startRows : resize.startRows + dRows;
-			onResizeCell(resize.id, cols, rows);
-			return;
-		}
+	function onMovePointerMove(e: PointerEvent) {
 		if (!pending) return;
-		const cell = layout.cells.find((c) => c.id === pending!.id);
-		if (!cell) return;
-		const dist = Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY);
-		if (!drag && dist > 4) {
-			pending.moved = true;
-			beginDrag(cell, e);
+		if (!drag) {
+			const dist = Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY);
+			if (dist <= 4) return;
+			captureSnapshot(pending.id); // base = layout minus the dragged cell
+			drag = { mode: 'move', id: pending.id, type: pending.type, ghostX: e.clientX, ghostY: e.clientY };
 		}
-		if (drag) {
-			drag.ghostX = e.clientX;
-			drag.ghostY = e.clientY;
-			const col = Math.min(colFromX(e.clientX), columns - drag.colSpan);
-			dropTarget = { col: Math.max(0, col), row: rowFromY(e.clientY), colSpan: drag.colSpan };
-		}
+		drag.ghostX = e.clientX;
+		drag.ghostY = e.clientY;
+		target = computeTarget(e.clientX, e.clientY);
 	}
 
-	function onWindowPointerUp() {
-		if (drag && dropTarget) {
-			onMoveCell(drag.id, dropTarget.col, dropTarget.row);
-		} else if (pending && !pending.moved) {
+	function onMovePointerUp() {
+		if (drag && drag.id && target) {
+			onApply(moveBlock(layout.cells, drag.id, target.row, target.index, columns, target.newRow));
+			onSelectBlock(drag.id);
+		} else if (pending && !drag) {
 			onSelectBlock(pending.id);
 		}
 		drag = null;
-		dropTarget = null;
+		target = null;
 		pending = null;
-		window.removeEventListener('pointermove', onWindowPointerMove);
-		window.removeEventListener('pointerup', onWindowPointerUp);
+		snapshot = [];
+		window.removeEventListener('pointermove', onMovePointerMove);
+		window.removeEventListener('pointerup', onMovePointerUp);
 	}
 
-	// ── Resize (pointer) ─────────────────────────────────────────────────────
-	function colTrackPx(): number {
-		if (!gridEl) return 80;
-		return (gridEl.getBoundingClientRect().width + GAP) / columns;
-	}
-
-	function onResizePointerDown(e: PointerEvent, cell: GridCell, axis: 'x' | 'y' | 'xy') {
+	// ── Gutter resize (pointer) ──────────────────────────────────────────────
+	function onGutterPointerDown(e: PointerEvent, leftId: string, rightId: string) {
 		e.preventDefault();
 		e.stopPropagation();
-		resize = {
-			id: cell.id,
-			axis,
-			startX: e.clientX,
-			startY: e.clientY,
-			startCols: cell.colSpan,
-			startRows: cell.rowSpan
-		};
-		window.addEventListener('pointermove', onWindowPointerMove);
-		window.addEventListener('pointerup', onResizePointerUp);
+		const left = layout.cells.find((c) => c.id === leftId);
+		if (!left) return;
+		gutter = { leftId, rightId, startX: e.clientX, startLeft: left.colSpan, base: layout.cells };
+		window.addEventListener('pointermove', onGutterPointerMove);
+		window.addEventListener('pointerup', onGutterPointerUp);
 	}
 
-	function onResizePointerUp() {
-		resize = null;
-		window.removeEventListener('pointermove', onWindowPointerMove);
-		window.removeEventListener('pointerup', onResizePointerUp);
+	function onGutterPointerMove(e: PointerEvent) {
+		if (!gutter || !gridEl) return;
+		const pxPerCol = gridEl.getBoundingClientRect().width / columns;
+		const deltaCols = Math.round((e.clientX - gutter.startX) / pxPerCol);
+		onApply(setGutter(gutter.base, gutter.leftId, gutter.rightId, gutter.startLeft + deltaCols, columns));
+	}
+
+	function onGutterPointerUp() {
+		gutter = null;
+		window.removeEventListener('pointermove', onGutterPointerMove);
+		window.removeEventListener('pointerup', onGutterPointerUp);
 	}
 
 	// ── Palette drop (HTML5 DnD) ───────────────────────────────────────────────
+	function onGridDragEnter(e: DragEvent) {
+		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
+		if (!drag) {
+			captureSnapshot();
+			drag = { mode: 'palette', ghostX: 0, ghostY: 0 };
+		}
+	}
+
 	function onGridDragOver(e: DragEvent) {
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		e.preventDefault();
-		paletteTarget = { col: colFromX(e.clientX), row: rowFromY(e.clientY) };
+		if (!drag) onGridDragEnter(e);
+		target = computeTarget(e.clientX, e.clientY);
+	}
+
+	function endPaletteDrag() {
+		drag = null;
+		target = null;
+		snapshot = [];
 	}
 
 	function onGridDrop(e: DragEvent) {
+		e.preventDefault();
 		const type = e.dataTransfer?.getData('application/x-block-type') as BlockType | undefined;
-		if (type && paletteTarget) {
-			onAddCell(type, paletteTarget.col, paletteTarget.row, columns);
+		if (type && target) {
+			const block = newCell(type, columns);
+			onApply(insertInto(layout.cells, block, target.row, target.index, columns, target.newRow));
+			onSelectBlock(block.id);
 		}
-		paletteTarget = null;
+		endPaletteDrag();
 	}
-
-	const placeholder = $derived(
-		dropTarget ?? (paletteTarget ? { col: paletteTarget.col, row: paletteTarget.row, colSpan: columns } : null)
-	);
 </script>
 
 <div class="canvas">
@@ -189,53 +238,54 @@
 		role="application"
 		aria-label="Template grid"
 		style="grid-template-columns: repeat({columns}, 1fr); --theme: {themeColor};"
+		ondragenter={onGridDragEnter}
 		ondragover={onGridDragOver}
-		ondragleave={() => (paletteTarget = null)}
+		ondragleave={(e) => { if (e.relatedTarget === null) endPaletteDrag(); }}
 		ondrop={onGridDrop}
 	>
-		{#each layout.cells as cell (cell.id)}
+		{#each displayCells as cell (cell.id)}
+			{@const isPreview = cell.id === PREVIEW_ID}
+			{@const rn = isPreview ? null : rightNeighborId(cell)}
+			<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 			<div
 				class="cell"
+				class:placeholder={isPreview}
 				class:selected={cell.id === selectedBlockId}
 				class:dragging={drag?.id === cell.id}
-				class:resizing={resize?.id === cell.id}
-				style="grid-column: {cell.col + 1} / span {cell.colSpan}; grid-row: {cell.row + 1} / span {cell.rowSpan};"
-				animate:flip={{ duration: 200 }}
+				data-id={cell.id}
+				data-row={cell.row}
+				style="grid-column: {cell.col + 1} / span {cell.colSpan}; grid-row: {cell.row + 1};"
+				animate:flip={{ duration: 180 }}
 				in:scale={{ duration: 150, start: 0.85 }}
-				role="button"
-				tabindex="0"
+				role={isPreview ? undefined : 'button'}
+				tabindex={isPreview ? undefined : 0}
+				aria-hidden={isPreview ? 'true' : undefined}
 				onpointerdown={(e) => onCellPointerDown(e, cell)}
 				onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectBlock(cell.id); } }}
 			>
-				<span class="cell-grip"><GripVertical size={12} /></span>
-				<span class="cell-label">{blockLabel(cell.type)}</span>
-				<button class="cell-del" title="Remove block"
-					onpointerdown={(e) => e.stopPropagation()}
-					onclick={(e) => { e.stopPropagation(); onDeleteBlock(cell.id); }}>×</button>
+				{#if !isPreview}
+					<span class="cell-grip"><GripVertical size={12} /></span>
+					<span class="cell-label">{blockLabel(cell.type)}</span>
+					<button class="cell-del" title="Remove block"
+						onpointerdown={(e) => e.stopPropagation()}
+						onclick={(e) => { e.stopPropagation(); onDeleteBlock(cell.id); }}>×</button>
 
-				<!-- Resize handles -->
-				<span class="rh rh-right" role="separator" aria-label="Resize width" title="Resize width"
-					onpointerdown={(e) => onResizePointerDown(e, cell, 'x')}></span>
-				<span class="rh rh-bottom" role="separator" aria-label="Resize height" title="Resize height"
-					onpointerdown={(e) => onResizePointerDown(e, cell, 'y')}></span>
-				<span class="rh rh-corner" role="separator" aria-label="Resize block" title="Resize"
-					onpointerdown={(e) => onResizePointerDown(e, cell, 'xy')}></span>
+					{#if rn}
+						<span class="col-gutter" role="separator" aria-label="Resize columns" title="Drag to resize"
+							onpointerdown={(e) => onGutterPointerDown(e, cell.id, rn)}></span>
+					{/if}
+				{/if}
 			</div>
 		{/each}
 
-		{#if placeholder}
-			<div class="placeholder"
-				style="grid-column: {placeholder.col + 1} / span {placeholder.colSpan}; grid-row: {placeholder.row + 1} / span 1;"></div>
-		{/if}
-
-		{#if layout.cells.length === 0 && !placeholder}
+		{#if displayCells.length === 0}
 			<div class="grid-empty">Drag blocks here or click one in the palette</div>
 		{/if}
 	</div>
 
-	{#if drag}
+	{#if drag?.mode === 'move' && drag.type}
 		<div class="drag-ghost" style="left: {drag.ghostX}px; top: {drag.ghostY}px;">
-			<GripVertical size={12} /> {drag.label}
+			<GripVertical size={12} /> {blockLabel(drag.type)}
 		</div>
 	{/if}
 </div>
@@ -266,7 +316,6 @@
 	.cell:hover { border-color: var(--primary); background: var(--accent); }
 	.cell.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--background)); box-shadow: 0 0 0 1px var(--primary); }
 	.cell.dragging { opacity: 0.35; }
-	.cell.resizing { border-color: var(--primary); border-style: dashed; }
 	.cell-grip { color: var(--muted-foreground); flex-shrink: 0; }
 	.cell-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.cell-del {
@@ -278,18 +327,23 @@
 	.cell:hover .cell-del { opacity: 1; }
 	.cell-del:hover { color: var(--destructive); }
 
-	/* Resize handles */
-	.rh { position: absolute; opacity: 0; transition: opacity 0.1s; }
-	.cell:hover .rh, .cell.resizing .rh { opacity: 1; }
-	.rh-right { top: 20%; bottom: 20%; right: 0; width: 7px; cursor: ew-resize; border-right: 2px solid var(--primary); }
-	.rh-bottom { left: 20%; right: 20%; bottom: 0; height: 7px; cursor: ns-resize; border-bottom: 2px solid var(--primary); }
-	.rh-corner { right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; border-right: 2px solid var(--primary); border-bottom: 2px solid var(--primary); border-bottom-right-radius: 6px; }
+	/* Column gutter — sits in the gap on the cell's right edge, between neighbours */
+	.col-gutter {
+		position: absolute; top: 6px; bottom: 6px; right: -8px; width: 16px;
+		cursor: col-resize; z-index: 2;
+		display: flex; align-items: center; justify-content: center;
+	}
+	.col-gutter::before {
+		content: ''; width: 2px; height: 100%; border-radius: 2px;
+		background: var(--border); transition: background 0.12s, width 0.12s;
+	}
+	.col-gutter:hover::before { background: var(--primary); width: 3px; }
 
-	/* Drop placeholder */
-	.placeholder {
+	/* Drop placeholder — the slot that opens to make room */
+	.cell.placeholder {
 		border: 2px dashed var(--primary);
-		border-radius: 6px;
 		background: color-mix(in srgb, var(--primary) 10%, transparent);
+		cursor: default;
 		pointer-events: none;
 		animation: ph-pulse 0.9s ease-in-out infinite alternate;
 	}

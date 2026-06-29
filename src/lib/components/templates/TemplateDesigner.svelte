@@ -3,6 +3,7 @@
 	import { Save, Star, Trash2 } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout, TemplateRow } from '$lib/pdf/template-types.js';
 	import { migrateLayout, GRID_COLUMNS } from '$lib/pdf/template-types.js';
+	import { newCell, appendRow, removeBlock } from './grid-ops.js';
 	import BlockPalette from './BlockPalette.svelte';
 	import TemplateCanvas from './TemplateCanvas.svelte';
 	import BlockInspector from './BlockInspector.svelte';
@@ -36,97 +37,22 @@
 		return l.cells.find((c) => c.id === id) ?? null;
 	}
 
-	function maxRow(cells: GridCell[]): number {
-		return cells.reduce((m, c) => Math.max(m, c.row + c.rowSpan), 0);
-	}
-
-	// Two grid rectangles overlap if they intersect on both axes.
-	function overlaps(a: GridCell, b: GridCell): boolean {
-		const colsClash = a.col < b.col + b.colSpan && b.col < a.col + a.colSpan;
-		const rowsClash = a.row < b.row + b.rowSpan && b.row < a.row + a.rowSpan;
-		return colsClash && rowsClash;
-	}
-
-	// Keep `movedId` fixed; push every other cell that collides straight down,
-	// processing top-to-bottom so a single downward pass resolves all clashes.
-	function resolveOverlaps(cells: GridCell[], movedId: string): GridCell[] {
-		const moved = cells.find((c) => c.id === movedId);
-		if (!moved) return cells;
-		const rest = cells
-			.filter((c) => c.id !== movedId)
-			.sort((a, b) => a.row - b.row || a.col - b.col);
-		const locked: GridCell[] = [moved];
-		for (const cell of rest) {
-			let c = cell;
-			while (locked.some((l) => overlaps(l, c))) c = { ...c, row: c.row + 1 };
-			locked.push(c);
-		}
-		return locked;
-	}
-
-	// Gravity: pull every cell up to its topmost non-overlapping slot, preserving
-	// order. Removes the empty rows left behind by moves/deletes so the grid stays
-	// compact (use spacer/divider blocks for intentional gaps).
-	function compact(cells: GridCell[]): GridCell[] {
-		const sorted = [...cells].sort((a, b) => a.row - b.row || a.col - b.col);
-		const placed: GridCell[] = [];
-		for (const cell of sorted) {
-			let c = cell;
-			while (c.row > 0) {
-				const up = { ...c, row: c.row - 1 };
-				if (placed.some((p) => overlaps(p, up))) break;
-				c = up;
-			}
-			placed.push(c);
-		}
-		return placed;
-	}
-
-	function commit(cells: GridCell[], movedId: string) {
-		layout = { ...layout, cells: compact(resolveOverlaps(cells, movedId)) };
+	// The canvas owns all grid interaction (drag/insert/gutter) via grid-ops and
+	// commits the resulting cell array through this single apply hook.
+	function applyCells(cells: GridCell[]) {
+		layout = { ...layout, cells };
 	}
 
 	function addBlockToBody(type: BlockType) {
-		// Palette click → full-width cell appended below everything (gravity settles it).
-		addCell(type, 0, maxRow(layout.cells), columns);
+		// Palette click → append a full-width block as a new bottom row.
+		const block = newCell(type, columns);
+		applyCells(appendRow(layout.cells, block, columns));
+		selectedBlockId = block.id;
 	}
 
-	function addCell(type: BlockType, col: number, row: number, colSpan = columns) {
-		const c = Math.min(Math.max(col, 0), columns - 1);
-		const span = Math.min(Math.max(colSpan, 1), columns - c);
-		const cell: GridCell = {
-			id: crypto.randomUUID(),
-			type,
-			config: {},
-			style: {},
-			col: c,
-			row: Math.max(row, 0),
-			colSpan: span,
-			rowSpan: 1
-		};
-		commit([...layout.cells, cell], cell.id);
-		selectedBlockId = cell.id;
-	}
-
-	function moveCell(id: string, col: number, row: number) {
-		const target = layout.cells.find((c) => c.id === id);
-		if (!target) return;
-		const c = Math.min(Math.max(col, 0), columns - target.colSpan);
-		const next = layout.cells.map((cell) =>
-			cell.id === id ? { ...cell, col: c, row: Math.max(row, 0) } : cell
-		);
-		commit(next, id);
-	}
-
-	function resizeCell(id: string, colSpan: number, rowSpan: number) {
-		const target = layout.cells.find((c) => c.id === id);
-		if (!target) return;
-		const span = Math.min(Math.max(colSpan, 1), columns - target.col);
-		const rspan = Math.max(rowSpan, 1);
-		const next = layout.cells.map((cell) =>
-			cell.id === id ? { ...cell, colSpan: span, rowSpan: rspan } : cell
-		);
-		commit(next, id);
+	function deleteCell(id: string) {
+		applyCells(removeBlock(layout.cells, id, columns));
+		if (selectedBlockId === id) selectedBlockId = null;
 	}
 
 	function updateSelectedBlock(patch: Partial<GridCell>) {
@@ -139,15 +65,6 @@
 					: c
 			)
 		};
-	}
-
-	function resizeSelected(colSpan: number, rowSpan: number) {
-		if (selectedBlockId) resizeCell(selectedBlockId, colSpan, rowSpan);
-	}
-
-	function deleteCell(id: string) {
-		layout = { ...layout, cells: compact(layout.cells.filter((c) => c.id !== id)) };
-		if (selectedBlockId === id) selectedBlockId = null;
 	}
 
 	function deleteSelectedBlock() {
@@ -233,12 +150,11 @@
 		<main class="designer-canvas-pane">
 			<TemplateCanvas
 				{layout}
+				{columns}
 				{selectedBlockId}
 				{themeColor}
 				onSelectBlock={(id) => (selectedBlockId = id)}
-				onAddCell={addCell}
-				onMoveCell={moveCell}
-				onResizeCell={resizeCell}
+				onApply={applyCells}
 				onDeleteBlock={deleteCell}
 			/>
 		</main>
@@ -248,9 +164,7 @@
 			{#if selectedBlock}
 				<BlockInspector
 					block={selectedBlock}
-					{columns}
 					onUpdate={updateSelectedBlock}
-					onResize={resizeSelected}
 					onDelete={deleteSelectedBlock}
 				/>
 			{:else}
