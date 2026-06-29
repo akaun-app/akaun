@@ -18,12 +18,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		companyRegistrationNo: getSetting(db, 'company.registrationNo') ?? ''
 	};
 
-	const buffer = await buildInvoicePdf(invoice, settings);
-
-	return new Response(new Uint8Array(buffer), {
-		headers: {
-			'Content-Type': 'application/pdf',
-			'Content-Disposition': `inline; filename="${invoice.invoiceNumber}.pdf"`
-		}
-	});
+	try {
+		const buffer = await buildInvoicePdf(invoice, settings);
+		return new Response(new Uint8Array(buffer), {
+			headers: {
+				'Content-Type': 'application/pdf',
+				'Content-Disposition': `inline; filename="${invoice.invoiceNumber}.pdf"`
+			}
+		});
+	} catch (err) {
+		console.error('PDF generation failed for invoice', id, err);
+		return new Response('PDF generation failed', { status: 500 });
+	}
 };

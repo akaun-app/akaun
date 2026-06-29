@@ -435,18 +435,18 @@
 		}
 	}
 
+	createResourceStream<InvoiceStreamMsg>('/api/invoices/stream', (msg) => {
+		if (msg.type === 'invoice-update') invoices = mergeById(invoices, [msg.item]);
+		else if (msg.type === 'invoice-delete')
+			invoices = invoices.filter((inv) => inv.id !== msg.id);
+	});
+
 	onMount(() => {
 		// Deep-link: open the invoice if openId was passed via direct navigation
 		if (openId) {
 			const found = invoices.find((inv) => inv.id === openId);
 			if (found) openInvoice(found, { push: false });
 		}
-		// SSE subscription — cleanup is handled internally by createResourceStream
-		createResourceStream<InvoiceStreamMsg>('/api/invoices/stream', (msg) => {
-			if (msg.type === 'invoice-update') invoices = mergeById(invoices, [msg.item]);
-			else if (msg.type === 'invoice-delete')
-				invoices = invoices.filter((inv) => inv.id !== msg.id);
-		});
 	});
 </script>
 
