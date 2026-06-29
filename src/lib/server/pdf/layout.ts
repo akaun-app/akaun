@@ -1,3 +1,5 @@
+export const PT_PER_MM = 2.8346; // points per millimetre
+
 export const M = 56.69; // 20mm page margin in points
 export const PW = 595.28; // A4 width
 export const CW = PW - 2 * M; // content width ≈ 481.9
