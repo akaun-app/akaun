@@ -856,6 +856,273 @@ Tax fields (line `tax_rate`/`tax_amount` + header rollup already wired), partial
 
 ---
 
+## Phase 7.5 — PDF Template Builder
+
+### Concept
+
+A drag-and-drop template designer that lets users configure how their quotations and invoices look when exported as PDFs. The designer produces a `layout_json` blob stored in the DB; the PDF renderer reads it at export time to compose the document. The document data (line items, contact, totals) is always live — the template only controls structure and presentation.
+
+Design constraints locked in for this phase:
+- **One active default template** per document type, configured in Settings. The active template is always used for PDF export — no per-document override.
+- **Shared template** for both quotations and invoices (document type = `Both`). Separate QT/IV templates are supported by the schema but not required now.
+- **Three-zone layout** — Header (multi-column), Body (single-column), Footer (multi-column). Multi-column is only available in the header and footer zones; the body is always a strict vertical stack. This matches real invoice structure and makes PDF rendering tractable.
+- **Global theme** — one brand color + one font family applied uniformly. No per-block styling beyond alignment and spacing.
+- **Primitive custom blocks** — text, image, divider, spacer. Purpose-specific blocks (bank account, certification, T&C) are intentionally not built; users compose them from primitives. This keeps the block catalogue small and the renderer simple.
+
+### Enum Storage
+
+Append-only additions to `src/lib/server/enums.ts`:
+
+```ts
+// --- document templates ---
+export const TemplateDocumentType = { Quotation: 1, Invoice: 2, Both: 3 } as const;
+export const TemplateFont = { Inter: 1, Roboto: 2, Lato: 3, Merriweather: 4 } as const;
+```
+
+### Schema
+
+One new table added to `src/lib/server/db/schema.ts`:
+
+```
+document_templates
+  id              INTEGER PK
+  uuid            TEXT UNIQUE NOT NULL    ← used as the on-disk asset folder name
+  name            TEXT NOT NULL
+  document_type   INTEGER NOT NULL        ← TemplateDocumentType code; see enums.ts
+  is_default      INTEGER NOT NULL DEFAULT 0   ← 0|1; enforced one-per-document_type at app layer
+  theme_color     TEXT NOT NULL DEFAULT '#1a56db'   ← hex
+  theme_font      INTEGER NOT NULL DEFAULT 1         ← TemplateFont code
+  layout_json     TEXT NOT NULL           ← serialised TemplateLayout; see Layout JSON shape below
+  created_by      INTEGER FK → users
+  updated_by      INTEGER FK → users
+  created_at      TIMESTAMP
+  updated_at      TIMESTAMP
+```
+
+No migrations needed on `quotations` or `invoices` — the active default template is resolved at export time from `document_templates WHERE is_default = 1 AND document_type IN (?, 3)`, so existing document rows carry no template reference.
+
+**`settings` table** — the existing KV table gains two new keys:
+- `template.quotation.defaultId` — integer ID of the active quotation template
+- `template.invoice.defaultId` — integer ID of the active invoice template
+
+These are set via Settings → Templates and read by the PDF export endpoint.
+
+### Template Asset Storage
+
+Each template's image assets (used by `image` blocks) are stored on disk under:
+
+```
+{STORAGE_PATH}/
+  templates/
+    {template-uuid}/
+      assets/
+        {asset-uuid}.ext
+```
+
+`image` block config stores only the filename (`{asset-uuid}.ext`). The renderer resolves the full path as `{STORAGE_PATH}/templates/{template-uuid}/assets/{filename}` at render time. Deleting a template deletes the entire `{template-uuid}/` folder — no orphan asset cleanup required.
+
+### Layout JSON Shape
+
+```ts
+type TemplateLayout = {
+  header: {
+    columns: ColumnDef[]       // 1–3 columns; widths must sum to 100
+  }
+  body: {
+    blocks: BlockDef[]         // ordered stack; no columns
+  }
+  footer: {
+    columns: ColumnDef[]       // 1–3 columns; widths must sum to 100
+  }
+}
+
+type ColumnDef = {
+  width: number                // percentage of zone width
+  blocks: BlockDef[]
+}
+
+type BlockDef = {
+  id: string                   // stable uuid within the layout; used as React key equivalent
+  type: BlockType
+  config: Record<string, unknown>   // per-type config; see Block Catalogue below
+  style?: {
+    marginTop?: number         // mm
+    marginBottom?: number      // mm
+    align?: 'left' | 'center' | 'right'
+  }
+}
+```
+
+### Block Catalogue
+
+**System blocks** — data-bound; repositionable within their zone but not deletable:
+
+| `type` | Config fields | Notes |
+|---|---|---|
+| `company-header` | `showLogo: bool`, `showAddress: bool` | Logo + company name + address from `settings` |
+| `document-meta` | `showReference: bool` | QT/IV number, issue date, expiry/due date, reference |
+| `customer-block` | `showRegistrationNo: bool` | Contact name, address, reg number |
+| `line-items-table` | `showUnitPrice: bool`, `showQty: bool` | Always present in body; cannot be moved to header/footer |
+| `totals-block` | `showTaxRow: bool` | Subtotal, tax (0.00 today), total, amount paid if invoice |
+
+**Optional system blocks** — data-bound; removable:
+
+| `type` | Config fields | Notes |
+|---|---|---|
+| `notes` | `label: string` | Renders `quotations.notes` / `invoices.notes` if non-empty |
+| `paid-stamp` | `color: string`, `opacity: number` | Diagonal "PAID" overlay; only renders when `InvoiceStatus.Paid` |
+| `issued-by` | `label: string` | Name of the `created_by` user |
+
+**Primitive custom blocks** — freely added, configured, removed:
+
+| `type` | Config fields | Notes |
+|---|---|---|
+| `text` | `title?: string`, `body: string`, `fontSize: number` | Plain text; `\n` respected. Use for bank details, T&C, notes, etc. |
+| `image` | `filename: string`, `widthPercent: number`, `align: 'left'\|'center'\|'right'` | Asset from template's asset folder. Use for stamps, signatures, certification logos. |
+| `divider` | `color: string`, `thickness: number` | Horizontal rule |
+| `spacer` | `heightMm: number` | Blank vertical gap |
+
+### Default Template (seeded on first boot)
+
+A sensible starting layout is seeded automatically if no template exists yet — no placeholder text, only system blocks:
+
+```
+Header (2 columns):
+  Col 1 (40%): company-header  { showLogo: true, showAddress: true }
+  Col 2 (60%): document-meta   { showReference: true }
+
+Body:
+  customer-block    { showRegistrationNo: true }
+  line-items-table  { showUnitPrice: true, showQty: true }
+  totals-block      { showTaxRow: true }
+  notes             { label: 'Notes' }
+
+Footer (1 column — full width):
+  (empty — user adds text/image blocks as needed)
+```
+
+### Designer UX
+
+Accessed via Settings → Templates. Layout:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Templates  [+ New]                    Theme: [●] [Font ▾]  │
+│  ──────────────────────────────────────────────────────────  │
+│  [Default ✓]  [Formal]  [Minimal]                           │
+└─────────────────────────────────────────────────────────────┘
+┌──────────────┬──────────────────────────┬────────────────────┐
+│  Block       │  Canvas                  │  Config            │
+│  Palette     │                          │                    │
+│              │  ▼ HEADER  [+col][-col]  │  (click a block    │
+│  System      │  ┌────────┬───────────┐  │   to open its      │
+│  ─────────   │  │company │doc-meta   │  │   config panel)    │
+│  company-    │  │-header │           │  │                    │
+│  header      │  └────────┴───────────┘  │                    │
+│  document-   │                          │                    │
+│  meta        │  ▼ BODY                  │                    │
+│  customer-   │  ┌───────────────────┐   │                    │
+│  block       │  │ customer-block    │⠿  │                    │
+│  line-items  │  │ line-items-table  │⠿  │                    │
+│  totals      │  │ totals-block      │⠿  │                    │
+│  notes       │  │ notes             │⠿  │                    │
+│  paid-stamp  │  └───────────────────┘   │                    │
+│  issued-by   │                          │                    │
+│              │  ▼ FOOTER [+col][-col]   │                    │
+│  Custom      │  ┌───────────────────┐   │                    │
+│  ─────────   │  │ (drop blocks here)│   │                    │
+│  text        │  └───────────────────┘   │                    │
+│  image       │                          │                    │
+│  divider     │                          │                    │
+│  spacer      │                          │                    │
+└──────────────┴──────────────────────────┴────────────────────┘
+          [Preview PDF]       [Save]   [Set as Default]
+```
+
+Interaction rules:
+- Drag from palette → drop into a zone (or a column within header/footer)
+- Reorder blocks within a zone/column by dragging the `⠿` handle
+- System blocks (`company-header`, `line-items-table`, etc.) show no delete button; optional system blocks and all custom blocks show one
+- `line-items-table` and `totals-block` are body-only — they cannot be dragged into header or footer (enforced in the drop handler)
+- Click any block → right panel shows its config fields
+- **+col / −col** buttons on header and footer zones add/remove columns (min 1, max 3); adding a column splits remaining width equally; removing the last non-empty column is blocked with an inline warning
+- **Preview PDF** calls `GET /api/templates/[id]/preview` — renders with the most recent real quotation or invoice, or a fully synthetic document if none exists yet — and opens the PDF in a new tab
+- **Set as Default** calls `POST /api/templates/[id]/default`; updates the `settings` key for the template's document type; the previously-default template is demoted
+- Theme color and font are global controls in the toolbar; changes are live in the canvas preview
+
+### API Routes
+
+All under `src/routes/api/templates/`. Superuser-only for create/edit/delete; any user with `quotations.view` or `invoices.view` can hit the preview and export endpoints.
+
+| Endpoint | Methods | Notes |
+|---|---|---|
+| `/api/templates` | GET, POST | List all templates; create new (seeds default layout JSON) |
+| `/api/templates/[id]` | GET, PATCH, DELETE | PATCH: name, theme, layout_json. DELETE: removes DB row + `{uuid}/` asset folder; blocks deletion of the only remaining template |
+| `/api/templates/[id]/assets` | POST | Multipart upload of a single image; saves to `templates/{uuid}/assets/{asset-uuid}.ext`; returns `{ filename }` |
+| `/api/templates/[id]/assets/[filename]` | DELETE | Removes asset file from disk |
+| `/api/templates/[id]/preview` | GET | Renders PDF using this template + synthetic (or most-recent real) document data; returns `application/pdf` |
+| `/api/templates/[id]/default` | POST | Sets `is_default = 1` for this template, clears `is_default` on any other template with overlapping `document_type`; updates the `settings` key |
+
+Existing `/api/quotations/[id]/pdf` and `/api/invoices/[id]/pdf` endpoints are updated to resolve the active template via the `settings` key and pass `layout_json` to the renderer.
+
+### PDF Renderer
+
+The existing simple PDF template (Phase 7) is replaced by a layout-driven renderer:
+
+```
+src/lib/server/pdf/
+  renderer.ts          ← entry point: resolveTemplate() → renderLayout() → PDF bytes
+  layout.ts            ← zone/column layout engine (computes x/y/width for each block)
+  blocks/
+    company-header.ts
+    document-meta.ts
+    customer-block.ts
+    line-items-table.ts
+    totals-block.ts
+    notes.ts
+    paid-stamp.ts
+    issued-by.ts
+    text.ts
+    image.ts
+    divider.ts
+    spacer.ts
+```
+
+Each block module exports a single `render(doc, blockDef, data, theme)` function. The layout engine calls them in order, passing the computed bounding box. Theme (color, font) is resolved once at the top and threaded through. Use the `pdf` skill for the underlying PDF generation.
+
+### Files to Create / Modify
+
+**`src/lib/server/enums.ts`** — append `TemplateDocumentType`, `TemplateFont` and their label maps.
+
+**`src/lib/server/db/schema.ts`** — add `documentTemplates` table.
+
+**`src/lib/server/pdf/`** — new directory replacing the single Phase 7 PDF template file; renderer + layout engine + per-block modules as above.
+
+**`src/lib/server/queries/templates.ts`** — Drizzle builders: list, get, create (with default layout seed), update, delete (+ asset folder cleanup), set-default (clears prior default for same document_type, updates settings keys).
+
+**`src/routes/api/templates/**`** — route handlers above.
+
+**`src/routes/(app)/settings/`** — new "Templates" tab (alongside General, Intelligence, Categories, Advanced); renders the designer canvas.
+
+**`src/lib/components/template-designer/`** — client-side designer components:
+- `TemplateDesigner.svelte` — root; manages layout state, drag state, selected block
+- `ZoneCanvas.svelte` — renders one zone (header/body/footer); handles column add/remove
+- `ColumnCanvas.svelte` — renders one column within header/footer; handles block drop + reorder
+- `BlockPalette.svelte` — left panel; draggable block type list
+- `BlockConfigPanel.svelte` — right panel; dynamic form keyed off selected block's `type`
+- `BlockPreview.svelte` — visual representation of each block in the canvas (not the real PDF render — a lightweight HTML approximation for design-time feedback)
+- `ThemeControls.svelte` — color picker + font selector in the toolbar
+
+### Deferred
+
+- Per-document template override (a `template_id` FK on `quotations`/`invoices` and a picker on the document form)
+- Email sending with PDF attachment
+- Custom page size / orientation (A4 portrait assumed throughout)
+- Header/footer repeat on multi-page documents (first-page-only layout for now)
+- Rich text in `text` blocks (bold, bullets) — plain text with `\n` is sufficient for bank details and T&C
+
+---
+
 ## SQLite → PostgreSQL Migration Path
 
 Only 3 files need to change:
@@ -883,3 +1150,4 @@ All query code in `src/lib/server/queries/*.ts` is unchanged — Drizzle's query
 12. **Quotation → invoice → income**: create a quotation with 2 line items → `QT`-numbered, `subtotal`/`total` = line sum, `tax_amount = 0`; convert → new `Draft` invoice (`IV`-numbered) with copied lines + contact, quotation now `Converted`, both link fields set, second convert → 409; mark invoice `Paid` → `amount_paid = total`, an income record created via `nextNumber`, `result_income_id` back-linked, second pay → 409.
 13. **Derived statuses**: an invoice past `due_date` and not `Paid` → list/detail report `Overdue` without any stored status change; a quotation past `expiry_date` in `Draft`/`Sent` → reports `Expired`; neither writes to the `status` column.
 14. **Quotation/invoice permissions & merge**: a user with only `quotations.view` can list/PDF but POST/PATCH/convert → 403; `invoices` resource enforced the same way. Merge two customer contacts each linked to invoices → survivor holds all invoices and quotations, losers gone; a contact referenced by any invoice/quotation → hard delete returns 409.
+15. **PDF template builder**: on first boot with no templates → default template seeded (company-header + document-meta in header, customer-block + line-items + totals + notes in body, empty footer); create a second template → both appear in Settings → Templates list; set new template as default → `settings` key updated, old template demoted; add an `image` block, upload an asset → file appears in `templates/{uuid}/assets/`; delete template → asset folder removed from disk, blocked if it is the only template; `GET /api/quotations/[id]/pdf` uses the active default template; `GET /api/templates/[id]/preview` returns a valid PDF without an existing document. Non-superuser cannot POST/PATCH/DELETE templates → 403.

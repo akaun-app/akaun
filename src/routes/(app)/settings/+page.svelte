@@ -9,8 +9,9 @@
 	import { toast } from 'svelte-sonner';
 	import { CURRENCIES } from '$lib/currency.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
-	import { dndzone } from 'svelte-dnd-action';
-	import type { DndEvent } from 'svelte-dnd-action';
+	import { flip } from 'svelte/animate';
+	import { draggable, droppable } from '@thisux/sveltednd';
+	import type { DragDropState } from '@thisux/sveltednd';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import type { PageData, ActionData } from './$types.js';
 
@@ -79,19 +80,35 @@
 	// svelte-ignore state_referenced_locally
 	let providers = $state<ProviderRow[]>([...data.providers]);
 
+	let reorderFormEl = $state<HTMLFormElement | null>(null);
+	let reorderInputEl = $state<HTMLInputElement | null>(null);
+
+	function reorderItems<T extends { id: string | number }>(
+		arr: T[],
+		draggedItem: T,
+		targetElement: HTMLElement | null,
+		dropPosition: 'before' | 'after' | null
+	): T[] {
+		if (!targetElement || !dropPosition) return arr;
+		const targetId = targetElement.closest<HTMLElement>('[data-id]')?.dataset.id;
+		if (!targetId || String(draggedItem.id) === targetId) return arr;
+		const result = [...arr];
+		const fromIndex = result.findIndex((i) => String(i.id) === String(draggedItem.id));
+		if (fromIndex === -1) return arr;
+		const [item] = result.splice(fromIndex, 1);
+		const newTargetIdx = result.findIndex((i) => String(i.id) === targetId);
+		if (newTargetIdx === -1) return arr;
+		result.splice(dropPosition === 'after' ? newTargetIdx + 1 : newTargetIdx, 0, item);
+		return result;
+	}
+
 	const reducedMotion =
 		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	const flipDurationMs = reducedMotion ? 0 : 200;
 
-	let reorderFormEl = $state<HTMLFormElement | null>(null);
-	let reorderInputEl = $state<HTMLInputElement | null>(null);
-
-	function handleDndConsider(e: CustomEvent<DndEvent<ProviderRow>>) {
-		providers = e.detail.items;
-	}
-
-	function handleDndFinalize(e: CustomEvent<DndEvent<ProviderRow>>) {
-		providers = e.detail.items;
+	function handleDrop(state: DragDropState<ProviderRow>) {
+		if (!state.draggedItem) return;
+		providers = reorderItems(providers, state.draggedItem, state.targetElement, state.dropPosition);
 		if (reorderInputEl) reorderInputEl.value = JSON.stringify(providers.map((p) => p.id));
 		reorderFormEl?.requestSubmit();
 	}
@@ -514,14 +531,25 @@
 							<span>No providers configured — add one to enable auto-import.</span>
 						</div>
 					{:else}
-						<div
-							class="prov-list"
-							use:dndzone={{ items: providers, flipDurationMs, dropTargetStyle: {}, dragDisabled: providers.length <= 1 }}
-							onconsider={handleDndConsider}
-							onfinalize={handleDndFinalize}
-						>
+						<div class="prov-list">
 							{#each providers as prov (prov.id)}
-								<div class="prov-row" class:prov-row-disabled={!prov.enabled}>
+								<div
+									class="prov-row"
+									class:prov-row-disabled={!prov.enabled}
+									data-id={String(prov.id)}
+									animate:flip={{ duration: flipDurationMs }}
+									use:draggable={{
+										container: 'prov-list',
+										dragData: prov,
+										handle: '.prov-handle',
+										disabled: providers.length <= 1
+									}}
+									use:droppable={{
+										container: 'prov-list',
+										callbacks: { onDrop: handleDrop },
+										disabled: providers.length <= 1
+									}}
+								>
 									<span class="prov-handle" aria-hidden="true" class:prov-handle-hidden={providers.length <= 1}><GripVertical size={15} /></span>
 									<span class="prov-type-badge">{PROVIDER_LABELS[prov.type] ?? prov.type}</span>
 									<div class="prov-info">
@@ -914,11 +942,17 @@
 		border: 1px solid var(--border);
 		border-radius: 10px;
 		background: var(--card);
-		transition: border-color 0.15s;
+		transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s, opacity 0.15s;
 	}
 
 	.prov-row:hover {
 		border-color: var(--primary);
+	}
+
+	.prov-row:global(.dragging) {
+		opacity: 0.55;
+		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+		transform: scale(1.01);
 	}
 
 	.prov-row-disabled {

@@ -5,8 +5,9 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import { toast } from 'svelte-sonner';
-	import { dndzone } from 'svelte-dnd-action';
-	import type { DndEvent } from 'svelte-dnd-action';
+	import { flip } from 'svelte/animate';
+	import { draggable, droppable } from '@thisux/sveltednd';
+	import type { DragDropState } from '@thisux/sveltednd';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -25,12 +26,32 @@
 	const mobileCount = $derived(navItems.filter((i) => i.showOnMobile).length);
 	const MAX_MOBILE = 5;
 
+	function reorderItems<T extends { id: string | number }>(
+		arr: T[],
+		draggedItem: T,
+		targetElement: HTMLElement | null,
+		dropPosition: 'before' | 'after' | null
+	): T[] {
+		if (!targetElement || !dropPosition) return arr;
+		const targetId = targetElement.closest<HTMLElement>('[data-id]')?.dataset.id;
+		if (!targetId || String(draggedItem.id) === targetId) return arr;
+		const result = [...arr];
+		const fromIndex = result.findIndex((i) => String(i.id) === String(draggedItem.id));
+		if (fromIndex === -1) return arr;
+		const [item] = result.splice(fromIndex, 1);
+		const newTargetIdx = result.findIndex((i) => String(i.id) === targetId);
+		if (newTargetIdx === -1) return arr;
+		result.splice(dropPosition === 'after' ? newTargetIdx + 1 : newTargetIdx, 0, item);
+		return result;
+	}
+
 	const reducedMotion =
 		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	const flipDurationMs = reducedMotion ? 0 : 200;
 
-	function handleDndUpdate(e: CustomEvent<DndEvent<NavPrefItem>>) {
-		navItems = e.detail.items;
+	function handleDrop(state: DragDropState<NavPrefItem>) {
+		if (!state.draggedItem) return;
+		navItems = reorderItems(navItems, state.draggedItem, state.targetElement, state.dropPosition);
 	}
 
 	function navItemsJson() {
@@ -305,14 +326,15 @@
 
 					<form method="POST" action="?/saveNavOrder" use:enhance>
 						<input type="hidden" name="items" value={navItemsJson()} />
-						<div
-							class="nav-pref-list"
-							use:dndzone={{ items: navItems, flipDurationMs, dropTargetStyle: {} }}
-							onconsider={handleDndUpdate}
-							onfinalize={handleDndUpdate}
-						>
+						<div class="nav-pref-list">
 							{#each navItems as item (item.id)}
-								<div class="nav-pref-row">
+								<div
+									class="nav-pref-row"
+									data-id={item.id}
+									animate:flip={{ duration: flipDurationMs }}
+									use:draggable={{ container: 'nav-pref', dragData: item, handle: '.nav-pref-handle' }}
+									use:droppable={{ container: 'nav-pref', callbacks: { onDrop: handleDrop } }}
+								>
 									<span class="nav-pref-handle" aria-label={`Drag to reorder ${item.label}`}>
 										<GripVertical size={16} />
 									</span>
@@ -403,12 +425,19 @@
 		overflow: hidden;
 	}
 
+
 	.nav-pref-row {
 		display: flex;
 		align-items: center;
 		gap: 12px;
 		padding: 10px 12px;
 		border-bottom: 1px solid var(--border);
+		transition: background 0.15s;
+	}
+
+	.nav-pref-row:global(.dragging) {
+		background: var(--accent);
+		opacity: 0.55;
 	}
 
 	.nav-pref-row:last-child {
