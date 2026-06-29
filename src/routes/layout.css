@@ -1195,3 +1195,13 @@ th.sortable:hover .th-idle { opacity: .5; }
 
 ::view-transition-old(root),
 ::view-transition-new(root) { animation: none; }
+
+/* Override @thisux/sveltednd default blue drop indicators to match app primary.
+   :root prefix raises specificity (0,2,1) above the library's (0,1,1) so our
+   rule wins regardless of CSS bundle order. */
+:root .drop-before::before,
+:root .drop-after::after,
+:root .drop-left::before,
+:root .drop-right::after {
+  background-color: var(--primary);
+}
