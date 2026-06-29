@@ -33,9 +33,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 				{
 					document: {
 						...invoice,
-						contactName: invoice.contactName ?? null,
-						contactAddress: null,
-						contactRegistrationNo: null,
+						contactName:           invoice.contactName           ?? null,
+						contactAddress:        invoice.contactAddress        ?? null,
+						contactRegistrationNo: invoice.contactRegistrationNo ?? null,
+						contactPhone:          invoice.contactPhone          ?? null,
 						paidAt: invoice.amountPaid > 0 ? 'paid' : null
 					},
 					settings,

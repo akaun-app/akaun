@@ -16,9 +16,6 @@ export function render(
 	fonts: Fonts
 ): number {
 	const cfg = block.config as { showUnitPrice?: boolean; showQty?: boolean };
-	const mt = (block.style?.marginTop ?? 4) * PT_PER_MM;
-	const mb = (block.style?.marginBottom ?? 0) * PT_PER_MM;
-	y += mt;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const d = doc as any;
 
@@ -66,7 +63,7 @@ export function render(
 			.lineWidth(0.5).strokeColor(C.light).stroke();
 		y += 8;
 	}
-	return y + mb;
+	return y;
 }
 
 // Re-export layout constants for use in totals-block

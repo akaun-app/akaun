@@ -77,7 +77,10 @@ export function deriveOverdue(inv: { dueDate: string | null; status: number }): 
 
 const invoiceWithContact = {
 	...getTableColumns(invoices),
-	contactName: contacts.legalName,
+	contactName:           contacts.legalName,
+	contactAddress:        contacts.address,
+	contactRegistrationNo: contacts.registrationNo,
+	contactPhone:          contacts.phone,
 	mainAmount: sql<number>`${invoices.subtotal} * ${invoices.exchangeRate}`
 };
 

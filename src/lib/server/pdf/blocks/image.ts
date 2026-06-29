@@ -2,7 +2,6 @@ import type PDFDocument from 'pdfkit';
 import type { BlockDef, ThemeData } from '../template-types.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { PT_PER_MM } from '../layout.js';
 import { STORAGE_PATH } from '$lib/server/env.js';
 
 type Bounds = { x: number; y: number; width: number };
@@ -17,13 +16,10 @@ export function render(
 	_fonts: Fonts
 ): number {
 	const cfg = block.config as { path?: string; height?: number; align?: 'left' | 'center' | 'right' };
-	const mt = (block.style?.marginTop ?? 0) * PT_PER_MM;
-	const mb = (block.style?.marginBottom ?? 0) * PT_PER_MM;
-	y += mt;
 
-	if (!cfg.path) return y + mb;
+	if (!cfg.path) return y;
 	const absPath = join(STORAGE_PATH, cfg.path);
-	if (!existsSync(absPath)) return y + mb;
+	if (!existsSync(absPath)) return y;
 
 	const h = cfg.height ?? 60;
 	let imgX = x;
@@ -31,5 +27,5 @@ export function render(
 	if (cfg.align === 'right') imgX = x + width - h;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(doc as any).image(absPath, imgX, y, { height: h, fit: [width, h] });
-	return y + h + mb;
+	return y + h;
 }

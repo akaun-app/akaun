@@ -404,7 +404,7 @@
 		</nav>
 
 		<!-- Content -->
-		<div class="set-content">
+		<div class="set-content" style={activeTab === 'templates' ? 'overflow:hidden;padding:0;display:flex;flex-direction:column;' : ''}>
 			{#if activeTab === 'general'}
 				<div class="set-section">
 					<div class="set-section-head">
@@ -1110,12 +1110,13 @@
 	/* Templates tab */
 	.tpl-section {
 		padding: 0;
-		height: 100%;
+		flex: 1;
 		overflow: hidden;
+		max-width: none;
 	}
 	.tpl-split {
 		display: flex;
-		height: 100%;
+		flex: 1;
 		overflow: hidden;
 	}
 	.tpl-sidebar {

@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { GripVertical, LayoutTemplate } from '@lucide/svelte';
-	import type { BlockDef, TemplateLayout } from '$lib/pdf/template-types.js';
-	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
+	import { GripVertical, Trash2 } from '@lucide/svelte';
+	import type { BlockDef, BlockType, TemplateLayout } from '$lib/pdf/template-types.js';
 
 	type Props = {
 		layout: TemplateLayout;
@@ -9,156 +8,185 @@
 		themeColor: string;
 		onSelectBlock: (id: string) => void;
 		onMoveBlock: (fromZone: string, fromIdx: number, toZone: string, toIdx: number) => void;
-		onLayoutChange: (layout: TemplateLayout) => void;
+		onDeleteBlock: (id: string) => void;
+		onDropFromPalette: (type: BlockType, zone: string, idx: number) => void;
+		onDeleteRow: (section: 'header' | 'body' | 'footer', rowIdx: number) => void;
 	};
 
-	let { layout, selectedBlockId, themeColor, onSelectBlock, onMoveBlock, onLayoutChange }: Props = $props();
+	let {
+		layout, selectedBlockId, themeColor,
+		onSelectBlock, onMoveBlock, onDeleteBlock, onDropFromPalette, onDeleteRow
+	}: Props = $props();
 
-	// Simple drag state without external DnD library since we need zone awareness
 	let dragSrc = $state<{ zone: string; idx: number } | null>(null);
+	let dragOverKey = $state<string | null>(null);
 
 	function blockLabel(type: BlockDef['type']): string {
 		const LABELS: Record<BlockDef['type'], string> = {
-			'company-header': 'Company Header',
-			'document-meta': 'Document Meta',
-			'customer-block': 'Customer',
-			'line-items-table': 'Line Items Table',
-			'totals-block': 'Totals',
-			notes: 'Notes',
-			'paid-stamp': 'Paid Stamp',
-			'issued-by': 'Issued By',
-			text: 'Text Block',
-			image: 'Image',
-			divider: 'Divider',
-			spacer: 'Spacer'
+			'company-name':    'Company Name',
+			'company-address': 'Company Address',
+			'company-reg-info':'Reg Info',
+			'document-title':  'Doc Title',
+			'document-meta':   'Document Meta',
+			'customer-block':  'Customer',
+			'line-items-table':'Line Items Table',
+			'totals-block':    'Totals',
+			notes:             'Notes',
+			'paid-stamp':      'Paid Stamp',
+			'issued-by':       'Issued By',
+			text:              'Text Block',
+			image:             'Image',
+			divider:           'Divider',
+			spacer:            'Spacer'
 		};
 		return LABELS[type] ?? type;
-	}
-
-	function isRequired(type: BlockDef['type']): boolean {
-		return SYSTEM_REQUIRED_BLOCKS.includes(type);
-	}
-
-	function getZoneBlocks(zone: string): BlockDef[] {
-		if (zone === 'body') return layout.body.blocks;
-		const [section, colIdxStr] = zone.split(':');
-		const colIdx = parseInt(colIdxStr);
-		if (section === 'header') return layout.header.columns[colIdx]?.blocks ?? [];
-		if (section === 'footer') return layout.footer.columns[colIdx]?.blocks ?? [];
-		return [];
 	}
 
 	function handleDragStart(zone: string, idx: number) {
 		dragSrc = { zone, idx };
 	}
 
-	function handleDrop(toZone: string, toIdx: number) {
-		if (!dragSrc) return;
-		onMoveBlock(dragSrc.zone, dragSrc.idx, toZone, toIdx);
-		dragSrc = null;
+	function handleDrop(e: DragEvent, toZone: string, toIdx: number) {
+		dragOverKey = null;
+		if (dragSrc) {
+			onMoveBlock(dragSrc.zone, dragSrc.idx, toZone, toIdx);
+			dragSrc = null;
+		} else {
+			const type = e.dataTransfer?.getData('application/x-block-type') as BlockType | undefined;
+			if (type) onDropFromPalette(type, toZone, toIdx);
+		}
+	}
+
+	type Section = 'header' | 'body' | 'footer';
+
+	function zoneRows(section: Section) {
+		if (section === 'header') return layout.header.rows;
+		if (section === 'body') return layout.body.rows;
+		return layout.footer.rows;
 	}
 </script>
 
 <div class="canvas">
-	<!-- Header zone -->
-	<div class="canvas-section">
-		<p class="canvas-zone-label">Header</p>
-		<div class="canvas-columns" style="border-top: 3px solid {themeColor}">
-			{#each layout.header.columns as col, ci (ci)}
-				<div class="canvas-col" style="flex: {col.width} 0 0">
-					{#each col.blocks as block, bi (block.id)}
-						<button
-							class="canvas-block"
-							class:selected={block.id === selectedBlockId}
-							class:required={isRequired(block.type)}
-							draggable="true"
-							ondragstart={() => handleDragStart(`header:${ci}`, bi)}
-							ondragover={(e) => e.preventDefault()}
-							ondrop={() => handleDrop(`header:${ci}`, bi)}
-							onclick={() => onSelectBlock(block.id)}
-						>
-							<span class="canvas-grip"><GripVertical size={11} /></span>
-							<span class="canvas-block-label">{blockLabel(block.type)}</span>
-						</button>
-					{/each}
-					<div class="canvas-drop-target" role="region" aria-label="Drop zone"
-						ondragover={(e) => e.preventDefault()}
-						ondrop={() => handleDrop(`header:${ci}`, col.blocks.length)}>
-						Drop here
+	{#each (['header', 'body', 'footer'] as Section[]) as section}
+		<div class="canvas-section">
+			<p class="canvas-zone-label">{section}</p>
+			{#each zoneRows(section) as row, ri (ri)}
+				<!-- Gap above row ri — drop here creates a new row at position ri -->
+				<div class="canvas-row-gap"
+					class:drag-over={dragOverKey === `gap:${section}:${ri}`}
+					role="region"
+					aria-label="Drop to create new row"
+					ondragover={(e) => { e.preventDefault(); dragOverKey = `gap:${section}:${ri}`; }}
+					ondragleave={() => { if (dragOverKey === `gap:${section}:${ri}`) dragOverKey = null; }}
+					ondrop={(e) => { e.stopPropagation(); handleDrop(e, `${section}:NEW:${ri}`, 0); }}>
+				</div>
+
+				<div class="canvas-row-wrapper">
+					<!-- Row zone: dropping on empty flex space appends to this row -->
+					<div class="canvas-row-zone" role="region"
+						style={section === 'header' && ri === 0 ? `border-top: 3px solid ${themeColor}` : ''}
+						ondragover={(e) => { e.preventDefault(); }}
+						ondrop={(e) => { handleDrop(e, `${section}:${ri}`, row.blocks.length); }}>
+
+						{#if row.blocks.length === 0}
+							<div class="canvas-drop-empty" role="region"
+								class:drag-over={dragOverKey === `empty:${section}:${ri}`}
+								ondragover={(e) => { e.preventDefault(); dragOverKey = `empty:${section}:${ri}`; }}
+								ondragleave={() => { if (dragOverKey === `empty:${section}:${ri}`) dragOverKey = null; }}
+								ondrop={(e) => { e.stopPropagation(); dragOverKey = null; handleDrop(e, `${section}:${ri}`, 0); }}>
+								Drop here
+							</div>
+						{:else}
+							{#each row.blocks as block, bi (block.id)}
+								<button class="canvas-block canvas-row-item"
+									class:selected={block.id === selectedBlockId}
+									class:drag-over={dragOverKey === `rb:${section}:${ri}:${bi}`}
+									draggable="true"
+									ondragstart={() => handleDragStart(`${section}:${ri}`, bi)}
+									ondragover={(e) => { e.preventDefault(); dragOverKey = `rb:${section}:${ri}:${bi}`; }}
+									ondragleave={() => { if (dragOverKey === `rb:${section}:${ri}:${bi}`) dragOverKey = null; }}
+									ondrop={(e) => { e.stopPropagation(); dragOverKey = null; handleDrop(e, `${section}:${ri}`, bi); }}
+									onclick={() => onSelectBlock(block.id)}>
+									<span class="canvas-grip"><GripVertical size={11} /></span>
+									<span class="canvas-block-label">{blockLabel(block.type)}</span>
+									<span class="canvas-block-del" role="button" tabindex="0" title="Remove block"
+										onclick={(e) => { e.stopPropagation(); onDeleteBlock(block.id); }}
+										onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onDeleteBlock(block.id); } }}>×</span>
+								</button>
+							{/each}
+						{/if}
 					</div>
+
+					{#if zoneRows(section).length > 1}
+						<button class="canvas-row-del-btn" title="Remove row"
+							onclick={() => onDeleteRow(section, ri)}>
+							<Trash2 size={11} />
+						</button>
+					{/if}
 				</div>
 			{/each}
-		</div>
-	</div>
 
-	<!-- Body zone -->
-	<div class="canvas-section">
-		<p class="canvas-zone-label">Body</p>
-		<div class="canvas-body-zone">
-			{#each layout.body.blocks as block, bi (block.id)}
-				<button
-					class="canvas-block"
-					class:selected={block.id === selectedBlockId}
-					class:required={isRequired(block.type)}
-					draggable="true"
-					ondragstart={() => handleDragStart('body', bi)}
-					ondragover={(e) => e.preventDefault()}
-					ondrop={() => handleDrop('body', bi)}
-					onclick={() => onSelectBlock(block.id)}
-				>
-					<span class="canvas-grip"><GripVertical size={11} /></span>
-					<span class="canvas-block-label">{blockLabel(block.type)}</span>
-				</button>
-			{/each}
-			<div class="canvas-drop-target" role="region" aria-label="Drop zone"
-				ondragover={(e) => e.preventDefault()}
-				ondrop={() => handleDrop('body', layout.body.blocks.length)}>
-				Drop here
+			<!-- Gap after the last row — drop here creates a new row at the end -->
+			<div class="canvas-row-gap"
+				class:drag-over={dragOverKey === `gap:${section}:${zoneRows(section).length}`}
+				role="region"
+				aria-label="Drop to create new row at end"
+				ondragover={(e) => { e.preventDefault(); dragOverKey = `gap:${section}:${zoneRows(section).length}`; }}
+				ondragleave={() => { if (dragOverKey === `gap:${section}:${zoneRows(section).length}`) dragOverKey = null; }}
+				ondrop={(e) => { e.stopPropagation(); handleDrop(e, `${section}:NEW:${zoneRows(section).length}`, 0); }}>
 			</div>
 		</div>
-	</div>
-
-	<!-- Footer zone -->
-	{#if layout.footer.columns.some((c) => c.blocks.length > 0) || true}
-		<div class="canvas-section">
-			<p class="canvas-zone-label">Footer</p>
-			<div class="canvas-columns">
-				{#each layout.footer.columns as col, ci (ci)}
-					<div class="canvas-col" style="flex: {col.width} 0 0">
-						{#each col.blocks as block, bi (block.id)}
-							<button
-								class="canvas-block"
-								class:selected={block.id === selectedBlockId}
-								class:required={isRequired(block.type)}
-								draggable="true"
-								ondragstart={() => handleDragStart(`footer:${ci}`, bi)}
-								ondragover={(e) => e.preventDefault()}
-								ondrop={() => handleDrop(`footer:${ci}`, bi)}
-								onclick={() => onSelectBlock(block.id)}
-							>
-								<span class="canvas-grip"><GripVertical size={11} /></span>
-								<span class="canvas-block-label">{blockLabel(block.type)}</span>
-							</button>
-						{/each}
-						<div class="canvas-drop-target" role="region" aria-label="Drop zone"
-							ondragover={(e) => e.preventDefault()}
-							ondrop={() => handleDrop(`footer:${ci}`, col.blocks.length)}>
-							Drop here
-						</div>
-					</div>
-				{/each}
-			</div>
-		</div>
-	{/if}
+	{/each}
 </div>
 
 <style>
 	.canvas { display: flex; flex-direction: column; gap: 12px; }
-	.canvas-section { display: flex; flex-direction: column; gap: 4px; }
-	.canvas-zone-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); }
-	.canvas-columns { display: flex; gap: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; min-height: 60px; }
-	.canvas-body-zone { border: 1px solid var(--border); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 4px; min-height: 80px; }
-	.canvas-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+	.canvas-section { display: flex; flex-direction: column; }
+	.canvas-zone-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); margin-bottom: 2px; }
+
+	/* Gap zone between rows — expands on dragover to show drop target */
+	.canvas-row-gap {
+		height: 8px; border-radius: 4px;
+		border: 1px dashed transparent;
+		transition: height 0.15s, border-color 0.15s, background 0.15s;
+	}
+	.canvas-row-gap.drag-over {
+		height: 28px;
+		border-color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 10%, transparent);
+	}
+
+	/* Multi-row wrapper — row zone + optional delete button */
+	.canvas-row-wrapper { display: flex; align-items: center; gap: 4px; }
+	.canvas-row-zone {
+		flex: 1; display: flex; align-items: stretch; gap: 4px;
+		border: 1px solid var(--border); border-radius: 6px;
+		padding: 8px; min-height: 48px;
+	}
+	.canvas-row-del-btn {
+		flex-shrink: 0; width: 22px; height: 22px; padding: 0;
+		display: flex; align-items: center; justify-content: center;
+		border: 1px solid var(--border); border-radius: 4px; background: none;
+		color: var(--muted-foreground); cursor: pointer;
+	}
+	.canvas-row-del-btn:hover { border-color: var(--destructive); color: var(--destructive); background: color-mix(in srgb, var(--destructive) 8%, transparent); }
+
+	.canvas-row-item { flex: 1; min-width: 60px; }
+
+	/* Empty row drop target */
+	.canvas-drop-empty {
+		flex: 1; padding: 6px; border-radius: 4px;
+		border: 1px dashed var(--border);
+		font-size: 11px; color: var(--muted-foreground); text-align: center;
+		display: flex; align-items: center; justify-content: center;
+	}
+	.canvas-drop-empty.drag-over {
+		border-color: var(--primary);
+		background: color-mix(in srgb, var(--primary) 10%, transparent);
+		color: var(--primary);
+	}
+
+	/* Shared block button */
 	.canvas-block {
 		display: flex; align-items: center; gap: 6px; padding: 7px 10px;
 		border-radius: 5px; border: 1px solid var(--border); background: var(--background);
@@ -166,11 +194,14 @@
 	}
 	.canvas-block:hover { border-color: var(--primary); background: var(--accent); }
 	.canvas-block.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--background)); }
-	.canvas-block.required .canvas-block-label::after { content: ' *'; color: var(--muted-foreground); font-size: 10px; }
+	.canvas-block.drag-over { border-color: var(--primary); border-style: dashed; }
 	.canvas-grip { color: var(--muted-foreground); flex-shrink: 0; }
 	.canvas-block-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.canvas-drop-target {
-		padding: 6px; border-radius: 4px; border: 1px dashed var(--border);
-		font-size: 11px; color: var(--muted-foreground); text-align: center;
+	.canvas-block-del {
+		flex-shrink: 0; background: none; border: none; padding: 0 2px;
+		font-size: 16px; line-height: 1; color: var(--muted-foreground);
+		cursor: pointer; opacity: 0; transition: opacity 0.1s;
 	}
+	.canvas-block:hover .canvas-block-del { opacity: 1; }
+	.canvas-block-del:hover { color: var(--destructive); }
 </style>

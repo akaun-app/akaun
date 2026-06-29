@@ -73,7 +73,10 @@ export function deriveExpired(q: { expiryDate: string | null; status: number }):
 
 const quotationWithContact = {
 	...getTableColumns(quotations),
-	contactName: contacts.legalName,
+	contactName:          contacts.legalName,
+	contactAddress:       contacts.address,
+	contactRegistrationNo: contacts.registrationNo,
+	contactPhone:         contacts.phone,
 	mainAmount: sql<number>`${quotations.subtotal} * ${quotations.exchangeRate}`
 };
 

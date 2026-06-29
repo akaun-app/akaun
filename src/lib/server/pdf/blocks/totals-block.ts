@@ -22,9 +22,6 @@ export function render(
 	fonts: Fonts
 ): number {
 	const cfg = block.config as { showTaxRow?: boolean };
-	const mt = (block.style?.marginTop ?? 2) * PT_PER_MM;
-	const mb = (block.style?.marginBottom ?? 0) * PT_PER_MM;
-	y += mt;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const d = doc as any;
 	const totalX = x + COL_DESC + COL_QTY + COL_PRICE;
@@ -55,5 +52,5 @@ export function render(
 		.text(fmt(total), totalX, y, { width: COL_TOTAL, align: 'right' });
 	y = d.y + 20;
 
-	return y + mb;
+	return y;
 }

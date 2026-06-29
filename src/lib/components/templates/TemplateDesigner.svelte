@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { Save, Star, Trash2, ChevronDown } from '@lucide/svelte';
-	import type { BlockDef, BlockType, TemplateLayout, TemplateRow } from '$lib/pdf/template-types.js';
-	import { makeDefaultLayout, SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
-	import { TemplateDocumentType } from '$lib/enums.js';
+	import { Save, Star, Trash2 } from '@lucide/svelte';
+	import type { BlockDef, BlockType, TemplateLayout, TemplateRow, ZoneRow } from '$lib/pdf/template-types.js';
+	import { migrateLayout } from '$lib/pdf/template-types.js';
 	import BlockPalette from './BlockPalette.svelte';
 	import TemplateCanvas from './TemplateCanvas.svelte';
 	import BlockInspector from './BlockInspector.svelte';
@@ -16,9 +15,8 @@
 	};
 	let { template, onSave, onDelete }: Props = $props();
 
-	// Local working copy of layout + theme
 	// svelte-ignore state_referenced_locally
-	let layout = $state<TemplateLayout>(JSON.parse(template.layoutJson) as TemplateLayout);
+	let layout = $state<TemplateLayout>(migrateLayout(JSON.parse(template.layoutJson)));
 	// svelte-ignore state_referenced_locally
 	let themeColor = $state(template.themeColor);
 	// svelte-ignore state_referenced_locally
@@ -32,92 +30,143 @@
 
 	const selectedBlock = $derived(findBlock(layout, selectedBlockId));
 
+	// zone string: "header:0" | "body:0" | "footer:0" | "header:NEW:1" | etc.
+	const selectedBlockZone = $derived((): string | null => {
+		if (!selectedBlockId) return null;
+		for (let ri = 0; ri < layout.header.rows.length; ri++) {
+			if (layout.header.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `header:${ri}`;
+		}
+		for (let ri = 0; ri < layout.body.rows.length; ri++) {
+			if (layout.body.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `body:${ri}`;
+		}
+		for (let ri = 0; ri < layout.footer.rows.length; ri++) {
+			if (layout.footer.rows[ri].blocks.some((b) => b.id === selectedBlockId)) return `footer:${ri}`;
+		}
+		return null;
+	});
+
+	function allBlocks(l: TemplateLayout): BlockDef[] {
+		return [
+			...l.header.rows.flatMap((r) => r.blocks),
+			...l.body.rows.flatMap((r) => r.blocks),
+			...l.footer.rows.flatMap((r) => r.blocks)
+		];
+	}
+
 	function findBlock(l: TemplateLayout, id: string | null): BlockDef | null {
 		if (!id) return null;
-		const all: BlockDef[] = [
-			...l.header.columns.flatMap((c) => c.blocks),
-			...l.body.blocks,
-			...l.footer.columns.flatMap((c) => c.blocks)
-		];
-		return all.find((b) => b.id === id) ?? null;
+		return allBlocks(l).find((b) => b.id === id) ?? null;
+	}
+
+	// Parse "header:0" → { section, rowIdx, newRow }
+	// Parse "body:NEW:2" → { section: 'body', rowIdx: 2, newRow: true }
+	function parseZone(zone: string): { section: string; rowIdx: number; newRow: boolean } {
+		const parts = zone.split(':');
+		if (parts[1] === 'NEW') {
+			return { section: parts[0], rowIdx: parseInt(parts[2] ?? '0') || 0, newRow: true };
+		}
+		return { section: parts[0], rowIdx: parseInt(parts[1] ?? '0') || 0, newRow: false };
+	}
+
+	function getSectionRows(l: TemplateLayout, section: string): ZoneRow[] {
+		if (section === 'body') return l.body.rows;
+		if (section === 'header') return l.header.rows;
+		if (section === 'footer') return l.footer.rows;
+		return [];
+	}
+
+	function getZoneBlocks(zone: string): BlockDef[] {
+		const { section, rowIdx, newRow } = parseZone(zone);
+		if (newRow) return [];
+		return getSectionRows(layout, section)[rowIdx]?.blocks ?? [];
+	}
+
+	function applyZoneBlocks(zone: string, blocks: BlockDef[], base?: TemplateLayout): TemplateLayout {
+		const l = base ?? layout;
+		const { section, rowIdx, newRow } = parseZone(zone);
+
+		function applyToSection(rows: ZoneRow[]): ZoneRow[] {
+			if (newRow) {
+				const next = [...rows];
+				next.splice(rowIdx, 0, { blocks });
+				return next;
+			}
+			return rows.map((r, i): ZoneRow => (i === rowIdx ? { blocks } : r));
+		}
+
+		if (section === 'body') return { ...l, body: { rows: applyToSection(l.body.rows) } };
+		if (section === 'header') return { ...l, header: { rows: applyToSection(l.header.rows) } };
+		if (section === 'footer') return { ...l, footer: { rows: applyToSection(l.footer.rows) } };
+		return l;
+	}
+
+	function cleanEmptyRows(l: TemplateLayout): TemplateLayout {
+		const clean = (rows: ZoneRow[]): ZoneRow[] => {
+			const kept = rows.filter((r) => r.blocks.length > 0);
+			return kept.length > 0 ? kept : [{ blocks: [] }];
+		};
+		return {
+			...l,
+			header: { rows: clean(l.header.rows) },
+			body: { rows: clean(l.body.rows) },
+			footer: { rows: clean(l.footer.rows) }
+		};
 	}
 
 	function addBlockToBody(type: BlockType) {
-		// Prevent duplicate required blocks
-		if (SYSTEM_REQUIRED_BLOCKS.includes(type)) {
-			const allBlocks: BlockDef[] = [
-				...layout.header.columns.flatMap((c) => c.blocks),
-				...layout.body.blocks,
-				...layout.footer.columns.flatMap((c) => c.blocks)
-			];
-			if (allBlocks.some((b) => b.type === type)) {
-				toast.error(`A "${type}" block already exists in this template.`);
-				return;
-			}
-		}
 		const newBlock: BlockDef = { id: crypto.randomUUID(), type, config: {}, style: {} };
-		layout = { ...layout, body: { blocks: [...layout.body.blocks, newBlock] } };
+		// Append to last body row if it exists and is non-full, otherwise new row
+		const lastRow = layout.body.rows[layout.body.rows.length - 1];
+		if (lastRow) {
+			const rows = [...layout.body.rows];
+			rows[rows.length - 1] = { blocks: [...lastRow.blocks, newBlock] };
+			layout = { ...layout, body: { rows } };
+		} else {
+			layout = { ...layout, body: { rows: [{ blocks: [newBlock] }] } };
+		}
+		selectedBlockId = newBlock.id;
+	}
+
+	function addBlockAt(type: BlockType, zone: string, idx: number) {
+		const newBlock: BlockDef = { id: crypto.randomUUID(), type, config: {}, style: {} };
+		const zoneBlocks = [...getZoneBlocks(zone)];
+		zoneBlocks.splice(idx, 0, newBlock);
+		layout = applyZoneBlocks(zone, zoneBlocks);
 		selectedBlockId = newBlock.id;
 	}
 
 	function moveBlock(fromZone: string, fromIdx: number, toZone: string, toIdx: number) {
 		if (fromZone === toZone && fromIdx === toIdx) return;
 
-		function getZoneBlocks(zone: string): BlockDef[] {
-			if (zone === 'body') return layout.body.blocks;
-			const [s, ci] = zone.split(':');
-			if (s === 'header') return layout.header.columns[parseInt(ci)].blocks;
-			if (s === 'footer') return layout.footer.columns[parseInt(ci)].blocks;
-			return [];
-		}
-
 		const srcBlocks = [...getZoneBlocks(fromZone)];
 		const [moved] = srcBlocks.splice(fromIdx, 1);
 
-		// Prevent moving required blocks out of body
-		if (SYSTEM_REQUIRED_BLOCKS.includes(moved.type) && toZone !== 'body' && fromZone === 'body') {
-			toast.error('Required blocks must stay in the body zone.');
-			return;
-		}
-
 		if (fromZone === toZone) {
 			srcBlocks.splice(toIdx, 0, moved);
-			applyZoneBlocks(fromZone, srcBlocks);
+			layout = cleanEmptyRows(applyZoneBlocks(fromZone, srcBlocks));
 		} else {
 			const dstBlocks = [...getZoneBlocks(toZone)];
 			dstBlocks.splice(toIdx, 0, moved);
 			let next = applyZoneBlocks(fromZone, srcBlocks);
 			next = applyZoneBlocks(toZone, dstBlocks, next);
-			layout = next;
+			layout = cleanEmptyRows(next);
 		}
-	}
-
-	function applyZoneBlocks(zone: string, blocks: BlockDef[], base?: TemplateLayout): TemplateLayout {
-		const l = base ?? layout;
-		if (zone === 'body') return { ...l, body: { blocks } };
-		const [s, ciStr] = zone.split(':');
-		const ci = parseInt(ciStr);
-		if (s === 'header') {
-			const cols = l.header.columns.map((c, i) => (i === ci ? { ...c, blocks } : c));
-			return { ...l, header: { columns: cols } };
-		}
-		if (s === 'footer') {
-			const cols = l.footer.columns.map((c, i) => (i === ci ? { ...c, blocks } : c));
-			return { ...l, footer: { columns: cols } };
-		}
-		return l;
 	}
 
 	function updateSelectedBlock(patch: Partial<BlockDef>) {
 		if (!selectedBlockId) return;
 		function patchIn(blocks: BlockDef[]): BlockDef[] {
-			return blocks.map((b) => (b.id === selectedBlockId ? { ...b, ...patch, config: { ...b.config, ...patch.config }, style: { ...b.style, ...patch.style } } : b));
+			return blocks.map((b) =>
+				b.id === selectedBlockId
+					? { ...b, ...patch, config: { ...b.config, ...patch.config }, style: { ...b.style, ...patch.style } }
+					: b
+			);
 		}
 		layout = {
 			...layout,
-			header: { columns: layout.header.columns.map((c) => ({ ...c, blocks: patchIn(c.blocks) })) },
-			body: { blocks: patchIn(layout.body.blocks) },
-			footer: { columns: layout.footer.columns.map((c) => ({ ...c, blocks: patchIn(c.blocks) })) }
+			header: { rows: layout.header.rows.map((r) => ({ blocks: patchIn(r.blocks) })) },
+			body: { rows: layout.body.rows.map((r) => ({ blocks: patchIn(r.blocks) })) },
+			footer: { rows: layout.footer.rows.map((r) => ({ blocks: patchIn(r.blocks) })) }
 		};
 	}
 
@@ -126,13 +175,21 @@
 		function removeFrom(blocks: BlockDef[]): BlockDef[] {
 			return blocks.filter((b) => b.id !== selectedBlockId);
 		}
-		layout = {
+		layout = cleanEmptyRows({
 			...layout,
-			header: { columns: layout.header.columns.map((c) => ({ ...c, blocks: removeFrom(c.blocks) })) },
-			body: { blocks: removeFrom(layout.body.blocks) },
-			footer: { columns: layout.footer.columns.map((c) => ({ ...c, blocks: removeFrom(c.blocks) })) }
-		};
+			header: { rows: layout.header.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) },
+			body: { rows: layout.body.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) },
+			footer: { rows: layout.footer.rows.map((r) => ({ blocks: removeFrom(r.blocks) })) }
+		});
 		selectedBlockId = null;
+	}
+
+	function deleteRow(section: 'header' | 'body' | 'footer', rowIdx: number) {
+		const row = layout[section].rows[rowIdx];
+		if (row.blocks.length > 0 && !window.confirm('Delete this row and all its blocks?')) return;
+		if (selectedBlockId && row.blocks.some((b) => b.id === selectedBlockId)) selectedBlockId = null;
+		const rows = layout[section].rows.filter((_, i) => i !== rowIdx);
+		layout = { ...layout, [section]: { rows: rows.length > 0 ? rows : [{ blocks: [] }] } };
 	}
 
 	async function save() {
@@ -181,7 +238,6 @@
 </script>
 
 <div class="designer">
-	<!-- Toolbar -->
 	<div class="designer-toolbar">
 		<input class="designer-name-input" type="text" bind:value={name} placeholder="Template name" />
 		<div class="designer-toolbar-actions">
@@ -197,9 +253,7 @@
 		</div>
 	</div>
 
-	<!-- 3-pane body -->
 	<div class="designer-body">
-		<!-- Left: palette / theme -->
 		<aside class="designer-left">
 			<div class="designer-left-tabs">
 				<button class="designer-ltab" class:active={sidebarTab === 'blocks'} onclick={() => (sidebarTab = 'blocks')}>Blocks</button>
@@ -214,7 +268,6 @@
 			</div>
 		</aside>
 
-		<!-- Center: canvas -->
 		<main class="designer-canvas-pane">
 			<TemplateCanvas
 				{layout}
@@ -222,11 +275,12 @@
 				{themeColor}
 				onSelectBlock={(id) => (selectedBlockId = id)}
 				onMoveBlock={moveBlock}
-				onLayoutChange={(l) => (layout = l)}
+				onDeleteBlock={(id) => { selectedBlockId = id; deleteSelectedBlock(); }}
+				onDropFromPalette={addBlockAt}
+				onDeleteRow={deleteRow}
 			/>
 		</main>
 
-		<!-- Right: inspector -->
 		<aside class="designer-right">
 			<p class="designer-right-title">Inspector</p>
 			{#if selectedBlock}

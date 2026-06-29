@@ -1,40 +1,39 @@
 import type PDFDocument from 'pdfkit';
-import type { ColumnDef, ThemeData } from './template-types.js';
+import type { BlockDef, ThemeData } from './template-types.js';
 import { renderBlock } from './renderer.js';
 
 type Fonts = { regular: string; bold: string };
 type Bounds = { x: number; y: number; width: number };
 
 /**
- * Render a list of columns side-by-side.
- * Each column gets its proportional slice of `bounds.width`.
- * Returns the bottom Y of the tallest column.
+ * Render a list of blocks side-by-side in a horizontal row.
+ * All items (including spacers) share equal width. Spacer blocks advance x
+ * without rendering any content, pushing adjacent blocks apart.
+ * Returns the bottom Y of the tallest rendered block.
  */
-export function renderColumns(
+export function renderRow(
 	doc: InstanceType<typeof PDFDocument>,
-	columns: ColumnDef[],
+	blocks: BlockDef[],
 	data: unknown,
 	theme: ThemeData,
 	{ x, y, width }: Bounds,
 	fonts: Fonts,
 	gap = 16
 ): number {
-	if (columns.length === 0) return y;
+	if (blocks.length === 0) return y;
 
-	const totalGap = gap * (columns.length - 1);
-	const usableW = width - totalGap;
-	const bottoms: number[] = [];
-
+	const totalGap = gap * (blocks.length - 1);
+	const itemW = (width - totalGap) / blocks.length;
 	let curX = x;
-	for (const col of columns) {
-		const colW = (col.width / 100) * usableW;
-		let colY = y;
-		for (const block of col.blocks) {
-			colY = renderBlock(doc, block, data, theme, { x: curX, y: colY, width: colW }, fonts);
+	let maxY = y;
+
+	for (const block of blocks) {
+		if (block.type !== 'spacer') {
+			const bottom = renderBlock(doc, block, data, theme, { x: curX, y, width: itemW }, fonts);
+			maxY = Math.max(maxY, bottom);
 		}
-		bottoms.push(colY);
-		curX += colW + gap;
+		curX += itemW + gap;
 	}
 
-	return Math.max(y, ...bottoms);
+	return maxY;
 }

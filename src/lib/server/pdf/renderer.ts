@@ -2,21 +2,24 @@ import PDFDocument from 'pdfkit';
 import type { BlockDef, TemplateLayout, ThemeData } from './template-types.js';
 import { TemplateFont } from '$lib/enums.js';
 import { M, CW } from './layout.js';
-import { renderColumns } from './multi-column.js';
+import { renderRow } from './multi-column.js';
 
 // Block renderer imports
-import { render as renderCompanyHeader } from './blocks/company-header.js';
-import { render as renderDocumentMeta } from './blocks/document-meta.js';
-import { render as renderCustomerBlock } from './blocks/customer-block.js';
+import { render as renderCompanyName }    from './blocks/company-name.js';
+import { render as renderCompanyAddress } from './blocks/company-address.js';
+import { render as renderCompanyRegInfo } from './blocks/company-reg-info.js';
+import { render as renderDocumentTitle }  from './blocks/document-title.js';
+import { render as renderDocumentMeta }   from './blocks/document-meta.js';
+import { render as renderCustomerBlock }  from './blocks/customer-block.js';
 import { render as renderLineItemsTable } from './blocks/line-items-table.js';
-import { render as renderTotalsBlock } from './blocks/totals-block.js';
-import { render as renderNotes } from './blocks/notes.js';
-import { render as renderPaidStamp } from './blocks/paid-stamp.js';
-import { render as renderIssuedBy } from './blocks/issued-by.js';
-import { render as renderText } from './blocks/text.js';
-import { render as renderImage } from './blocks/image.js';
-import { render as renderDivider } from './blocks/divider.js';
-import { render as renderSpacer } from './blocks/spacer.js';
+import { render as renderTotalsBlock }    from './blocks/totals-block.js';
+import { render as renderNotes }          from './blocks/notes.js';
+import { render as renderPaidStamp }      from './blocks/paid-stamp.js';
+import { render as renderIssuedBy }       from './blocks/issued-by.js';
+import { render as renderText }           from './blocks/text.js';
+import { render as renderImage }          from './blocks/image.js';
+import { render as renderDivider }        from './blocks/divider.js';
+import { render as renderSpacer }         from './blocks/spacer.js';
 
 type Bounds = { x: number; y: number; width: number };
 type Fonts = { regular: string; bold: string };
@@ -42,18 +45,21 @@ export function renderBlock(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const d = data as any;
 	switch (block.type) {
-		case 'company-header': return renderCompanyHeader(doc, block, d, theme, bounds, fonts);
-		case 'document-meta': return renderDocumentMeta(doc, block, d, theme, bounds, fonts);
-		case 'customer-block': return renderCustomerBlock(doc, block, d, theme, bounds, fonts);
-		case 'line-items-table': return renderLineItemsTable(doc, block, d, theme, bounds, fonts);
-		case 'totals-block': return renderTotalsBlock(doc, block, d, theme, bounds, fonts);
-		case 'notes': return renderNotes(doc, block, d, theme, bounds, fonts);
-		case 'paid-stamp': return renderPaidStamp(doc, block, d, theme, bounds, fonts);
-		case 'issued-by': return renderIssuedBy(doc, block, d, theme, bounds, fonts);
-		case 'text': return renderText(doc, block, d, theme, bounds, fonts);
-		case 'image': return renderImage(doc, block, d, theme, bounds, fonts);
-		case 'divider': return renderDivider(doc, block, d, theme, bounds, fonts);
-		case 'spacer': return renderSpacer(doc, block, d, theme, bounds, fonts);
+		case 'company-name':    return renderCompanyName(doc, block, d, theme, bounds, fonts);
+		case 'company-address': return renderCompanyAddress(doc, block, d, theme, bounds, fonts);
+		case 'company-reg-info':return renderCompanyRegInfo(doc, block, d, theme, bounds, fonts);
+		case 'document-title':  return renderDocumentTitle(doc, block, d, theme, bounds, fonts);
+		case 'document-meta':   return renderDocumentMeta(doc, block, d, theme, bounds, fonts);
+		case 'customer-block':  return renderCustomerBlock(doc, block, d, theme, bounds, fonts);
+		case 'line-items-table':return renderLineItemsTable(doc, block, d, theme, bounds, fonts);
+		case 'totals-block':    return renderTotalsBlock(doc, block, d, theme, bounds, fonts);
+		case 'notes':           return renderNotes(doc, block, d, theme, bounds, fonts);
+		case 'paid-stamp':      return renderPaidStamp(doc, block, d, theme, bounds, fonts);
+		case 'issued-by':       return renderIssuedBy(doc, block, d, theme, bounds, fonts);
+		case 'text':            return renderText(doc, block, d, theme, bounds, fonts);
+		case 'image':           return renderImage(doc, block, d, theme, bounds, fonts);
+		case 'divider':         return renderDivider(doc, block, d, theme, bounds, fonts);
+		case 'spacer':          return renderSpacer(doc, block, d, theme, bounds, fonts);
 		default:
 			return bounds.y;
 	}
@@ -84,22 +90,30 @@ export function buildPdfFromTemplate(
 	let y = M;
 
 	// ── HEADER ───────────────────────────────────────────────────────────────
-	y = renderColumns(doc, layout.header.columns, data, theme, { x: M, y, width: CW }, fonts);
-	y += 12;
+	for (const row of layout.header.rows) {
+		y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
+		y += 6;
+	}
+	y += 6;
 
 	// Horizontal rule after header
 	doc.moveTo(M, y).lineTo(M + CW, y).lineWidth(2).strokeColor('#111111').stroke();
 	y += 24;
 
 	// ── BODY ─────────────────────────────────────────────────────────────────
-	for (const block of layout.body.blocks) {
-		y = renderBlock(doc, block, data, theme, { x: M, y, width: CW }, fonts);
+	for (const row of layout.body.rows) {
+		y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
+		y += 4;
 	}
 
 	// ── FOOTER ───────────────────────────────────────────────────────────────
-	if (layout.footer.columns.some((c) => c.blocks.length > 0)) {
+	const hasFooter = layout.footer.rows.some((r) => r.blocks.length > 0);
+	if (hasFooter) {
 		y += 12;
-		renderColumns(doc, layout.footer.columns, data, theme, { x: M, y, width: CW }, fonts);
+		for (const row of layout.footer.rows) {
+			y = renderRow(doc, row.blocks, data, theme, { x: M, y, width: CW }, fonts);
+			y += 6;
+		}
 	}
 
 	return new Promise((resolve, reject) => {

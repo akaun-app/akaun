@@ -8,19 +8,16 @@ type Fonts = { regular: string; bold: string };
 export function render(
 	doc: InstanceType<typeof PDFDocument>,
 	block: BlockDef,
-	_data: unknown,
+	data: { settings?: { companyAddress?: string } },
 	_theme: ThemeData,
 	{ x, y, width }: Bounds,
-	_fonts: Fonts
+	fonts: Fonts
 ): number {
-	const cfg = block.config as { color?: string; thickness?: number };
-	const thickness = cfg.thickness ?? 0.5;
+	const addr = data.settings?.companyAddress;
+	if (!addr) return y;
+	const align = (block.style?.align ?? 'left') as 'left' | 'center' | 'right';
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	(doc as any)
-		.moveTo(x, y)
-		.lineTo(x + width, y)
-		.strokeColor(cfg.color ?? C.light)
-		.lineWidth(thickness)
-		.stroke();
-	return y + thickness;
+	(doc as any).font(fonts.regular).fontSize(10).fillColor(C.subtle).text(addr, x, y, { width, align });
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	return (doc as any).y;
 }
