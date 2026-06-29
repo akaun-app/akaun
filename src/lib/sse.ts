@@ -47,6 +47,18 @@ function subscribe(url: string, onMessage: Subscriber): () => void {
 			}
 			for (const fn of created.subscribers) fn(data);
 		};
+		created.es.onerror = () => {
+			// CONNECTING (readyState 0): a transient drop; the browser is already
+			// auto-reconnecting and the next event re-syncs — leave it alone.
+			// CLOSED (2): fatal (e.g. session expired → 401/403); the browser will
+			// NOT retry. Evict the dead connection so the next subscribe opens a
+			// fresh one instead of every future subscriber reusing a dead socket.
+			if (created.es.readyState !== EventSource.CLOSED) return;
+			created.es.close();
+			if (created.idleTimer) clearTimeout(created.idleTimer);
+			// Guard against deleting a newer entry that replaced this one.
+			if (registry.get(url) === created) registry.delete(url);
+		};
 		registry.set(url, created);
 		entry = created;
 	}

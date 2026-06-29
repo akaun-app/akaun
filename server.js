@@ -8,6 +8,7 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (err) => {
 	console.error('[uncaughtException]', err);
+	process.exit(1); // undefined state after this — let the orchestrator restart
 });
 
 const port = process.env.PORT || '3000';
