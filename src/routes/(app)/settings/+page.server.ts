@@ -1,5 +1,6 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
+import { listTemplates } from '$lib/server/queries/templates.js';
 import { expenses, incomes } from '$lib/server/db/schema.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import {
@@ -81,7 +82,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		companyName,
 		companyAddress,
 		companyRegistrationNo,
-		providers
+		providers,
+		templates: listTemplates(db)
 	};
 };
 

@@ -13,11 +13,16 @@
 	import { draggable, droppable } from '@thisux/sveltednd';
 	import type { DragDropState } from '@thisux/sveltednd';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+	import TemplateList from '$lib/components/templates/TemplateList.svelte';
+	import TemplateDesigner from '$lib/components/templates/TemplateDesigner.svelte';
+	import { makeDefaultLayout } from '$lib/server/pdf/template-types.js';
+	import { TemplateDocumentType } from '$lib/enums.js';
+	import type { TemplateRow } from '$lib/server/pdf/template-types.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'intelligence' | 'providers' | 'categories' | 'advanced';
+	type Tab = 'general' | 'intelligence' | 'providers' | 'categories' | 'templates' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Mobile detection for Sheet side
@@ -335,11 +340,38 @@
 		if (e.key === 'Enter') { e.preventDefault(); addIncCat(); }
 	}
 
+	// --- Template tab state ---
+	// svelte-ignore state_referenced_locally
+	let templates = $state<TemplateRow[]>([...(data.templates as TemplateRow[])]);
+	let selectedTemplate = $state<TemplateRow | null>(templates[0] ?? null);
+	let creatingTemplate = $state(false);
+
+	async function createNewTemplate() {
+		try {
+			const res = await fetch('/api/templates', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					name: 'New Template',
+					documentType: TemplateDocumentType.Both,
+					layout: makeDefaultLayout()
+				})
+			});
+			if (!res.ok) throw new Error(await res.text());
+			const created = (await res.json()) as TemplateRow;
+			templates = [created, ...templates];
+			selectedTemplate = created;
+		} catch {
+			// ignore — toast shown in API error path
+		}
+	}
+
 	const TABS: { id: Tab; label: string }[] = [
 		{ id: 'general', label: 'General' },
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'providers', label: 'Providers' },
 		{ id: 'categories', label: 'Categories' },
+		{ id: 'templates', label: 'Templates' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
 </script>
@@ -633,6 +665,39 @@
 
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
+				</div>
+
+			{:else if activeTab === 'templates'}
+				<div class="set-section tpl-section">
+					<div class="tpl-split">
+						<aside class="tpl-sidebar">
+							<TemplateList
+								{templates}
+								selectedId={selectedTemplate?.id ?? null}
+								onSelect={(t) => (selectedTemplate = t)}
+								onCreate={createNewTemplate}
+							/>
+						</aside>
+						<main class="tpl-main">
+							{#if selectedTemplate}
+								<TemplateDesigner
+									template={selectedTemplate}
+									onSave={(updated) => {
+										templates = templates.map((t) => (t.id === updated.id ? updated : t));
+										selectedTemplate = updated;
+									}}
+									onDelete={(id) => {
+										templates = templates.filter((t) => t.id !== id);
+										selectedTemplate = templates[0] ?? null;
+									}}
+								/>
+							{:else}
+								<div class="tpl-empty">
+									<p>No template selected. Create one to get started.</p>
+								</div>
+							{/if}
+						</main>
+					</div>
 				</div>
 
 			{:else if activeTab === 'advanced'}
@@ -1039,5 +1104,38 @@
 		flex-direction: column;
 		gap: 6px;
 		margin-bottom: 16px;
+	}
+
+	/* Templates tab */
+	.tpl-section {
+		padding: 0;
+		height: 100%;
+		overflow: hidden;
+	}
+	.tpl-split {
+		display: flex;
+		height: 100%;
+		overflow: hidden;
+	}
+	.tpl-sidebar {
+		width: 220px;
+		flex-shrink: 0;
+		border-right: 1px solid var(--border);
+		overflow-y: auto;
+		padding: 8px 0;
+	}
+	.tpl-main {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+	.tpl-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex: 1;
+		color: var(--muted-foreground);
+		font-size: 14px;
 	}
 </style>
