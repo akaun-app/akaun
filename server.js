@@ -24,6 +24,9 @@ const server = sslEnabled
 		)
 	: http.createServer(handler);
 
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+
 server.listen(port, host, () => {
 	console.log(`Listening on ${sslEnabled ? 'https' : 'http'}://${host}:${port}`);
 });

@@ -56,7 +56,7 @@ export const GET: RequestHandler = ({ locals }) => {
 		headers: {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
-			Connection: 'keep-alive'
+			'X-Accel-Buffering': 'no'
 		}
 	});
 };

@@ -78,7 +78,7 @@
 
 {#if open || closing}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-	<div class="drawer-backdrop" class:closing onclick={close} aria-hidden="true"></div>
+	<div class="drawer-backdrop" class:closing onclick={(e) => { if (!panelEl?.contains(e.target as Node)) close(); }} aria-hidden="true"></div>
 
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
 	<div
@@ -91,7 +91,6 @@
 		aria-label="Navigation menu"
 		tabindex="-1"
 		onanimationend={onAnimationEnd}
-		onclick={(e) => e.stopPropagation()}
 	>
 		<!-- Brand -->
 		<div class="drawer-brand">
