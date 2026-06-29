@@ -15,7 +15,9 @@ export const SETTING_KEYS = {
 	godModeEnabled: 'godMode.enabled',
 	companyName: 'company.name',
 	companyAddress: 'company.address',
-	companyRegistrationNo: 'company.registrationNo'
+	companyRegistrationNo: 'company.registrationNo',
+	templateQuotationDefaultId: 'template.quotation.defaultId',
+	templateInvoiceDefaultId: 'template.invoice.defaultId'
 } as const;
 
 export function getSetting(

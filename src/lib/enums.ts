@@ -151,3 +151,24 @@ export const InvoiceStatusLabels: Record<number, string> = {
 	[InvoiceStatus.Cancelled]: 'cancelled'
 };
 export const invoiceStatusEnum = makeEnum(InvoiceStatusLabels);
+
+// --- document templates ---
+export const TemplateDocumentType = { Quotation: 1, Invoice: 2, Both: 3 } as const;
+// reserved: per-document override (future — no stored status change)
+export type TemplateDocumentTypeCode = (typeof TemplateDocumentType)[keyof typeof TemplateDocumentType];
+export const TemplateDocumentTypeLabels: Record<number, string> = {
+	[TemplateDocumentType.Quotation]: 'quotation',
+	[TemplateDocumentType.Invoice]: 'invoice',
+	[TemplateDocumentType.Both]: 'both'
+};
+export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
+
+export const TemplateFont = { Inter: 1, Roboto: 2, Lato: 3, Merriweather: 4 } as const;
+export type TemplateFontCode = (typeof TemplateFont)[keyof typeof TemplateFont];
+export const TemplateFontLabels: Record<number, string> = {
+	[TemplateFont.Inter]: 'Inter',
+	[TemplateFont.Roboto]: 'Roboto',
+	[TemplateFont.Lato]: 'Lato',
+	[TemplateFont.Merriweather]: 'Merriweather'
+};
+export const templateFontEnum = makeEnum(TemplateFontLabels);

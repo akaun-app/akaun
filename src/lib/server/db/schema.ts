@@ -407,3 +407,23 @@ export const invoiceLines = sqliteTable('invoice_lines', {
 	lineTotal: real('line_total').notNull(),
 	sortOrder: integer('sort_order').notNull()
 });
+
+// --- document templates (Phase 7.5) ---
+// Stores PDF layout JSON + theme. Active template per document type resolved via settings keys.
+export const documentTemplates = sqliteTable('document_templates', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	uuid: text('uuid').notNull().unique(),
+	name: text('name').notNull(),
+	// TemplateDocumentType code: 1=Quotation, 2=Invoice, 3=Both. See enums.ts.
+	documentType: integer('document_type').notNull(),
+	// 1 = this template is the default for its document_type. App layer enforces one-per-type.
+	isDefault: integer('is_default').notNull().default(0),
+	themeColor: text('theme_color').notNull().default('#1a56db'),
+	// TemplateFont code: 1=Inter(Helvetica), 2=Roboto(Helvetica), 3=Lato(Helvetica), 4=Merriweather(Times). See enums.ts.
+	themeFont: integer('theme_font').notNull().default(1),
+	layoutJson: text('layout_json').notNull(),
+	createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+	updatedBy: integer('updated_by').references(() => users.id, { onDelete: 'set null' }),
+	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
+	updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`)
+});
