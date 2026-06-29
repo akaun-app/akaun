@@ -3,7 +3,11 @@ import type { RequestHandler } from './$types';
 import { db } from '$lib/server/db/client.js';
 import { getInvoice } from '$lib/server/queries/invoices.js';
 import { getSetting } from '$lib/server/settings.js';
+import { getActiveTemplate } from '$lib/server/queries/templates.js';
+import { buildPdfFromTemplate } from '$lib/server/pdf/renderer.js';
 import { buildInvoicePdf } from '$lib/server/pdf/invoice.js';
+import { TemplateDocumentType } from '$lib/enums.js';
+import type { TemplateLayout } from '$lib/server/pdf/template-types.js';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw redirect(302, '/login');
@@ -19,7 +23,29 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	};
 
 	try {
-		const buffer = await buildInvoicePdf(invoice, settings);
+		const templateRow = getActiveTemplate(db, TemplateDocumentType.Invoice);
+		let buffer: Buffer;
+		if (templateRow) {
+			const layout = JSON.parse(templateRow.layoutJson) as TemplateLayout;
+			buffer = await buildPdfFromTemplate(
+				layout,
+				{ color: templateRow.themeColor, font: templateRow.themeFont },
+				{
+					document: {
+						...invoice,
+						contactName: invoice.contactName ?? null,
+						contactAddress: null,
+						contactRegistrationNo: null,
+						paidAt: invoice.amountPaid > 0 ? 'paid' : null
+					},
+					settings,
+					docTypeLabel: 'INVOICE'
+				},
+				invoice.invoiceNumber
+			);
+		} else {
+			buffer = await buildInvoicePdf(invoice, settings);
+		}
 		return new Response(new Uint8Array(buffer), {
 			headers: {
 				'Content-Type': 'application/pdf',
