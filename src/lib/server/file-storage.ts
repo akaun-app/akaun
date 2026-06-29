@@ -1,5 +1,6 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'fs';
-import { dirname, basename, join, resolve, sep } from 'path';
+import { mkdirSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { dirname, basename, extname, join, resolve, sep } from 'path';
+import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { STORAGE_PATH } from './env.js';
 
@@ -79,4 +80,47 @@ export function deleteFile(relativePath: string): void {
 	} catch {
 		// ignore missing files
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Template asset helpers (Phase 7.5)
+// ---------------------------------------------------------------------------
+
+/** Max number of image assets per template. */
+export const MAX_TEMPLATE_ASSETS = 5;
+
+/**
+ * Save an image asset for a template. Returns the relative path within STORAGE_PATH.
+ * Caller must validate file type (jpeg/png only) before calling.
+ */
+export function saveTemplateAsset(
+	buffer: Buffer,
+	templateUuid: string,
+	originalFilename: string
+): string {
+	const assetUuid = randomUUID();
+	const ext = extname(originalFilename).toLowerCase();
+	const filename = `${assetUuid}${ext}`;
+	const dir = join(STORAGE_PATH, 'templates', templateUuid);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, filename), buffer);
+	return join('templates', templateUuid, filename);
+}
+
+/** Delete a single template asset by its relative path. */
+export function deleteTemplateAsset(relativePath: string): void {
+	deleteFile(relativePath);
+}
+
+/** List all asset relative paths for a template. Returns [] if the folder doesn't exist. */
+export function listTemplateAssets(templateUuid: string): string[] {
+	const dir = join(STORAGE_PATH, 'templates', templateUuid);
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir).map((f) => join('templates', templateUuid, f));
+}
+
+/** Delete the entire asset folder for a template (called on template DELETE). */
+export function deleteTemplateAssetFolder(templateUuid: string): void {
+	const dir = join(STORAGE_PATH, 'templates', templateUuid);
+	if (existsSync(dir)) rmSync(dir, { recursive: true });
 }
