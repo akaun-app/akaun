@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Plus, FileText, Star } from '@lucide/svelte';
-	import type { TemplateRow } from '$lib/server/pdf/template-types.js';
+	import type { TemplateRow } from '$lib/pdf/template-types.js';
 	import { TemplateDocumentTypeLabels } from '$lib/enums.js';
 
 	type Props = {
@@ -30,7 +30,7 @@
 			<span class="tpl-list-name">{t.name}</span>
 			<span class="tpl-list-meta">{TemplateDocumentTypeLabels[t.documentType] ?? '?'}</span>
 			{#if t.isDefault}
-				<Star size={11} class="tpl-list-star" />
+				<span class="tpl-list-star"><Star size={11} /></span>
 			{/if}
 		</button>
 	{:else}

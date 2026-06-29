@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { GripVertical, LayoutTemplate } from '@lucide/svelte';
-	import type { BlockDef, TemplateLayout } from '$lib/server/pdf/template-types.js';
-	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/server/pdf/template-types.js';
+	import type { BlockDef, TemplateLayout } from '$lib/pdf/template-types.js';
+	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
 
 	type Props = {
 		layout: TemplateLayout;
@@ -77,11 +77,11 @@
 							ondrop={() => handleDrop(`header:${ci}`, bi)}
 							onclick={() => onSelectBlock(block.id)}
 						>
-							<GripVertical size={11} class="canvas-grip" />
+							<span class="canvas-grip"><GripVertical size={11} /></span>
 							<span class="canvas-block-label">{blockLabel(block.type)}</span>
 						</button>
 					{/each}
-					<div class="canvas-drop-target"
+					<div class="canvas-drop-target" role="region" aria-label="Drop zone"
 						ondragover={(e) => e.preventDefault()}
 						ondrop={() => handleDrop(`header:${ci}`, col.blocks.length)}>
 						Drop here
@@ -106,11 +106,11 @@
 					ondrop={() => handleDrop('body', bi)}
 					onclick={() => onSelectBlock(block.id)}
 				>
-					<GripVertical size={11} class="canvas-grip" />
+					<span class="canvas-grip"><GripVertical size={11} /></span>
 					<span class="canvas-block-label">{blockLabel(block.type)}</span>
 				</button>
 			{/each}
-			<div class="canvas-drop-target"
+			<div class="canvas-drop-target" role="region" aria-label="Drop zone"
 				ondragover={(e) => e.preventDefault()}
 				ondrop={() => handleDrop('body', layout.body.blocks.length)}>
 				Drop here
@@ -136,11 +136,11 @@
 								ondrop={() => handleDrop(`footer:${ci}`, bi)}
 								onclick={() => onSelectBlock(block.id)}
 							>
-								<GripVertical size={11} class="canvas-grip" />
+								<span class="canvas-grip"><GripVertical size={11} /></span>
 								<span class="canvas-block-label">{blockLabel(block.type)}</span>
 							</button>
 						{/each}
-						<div class="canvas-drop-target"
+						<div class="canvas-drop-target" role="region" aria-label="Drop zone"
 							ondragover={(e) => e.preventDefault()}
 							ondrop={() => handleDrop(`footer:${ci}`, col.blocks.length)}>
 							Drop here

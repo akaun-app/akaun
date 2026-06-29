@@ -15,9 +15,9 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import TemplateList from '$lib/components/templates/TemplateList.svelte';
 	import TemplateDesigner from '$lib/components/templates/TemplateDesigner.svelte';
-	import { makeDefaultLayout } from '$lib/server/pdf/template-types.js';
+	import { makeDefaultLayout } from '$lib/pdf/template-types.js';
 	import { TemplateDocumentType } from '$lib/enums.js';
-	import type { TemplateRow } from '$lib/server/pdf/template-types.js';
+	import type { TemplateRow } from '$lib/pdf/template-types.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -343,6 +343,7 @@
 	// --- Template tab state ---
 	// svelte-ignore state_referenced_locally
 	let templates = $state<TemplateRow[]>([...(data.templates as TemplateRow[])]);
+	// svelte-ignore state_referenced_locally
 	let selectedTemplate = $state<TemplateRow | null>(templates[0] ?? null);
 	let creatingTemplate = $state(false);
 

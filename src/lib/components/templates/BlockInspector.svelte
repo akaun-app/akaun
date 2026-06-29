@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { BlockDef } from '$lib/server/pdf/template-types.js';
-	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/server/pdf/template-types.js';
+	import type { BlockDef } from '$lib/pdf/template-types.js';
+	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
 	import { Trash2 } from '@lucide/svelte';
 
 	type Props = {
@@ -20,7 +20,7 @@
 
 <div class="inspector">
 	<div class="insp-row">
-		<label class="insp-label">Block type</label>
+		<p class="insp-label">Block type</p>
 		<span class="insp-tag">{block.type}</span>
 	</div>
 

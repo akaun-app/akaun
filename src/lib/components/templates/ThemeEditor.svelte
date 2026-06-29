@@ -20,7 +20,7 @@
 
 <div class="theme-editor">
 	<div class="theme-row">
-		<label class="theme-label">Accent color</label>
+		<p class="theme-label">Accent color</p>
 		<div class="theme-presets">
 			{#each PRESETS as preset (preset)}
 				<button
@@ -38,7 +38,7 @@
 		</div>
 	</div>
 	<div class="theme-row">
-		<label class="theme-label">Font family</label>
+		<p class="theme-label">Font family</p>
 		<div class="theme-fonts">
 			{#each FONT_OPTIONS as opt (opt.code)}
 				<button

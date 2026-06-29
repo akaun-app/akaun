@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { Save, Star, Trash2, ChevronDown } from '@lucide/svelte';
-	import type { BlockDef, BlockType, TemplateLayout, TemplateRow } from '$lib/server/pdf/template-types.js';
-	import { makeDefaultLayout, SYSTEM_REQUIRED_BLOCKS } from '$lib/server/pdf/template-types.js';
+	import type { BlockDef, BlockType, TemplateLayout, TemplateRow } from '$lib/pdf/template-types.js';
+	import { makeDefaultLayout, SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
 	import { TemplateDocumentType } from '$lib/enums.js';
 	import BlockPalette from './BlockPalette.svelte';
 	import TemplateCanvas from './TemplateCanvas.svelte';

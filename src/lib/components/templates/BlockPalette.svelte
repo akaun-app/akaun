@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileText, Building2, User, List, Calculator, StickyNote, Stamp, UserCheck, Type, Image, Minus, Space } from '@lucide/svelte';
-	import type { BlockType } from '$lib/server/pdf/template-types.js';
-	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/server/pdf/template-types.js';
+	import type { BlockType } from '$lib/pdf/template-types.js';
+	import { SYSTEM_REQUIRED_BLOCKS } from '$lib/pdf/template-types.js';
 
 	type Props = {
 		onAddBlock: (type: BlockType) => void;
