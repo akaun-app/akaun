@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client.js';
 import { listTemplates } from '$lib/server/queries/templates.js';
 import { expenses, incomes } from '$lib/server/db/schema.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { getCategories, saveCategories as saveCategoriesDB } from '$lib/server/queries/categories.js';
 import {
 	getAllProviders,
 	insertProvider,
@@ -20,36 +21,11 @@ function hasAnyTransactions(): boolean {
 	return expenseCount + incomeCount > 0;
 }
 
-const DEFAULT_EXPENSE_CATEGORIES = [
-	'Food & Beverage',
-	'Transport',
-	'Accommodation',
-	'Equipment',
-	'Software & Subscriptions',
-	'Office Supplies',
-	'Marketing',
-	'Professional Services',
-	'Other'
-];
-
-const DEFAULT_INCOME_CATEGORIES = [
-	'Client Project',
-	'Product Sales',
-	'Consulting',
-	'Salary',
-	'Investment',
-	'Rental',
-	'Other'
-];
-
 export const load: PageServerLoad = async ({ locals }) => {
-	const expCatRaw = getSetting(db, SETTING_KEYS.expenseCategories);
-	const incCatRaw = getSetting(db, SETTING_KEYS.incomeCategories);
+	const expenseCategories = getCategories(db, 'expense');
+	const incomeCategories = getCategories(db, 'income');
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
 	const currencyLocked = hasAnyTransactions();
-
-	const expenseCategories: string[] = expCatRaw ? JSON.parse(expCatRaw) : DEFAULT_EXPENSE_CATEGORIES;
-	const incomeCategories: string[] = incCatRaw ? JSON.parse(incCatRaw) : DEFAULT_INCOME_CATEGORIES;
 
 	const autoImportParallelTasks = parseInt(
 		getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3',
@@ -113,8 +89,8 @@ export const actions: Actions = {
 			const expCats = JSON.parse(expRaw);
 			const incCats = JSON.parse(incRaw);
 			if (!Array.isArray(expCats) || !Array.isArray(incCats)) throw new Error('not array');
-			setSetting(db, SETTING_KEYS.expenseCategories, JSON.stringify(expCats));
-			setSetting(db, SETTING_KEYS.incomeCategories, JSON.stringify(incCats));
+			saveCategoriesDB(db, 'expense', expCats);
+			saveCategoriesDB(db, 'income', incCats);
 			return { success: true, action: 'saveCategories' };
 		} catch {
 			return fail(400, { error: 'Invalid categories data' });
