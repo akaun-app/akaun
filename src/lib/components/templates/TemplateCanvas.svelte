@@ -4,7 +4,7 @@
 	import { GripVertical } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout } from '$lib/pdf/template-types.js';
 	import {
-		planDrop, setColGutter, setRowSpan, rightNeighbor, isPlainRow, maxRow, newCell,
+		planDrop, setColGutter, setRowSpan, rightNeighbor, isPlainRow, freeRunAt, newCell,
 		type DropTarget
 	} from './grid-ops.js';
 
@@ -41,11 +41,15 @@
 	let colGutter: { leftId: string; rightId: string; startX: number; startLeft: number; base: GridCell[] } | null = null;
 	let rowGutter: { id: string; startY: number; startRowSpan: number; stride: number; base: GridCell[] } | null = null;
 
-	// Geometry snapshot of the committed layout, captured when a drag begins so
-	// hit-testing stays stable while the preview reflows.
-	type CellSnap = { id: string; col: number; colSpan: number; left: number; right: number };
-	type BandSnap = { row: number; top: number; bottom: number; cells: CellSnap[] };
-	let snapshot: BandSnap[] = [];
+	// Geometry snapshot of the drag base (baseCells), captured once when a drag begins.
+	// Row geometry uses the grid's disjoint row tracks (so a row-spanning cell can't
+	// shadow the rows beneath it); cells carry their rects for into-row indexing.
+	// Because baseCells is constant for the whole drag, this never goes stale.
+	type CellSnap = { id: string; row: number; col: number; colSpan: number; left: number; right: number };
+	type Snapshot = { tops: number[]; heights: number[]; cells: CellSnap[] };
+	let snapshot: Snapshot = { tops: [], heights: [], cells: [] };
+	let lastX = 0;
+	let lastY = 0;
 
 	function blockLabel(type: GridCell['type']): string {
 		const LABELS: Record<GridCell['type'], string> = {
@@ -88,53 +92,45 @@
 		};
 		return planDrop(baseCells, ph, target, columns);
 	});
-	const displayCells = $derived(drag && target ? previewCells : layout.cells);
+	// While a drag is starting (before the first target) show baseCells — the dragged
+	// cell already removed, no placeholder — so the snapshot frame measures the true base.
+	const displayCells = $derived(drag ? (target ? previewCells : baseCells) : layout.cells);
 
 	function rightNeighborId(cell: GridCell): string | null {
 		return rightNeighbor(displayCells, cell)?.id ?? null;
 	}
 
 	// ── Snapshot + hit-testing ─────────────────────────────────────────────────
-	function captureSnapshot(excludeId?: string) {
-		snapshot = [];
-		if (!gridEl) return;
-		const rows: Record<number, (CellSnap & { top: number; bottom: number })[]> = {};
-		let excluded: { row: number; height: number } | null = null;
+	function captureSnapshot() {
+		if (!gridEl) {
+			snapshot = { tops: [], heights: [], cells: [] };
+			return;
+		}
+		const cs = getComputedStyle(gridEl);
+		const heights = cs.gridTemplateRows.split(' ').map(parseFloat).filter((n) => !Number.isNaN(n));
+		const rowGap = parseFloat(cs.rowGap) || GAP;
+		const rect = gridEl.getBoundingClientRect();
+		let y = rect.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
+		const tops: number[] = [];
+		for (const h of heights) {
+			tops.push(y);
+			y += h + rowGap;
+		}
+		const cells: CellSnap[] = [];
 		for (const el of Array.from(gridEl.querySelectorAll<HTMLElement>('.cell'))) {
 			const id = el.dataset.id;
 			if (!id || id === PREVIEW_ID) continue;
-			const row = parseInt(el.dataset.row ?? '0');
 			const r = el.getBoundingClientRect();
-			if (id === excludeId) {
-				excluded = { row, height: r.height };
-				continue;
-			}
-			(rows[row] ??= []).push({
+			cells.push({
 				id,
+				row: parseInt(el.dataset.row ?? '0'),
 				col: parseInt(el.dataset.col ?? '0'),
 				colSpan: parseInt(el.dataset.colspan ?? '1'),
 				left: r.left,
-				right: r.right,
-				top: r.top,
-				bottom: r.bottom
+				right: r.right
 			});
 		}
-		// If the dragged cell was the sole occupant of its row, that row collapses once
-		// the preview removes it — shift every band below up to match what the user sees.
-		const shift = excluded && !rows[excluded.row] ? excluded.height + GAP : 0;
-		snapshot = Object.keys(rows)
-			.map(Number)
-			.sort((a, b) => a - b)
-			.map((row) => {
-				const cs = rows[row].sort((a, b) => a.left - b.left);
-				const dy = shift && excluded && row > excluded.row ? shift : 0;
-				return {
-					row,
-					top: Math.min(...cs.map((c) => c.top)) - dy,
-					bottom: Math.max(...cs.map((c) => c.bottom)) - dy,
-					cells: cs.map((c) => ({ id: c.id, col: c.col, colSpan: c.colSpan, left: c.left, right: c.right }))
-				};
-			});
+		snapshot = { tops, heights, cells };
 	}
 
 	function colFromX(x: number): number {
@@ -146,22 +142,33 @@
 	}
 
 	function computeTarget(x: number, y: number): DropTarget {
-		if (!snapshot.length) return { mode: 'new-row', row: 0 };
-		for (const b of snapshot) {
-			if (y < b.top) return { mode: 'new-row', row: b.row }; // in the gap above this band
-			if (y <= b.bottom) {
-				if (isPlainRow(baseCells, b.row)) {
-					let index = b.cells.length;
-					for (let j = 0; j < b.cells.length; j++) {
-						const mid = (b.cells[j].left + b.cells[j].right) / 2;
-						if (x < mid) { index = j; break; }
-					}
-					return { mode: 'into-row', row: b.row, index };
-				}
-				return { mode: 'place', col: colFromX(x), row: b.row };
-			}
+		const { tops, heights, cells } = snapshot;
+		if (!tops.length) return { mode: 'new-row', row: 0 };
+		if (y < tops[0]) return { mode: 'new-row', row: 0 };
+
+		let row = -1;
+		for (let i = 0; i < tops.length; i++) {
+			if (y <= tops[i] + heights[i]) { row = i; break; } // inside row track i
+			const nextTop = tops[i + 1];
+			if (nextTop != null && y < nextTop) return { mode: 'new-row', row: i + 1 }; // gap below row i
 		}
-		return { mode: 'new-row', row: maxRow(baseCells) }; // below everything
+		if (row === -1) return { mode: 'new-row', row: tops.length }; // below everything
+
+		// Inside row `row`: prefer the free run under the cursor (e.g. beside a spanning cell).
+		const col = colFromX(x);
+		const run = freeRunAt(baseCells, col, row, columns);
+		if (run) return { mode: 'place', col: run.col, row, colSpan: run.colSpan };
+
+		// Cursor over an occupied cell: even-split a plain row, else place + push down.
+		if (isPlainRow(baseCells, row)) {
+			const rowCells = cells.filter((c) => c.row === row).sort((a, b) => a.left - b.left);
+			let index = rowCells.length;
+			for (let j = 0; j < rowCells.length; j++) {
+				if (x < (rowCells[j].left + rowCells[j].right) / 2) { index = j; break; }
+			}
+			return { mode: 'into-row', row, index };
+		}
+		return { mode: 'place', col, row, colSpan: Math.min(drag?.colSpan ?? 1, columns - col) };
 	}
 
 	function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
@@ -169,8 +176,27 @@
 		if (!a || !b || a.mode !== b.mode) return false;
 		if (a.mode === 'new-row' && b.mode === 'new-row') return a.row === b.row;
 		if (a.mode === 'into-row' && b.mode === 'into-row') return a.row === b.row && a.index === b.index;
-		if (a.mode === 'place' && b.mode === 'place') return a.col === b.col && a.row === b.row;
+		if (a.mode === 'place' && b.mode === 'place') return a.col === b.col && a.row === b.row && a.colSpan === b.colSpan;
 		return false;
+	}
+
+	// Capture the base geometry one frame after the drag base is rendered, then set the
+	// initial target. baseCells stays constant, so this snapshot is valid for the whole drag.
+	function scheduleCapture() {
+		requestAnimationFrame(() => {
+			if (!drag) return;
+			captureSnapshot();
+			const next = computeTarget(lastX, lastY);
+			if (!sameTarget(target, next)) target = next;
+		});
+	}
+
+	function updateTarget(x: number, y: number) {
+		lastX = x;
+		lastY = y;
+		if (!snapshot.tops.length) return; // snapshot not ready yet — scheduleCapture will set it
+		const next = computeTarget(x, y);
+		if (!sameTarget(target, next)) target = next;
 	}
 
 	// ── Move (pointer) ─────────────────────────────────────────────────────────
@@ -183,17 +209,19 @@
 
 	function onMovePointerMove(e: PointerEvent) {
 		if (!pending) return;
+		lastX = e.clientX;
+		lastY = e.clientY;
 		if (!drag) {
 			const dist = Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY);
 			if (dist <= 4) return;
-			captureSnapshot(pending.id); // base = layout minus the dragged cell
+			// Render baseCells (dragged cell removed) first; measure it next frame.
 			drag = { mode: 'move', id: pending.id, type: pending.type, colSpan: pending.colSpan, rowSpan: pending.rowSpan, ghostX: e.clientX, ghostY: e.clientY };
+			scheduleCapture();
+			return;
 		}
 		drag.ghostX = e.clientX;
 		drag.ghostY = e.clientY;
-		// Only rebuild the preview when the drop slot actually changes (avoids flip thrash).
-		const next = computeTarget(e.clientX, e.clientY);
-		if (!sameTarget(target, next)) target = next;
+		updateTarget(e.clientX, e.clientY);
 	}
 
 	function onMovePointerUp() {
@@ -207,7 +235,7 @@
 		drag = null;
 		target = null;
 		pending = null;
-		snapshot = [];
+		snapshot = { tops: [], heights: [], cells: [] };
 		window.removeEventListener('pointermove', onMovePointerMove);
 		window.removeEventListener('pointerup', onMovePointerUp);
 	}
@@ -260,21 +288,20 @@
 	function onGridDragEnter(e: DragEvent) {
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		if (!drag) {
-			captureSnapshot();
 			drag = { mode: 'palette', colSpan: columns, rowSpan: 1, ghostX: 0, ghostY: 0 };
+			scheduleCapture();
 		}
 	}
 	function onGridDragOver(e: DragEvent) {
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		e.preventDefault();
 		if (!drag) onGridDragEnter(e);
-		const next = computeTarget(e.clientX, e.clientY);
-		if (!sameTarget(target, next)) target = next;
+		updateTarget(e.clientX, e.clientY);
 	}
 	function endPaletteDrag() {
 		drag = null;
 		target = null;
-		snapshot = [];
+		snapshot = { tops: [], heights: [], cells: [] };
 	}
 	function onGridDrop(e: DragEvent) {
 		e.preventDefault();

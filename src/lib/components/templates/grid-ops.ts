@@ -12,7 +12,7 @@ import type { BlockType, GridCell } from '$lib/pdf/template-types.js';
 export type DropTarget =
 	| { mode: 'new-row'; row: number }
 	| { mode: 'into-row'; row: number; index: number }
-	| { mode: 'place'; col: number; row: number };
+	| { mode: 'place'; col: number; row: number; colSpan: number };
 
 export function newCell(type: BlockType, columns: number): GridCell {
 	return { id: crypto.randomUUID(), type, config: {}, style: {}, col: 0, row: 0, colSpan: columns, rowSpan: 1 };
@@ -158,6 +158,33 @@ export function isPlainRow(cells: GridCell[], row: number): boolean {
 	return true;
 }
 
+// Which columns of `row` are occupied — including cells that span into it from above.
+export function occupancyAt(cells: GridCell[], row: number, columns: number): boolean[] {
+	const occ = new Array<boolean>(columns).fill(false);
+	for (const c of cells) {
+		if (c.row <= row && row < c.row + c.rowSpan) {
+			for (let i = c.col; i < c.col + c.colSpan && i < columns; i++) occ[i] = true;
+		}
+	}
+	return occ;
+}
+
+// The contiguous run of free columns in `row` containing `col`, or null if `col` is occupied.
+export function freeRunAt(
+	cells: GridCell[],
+	col: number,
+	row: number,
+	columns: number
+): { col: number; colSpan: number } | null {
+	const occ = occupancyAt(cells, row, columns);
+	if (col < 0 || col >= columns || occ[col]) return null;
+	let start = col;
+	while (start > 0 && !occ[start - 1]) start--;
+	let end = col;
+	while (end < columns - 1 && !occ[end + 1]) end++;
+	return { col: start, colSpan: end - start + 1 };
+}
+
 // The cell immediately to the right of `cell` whose row range overlaps it.
 export function rightNeighbor(cells: GridCell[], cell: GridCell): GridCell | null {
 	return (
@@ -185,6 +212,9 @@ export function planDrop(
 	if (target.mode === 'into-row' && isPlainRow(cells, target.row)) {
 		return insertIntoRow(cells, block, target.row, target.index, columns);
 	}
-	const col = target.mode === 'place' ? target.col : 0;
-	return placeCell(cells, block, col, target.row, columns);
+	if (target.mode === 'place') {
+		return placeCell(cells, { ...block, colSpan: target.colSpan }, target.col, target.row, columns);
+	}
+	// into-row on a non-plain row → fall back to placing at the row start.
+	return placeCell(cells, block, 0, target.row, columns);
 }
