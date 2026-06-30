@@ -23,6 +23,7 @@
 	}: Props = $props();
 
 	const PREVIEW_ID = '__preview__';
+	const GAP = 8; // must match the grid's `gap` in CSS
 
 	let gridEl = $state<HTMLDivElement | null>(null);
 
@@ -98,24 +99,40 @@
 		snapshot = [];
 		if (!gridEl) return;
 		const rows: Record<number, { id: string; left: number; right: number; top: number; bottom: number }[]> = {};
+		let excluded: { row: number; height: number } | null = null;
 		for (const el of Array.from(gridEl.querySelectorAll<HTMLElement>('.cell'))) {
 			const id = el.dataset.id;
-			if (!id || id === PREVIEW_ID || id === excludeId) continue;
+			if (!id || id === PREVIEW_ID) continue;
 			const r = parseInt(el.dataset.row ?? '0');
 			const rect = el.getBoundingClientRect();
+			if (id === excludeId) {
+				excluded = { row: r, height: rect.height };
+				continue;
+			}
 			(rows[r] ??= []).push({ id, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
 		}
+		// If the dragged cell was the sole occupant of its row, that row collapses once
+		// the preview removes it — every band below shifts up. Mirror that here so the
+		// snapshot matches what the user sees and the placeholder tracks the cursor.
+		const shift = excluded && !rows[excluded.row] ? excluded.height + GAP : 0;
 		snapshot = Object.keys(rows)
 			.map(Number)
 			.sort((a, b) => a - b)
 			.map((r) => {
 				const cs = rows[r].sort((a, b) => a.left - b.left);
+				const dy = shift && excluded && r > excluded.row ? shift : 0;
 				return {
-					top: Math.min(...cs.map((c) => c.top)),
-					bottom: Math.max(...cs.map((c) => c.bottom)),
+					top: Math.min(...cs.map((c) => c.top)) - dy,
+					bottom: Math.max(...cs.map((c) => c.bottom)) - dy,
 					cells: cs.map((c) => ({ id: c.id, left: c.left, right: c.right }))
 				};
 			});
+	}
+
+	function sameTarget(a: Target | null, b: Target | null): boolean {
+		if (a === b) return true;
+		if (!a || !b) return false;
+		return a.row === b.row && a.index === b.index && a.newRow === b.newRow;
 	}
 
 	function computeTarget(x: number, y: number): Target {
@@ -155,7 +172,10 @@
 		}
 		drag.ghostX = e.clientX;
 		drag.ghostY = e.clientY;
-		target = computeTarget(e.clientX, e.clientY);
+		// Only rebuild the preview when the logical drop slot actually changes — otherwise
+		// the keyed each + animate:flip restart every pointer move and the cells jitter.
+		const next = computeTarget(e.clientX, e.clientY);
+		if (!sameTarget(target, next)) target = next;
 	}
 
 	function onMovePointerUp() {
@@ -210,7 +230,8 @@
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		e.preventDefault();
 		if (!drag) onGridDragEnter(e);
-		target = computeTarget(e.clientX, e.clientY);
+		const next = computeTarget(e.clientX, e.clientY);
+		if (!sameTarget(target, next)) target = next;
 	}
 
 	function endPaletteDrag() {
@@ -311,7 +332,8 @@
 		font-size: 12px; color: var(--foreground);
 		cursor: grab; user-select: none; touch-action: none;
 		transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
-		overflow: hidden;
+		/* visible (not hidden) so the gutter can sit in the gap; .cell-label clips its own text */
+		overflow: visible;
 	}
 	.cell:hover { border-color: var(--primary); background: var(--accent); }
 	.cell.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--background)); box-shadow: 0 0 0 1px var(--primary); }
@@ -327,10 +349,11 @@
 	.cell:hover .cell-del { opacity: 1; }
 	.cell-del:hover { color: var(--destructive); }
 
-	/* Column gutter — sits in the gap on the cell's right edge, between neighbours */
+	/* Column gutter — centered on the 8px gap between this cell and its right neighbour,
+	   so the user grabs the divider between the two blocks, not one block's edge. */
 	.col-gutter {
-		position: absolute; top: 6px; bottom: 6px; right: -8px; width: 16px;
-		cursor: col-resize; z-index: 2;
+		position: absolute; top: 6px; bottom: 6px; right: -12px; width: 16px;
+		cursor: col-resize; z-index: 3;
 		display: flex; align-items: center; justify-content: center;
 	}
 	.col-gutter::before {
