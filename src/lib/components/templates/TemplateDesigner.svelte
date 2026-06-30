@@ -3,7 +3,7 @@
 	import { Save, Star, Trash2 } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout, TemplateRow } from '$lib/pdf/template-types.js';
 	import { migrateLayout, GRID_COLUMNS } from '$lib/pdf/template-types.js';
-	import { newCell, appendRow, removeBlock } from './grid-ops.js';
+	import { newCell, placeCell, removeBlock, maxRow } from './grid-ops.js';
 	import BlockPalette from './BlockPalette.svelte';
 	import TemplateCanvas from './TemplateCanvas.svelte';
 	import BlockInspector from './BlockInspector.svelte';
@@ -44,14 +44,14 @@
 	}
 
 	function addBlockToBody(type: BlockType) {
-		// Palette click → append a full-width block as a new bottom row.
+		// Palette click → place a full-width block on a new bottom row.
 		const block = newCell(type, columns);
-		applyCells(appendRow(layout.cells, block, columns));
+		applyCells(placeCell(layout.cells, block, 0, maxRow(layout.cells), columns));
 		selectedBlockId = block.id;
 	}
 
 	function deleteCell(id: string) {
-		applyCells(removeBlock(layout.cells, id, columns));
+		applyCells(removeBlock(layout.cells, id));
 		if (selectedBlockId === id) selectedBlockId = null;
 	}
 

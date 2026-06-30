@@ -3,9 +3,10 @@
 	import { scale } from 'svelte/transition';
 	import { GripVertical } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout } from '$lib/pdf/template-types.js';
-	import { insertInto, moveBlock, setGutter, newCell } from './grid-ops.js';
-
-	type Target = { row: number; index: number; newRow: boolean };
+	import {
+		planDrop, setColGutter, setRowSpan, rightNeighbor, isPlainRow, maxRow, newCell,
+		type DropTarget
+	} from './grid-ops.js';
 
 	type Props = {
 		layout: TemplateLayout;
@@ -30,18 +31,20 @@
 	// Drag (move existing cell, or drop from palette)
 	let drag = $state<
 		| null
-		| { mode: 'move' | 'palette'; id?: string; type?: BlockType; ghostX: number; ghostY: number }
+		| { mode: 'move' | 'palette'; id?: string; type?: BlockType; colSpan: number; rowSpan: number; ghostX: number; ghostY: number }
 	>(null);
-	let target = $state<Target | null>(null);
+	let target = $state<DropTarget | null>(null);
 	// Pre-threshold pointer info for a potential move (distinguishes click vs drag)
-	let pending: { id: string; type: BlockType; startX: number; startY: number } | null = null;
+	let pending: { id: string; type: BlockType; colSpan: number; rowSpan: number; startX: number; startY: number } | null = null;
 
-	// Gutter resize
-	let gutter: { leftId: string; rightId: string; startX: number; startLeft: number; base: GridCell[] } | null = null;
+	// Column gutter (width) and row gutter (height / rowSpan) drags
+	let colGutter: { leftId: string; rightId: string; startX: number; startLeft: number; base: GridCell[] } | null = null;
+	let rowGutter: { id: string; startY: number; startRowSpan: number; stride: number; base: GridCell[] } | null = null;
 
 	// Geometry snapshot of the committed layout, captured when a drag begins so
-	// hit-testing stays stable while the preview reflows. Indexed by dense band order.
-	type BandSnap = { top: number; bottom: number; cells: { id: string; left: number; right: number }[] };
+	// hit-testing stays stable while the preview reflows.
+	type CellSnap = { id: string; col: number; colSpan: number; left: number; right: number };
+	type BandSnap = { row: number; top: number; bottom: number; cells: CellSnap[] };
 	let snapshot: BandSnap[] = [];
 
 	function blockLabel(type: GridCell['type']): string {
@@ -73,91 +76,107 @@
 	);
 	const previewCells = $derived.by(() => {
 		if (!drag || !target) return layout.cells;
-		const placeholder: GridCell = {
+		const ph: GridCell = {
 			id: PREVIEW_ID,
 			type: drag.type ?? 'text',
 			config: {},
 			style: {},
 			col: 0,
 			row: 0,
-			colSpan: columns,
-			rowSpan: 1
+			colSpan: drag.colSpan,
+			rowSpan: drag.rowSpan
 		};
-		return insertInto(baseCells, placeholder, target.row, target.index, columns, target.newRow);
+		return planDrop(baseCells, ph, target, columns);
 	});
 	const displayCells = $derived(drag && target ? previewCells : layout.cells);
 
 	function rightNeighborId(cell: GridCell): string | null {
-		const n = displayCells.find(
-			(c) => c.id !== cell.id && c.row === cell.row && c.col === cell.col + cell.colSpan
-		);
-		return n?.id ?? null;
+		return rightNeighbor(displayCells, cell)?.id ?? null;
 	}
 
 	// ── Snapshot + hit-testing ─────────────────────────────────────────────────
 	function captureSnapshot(excludeId?: string) {
 		snapshot = [];
 		if (!gridEl) return;
-		const rows: Record<number, { id: string; left: number; right: number; top: number; bottom: number }[]> = {};
+		const rows: Record<number, (CellSnap & { top: number; bottom: number })[]> = {};
 		let excluded: { row: number; height: number } | null = null;
 		for (const el of Array.from(gridEl.querySelectorAll<HTMLElement>('.cell'))) {
 			const id = el.dataset.id;
 			if (!id || id === PREVIEW_ID) continue;
-			const r = parseInt(el.dataset.row ?? '0');
-			const rect = el.getBoundingClientRect();
+			const row = parseInt(el.dataset.row ?? '0');
+			const r = el.getBoundingClientRect();
 			if (id === excludeId) {
-				excluded = { row: r, height: rect.height };
+				excluded = { row, height: r.height };
 				continue;
 			}
-			(rows[r] ??= []).push({ id, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+			(rows[row] ??= []).push({
+				id,
+				col: parseInt(el.dataset.col ?? '0'),
+				colSpan: parseInt(el.dataset.colspan ?? '1'),
+				left: r.left,
+				right: r.right,
+				top: r.top,
+				bottom: r.bottom
+			});
 		}
 		// If the dragged cell was the sole occupant of its row, that row collapses once
-		// the preview removes it — every band below shifts up. Mirror that here so the
-		// snapshot matches what the user sees and the placeholder tracks the cursor.
+		// the preview removes it — shift every band below up to match what the user sees.
 		const shift = excluded && !rows[excluded.row] ? excluded.height + GAP : 0;
 		snapshot = Object.keys(rows)
 			.map(Number)
 			.sort((a, b) => a - b)
-			.map((r) => {
-				const cs = rows[r].sort((a, b) => a.left - b.left);
-				const dy = shift && excluded && r > excluded.row ? shift : 0;
+			.map((row) => {
+				const cs = rows[row].sort((a, b) => a.left - b.left);
+				const dy = shift && excluded && row > excluded.row ? shift : 0;
 				return {
+					row,
 					top: Math.min(...cs.map((c) => c.top)) - dy,
 					bottom: Math.max(...cs.map((c) => c.bottom)) - dy,
-					cells: cs.map((c) => ({ id: c.id, left: c.left, right: c.right }))
+					cells: cs.map((c) => ({ id: c.id, col: c.col, colSpan: c.colSpan, left: c.left, right: c.right }))
 				};
 			});
 	}
 
-	function sameTarget(a: Target | null, b: Target | null): boolean {
-		if (a === b) return true;
-		if (!a || !b) return false;
-		return a.row === b.row && a.index === b.index && a.newRow === b.newRow;
+	function colFromX(x: number): number {
+		if (!gridEl) return 0;
+		const rect = gridEl.getBoundingClientRect();
+		const colW = (rect.width - (columns - 1) * GAP) / columns;
+		const stride = colW + GAP;
+		return Math.min(columns - 1, Math.max(0, Math.floor((x - rect.left) / stride)));
 	}
 
-	function computeTarget(x: number, y: number): Target {
-		if (!snapshot.length) return { row: 0, index: 0, newRow: true };
-		for (let i = 0; i < snapshot.length; i++) {
-			const b = snapshot[i];
-			// In the gap above this band → open a new row here.
-			if (y < b.top) return { row: i, index: 0, newRow: true };
-			// Inside the band → join it; pick the insert slot by x.
+	function computeTarget(x: number, y: number): DropTarget {
+		if (!snapshot.length) return { mode: 'new-row', row: 0 };
+		for (const b of snapshot) {
+			if (y < b.top) return { mode: 'new-row', row: b.row }; // in the gap above this band
 			if (y <= b.bottom) {
-				let index = b.cells.length;
-				for (let j = 0; j < b.cells.length; j++) {
-					const mid = (b.cells[j].left + b.cells[j].right) / 2;
-					if (x < mid) { index = j; break; }
+				if (isPlainRow(baseCells, b.row)) {
+					let index = b.cells.length;
+					for (let j = 0; j < b.cells.length; j++) {
+						const mid = (b.cells[j].left + b.cells[j].right) / 2;
+						if (x < mid) { index = j; break; }
+					}
+					return { mode: 'into-row', row: b.row, index };
 				}
-				return { row: i, index, newRow: false };
+				return { mode: 'place', col: colFromX(x), row: b.row };
 			}
 		}
-		return { row: snapshot.length, index: 0, newRow: true };
+		return { mode: 'new-row', row: maxRow(baseCells) }; // below everything
+	}
+
+	function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
+		if (a === b) return true;
+		if (!a || !b || a.mode !== b.mode) return false;
+		if (a.mode === 'new-row' && b.mode === 'new-row') return a.row === b.row;
+		if (a.mode === 'into-row' && b.mode === 'into-row') return a.row === b.row && a.index === b.index;
+		if (a.mode === 'place' && b.mode === 'place') return a.col === b.col && a.row === b.row;
+		return false;
 	}
 
 	// ── Move (pointer) ─────────────────────────────────────────────────────────
 	function onCellPointerDown(e: PointerEvent, cell: GridCell) {
 		if (e.button !== 0 || cell.id === PREVIEW_ID) return;
-		pending = { id: cell.id, type: cell.type, startX: e.clientX, startY: e.clientY };
+		pending = { id: cell.id, type: cell.type, colSpan: cell.colSpan, rowSpan: cell.rowSpan, startX: e.clientX, startY: e.clientY };
 		window.addEventListener('pointermove', onMovePointerMove);
 		window.addEventListener('pointerup', onMovePointerUp);
 	}
@@ -168,19 +187,19 @@
 			const dist = Math.hypot(e.clientX - pending.startX, e.clientY - pending.startY);
 			if (dist <= 4) return;
 			captureSnapshot(pending.id); // base = layout minus the dragged cell
-			drag = { mode: 'move', id: pending.id, type: pending.type, ghostX: e.clientX, ghostY: e.clientY };
+			drag = { mode: 'move', id: pending.id, type: pending.type, colSpan: pending.colSpan, rowSpan: pending.rowSpan, ghostX: e.clientX, ghostY: e.clientY };
 		}
 		drag.ghostX = e.clientX;
 		drag.ghostY = e.clientY;
-		// Only rebuild the preview when the logical drop slot actually changes — otherwise
-		// the keyed each + animate:flip restart every pointer move and the cells jitter.
+		// Only rebuild the preview when the drop slot actually changes (avoids flip thrash).
 		const next = computeTarget(e.clientX, e.clientY);
 		if (!sameTarget(target, next)) target = next;
 	}
 
 	function onMovePointerUp() {
-		if (drag && drag.id && target) {
-			onApply(moveBlock(layout.cells, drag.id, target.row, target.index, columns, target.newRow));
+		if (drag?.id && target) {
+			const block = layout.cells.find((c) => c.id === drag!.id);
+			if (block) onApply(planDrop(baseCells, block, target, columns));
 			onSelectBlock(drag.id);
 		} else if (pending && !drag) {
 			onSelectBlock(pending.id);
@@ -193,28 +212,48 @@
 		window.removeEventListener('pointerup', onMovePointerUp);
 	}
 
-	// ── Gutter resize (pointer) ──────────────────────────────────────────────
-	function onGutterPointerDown(e: PointerEvent, leftId: string, rightId: string) {
+	// ── Column gutter (width) ─────────────────────────────────────────────────
+	function onColGutterDown(e: PointerEvent, leftId: string, rightId: string) {
 		e.preventDefault();
 		e.stopPropagation();
 		const left = layout.cells.find((c) => c.id === leftId);
 		if (!left) return;
-		gutter = { leftId, rightId, startX: e.clientX, startLeft: left.colSpan, base: layout.cells };
-		window.addEventListener('pointermove', onGutterPointerMove);
-		window.addEventListener('pointerup', onGutterPointerUp);
+		colGutter = { leftId, rightId, startX: e.clientX, startLeft: left.colSpan, base: layout.cells };
+		window.addEventListener('pointermove', onColGutterMove);
+		window.addEventListener('pointerup', onColGutterUp);
+	}
+	function onColGutterMove(e: PointerEvent) {
+		if (!colGutter || !gridEl) return;
+		const colW = (gridEl.getBoundingClientRect().width - (columns - 1) * GAP) / columns;
+		const deltaCols = Math.round((e.clientX - colGutter.startX) / (colW + GAP));
+		onApply(setColGutter(colGutter.base, colGutter.leftId, colGutter.rightId, colGutter.startLeft + deltaCols));
+	}
+	function onColGutterUp() {
+		colGutter = null;
+		window.removeEventListener('pointermove', onColGutterMove);
+		window.removeEventListener('pointerup', onColGutterUp);
 	}
 
-	function onGutterPointerMove(e: PointerEvent) {
-		if (!gutter || !gridEl) return;
-		const pxPerCol = gridEl.getBoundingClientRect().width / columns;
-		const deltaCols = Math.round((e.clientX - gutter.startX) / pxPerCol);
-		onApply(setGutter(gutter.base, gutter.leftId, gutter.rightId, gutter.startLeft + deltaCols, columns));
+	// ── Row gutter (height / rowSpan) ─────────────────────────────────────────
+	function onRowGutterDown(e: PointerEvent, cell: GridCell) {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = (e.currentTarget as HTMLElement).closest('.cell') as HTMLElement | null;
+		const h = el ? el.getBoundingClientRect().height : 46;
+		const perRow = (h - (cell.rowSpan - 1) * GAP) / cell.rowSpan;
+		rowGutter = { id: cell.id, startY: e.clientY, startRowSpan: cell.rowSpan, stride: perRow + GAP, base: layout.cells };
+		window.addEventListener('pointermove', onRowGutterMove);
+		window.addEventListener('pointerup', onRowGutterUp);
 	}
-
-	function onGutterPointerUp() {
-		gutter = null;
-		window.removeEventListener('pointermove', onGutterPointerMove);
-		window.removeEventListener('pointerup', onGutterPointerUp);
+	function onRowGutterMove(e: PointerEvent) {
+		if (!rowGutter) return;
+		const deltaRows = Math.round((e.clientY - rowGutter.startY) / rowGutter.stride);
+		onApply(setRowSpan(rowGutter.base, rowGutter.id, rowGutter.startRowSpan + deltaRows));
+	}
+	function onRowGutterUp() {
+		rowGutter = null;
+		window.removeEventListener('pointermove', onRowGutterMove);
+		window.removeEventListener('pointerup', onRowGutterUp);
 	}
 
 	// ── Palette drop (HTML5 DnD) ───────────────────────────────────────────────
@@ -222,10 +261,9 @@
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		if (!drag) {
 			captureSnapshot();
-			drag = { mode: 'palette', ghostX: 0, ghostY: 0 };
+			drag = { mode: 'palette', colSpan: columns, rowSpan: 1, ghostX: 0, ghostY: 0 };
 		}
 	}
-
 	function onGridDragOver(e: DragEvent) {
 		if (!e.dataTransfer?.types.includes('application/x-block-type')) return;
 		e.preventDefault();
@@ -233,19 +271,17 @@
 		const next = computeTarget(e.clientX, e.clientY);
 		if (!sameTarget(target, next)) target = next;
 	}
-
 	function endPaletteDrag() {
 		drag = null;
 		target = null;
 		snapshot = [];
 	}
-
 	function onGridDrop(e: DragEvent) {
 		e.preventDefault();
 		const type = e.dataTransfer?.getData('application/x-block-type') as BlockType | undefined;
 		if (type && target) {
 			const block = newCell(type, columns);
-			onApply(insertInto(layout.cells, block, target.row, target.index, columns, target.newRow));
+			onApply(planDrop(baseCells, block, target, columns));
 			onSelectBlock(block.id);
 		}
 		endPaletteDrag();
@@ -275,7 +311,9 @@
 				class:dragging={drag?.id === cell.id}
 				data-id={cell.id}
 				data-row={cell.row}
-				style="grid-column: {cell.col + 1} / span {cell.colSpan}; grid-row: {cell.row + 1};"
+				data-col={cell.col}
+				data-colspan={cell.colSpan}
+				style="grid-column: {cell.col + 1} / span {cell.colSpan}; grid-row: {cell.row + 1} / span {cell.rowSpan};"
 				animate:flip={{ duration: 180 }}
 				in:scale={{ duration: 150, start: 0.85 }}
 				role={isPreview ? undefined : 'button'}
@@ -292,9 +330,11 @@
 						onclick={(e) => { e.stopPropagation(); onDeleteBlock(cell.id); }}>×</button>
 
 					{#if rn}
-						<span class="col-gutter" role="separator" aria-label="Resize columns" title="Drag to resize"
-							onpointerdown={(e) => onGutterPointerDown(e, cell.id, rn)}></span>
+						<span class="col-gutter" role="separator" aria-label="Resize width" title="Drag to resize width"
+							onpointerdown={(e) => onColGutterDown(e, cell.id, rn)}></span>
 					{/if}
+					<span class="row-gutter" role="separator" aria-label="Resize height" title="Drag to span rows"
+						onpointerdown={(e) => onRowGutterDown(e, cell)}></span>
 				{/if}
 			</div>
 		{/each}
@@ -332,7 +372,7 @@
 		font-size: 12px; color: var(--foreground);
 		cursor: grab; user-select: none; touch-action: none;
 		transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
-		/* visible (not hidden) so the gutter can sit in the gap; .cell-label clips its own text */
+		/* visible (not hidden) so the gutters can sit in the gaps; .cell-label clips its own text */
 		overflow: visible;
 	}
 	.cell:hover { border-color: var(--primary); background: var(--accent); }
@@ -349,8 +389,8 @@
 	.cell:hover .cell-del { opacity: 1; }
 	.cell-del:hover { color: var(--destructive); }
 
-	/* Column gutter — centered on the 8px gap between this cell and its right neighbour,
-	   so the user grabs the divider between the two blocks, not one block's edge. */
+	/* Gutters — centered on the 8px gap between this cell and its neighbour, so the
+	   user grabs the divider between two blocks, not one block's edge. */
 	.col-gutter {
 		position: absolute; top: 6px; bottom: 6px; right: -12px; width: 16px;
 		cursor: col-resize; z-index: 3;
@@ -361,6 +401,19 @@
 		background: var(--border); transition: background 0.12s, width 0.12s;
 	}
 	.col-gutter:hover::before { background: var(--primary); width: 3px; }
+
+	.row-gutter {
+		position: absolute; left: 6px; right: 14px; bottom: -12px; height: 16px;
+		cursor: row-resize; z-index: 3;
+		display: flex; align-items: center; justify-content: center;
+	}
+	.row-gutter::before {
+		content: ''; height: 2px; width: 100%; border-radius: 2px;
+		background: var(--border); transition: background 0.12s, height 0.12s;
+		opacity: 0;
+	}
+	.cell:hover .row-gutter::before { opacity: 1; }
+	.row-gutter:hover::before { background: var(--primary); height: 3px; }
 
 	/* Drop placeholder — the slot that opens to make room */
 	.cell.placeholder {
