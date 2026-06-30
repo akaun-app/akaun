@@ -121,27 +121,49 @@ export function setRowSpan(cells: GridCell[], id: string, rowSpan: number): Grid
 	return finalize(next, id);
 }
 
-// Move the shared boundary between two horizontally-adjacent cells: the left cell
-// takes `leftColSpan`, the right absorbs the rest of their shared width.
-export function setColGutter(
-	cells: GridCell[],
-	leftId: string,
-	rightId: string,
-	leftColSpan: number
-): GridCell[] {
-	const left = cells.find((c) => c.id === leftId);
-	const right = cells.find((c) => c.id === rightId);
-	if (!left || !right) return cells;
-	const pair = left.colSpan + right.colSpan;
-	const l = Math.min(Math.max(leftColSpan, 1), pair - 1);
-	const next = cells.map((c) => {
-		if (c.id === leftId) return { ...c, colSpan: l };
-		if (c.id === rightId) return { ...c, col: left.col + l, colSpan: pair - l };
+// Move a whole vertical column boundary by `deltaCols`. Grabbing the gutter on cell
+// `leftId` identifies the boundary X = left.col + left.colSpan; every cell touching X —
+// left side (`col + colSpan === X`) and right side (`col === X`) — within the connected
+// row band moves together, so a tall cell and the full stack of cells beside it stay
+// aligned. Left cells widen by d, right cells shift right by d; the boundary stays
+// straight, so no overlaps are introduced and no resolve/compact is needed.
+export function setColBoundary(cells: GridCell[], leftId: string, deltaCols: number): GridCell[] {
+	const seed = cells.find((c) => c.id === leftId);
+	if (!seed) return cells;
+	const X = seed.col + seed.colSpan;
+	const touches = (c: GridCell) => c.col + c.colSpan === X || c.col === X;
+	const overlapsRange = (c: GridCell, lo: number, hi: number) => c.row < hi && lo < c.row + c.rowSpan;
+
+	// BFS: grow the row range to pull in every boundary-touching cell that connects to it.
+	let lo = seed.row;
+	let hi = seed.row + seed.rowSpan;
+	const involved = new Set<GridCell>([seed]);
+	for (;;) {
+		let grew = false;
+		for (const c of cells) {
+			if (involved.has(c) || !touches(c) || !overlapsRange(c, lo, hi)) continue;
+			involved.add(c);
+			lo = Math.min(lo, c.row);
+			hi = Math.max(hi, c.row + c.rowSpan);
+			grew = true;
+		}
+		if (!grew) break;
+	}
+
+	const leftCells = [...involved].filter((c) => c.col + c.colSpan === X);
+	const rightCells = [...involved].filter((c) => c.col === X);
+	if (!leftCells.length || !rightCells.length) return cells;
+
+	const minLeft = Math.min(...leftCells.map((c) => c.colSpan));
+	const minRight = Math.min(...rightCells.map((c) => c.colSpan));
+	const d = Math.min(Math.max(deltaCols, 1 - minLeft), minRight - 1);
+	if (d === 0) return cells;
+
+	return cells.map((c) => {
+		if (leftCells.includes(c)) return { ...c, colSpan: c.colSpan + d };
+		if (rightCells.includes(c)) return { ...c, col: c.col + d, colSpan: c.colSpan - d };
 		return c;
 	});
-	// If either cell row-spans, widening it can collide with cells in the spanned
-	// rows below — push those out, then compact so they spring back on narrowing.
-	return finalize(next, leftId);
 }
 
 export function removeBlock(cells: GridCell[], id: string): GridCell[] {

@@ -4,7 +4,7 @@
 	import { GripVertical } from '@lucide/svelte';
 	import type { BlockType, GridCell, TemplateLayout } from '$lib/pdf/template-types.js';
 	import {
-		planDrop, setColGutter, setRowSpan, rightNeighbor, isPlainRow, freeRunAt, newCell,
+		planDrop, setColBoundary, setRowSpan, rightNeighbor, isPlainRow, freeRunAt, newCell,
 		type DropTarget
 	} from './grid-ops.js';
 
@@ -38,7 +38,7 @@
 	let pending: { id: string; type: BlockType; colSpan: number; rowSpan: number; startX: number; startY: number } | null = null;
 
 	// Column gutter (width) and row gutter (height / rowSpan) drags
-	let colGutter: { leftId: string; rightId: string; startX: number; startLeft: number; base: GridCell[] } | null = null;
+	let colGutter: { leftId: string; startX: number; base: GridCell[] } | null = null;
 	let rowGutter: { id: string; startY: number; startRowSpan: number; stride: number; base: GridCell[] } | null = null;
 
 	// Geometry snapshot of the drag base (baseCells), captured once when a drag begins.
@@ -154,12 +154,7 @@
 		}
 		if (row === -1) return { mode: 'new-row', row: tops.length }; // below everything
 
-		// Inside row `row`: prefer the free run under the cursor (e.g. beside a spanning cell).
-		const col = colFromX(x);
-		const run = freeRunAt(baseCells, col, row, columns);
-		if (run) return { mode: 'place', col: run.col, row, colSpan: run.colSpan };
-
-		// Cursor over an occupied cell: even-split a plain row, else place + push down.
+		// Inside row `row`. A plain row (no row-span) → even-split so it always fills the width.
 		if (isPlainRow(baseCells, row)) {
 			const rowCells = cells.filter((c) => c.row === row).sort((a, b) => a.left - b.left);
 			let index = rowCells.length;
@@ -168,7 +163,12 @@
 			}
 			return { mode: 'into-row', row, index };
 		}
-		return { mode: 'place', col, row, colSpan: Math.min(drag?.colSpan ?? 1, columns - col) };
+		// Non-plain row (a cell row-spans here): drop into the free columns beside the
+		// spanning cell, else create a full-width new row at this position.
+		const col = colFromX(x);
+		const run = freeRunAt(baseCells, col, row, columns);
+		if (run) return { mode: 'place', col: run.col, row, colSpan: run.colSpan };
+		return { mode: 'new-row', row };
 	}
 
 	function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
@@ -240,13 +240,11 @@
 		window.removeEventListener('pointerup', onMovePointerUp);
 	}
 
-	// ── Column gutter (width) ─────────────────────────────────────────────────
-	function onColGutterDown(e: PointerEvent, leftId: string, rightId: string) {
+	// ── Column gutter (width) — moves the whole boundary, including any stack beside it ──
+	function onColGutterDown(e: PointerEvent, leftId: string) {
 		e.preventDefault();
 		e.stopPropagation();
-		const left = layout.cells.find((c) => c.id === leftId);
-		if (!left) return;
-		colGutter = { leftId, rightId, startX: e.clientX, startLeft: left.colSpan, base: layout.cells };
+		colGutter = { leftId, startX: e.clientX, base: layout.cells };
 		window.addEventListener('pointermove', onColGutterMove);
 		window.addEventListener('pointerup', onColGutterUp);
 	}
@@ -254,7 +252,7 @@
 		if (!colGutter || !gridEl) return;
 		const colW = (gridEl.getBoundingClientRect().width - (columns - 1) * GAP) / columns;
 		const deltaCols = Math.round((e.clientX - colGutter.startX) / (colW + GAP));
-		onApply(setColGutter(colGutter.base, colGutter.leftId, colGutter.rightId, colGutter.startLeft + deltaCols));
+		onApply(setColBoundary(colGutter.base, colGutter.leftId, deltaCols));
 	}
 	function onColGutterUp() {
 		colGutter = null;
@@ -358,7 +356,7 @@
 
 					{#if rn}
 						<span class="col-gutter" role="separator" aria-label="Resize width" title="Drag to resize width"
-							onpointerdown={(e) => onColGutterDown(e, cell.id, rn)}></span>
+							onpointerdown={(e) => onColGutterDown(e, cell.id)}></span>
 					{/if}
 					<span class="row-gutter" role="separator" aria-label="Resize height" title="Drag to span rows"
 						onpointerdown={(e) => onRowGutterDown(e, cell)}></span>
