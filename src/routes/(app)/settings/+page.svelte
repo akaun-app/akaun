@@ -1113,6 +1113,8 @@
 		flex: 1;
 		overflow: hidden;
 		max-width: none;
+		display: flex;
+		flex-direction: column;
 	}
 	.tpl-split {
 		display: flex;

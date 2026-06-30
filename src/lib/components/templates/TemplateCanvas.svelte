@@ -418,9 +418,9 @@
 	.cell-grip { color: var(--muted-foreground); flex-shrink: 0; }
 	.cell-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.cell-del {
-		position: absolute; top: 4px; right: 6px;
+		position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
 		background: none; border: none; padding: 0 2px;
-		font-size: 16px; line-height: 1; color: var(--muted-foreground);
+		font-size: 20px; line-height: 1; color: var(--muted-foreground);
 		cursor: pointer; opacity: 0; transition: opacity 0.1s;
 	}
 	.cell:hover .cell-del { opacity: 1; }
@@ -429,18 +429,20 @@
 	/* Gutters — centered on the 8px gap between this cell and its neighbour, so the
 	   user grabs the divider between two blocks, not one block's edge. */
 	.col-gutter {
-		position: absolute; top: 6px; bottom: 6px; right: -12px; width: 16px;
+		position: absolute; top: 6px; bottom: 6px; right: -13px; width: 16px;
 		cursor: col-resize; z-index: 3;
 		display: flex; align-items: center; justify-content: center;
 	}
 	.col-gutter::before {
 		content: ''; width: 2px; height: 100%; border-radius: 2px;
-		background: var(--border); transition: background 0.12s, width 0.12s;
+		background: var(--border); transition: background 0.12s, width 0.12s, opacity 0.12s;
+		opacity: 0;
 	}
+	.cell:hover .col-gutter::before { opacity: 1; }
 	.col-gutter:hover::before { background: var(--primary); width: 3px; }
 
 	.row-gutter {
-		position: absolute; left: 6px; right: 14px; bottom: -12px; height: 16px;
+		position: absolute; left: 6px; right: 6px; bottom: -13px; height: 16px;
 		cursor: row-resize; z-index: 3;
 		display: flex; align-items: center; justify-content: center;
 	}

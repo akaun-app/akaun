@@ -125,6 +125,8 @@ const incomeDateByNumber = new Map<string, string>();
 				status,
 				date,
 				amount: e.ZAMOUNTCENTS / 100,
+				currency: 'MYR',
+				exchangeRate: 1,
 				claimId,
 				createdBy: actingUserId,
 				updatedBy: actingUserId
@@ -165,6 +167,8 @@ const incomeDateByNumber = new Map<string, string>();
 				category: i.ZCATEGORY ?? 'Other',
 				date,
 				amount: i.ZAMOUNTCENTS / 100,
+				currency: 'MYR',
+				exchangeRate: 1,
 				createdBy: actingUserId,
 				updatedBy: actingUserId
 			})

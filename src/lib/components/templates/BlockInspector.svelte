@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { GridCell } from '$lib/pdf/template-types.js';
-	import { Trash2 } from '@lucide/svelte';
+	import { AlignLeft, AlignCenter, AlignRight } from '@lucide/svelte';
 
 	type Props = {
 		block: GridCell;
@@ -27,11 +27,15 @@
 	<div class="insp-row">
 		<p class="insp-label">Alignment</p>
 		<div class="insp-align">
-			{#each ['left', 'center', 'right'] as a (a)}
-				<button class="insp-align-btn" class:active={(block.style?.align ?? 'left') === a}
-					onclick={() => setStyle('align', a)}
-					title={a}>
-					{a === 'left' ? '⇤' : a === 'center' ? '⇔' : '⇥'}
+			{#each [
+				{ id: 'left',   Icon: AlignLeft   },
+				{ id: 'center', Icon: AlignCenter },
+				{ id: 'right',  Icon: AlignRight  }
+			] as { id, Icon } (id)}
+				<button class="insp-align-btn" class:active={(block.style?.align ?? 'left') === id}
+					onclick={() => setStyle('align', id)}
+					title={id}>
+					<Icon size={14} />
 				</button>
 			{/each}
 		</div>
@@ -73,9 +77,6 @@
 		</div>
 	{/if}
 
-	<button class="insp-delete" onclick={onDelete}>
-		<Trash2 size={13} /> Remove block
-	</button>
 </div>
 
 <style>
@@ -93,15 +94,10 @@
 	.insp-align-btn {
 		flex: 1; padding: 5px 2px; border: 1px solid var(--border);
 		border-radius: 4px; background: none; font-size: 14px; cursor: pointer;
+		display: flex; align-items: center; justify-content: center;
 	}
 	.insp-align-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
 	.insp-info { font-size: 11px; color: var(--muted-foreground); line-height: 1.4; }
 	.insp-hint { font-size: 11px; color: var(--muted-foreground); line-height: 1.4; padding: 2px 0; }
-	.insp-delete {
-		display: flex; align-items: center; gap: 6px; margin-top: 8px;
-		padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border);
-		background: none; font-size: 12px; color: var(--destructive); cursor: pointer;
-	}
-	.insp-delete:hover { background: color-mix(in srgb, var(--destructive) 8%, transparent); border-color: var(--destructive); }
 </style>
