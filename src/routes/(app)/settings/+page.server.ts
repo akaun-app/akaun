@@ -86,9 +86,9 @@ export const actions: Actions = {
 		const expRaw = String(data.get('expenseCategories') ?? '[]');
 		const incRaw = String(data.get('incomeCategories') ?? '[]');
 		try {
-			const expCats = JSON.parse(expRaw);
-			const incCats = JSON.parse(incRaw);
-			if (!Array.isArray(expCats) || !Array.isArray(incCats)) throw new Error('not array');
+			const expCats = [...new Set((JSON.parse(expRaw) as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((s) => s.trim()))];
+			const incCats = [...new Set((JSON.parse(incRaw) as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((s) => s.trim()))];
+			if (expCats.length === 0 || incCats.length === 0) return fail(400, { error: 'At least one category per type is required' });
 			saveCategoriesDB(db, 'expense', expCats);
 			saveCategoriesDB(db, 'income', incCats);
 			return { success: true, action: 'saveCategories' };
