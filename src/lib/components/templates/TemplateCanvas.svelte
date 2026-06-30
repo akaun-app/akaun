@@ -147,19 +147,20 @@
 		const { tops, heights, cells } = snapshot;
 		if (!tops.length) return { mode: 'new-row', row: 0 };
 
-		// Over a block → edge zones: bottom edge stacks below it; otherwise add a column on
-		// the side the cursor is on (plain rows only). Non-plain rows can only stack.
+		// Over a block → edge zones: top edge stacks above, bottom edge stacks below, the middle
+		// band adds a column on the cursor's side (even-split on plain rows, local split otherwise).
 		const C = cells.find((c) => x >= c.left && x <= c.right && y >= c.top && y <= c.bottom);
 		if (C) {
-			const edgeV = Math.min(Math.max((C.bottom - C.top) * 0.33, 14), 28);
+			const edgeV = Math.min(Math.max((C.bottom - C.top) * 0.25, 12), 22);
+			if (y < C.top + edgeV) return { mode: 'stack-above', targetId: C.id };
 			if (y > C.bottom - edgeV) return { mode: 'stack-below', targetId: C.id };
+			const side: 'left' | 'right' = x < (C.left + C.right) / 2 ? 'left' : 'right';
 			if (isPlainRow(baseCells, C.row)) {
 				const rowCells = cells.filter((c) => c.row === C.row).sort((a, b) => a.left - b.left);
 				const pos = rowCells.findIndex((c) => c.id === C.id);
-				const index = pos + (x < (C.left + C.right) / 2 ? 0 : 1);
-				return { mode: 'into-row', row: C.row, index };
+				return { mode: 'into-row', row: C.row, index: pos + (side === 'right' ? 1 : 0) };
 			}
-			return { mode: 'stack-below', targetId: C.id };
+			return { mode: 'split', targetId: C.id, side };
 		}
 
 		// Not over a block → find the row track / gap from the pointer-y.
@@ -186,6 +187,8 @@
 		if (a.mode === 'into-row' && b.mode === 'into-row') return a.row === b.row && a.index === b.index;
 		if (a.mode === 'place' && b.mode === 'place') return a.col === b.col && a.row === b.row && a.colSpan === b.colSpan;
 		if (a.mode === 'stack-below' && b.mode === 'stack-below') return a.targetId === b.targetId;
+		if (a.mode === 'stack-above' && b.mode === 'stack-above') return a.targetId === b.targetId;
+		if (a.mode === 'split' && b.mode === 'split') return a.targetId === b.targetId && a.side === b.side;
 		return false;
 	}
 

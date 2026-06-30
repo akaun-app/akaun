@@ -13,7 +13,9 @@ export type DropTarget =
 	| { mode: 'new-row'; row: number }
 	| { mode: 'into-row'; row: number; index: number }
 	| { mode: 'place'; col: number; row: number; colSpan: number }
-	| { mode: 'stack-below'; targetId: string };
+	| { mode: 'stack-below'; targetId: string }
+	| { mode: 'stack-above'; targetId: string }
+	| { mode: 'split'; targetId: string; side: 'left' | 'right' };
 
 export function newCell(type: BlockType, columns: number): GridCell {
 	return { id: crypto.randomUUID(), type, config: {}, style: {}, col: 0, row: 0, colSpan: columns, rowSpan: 1 };
@@ -264,6 +266,59 @@ export function stackBelow(cells: GridCell[], targetId: string, block: GridCell)
 	return [...shifted.filter((c) => c.id !== placed.id), placed];
 }
 
+// Mirror of stackBelow: place `block` directly ABOVE `targetId` in the target's columns. A new
+// grid row is opened at the target's row; the target (and the cells stacked in its column) move
+// down, the target's siblings extend up to cover the new row.
+export function stackAbove(cells: GridCell[], targetId: string, block: GridCell): GridCell[] {
+	const target = cells.find((c) => c.id === targetId);
+	if (!target) return cells;
+	const A = target.row; // the new row index, at the target's current top
+	const tLo = target.row;
+	const tHi = target.row + target.rowSpan;
+	const inTargetCols = (c: GridCell) =>
+		c.col >= target.col && c.col + c.colSpan <= target.col + target.colSpan;
+
+	const shifted = cells.map((c) => {
+		if (c.id === targetId) return { ...c, row: c.row + 1 }; // target pushed down
+		// sibling beside the target (overlaps its rows, not in its columns) → extend up to cover A
+		if (c.row < tHi && tLo < c.row + c.rowSpan && !inTargetCols(c)) {
+			const top = Math.min(c.row, A);
+			return { ...c, row: top, rowSpan: c.row + c.rowSpan + 1 - top };
+		}
+		if (c.row >= A) return { ...c, row: c.row + 1 }; // below A (incl. target's column stack)
+		if (c.row < A && c.row + c.rowSpan > A) return { ...c, rowSpan: c.rowSpan + 1 }; // spans across A
+		return c;
+	});
+
+	const placed: GridCell = { ...block, col: target.col, colSpan: target.colSpan, row: A, rowSpan: 1 };
+	return [...shifted.filter((c) => c.id !== placed.id), placed];
+}
+
+// Split `targetId` in half along its own columns and place `block` on `side`, at the target's
+// row & rowSpan (so it sits beside a spanning cell). Needs colSpan >= 2.
+export function splitCell(
+	cells: GridCell[],
+	targetId: string,
+	side: 'left' | 'right',
+	block: GridCell
+): GridCell[] {
+	const target = cells.find((c) => c.id === targetId);
+	if (!target || target.colSpan < 2) return cells;
+	const leftSpan = Math.floor(target.colSpan / 2);
+	const rightSpan = target.colSpan - leftSpan;
+
+	let placed: GridCell;
+	let updatedTarget: GridCell;
+	if (side === 'right') {
+		updatedTarget = { ...target, colSpan: leftSpan };
+		placed = { ...block, col: target.col + leftSpan, colSpan: rightSpan, row: target.row, rowSpan: target.rowSpan };
+	} else {
+		updatedTarget = { ...target, col: target.col + leftSpan, colSpan: rightSpan };
+		placed = { ...block, col: target.col, colSpan: leftSpan, row: target.row, rowSpan: target.rowSpan };
+	}
+	return [...cells.filter((c) => c.id !== targetId && c.id !== placed.id), updatedTarget, placed];
+}
+
 // Apply a drag drop (used for both the live preview and the commit). `cells` is the
 // drag base (the dragged block already removed when moving). Returns the new layout.
 export function planDrop(
@@ -277,6 +332,12 @@ export function planDrop(
 	}
 	if (target.mode === 'stack-below') {
 		return stackBelow(cells, target.targetId, block);
+	}
+	if (target.mode === 'stack-above') {
+		return stackAbove(cells, target.targetId, block);
+	}
+	if (target.mode === 'split') {
+		return splitCell(cells, target.targetId, target.side, block);
 	}
 	if (target.mode === 'into-row' && isPlainRow(cells, target.row)) {
 		return insertIntoRow(cells, block, target.row, target.index, columns);
