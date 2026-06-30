@@ -258,6 +258,18 @@ export const settings = sqliteTable('settings', {
 	value: text('value').notNull()
 });
 
+// User-defined categories for expenses and income.
+export const categories = sqliteTable(
+	'categories',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		type: text('type', { enum: ['expense', 'income'] }).notNull(),
+		name: text('name').notNull(),
+		sortOrder: integer('sort_order').notNull().default(0)
+	},
+	(t) => [uniqueIndex('categories_type_name_idx').on(t.type, t.name)]
+);
+
 // Cache of historical exchange rates, stored in the provider's native pair shape: each
 // row is `rate` = `quote` units per 1 `base` on `date`. Rows are self-describing, so a
 // later main-currency change needs no invalidation — new lookups simply use a different
