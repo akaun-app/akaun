@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "081d9c44-764f-4a67-bea2-60eedcaeef99",
+  "id": "009f412e-461d-42a5-8913-e5842ae428ac",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "app_sequences": {
@@ -64,7 +64,7 @@
         },
         "type": {
           "name": "type",
-          "type": "text",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -76,13 +76,12 @@
           "notNull": true,
           "autoincrement": false
         },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
+        "rank": {
+          "name": "rank",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
-          "default": 0
+          "autoincrement": false
         }
       },
       "indexes": {

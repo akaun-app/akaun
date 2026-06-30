@@ -259,13 +259,16 @@ export const settings = sqliteTable('settings', {
 });
 
 // User-defined categories for expenses and income.
+export const CATEGORY_TYPE = { expense: 0, income: 1 } as const;
+export type CategoryType = (typeof CATEGORY_TYPE)[keyof typeof CATEGORY_TYPE];
+
 export const categories = sqliteTable(
 	'categories',
 	{
 		id: integer('id').primaryKey({ autoIncrement: true }),
-		type: text('type', { enum: ['expense', 'income'] }).notNull(),
+		type: integer('type').notNull(), // 0 = expense, 1 = income (see CATEGORY_TYPE)
 		name: text('name').notNull(),
-		sortOrder: integer('sort_order').notNull().default(0)
+		rank: text('rank').notNull()
 	},
 	(t) => [uniqueIndex('categories_type_name_idx').on(t.type, t.name)]
 );

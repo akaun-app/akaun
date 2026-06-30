@@ -9,7 +9,8 @@ import { dirname } from 'path';
 import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
-import { users, groups, groupPermissions, userGroups, documentTemplates, categories } from './schema.js';
+import { users, groups, groupPermissions, userGroups, documentTemplates, categories, CATEGORY_TYPE } from './schema.js';
+import { generateRanks } from '../queries/categories.js';
 import { TemplateDocumentType, TemplateFont } from '$lib/enums.js';
 import { makeDefaultLayout } from '../pdf/template-types.js';
 
@@ -181,16 +182,18 @@ const SEED_INCOME_CATEGORIES = [
 ];
 
 export function ensureDefaultCategories(): void {
-	const expCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, 'expense')).get() as { n: number }).n;
+	const expCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, CATEGORY_TYPE.expense)).get() as { n: number }).n;
 	if (expCount === 0) {
+		const ranks = generateRanks(SEED_EXPENSE_CATEGORIES.length);
 		db.insert(categories)
-			.values(SEED_EXPENSE_CATEGORIES.map((name, i) => ({ type: 'expense' as const, name, sortOrder: i })))
+			.values(SEED_EXPENSE_CATEGORIES.map((name, i) => ({ type: CATEGORY_TYPE.expense, name, rank: ranks[i] })))
 			.run();
 	}
-	const incCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, 'income')).get() as { n: number }).n;
+	const incCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, CATEGORY_TYPE.income)).get() as { n: number }).n;
 	if (incCount === 0) {
+		const ranks = generateRanks(SEED_INCOME_CATEGORIES.length);
 		db.insert(categories)
-			.values(SEED_INCOME_CATEGORIES.map((name, i) => ({ type: 'income' as const, name, sortOrder: i })))
+			.values(SEED_INCOME_CATEGORIES.map((name, i) => ({ type: CATEGORY_TYPE.income, name, rank: ranks[i] })))
 			.run();
 	}
 }

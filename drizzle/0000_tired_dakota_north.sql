@@ -8,9 +8,9 @@ CREATE TABLE `app_sequences` (
 CREATE UNIQUE INDEX `app_sequences_prefix_date_idx` ON `app_sequences` (`prefix`,`date_key`);--> statement-breakpoint
 CREATE TABLE `categories` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`type` text NOT NULL,
+	`type` integer NOT NULL,
 	`name` text NOT NULL,
-	`sort_order` integer DEFAULT 0 NOT NULL
+	`rank` text NOT NULL
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `categories_type_name_idx` ON `categories` (`type`,`name`);--> statement-breakpoint
