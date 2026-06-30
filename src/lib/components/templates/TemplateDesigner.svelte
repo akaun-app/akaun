@@ -51,7 +51,7 @@
 	}
 
 	function deleteCell(id: string) {
-		applyCells(removeBlock(layout.cells, id));
+		applyCells(removeBlock(layout.cells, id, columns));
 		if (selectedBlockId === id) selectedBlockId = null;
 	}
 

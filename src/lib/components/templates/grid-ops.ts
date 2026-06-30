@@ -12,7 +12,8 @@ import type { BlockType, GridCell } from '$lib/pdf/template-types.js';
 export type DropTarget =
 	| { mode: 'new-row'; row: number }
 	| { mode: 'into-row'; row: number; index: number }
-	| { mode: 'place'; col: number; row: number; colSpan: number };
+	| { mode: 'place'; col: number; row: number; colSpan: number }
+	| { mode: 'stack-below'; targetId: string };
 
 export function newCell(type: BlockType, columns: number): GridCell {
 	return { id: crypto.randomUUID(), type, config: {}, style: {}, col: 0, row: 0, colSpan: columns, rowSpan: 1 };
@@ -166,8 +167,25 @@ export function setColBoundary(cells: GridCell[], leftId: string, deltaCols: num
 	});
 }
 
-export function removeBlock(cells: GridCell[], id: string): GridCell[] {
-	return compact(cells.filter((c) => c.id !== id));
+export function removeBlock(cells: GridCell[], id: string, columns: number): GridCell[] {
+	const removed = cells.find((c) => c.id === id);
+	let rest = cells.filter((c) => c.id !== id);
+	// If the removed cell's row is still a plain row, re-tile its remaining cells evenly so
+	// they use up the freed space instead of leaving a gap.
+	if (removed && isPlainRow(rest, removed.row)) {
+		const rowCells = rest.filter((c) => c.row === removed.row).sort((a, b) => a.col - b.col);
+		if (rowCells.length) {
+			const spans = evenSpans(rowCells.length, columns);
+			let col = 0;
+			const tiled = rowCells.map((c, i) => {
+				const nc: GridCell = { ...c, col, colSpan: spans[i] };
+				col += spans[i];
+				return nc;
+			});
+			rest = [...rest.filter((c) => c.row !== removed.row), ...tiled];
+		}
+	}
+	return compact(rest);
 }
 
 // A row is "plain" if it holds cells, all rowSpan 1, with nothing spanning into it
@@ -220,6 +238,32 @@ export function rightNeighbor(cells: GridCell[], cell: GridCell): GridCell | nul
 	);
 }
 
+// Place `block` directly below `targetId`, in the target's columns. A new grid row is
+// opened just under the target and the target's siblings (cells beside it) auto-span down
+// to cover it — so a partial target grows a stacked column, while a full-width target just
+// gets a plain new row below it.
+export function stackBelow(cells: GridCell[], targetId: string, block: GridCell): GridCell[] {
+	const target = cells.find((c) => c.id === targetId);
+	if (!target) return cells;
+	const B = target.row + target.rowSpan; // the new row index, just under the target
+	const tLo = target.row;
+	const tHi = target.row + target.rowSpan;
+
+	const shifted = cells.map((c) => {
+		if (c.id === targetId) return c;
+		if (c.row >= B) return { ...c, row: c.row + 1 }; // pushed below the new row
+		if (c.row < B && c.row + c.rowSpan > B) return { ...c, rowSpan: c.rowSpan + 1 }; // spans across B
+		// sibling sharing the target's rows → extend it to cover the new row
+		if (c.row < tHi && tLo < c.row + c.rowSpan) {
+			return { ...c, rowSpan: Math.max(c.rowSpan, B + 1 - c.row) };
+		}
+		return c;
+	});
+
+	const placed: GridCell = { ...block, col: target.col, colSpan: target.colSpan, row: B, rowSpan: 1 };
+	return [...shifted.filter((c) => c.id !== placed.id), placed];
+}
+
 // Apply a drag drop (used for both the live preview and the commit). `cells` is the
 // drag base (the dragged block already removed when moving). Returns the new layout.
 export function planDrop(
@@ -230,6 +274,9 @@ export function planDrop(
 ): GridCell[] {
 	if (target.mode === 'new-row') {
 		return placeCell(cells, { ...block, col: 0, colSpan: columns }, 0, target.row, columns);
+	}
+	if (target.mode === 'stack-below') {
+		return stackBelow(cells, target.targetId, block);
 	}
 	if (target.mode === 'into-row' && isPlainRow(cells, target.row)) {
 		return insertIntoRow(cells, block, target.row, target.index, columns);

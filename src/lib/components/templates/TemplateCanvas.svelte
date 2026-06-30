@@ -45,7 +45,7 @@
 	// Row geometry uses the grid's disjoint row tracks (so a row-spanning cell can't
 	// shadow the rows beneath it); cells carry their rects for into-row indexing.
 	// Because baseCells is constant for the whole drag, this never goes stale.
-	type CellSnap = { id: string; row: number; col: number; colSpan: number; left: number; right: number };
+	type CellSnap = { id: string; row: number; col: number; colSpan: number; left: number; right: number; top: number; bottom: number };
 	type Snapshot = { tops: number[]; heights: number[]; cells: CellSnap[] };
 	let snapshot: Snapshot = { tops: [], heights: [], cells: [] };
 	let lastX = 0;
@@ -127,7 +127,9 @@
 				col: parseInt(el.dataset.col ?? '0'),
 				colSpan: parseInt(el.dataset.colspan ?? '1'),
 				left: r.left,
-				right: r.right
+				right: r.right,
+				top: r.top,
+				bottom: r.bottom
 			});
 		}
 		snapshot = { tops, heights, cells };
@@ -144,8 +146,24 @@
 	function computeTarget(x: number, y: number): DropTarget {
 		const { tops, heights, cells } = snapshot;
 		if (!tops.length) return { mode: 'new-row', row: 0 };
-		if (y < tops[0]) return { mode: 'new-row', row: 0 };
 
+		// Over a block → edge zones: bottom edge stacks below it; otherwise add a column on
+		// the side the cursor is on (plain rows only). Non-plain rows can only stack.
+		const C = cells.find((c) => x >= c.left && x <= c.right && y >= c.top && y <= c.bottom);
+		if (C) {
+			const edgeV = Math.min(Math.max((C.bottom - C.top) * 0.33, 14), 28);
+			if (y > C.bottom - edgeV) return { mode: 'stack-below', targetId: C.id };
+			if (isPlainRow(baseCells, C.row)) {
+				const rowCells = cells.filter((c) => c.row === C.row).sort((a, b) => a.left - b.left);
+				const pos = rowCells.findIndex((c) => c.id === C.id);
+				const index = pos + (x < (C.left + C.right) / 2 ? 0 : 1);
+				return { mode: 'into-row', row: C.row, index };
+			}
+			return { mode: 'stack-below', targetId: C.id };
+		}
+
+		// Not over a block → find the row track / gap from the pointer-y.
+		if (y < tops[0]) return { mode: 'new-row', row: 0 };
 		let row = -1;
 		for (let i = 0; i < tops.length; i++) {
 			if (y <= tops[i] + heights[i]) { row = i; break; } // inside row track i
@@ -154,19 +172,9 @@
 		}
 		if (row === -1) return { mode: 'new-row', row: tops.length }; // below everything
 
-		// Inside row `row`. A plain row (no row-span) → even-split so it always fills the width.
-		if (isPlainRow(baseCells, row)) {
-			const rowCells = cells.filter((c) => c.row === row).sort((a, b) => a.left - b.left);
-			let index = rowCells.length;
-			for (let j = 0; j < rowCells.length; j++) {
-				if (x < (rowCells[j].left + rowCells[j].right) / 2) { index = j; break; }
-			}
-			return { mode: 'into-row', row, index };
-		}
-		// Non-plain row (a cell row-spans here): drop into the free columns beside the
-		// spanning cell, else create a full-width new row at this position.
-		const col = colFromX(x);
-		const run = freeRunAt(baseCells, col, row, columns);
+		// Inside a row but not over a block → fill the free columns beside a spanning cell,
+		// else a full-width new row.
+		const run = freeRunAt(baseCells, colFromX(x), row, columns);
 		if (run) return { mode: 'place', col: run.col, row, colSpan: run.colSpan };
 		return { mode: 'new-row', row };
 	}
@@ -177,6 +185,7 @@
 		if (a.mode === 'new-row' && b.mode === 'new-row') return a.row === b.row;
 		if (a.mode === 'into-row' && b.mode === 'into-row') return a.row === b.row && a.index === b.index;
 		if (a.mode === 'place' && b.mode === 'place') return a.col === b.col && a.row === b.row && a.colSpan === b.colSpan;
+		if (a.mode === 'stack-below' && b.mode === 'stack-below') return a.targetId === b.targetId;
 		return false;
 	}
 
