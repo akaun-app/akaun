@@ -1,7 +1,7 @@
 import { redirect, type Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { eq } from 'drizzle-orm';
-import { db, ensureDefaultAdmin, ensureGroupSeed, ensureDefaultTemplate } from '$lib/server/db/client.js';
+import { db, ensureDefaultAdmin, ensureGroupSeed, ensureDefaultTemplate, ensureDefaultCategories } from '$lib/server/db/client.js';
 import { getSessionUser } from '$lib/server/auth.js';
 import { users } from '$lib/server/db/schema.js';
 import { getEffectivePermissions } from '$lib/server/permissions.js';
@@ -14,6 +14,7 @@ export const init = async () => {
 	await ensureDefaultAdmin();
 	ensureGroupSeed();
 	ensureDefaultTemplate();
+	ensureDefaultCategories();
 	startImportWorker();
 };
 

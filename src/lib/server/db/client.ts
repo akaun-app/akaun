@@ -9,7 +9,7 @@ import { dirname } from 'path';
 import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
-import { users, groups, groupPermissions, userGroups, documentTemplates } from './schema.js';
+import { users, groups, groupPermissions, userGroups, documentTemplates, categories } from './schema.js';
 import { TemplateDocumentType, TemplateFont } from '$lib/enums.js';
 import { makeDefaultLayout } from '../pdf/template-types.js';
 
@@ -167,5 +167,30 @@ export function ensureGroupSeed(): void {
 	for (const u of ungrouped) {
 		db.insert(userGroups).values({ userId: u.id, groupId: adminGroup.id }).run();
 		log.info({ userId: u.id }, 'Assigned ungrouped user to Administrators');
+	}
+}
+
+const SEED_EXPENSE_CATEGORIES = [
+	'Food & Beverage', 'Transport', 'Accommodation', 'Equipment',
+	'Software & Subscriptions', 'Office Supplies', 'Marketing',
+	'Professional Services', 'Other',
+];
+const SEED_INCOME_CATEGORIES = [
+	'Client Project', 'Product Sales', 'Consulting',
+	'Salary', 'Investment', 'Rental', 'Other',
+];
+
+export function ensureDefaultCategories(): void {
+	const expCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, 'expense')).get() as { n: number }).n;
+	if (expCount === 0) {
+		db.insert(categories)
+			.values(SEED_EXPENSE_CATEGORIES.map((name, i) => ({ type: 'expense' as const, name, sortOrder: i })))
+			.run();
+	}
+	const incCount = (db.select({ n: count() }).from(categories).where(eq(categories.type, 'income')).get() as { n: number }).n;
+	if (incCount === 0) {
+		db.insert(categories)
+			.values(SEED_INCOME_CATEGORIES.map((name, i) => ({ type: 'income' as const, name, sortOrder: i })))
+			.run();
 	}
 }
