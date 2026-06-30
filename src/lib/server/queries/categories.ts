@@ -17,23 +17,25 @@ export function saveCategories(
 	type: 'expense' | 'income',
 	names: string[]
 ): void {
-	const existing = db.select().from(categories).where(eq(categories.type, type)).all();
-	const existingByName = new Map(existing.map((r) => [r.name, r]));
-	const newSet = new Set(names);
+	db.transaction((tx) => {
+		const existing = tx.select().from(categories).where(eq(categories.type, type)).all();
+		const existingByName = new Map(existing.map((r) => [r.name, r]));
+		const newSet = new Set(names);
 
-	// Delete removed
-	for (const row of existing) {
-		if (!newSet.has(row.name)) {
-			db.delete(categories).where(eq(categories.id, row.id)).run();
+		// Delete removed
+		for (const row of existing) {
+			if (!newSet.has(row.name)) {
+				tx.delete(categories).where(eq(categories.id, row.id)).run();
+			}
 		}
-	}
-	// Insert new / update sortOrder for kept
-	names.forEach((name, i) => {
-		const found = existingByName.get(name);
-		if (found) {
-			db.update(categories).set({ sortOrder: i }).where(eq(categories.id, found.id)).run();
-		} else {
-			db.insert(categories).values({ type, name, sortOrder: i }).run();
-		}
+		// Insert new / update sortOrder for kept
+		names.forEach((name, i) => {
+			const found = existingByName.get(name);
+			if (found) {
+				tx.update(categories).set({ sortOrder: i }).where(eq(categories.id, found.id)).run();
+			} else {
+				tx.insert(categories).values({ type, name, sortOrder: i }).run();
+			}
+		});
 	});
 }
