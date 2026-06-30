@@ -3,29 +3,18 @@ import { db } from '$lib/server/db/client.js';
 import { listIncomes } from '$lib/server/queries/income.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { createIncome, removeIncome } from '$lib/server/services/income.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { getUserPreference, setUserPreference, USER_PREF_KEYS } from '$lib/server/userPreferences.js';
+import { getCategories } from '$lib/server/queries/categories.js';
 import { resolveRecordCurrency, mainCurrencyCode } from '$lib/server/currency/form.js';
 import { Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
 
-const DEFAULT_INCOME_CATEGORIES = [
-	'Client Project',
-	'Product Sales',
-	'Consulting',
-	'Salary',
-	'Investment',
-	'Rental',
-	'Other'
-];
-
 export function loadIncomePage(locals: App.Locals, openIncomeId: number | null) {
 	if (!hasPermission(locals, 'income', 'view')) throw redirect(302, '/dashboard');
 	const allIncomes = listIncomes(db, { limit: 1000 });
 
-	const catSetting = getSetting(db, SETTING_KEYS.incomeCategories);
-	const categories: string[] = catSetting ? JSON.parse(catSetting) : DEFAULT_INCOME_CATEGORIES;
+	const categories = getCategories(db, 'income');
 
 	const now = new Date();
 	const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;

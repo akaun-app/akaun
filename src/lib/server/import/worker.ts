@@ -4,6 +4,7 @@ import { importQueue, users } from '../db/schema.js';
 import { STORAGE_PATH } from '../env.js';
 import { createLogger } from '../logger.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
+import { getCategories } from '../queries/categories.js';
 import { getEnabledProviders, insertProvider } from '../llmProviders.js';
 import { extractText } from './extractor.js';
 import { callLLMWithProviders } from './llm.js';
@@ -104,10 +105,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 			return;
 		}
 
-		const expCatsRaw = getSetting(db, SETTING_KEYS.expenseCategories);
-		const incCatsRaw = getSetting(db, SETTING_KEYS.incomeCategories);
-		const expenseCategories: string[] = expCatsRaw ? JSON.parse(expCatsRaw) : [];
-		const incomeCategories: string[] = incCatsRaw ? JSON.parse(incCatsRaw) : [];
+		const expenseCategories = getCategories(db, 'expense');
+		const incomeCategories = getCategories(db, 'income');
 		const mainCurrency = mainCurrencyCode(db);
 
 		log.info({ jobId: job.id, filename: job.originalFilename, providerCount: providers.length }, 'Processing job');

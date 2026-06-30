@@ -5,24 +5,12 @@ import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { createExpense, patchExpense, removeExpense } from '$lib/server/services/expenses.js';
 import { createClaim } from '$lib/server/services/claims.js';
 import { canEditAmount } from '$lib/server/locking.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { getUserPreference, setUserPreference, USER_PREF_KEYS } from '$lib/server/userPreferences.js';
+import { getCategories } from '$lib/server/queries/categories.js';
 import { resolveRecordCurrency, mainCurrencyCode } from '$lib/server/currency/form.js';
 import { ExpenseStatus, Role } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
-
-const DEFAULT_CATEGORIES = [
-	'Food & Beverage',
-	'Transport',
-	'Accommodation',
-	'Equipment',
-	'Software & Subscriptions',
-	'Office Supplies',
-	'Marketing',
-	'Professional Services',
-	'Other'
-];
 
 export function loadExpensesPage(locals: App.Locals, openExpenseId: number | null) {
 	if (!hasPermission(locals, 'expenses', 'view')) throw redirect(302, '/dashboard');
@@ -35,8 +23,7 @@ export function loadExpensesPage(locals: App.Locals, openExpenseId: number | nul
 		else if (e.status === ExpenseStatus.Paid) counts.paid++;
 	});
 
-	const catSetting = getSetting(db, SETTING_KEYS.expenseCategories);
-	const categories: string[] = catSetting ? JSON.parse(catSetting) : DEFAULT_CATEGORIES;
+	const categories = getCategories(db, 'expense');
 
 	if (openExpenseId !== null && !allExpenses.some((e) => e.id === openExpenseId)) {
 		throw redirect(302, '/expenses');

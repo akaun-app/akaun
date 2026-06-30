@@ -4,8 +4,6 @@ import { settings } from './db/schema.js';
 
 export const SETTING_KEYS = {
 	currencyCode: 'display.currencyCode',
-	expenseCategories: 'expense.categories',
-	incomeCategories: 'income.categories',
 	autoImportApiKey: 'autoImport.apiKey',
 	autoImportModel: 'autoImport.model',
 	autoImportEnabled: 'autoImport.enabled',
