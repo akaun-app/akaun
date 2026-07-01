@@ -101,6 +101,9 @@
 	// Tracks an in-field badge being repositioned via drag — not reactive
 	// state, just bookkeeping read/written across native drag event handlers.
 	let seqDraggingInternalNode: HTMLElement | null = null;
+	// The animated "gap" shown at the exact spot a dragged chip/badge would
+	// land — also plain bookkeeping, not reactive state.
+	let seqDropPlaceholder: HTMLElement | null = null;
 
 	const seqToday = new Date().toISOString().slice(0, 10);
 	const seqReducedMotion =
@@ -120,7 +123,7 @@
 		span.className = 'seq-inline-badge';
 		span.dataset.token = token;
 		span.textContent = seqTokenLabel(token);
-		span.draggable = true;
+		span.draggable = !data.sequenceTemplateLocked;
 		span.addEventListener('dragstart', (event) => {
 			event.dataTransfer?.setData('text/plain', token);
 			if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
@@ -130,6 +133,7 @@
 		span.addEventListener('dragend', () => {
 			span.classList.remove('seq-inline-badge-dragging');
 			seqDraggingInternalNode = null;
+			seqRemovePlaceholder();
 		});
 		return span;
 	}
@@ -196,12 +200,36 @@
 		return range;
 	}
 
+	// Point-based ranges (drag-drop) can resolve to a position *inside* an
+	// existing badge's label text, since caretRangeFromPoint measures pixel
+	// layout and ignores contenteditable="false". Snap such a range to just
+	// before/after the badge instead, so insertion never nests one badge
+	// inside another's DOM subtree.
+	function seqNormalizeRange(range: Range): Range {
+		const el = seqFieldRef;
+		if (!el) return range;
+		const container = range.startContainer;
+		const containerEl = container.nodeType === Node.TEXT_NODE ? container.parentElement : (container as Element);
+		const badge = containerEl?.closest?.('.seq-inline-badge') as HTMLElement | null;
+		if (!badge || !el.contains(badge)) return range;
+		const label = badge.textContent ?? '';
+		const before = container.nodeType === Node.TEXT_NODE && range.startOffset <= label.length / 2;
+		const normalized = document.createRange();
+		if (before) normalized.setStartBefore(badge);
+		else normalized.setStartAfter(badge);
+		normalized.collapse(true);
+		return normalized;
+	}
+
 	function seqInsertTokenAtRange(token: string, range: Range) {
 		const el = seqFieldRef;
 		if (!el) return;
+		range = seqNormalizeRange(range);
 		const badge = seqMakeBadgeEl(token);
+		if (!seqReducedMotion) badge.classList.add('seq-inline-badge-enter');
 		range.deleteContents();
 		range.insertNode(badge);
+		if (!seqReducedMotion) requestAnimationFrame(() => badge.classList.remove('seq-inline-badge-enter'));
 		range.setStartAfter(badge);
 		range.collapse(true);
 		const sel = document.getSelection();
@@ -231,15 +259,23 @@
 
 	function seqChipDragEnd() {
 		seqDraggingChip = null;
+		seqRemovePlaceholder();
 	}
 
 	function seqTemplateDragOver(event: DragEvent) {
 		event.preventDefault();
 		seqDragOver = true;
+		seqUpdateDropIndicator(event);
 	}
 
-	function seqTemplateDragLeave() {
+	function seqTemplateDragLeave(event: DragEvent) {
+		const el = seqFieldRef;
+		const related = event.relatedTarget as Node | null;
+		// Moving onto a child (e.g. a badge) fires leave-then-enter on some
+		// browsers — only treat it as a real leave once we're outside the field.
+		if (el && related && el.contains(related)) return;
 		seqDragOver = false;
+		seqRemovePlaceholder();
 	}
 
 	// Resolves a drop point to a precise DOM Range. Unlike a plain <input>,
@@ -262,6 +298,88 @@
 		return null;
 	}
 
+	// FLIP-slides existing badges into their new position whenever the drop
+	// gap moves, instead of letting them snap there instantly. Snapshot
+	// rects before the DOM change, then after, and animate away the delta.
+	function seqCaptureBadgeRects(el: HTMLElement): Map<HTMLElement, DOMRect> {
+		const rects = new Map<HTMLElement, DOMRect>();
+		for (const node of el.children) {
+			if (node instanceof HTMLElement && node !== seqDropPlaceholder) rects.set(node, node.getBoundingClientRect());
+		}
+		return rects;
+	}
+
+	function seqPlayFlip(el: HTMLElement, prevRects: Map<HTMLElement, DOMRect>) {
+		if (seqReducedMotion) return;
+		for (const node of el.children) {
+			if (!(node instanceof HTMLElement) || node === seqDropPlaceholder) continue;
+			const prev = prevRects.get(node);
+			if (!prev) continue;
+			const next = node.getBoundingClientRect();
+			const dx = prev.left - next.left;
+			const dy = prev.top - next.top;
+			if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+			node.style.transition = 'none';
+			node.style.transform = `translate(${dx}px, ${dy}px)`;
+			requestAnimationFrame(() => {
+				node.style.transition = 'transform 180ms cubic-bezier(0.16, 1, 0.3, 1)';
+				node.style.transform = '';
+				node.addEventListener(
+					'transitionend',
+					() => {
+						node.style.transition = '';
+					},
+					{ once: true }
+				);
+			});
+		}
+	}
+
+	// Shows an animated gap at the exact spot a dropped chip/badge would
+	// land — the field visibly makes room before the drop actually happens,
+	// so repositioning reads as "pushing badges apart" instead of a blind swap.
+	function seqEnsurePlaceholder(): HTMLElement {
+		if (seqDropPlaceholder && !seqDropPlaceholder.isConnected) seqDropPlaceholder = null;
+		if (!seqDropPlaceholder) {
+			const span = document.createElement('span');
+			span.contentEditable = 'false';
+			span.className = 'seq-drop-placeholder';
+			seqDropPlaceholder = span;
+		}
+		return seqDropPlaceholder;
+	}
+
+	function seqRemovePlaceholder() {
+		const placeholder = seqDropPlaceholder;
+		seqDropPlaceholder = null;
+		if (!placeholder?.isConnected) return;
+		if (seqReducedMotion) {
+			placeholder.remove();
+			return;
+		}
+		placeholder.classList.remove('seq-drop-placeholder-grown');
+		placeholder.addEventListener('transitionend', () => placeholder.remove(), { once: true });
+		// Safety net in case width was already 0 and no transition fires.
+		setTimeout(() => placeholder.remove(), 200);
+	}
+
+	function seqUpdateDropIndicator(event: DragEvent) {
+		const el = seqFieldRef;
+		if (!el) return;
+		const pointRange = seqRangeFromPoint(event.clientX, event.clientY);
+		if (!pointRange || !el.contains(pointRange.startContainer)) return;
+		const target = seqNormalizeRange(pointRange);
+		const placeholder = seqEnsurePlaceholder();
+		const prevRects = seqCaptureBadgeRects(el);
+		target.insertNode(placeholder);
+		seqPlayFlip(el, prevRects);
+		if (seqReducedMotion) {
+			placeholder.classList.add('seq-drop-placeholder-grown');
+		} else if (!placeholder.classList.contains('seq-drop-placeholder-grown')) {
+			requestAnimationFrame(() => placeholder.classList.add('seq-drop-placeholder-grown'));
+		}
+	}
+
 	function seqTemplateDrop(event: DragEvent) {
 		event.preventDefault();
 		seqDragOver = false;
@@ -269,11 +387,27 @@
 		const el = seqFieldRef;
 		const draggedNode = seqDraggingInternalNode;
 		seqDraggingInternalNode = null;
-		if (!token || !el) return;
-		const pointRange = seqRangeFromPoint(event.clientX, event.clientY);
-		const target = pointRange && el.contains(pointRange.startContainer) ? pointRange : seqCurrentRange();
-		if (!target) return;
-		seqInsertTokenAtRange(token, target);
+		const placeholder = seqDropPlaceholder;
+		seqDropPlaceholder = null;
+		if (!token || !el) {
+			placeholder?.remove();
+			return;
+		}
+		// Reuse the placeholder's exact position as the drop target — it's
+		// already sitting where the animation showed the badge would land.
+		let target: Range | null = null;
+		if (placeholder?.isConnected) {
+			target = document.createRange();
+			target.selectNode(placeholder);
+		} else {
+			const pointRange = seqRangeFromPoint(event.clientX, event.clientY);
+			target = pointRange && el.contains(pointRange.startContainer) ? seqNormalizeRange(pointRange) : seqCurrentRange();
+		}
+		if (!target) {
+			placeholder?.remove();
+			return;
+		}
+		seqInsertTokenAtRange(token, target); // deleteContents() removes the placeholder itself
 		// Repositioning an existing badge — drop the copy in at the new spot
 		// (above), then remove the original so it reads as a move, not a copy.
 		if (draggedNode?.isConnected) {
@@ -956,58 +1090,71 @@
 						use:enhance={() => ({ update }) => update({ reset: false })}
 					>
 						<input type="hidden" name="template" value={seqTemplate} />
-						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:14px;">
-							Drag or click a token to insert it — literal characters (dashes, custom text) are typed
-							by hand. <code>{'{PREFIX}'}</code> resolves to each type's fixed code (EX/IN/CL/QT/IV) —
-							include it or leave it out, but its value can't be changed. Exactly one
-							<code>{'{SEQ}'}</code> token is required; the sequence resets whenever the resolved date
-							portion of the template changes — a template with <code>{'{DD}'}</code> resets daily,
-							<code>{'{YYYY}'}</code> only resets yearly, no date token never resets.
-						</p>
+						{#if data.sequenceTemplateLocked}
+							<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:14px;">
+								This format generated at least one document number, so it's now fixed.
+							</p>
+						{:else}
+							<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:14px;">
+								Drag or click a token to insert it — literal characters (dashes, custom text) are typed
+								by hand. <code>{'{PREFIX}'}</code> resolves to each type's fixed code (EX/IN/CL/QT/IV) —
+								include it or leave it out, but its value can't be changed. Exactly one
+								<code>{'{SEQ}'}</code> token is required; the sequence resets whenever the resolved date
+								portion of the template changes — a template with <code>{'{DD}'}</code> resets daily,
+								<code>{'{YYYY}'}</code> only resets yearly, no date token never resets.
+							</p>
 
-						<div class="seq-chip-row">
-							{#each SEQ_CHIPS as chip (chip.token)}
-								<Badge
-									variant="outline"
-									class="seq-chip {seqDraggingChip === chip.token ? 'seq-chip-dragging' : ''} {seqPoppingChip === chip.token ? 'seq-chip-pop' : ''}"
-									draggable={true}
-									role="button"
-									tabindex={0}
-									ondragstart={(e: DragEvent) => seqChipDragStart(e, chip.token)}
-									ondragend={seqChipDragEnd}
-									onclick={() => seqChipClick(chip.token)}
-									onkeydown={(e: KeyboardEvent) => {
-										if (e.key === 'Enter' || e.key === ' ') {
-											e.preventDefault();
-											seqChipClick(chip.token);
-										}
-									}}
-								>
-									{chip.label}
-								</Badge>
-							{/each}
-						</div>
+							<div class="seq-chip-row">
+								{#each SEQ_CHIPS as chip (chip.token)}
+									<Badge
+										variant="outline"
+										class="seq-chip {seqDraggingChip === chip.token ? 'seq-chip-dragging' : ''} {seqPoppingChip === chip.token ? 'seq-chip-pop' : ''}"
+										draggable={true}
+										role="button"
+										tabindex={0}
+										ondragstart={(e: DragEvent) => seqChipDragStart(e, chip.token)}
+										ondragend={seqChipDragEnd}
+										onclick={() => seqChipClick(chip.token)}
+										onkeydown={(e: KeyboardEvent) => {
+											if (e.key === 'Enter' || e.key === ' ') {
+												e.preventDefault();
+												seqChipClick(chip.token);
+											}
+										}}
+									>
+										{chip.label}
+									</Badge>
+								{/each}
+							</div>
+						{/if}
 
 						<div
 							bind:this={seqFieldRef}
-							class="set-input-full seq-template-field {seqDragOver ? 'seq-drag-over' : ''} {seqFlash ? 'seq-flash' : ''}"
-							contenteditable="true"
+							class="set-input-full seq-template-field {seqDragOver ? 'seq-drag-over' : ''} {seqFlash ? 'seq-flash' : ''} {data.sequenceTemplateLocked ? 'seq-template-field-locked' : ''}"
+							contenteditable={data.sequenceTemplateLocked ? 'false' : 'true'}
 							role="textbox"
 							aria-multiline="false"
+							aria-readonly={data.sequenceTemplateLocked}
 							aria-label="Document number template"
 							tabindex={0}
-							oninput={seqSyncFromDom}
-							onkeydown={seqHandleKeydown}
-							onpaste={seqHandlePaste}
-							ondragover={seqTemplateDragOver}
-							ondragleave={seqTemplateDragLeave}
-							ondrop={seqTemplateDrop}
+							oninput={data.sequenceTemplateLocked ? undefined : seqSyncFromDom}
+							onkeydown={data.sequenceTemplateLocked ? undefined : seqHandleKeydown}
+							onpaste={data.sequenceTemplateLocked ? undefined : seqHandlePaste}
+							ondragover={data.sequenceTemplateLocked ? undefined : seqTemplateDragOver}
+							ondragleave={data.sequenceTemplateLocked ? undefined : seqTemplateDragLeave}
+							ondrop={data.sequenceTemplateLocked ? undefined : seqTemplateDrop}
 						></div>
 
 						<p class="set-row-value" style="font-size:12px; margin-top:12px; word-break: break-word;">
 							Preview: <code>{seqPreviewLine}</code>
 						</p>
-						<Button type="submit" class="mt-4">Save</Button>
+						{#if data.sequenceTemplateLocked}
+							<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:6px; margin-bottom:0;">
+								<Lock size={12} /> Number format is locked once any document exists — changing it would break historical document numbering.
+							</p>
+						{:else}
+							<Button type="submit" class="mt-4">Save</Button>
+						{/if}
 					</form>
 				</div>
 
@@ -1371,6 +1518,24 @@
 		border-color: var(--primary);
 	}
 
+	.seq-template-field-locked {
+		cursor: default;
+		color: var(--muted-foreground);
+	}
+
+	.seq-template-field-locked :global(.seq-inline-badge) {
+		cursor: default;
+		background: oklch(0.97 0.04 85 / 0.6);
+		border: 1px solid oklch(0.85 0.1 85);
+		color: oklch(0.45 0.15 70);
+	}
+
+	:global(.dark) .seq-template-field-locked :global(.seq-inline-badge) {
+		background: oklch(0.25 0.05 85 / 0.4);
+		border-color: oklch(0.4 0.1 85);
+		color: oklch(0.75 0.1 85);
+	}
+
 	:global(.seq-inline-badge) {
 		display: inline-flex;
 		align-items: center;
@@ -1386,10 +1551,40 @@
 		white-space: nowrap;
 		user-select: none;
 		cursor: grab;
+		transition:
+			opacity 150ms ease,
+			transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 	}
 
 	:global(.seq-inline-badge-dragging) {
 		opacity: 0.4;
+	}
+
+	/* Starting state for a freshly-dropped badge — the class is removed one
+	   frame after insertion so the badge transitions from this into place. */
+	:global(.seq-inline-badge-enter) {
+		opacity: 0;
+		transform: scale(0.75);
+	}
+
+	:global(.seq-drop-placeholder) {
+		display: inline-block;
+		width: 0;
+		height: 15px;
+		vertical-align: middle;
+		margin: 0 1px;
+		border-radius: 9999px;
+		border: 1.5px dashed var(--primary);
+		background: var(--primary-soft);
+		opacity: 0;
+		transition:
+			width 200ms cubic-bezier(0.16, 1, 0.3, 1),
+			opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	:global(.seq-drop-placeholder-grown) {
+		width: 26px;
+		opacity: 1;
 	}
 
 	.seq-drag-over {
@@ -1410,6 +1605,8 @@
 		:global(.seq-chip:hover),
 		:global(.seq-chip-dragging),
 		:global(.seq-chip-pop),
+		:global(.seq-inline-badge),
+		:global(.seq-drop-placeholder),
 		.seq-template-field {
 			transition: none;
 			animation: none;

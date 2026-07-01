@@ -1,8 +1,7 @@
 import type { PageServerLoad, Actions } from './$types.js';
 import { db } from '$lib/server/db/client.js';
 import { listTemplates } from '$lib/server/queries/templates.js';
-import { expenses, incomes } from '$lib/server/db/schema.js';
-import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { getSetting, setSetting, SETTING_KEYS, hasAnyDocuments } from '$lib/server/settings.js';
 import { getCategories, saveCategories as saveCategoriesDB } from '$lib/server/queries/categories.js';
 import { DEFAULT_SEQUENCE_TEMPLATE, validateTemplate } from '$lib/sequence-template.js';
 import {
@@ -14,20 +13,15 @@ import {
 } from '$lib/server/llmProviders.js';
 import type { ProviderType } from '$lib/server/import/providers/index.js';
 import { fail } from '@sveltejs/kit';
-import { sql } from 'drizzle-orm';
-
-function hasAnyTransactions(): boolean {
-	const expenseCount = db.select({ n: sql<number>`count(*)` }).from(expenses).get()!.n;
-	const incomeCount = db.select({ n: sql<number>`count(*)` }).from(incomes).get()!.n;
-	return expenseCount + incomeCount > 0;
-}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const expenseCategories = getCategories(db, 'expense');
 	const incomeCategories = getCategories(db, 'income');
 	const sequenceTemplate = getSetting(db, SETTING_KEYS.sequenceTemplate) ?? DEFAULT_SEQUENCE_TEMPLATE;
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
-	const currencyLocked = hasAnyTransactions();
+	const locked = hasAnyDocuments(db);
+	const currencyLocked = locked;
+	const sequenceTemplateLocked = locked;
 
 	const autoImportParallelTasks = parseInt(
 		getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3',
@@ -54,6 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		sequenceTemplate,
 		currency,
 		currencyLocked,
+		sequenceTemplateLocked,
 		username: locals.user!.username,
 		autoImportParallelTasks,
 		autoImportCategoryHints,
@@ -74,8 +69,17 @@ export const actions: Actions = {
 		const companyAddress = String(data.get('companyAddress') ?? '').trim();
 		const companyRegistrationNo = String(data.get('companyRegistrationNo') ?? '').trim();
 
-		if (!hasAnyTransactions() && /^[A-Z]{3}$/.test(code)) {
-			setSetting(db, SETTING_KEYS.currencyCode, code);
+		if (code) {
+			const currentCode = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
+			if (hasAnyDocuments(db)) {
+				if (code !== currentCode) {
+					return fail(400, {
+						error: 'Currency is locked once any document exists — changing it would corrupt historical amounts.'
+					});
+				}
+			} else if (/^[A-Z]{3}$/.test(code)) {
+				setSetting(db, SETTING_KEYS.currencyCode, code);
+			}
 		}
 		setSetting(db, SETTING_KEYS.companyName, companyName);
 		setSetting(db, SETTING_KEYS.companyAddress, companyAddress);
@@ -101,6 +105,11 @@ export const actions: Actions = {
 	},
 
 	saveSequenceTemplate: async ({ request }) => {
+		if (hasAnyDocuments(db)) {
+			return fail(400, {
+				error: 'Sequence number format is locked once any document exists — changing it would break historical document numbering.'
+			});
+		}
 		const data = await request.formData();
 		const template = String(data.get('template') ?? '').trim();
 		const err = validateTemplate(template);
@@ -199,6 +208,5 @@ export const actions: Actions = {
 		const godMode = data.get('godMode') === 'true';
 		setSetting(db, SETTING_KEYS.godModeEnabled, String(godMode));
 		return { success: true };
-	},
-
+	}
 };

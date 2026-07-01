@@ -20,10 +20,13 @@ import {
 	claimAttachments,
 	expenseSearchText,
 	incomeSearchText,
-	appSequences
+	appSequences,
+	SEQUENCE_DOCUMENT_TYPE
 } from '../src/lib/server/db/schema.js';
 import { resolveOrCreateContact } from '../src/lib/server/queries/contacts.js';
 import { resolveOrCreateCategory } from '../src/lib/server/queries/categories.js';
+import { getSetting, SETTING_KEYS } from '../src/lib/server/settings.js';
+import { deriveBucketKey, validateTemplate, DEFAULT_SEQUENCE_TEMPLATE } from '../src/lib/sequence-template.js';
 import { Role, ExpenseStatus, ClaimStatus } from '../src/lib/enums.js';
 
 // Connects directly to the target SQLite file rather than importing
@@ -63,6 +66,26 @@ const expenseStatusByLabel: Record<string, number> = {
 	unpaid: ExpenseStatus.Unpaid,
 	pending: ExpenseStatus.Pending,
 	paid: ExpenseStatus.Paid
+};
+
+// The old app's ZAPPSEQUENCE.ZPREFIX values match the current app's fixed
+// per-type sequence prefixes (SEQUENCE_PREFIXES in $lib/sequence-template.ts).
+const SEQUENCE_TYPE_BY_OLD_PREFIX: Record<string, 'expense' | 'income' | 'claim'> = {
+	EX: 'expense',
+	IN: 'income',
+	CL: 'claim'
+};
+
+// Old macOS Akaun categories that are the same concept as an existing
+// category, just named differently — map them so migration reuses the
+// existing category instead of creating a near-duplicate.
+const EXPENSE_CATEGORY_MAP: Record<string, string> = {
+	Maintenance: 'Equipment',
+	'Spare Parts': 'Equipment',
+	Supplies: 'Office Supplies'
+};
+const INCOME_CATEGORY_MAP: Record<string, string> = {
+	'Sales Revenue': 'Product Sales'
 };
 
 const claimIdByNumber = new Map<string, number>();
@@ -114,7 +137,8 @@ const incomeDateByNumber = new Map<string, string>();
 		const status = expenseStatusByLabel[String(e.ZSTATUS).toLowerCase()] ?? ExpenseStatus.Unpaid;
 		const contactId = resolveOrCreateContact(tx, e.ZSUPPLIER ?? '', Role.Supplier, actingUserId);
 		const claimId = e.claimNumber ? claimIdByNumber.get(e.claimNumber) ?? null : null;
-		const category = e.ZCATEGORY?.trim() || 'Other';
+		const rawCategory = e.ZCATEGORY?.trim() || 'Other';
+		const category = EXPENSE_CATEGORY_MAP[rawCategory] ?? rawCategory;
 		resolveOrCreateCategory(tx, 'expense', category);
 		const row = tx
 			.insert(expenses)
@@ -159,7 +183,8 @@ const incomeDateByNumber = new Map<string, string>();
 	for (const i of incomeRows) {
 		const date = coreDataDateToISO(i.ZDATE);
 		const contactId = resolveOrCreateContact(tx, i.ZSOURCE ?? '', Role.Customer, actingUserId);
-		const category = i.ZCATEGORY?.trim() || 'Other';
+		const rawCategory = i.ZCATEGORY?.trim() || 'Other';
+		const category = INCOME_CATEGORY_MAP[rawCategory] ?? rawCategory;
 		resolveOrCreateCategory(tx, 'income', category);
 		const row = tx
 			.insert(incomes)
@@ -270,18 +295,38 @@ const incomeDateByNumber = new Map<string, string>();
 		tx.insert(incomeSearchText).values({ incomeId, text: s.ZTEXT }).run();
 	}
 
-	// 8. App sequences — now global (no per-user split); upsert by prefix+date_key.
+	// 8. App sequences — now global (no per-user split) and keyed by
+	// (documentType, bucketKey) instead of the old (prefix, dateKey), where
+	// bucketKey is derived from the shared sequence template. Recompute each
+	// old row's bucket under that template, collapsing any old rows that land
+	// in the same bucket (e.g. a template coarser than the old per-day one)
+	// by keeping the max lastSequence.
+	const storedTemplate = getSetting(tx, SETTING_KEYS.sequenceTemplate) ?? DEFAULT_SEQUENCE_TEMPLATE;
+	const template = validateTemplate(storedTemplate) ? DEFAULT_SEQUENCE_TEMPLATE : storedTemplate;
 	const sequenceRows = src.query(`SELECT ZPREFIX, ZDATEKEY, ZLASTSEQUENCE FROM ZAPPSEQUENCE`).all() as Array<{
 		ZPREFIX: string;
 		ZDATEKEY: string;
 		ZLASTSEQUENCE: number;
 	}>;
+	const bucketBySeqKey = new Map<string, { documentType: number; bucketKey: string; lastSequence: number }>();
 	for (const s of sequenceRows) {
+		const docType = SEQUENCE_TYPE_BY_OLD_PREFIX[s.ZPREFIX];
+		if (!docType) continue;
+		const date = `${s.ZDATEKEY.slice(0, 4)}-${s.ZDATEKEY.slice(4, 6)}-${s.ZDATEKEY.slice(6, 8)}`;
+		const documentType = SEQUENCE_DOCUMENT_TYPE[docType];
+		const bucketKey = deriveBucketKey(template, docType, date);
+		const seqKey = `${documentType}:${bucketKey}`;
+		const existing = bucketBySeqKey.get(seqKey);
+		if (!existing || s.ZLASTSEQUENCE > existing.lastSequence) {
+			bucketBySeqKey.set(seqKey, { documentType, bucketKey, lastSequence: s.ZLASTSEQUENCE });
+		}
+	}
+	for (const { documentType, bucketKey, lastSequence } of bucketBySeqKey.values()) {
 		tx.insert(appSequences)
-			.values({ prefix: s.ZPREFIX, dateKey: s.ZDATEKEY, lastSequence: s.ZLASTSEQUENCE })
+			.values({ documentType, bucketKey, lastSequence })
 			.onConflictDoUpdate({
-				target: [appSequences.prefix, appSequences.dateKey],
-				set: { lastSequence: s.ZLASTSEQUENCE }
+				target: [appSequences.documentType, appSequences.bucketKey],
+				set: { lastSequence }
 			})
 			.run();
 	}

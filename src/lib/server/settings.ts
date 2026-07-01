@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { settings } from './db/schema.js';
+import { settings, expenses, incomes, claims, quotations, invoices } from './db/schema.js';
 
 export const SETTING_KEYS = {
 	currencyCode: 'display.currencyCode',
@@ -45,4 +45,16 @@ export function setSetting(
 			set: { value }
 		})
 		.run();
+}
+
+// True once the business has issued any real document — at that point currency
+// and sequence-number-format settings must become immutable, since changing
+// either after the fact would corrupt historical amounts/numbering.
+export function hasAnyDocuments(
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	db: BunSQLiteDatabase<any>
+): boolean {
+	return [expenses, incomes, claims, quotations, invoices].some(
+		(table) => (db.select({ n: sql<number>`count(*)` }).from(table).get()?.n ?? 0) > 0
+	);
 }
