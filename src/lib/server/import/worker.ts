@@ -18,7 +18,6 @@ import { join } from 'path';
 
 const log = createLogger('import:worker');
 
-const DEFAULT_CONCURRENCY = 3;
 const TICK_INTERVAL = 2000;
 
 const activeJobs = new Set<string>();
@@ -58,7 +57,11 @@ async function tick() {
 		.where(eq(importQueue.state, ImportState.Queued))
 		.all();
 
-	const slots = DEFAULT_CONCURRENCY - activeJobs.size;
+	const maxConcurrency = Math.min(
+		10,
+		Math.max(1, parseInt(getSetting(db, SETTING_KEYS.autoImportParallelTasks) ?? '3', 10) || 3)
+	);
+	const slots = maxConcurrency - activeJobs.size;
 	if (slots <= 0 || queued.length === 0) return;
 
 	const toProcess = queued.slice(0, slots);
@@ -108,6 +111,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		const expenseCategories = getCategories(db, 'expense');
 		const incomeCategories = getCategories(db, 'income');
 		const mainCurrency = mainCurrencyCode(db);
+		const rateLimitMs = parseInt(getSetting(db, SETTING_KEYS.autoImportRateLimitMs) ?? '0', 10);
+		const customInstructions = getSetting(db, SETTING_KEYS.autoImportCustomInstructions) ?? '';
 
 		log.info({ jobId: job.id, filename: job.originalFilename, providerCount: providers.length }, 'Processing job');
 
@@ -154,8 +159,9 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		let result;
 		try {
 			result = await callLLMWithProviders(
-				{ text, expenseCategories, incomeCategories, mainCurrency },
-				providers
+				{ text, expenseCategories, incomeCategories, mainCurrency, customInstructions },
+				providers,
+				rateLimitMs
 			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

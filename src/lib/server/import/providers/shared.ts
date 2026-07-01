@@ -20,10 +20,11 @@ export interface PromptParams {
   incomeCategories: string[];
   mainCurrency: string;
   today: string;
+  customInstructions?: string;
 }
 
 export function buildSystemPrompt(params: PromptParams): string {
-  const { expenseCategories, incomeCategories, mainCurrency, today } = params;
+  const { expenseCategories, incomeCategories, mainCurrency, today, customInstructions } = params;
   const safeExpCats = expenseCategories.map((c) => c.replace(/[\[\];\n\r]/g, ""));
   const safeIncCats = incomeCategories.map((c) => c.replace(/[\[\];\n\r]/g, ""));
   return `You are a bookkeeping assistant that extracts structured data from a document.
@@ -42,7 +43,7 @@ Instructions:
 - reference = invoice/receipt/transaction number if present, else empty string.
 - remark = any useful notes, else empty string.
 - If a field cannot be determined, use an empty string or 0 for amount.
-
+${customInstructions ? `\nAdditional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):\n${customInstructions}\n` : ""}
 Respond with valid JSON only, matching the schema exactly. No markdown, no extra text.`;
 }
 

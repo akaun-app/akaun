@@ -11,6 +11,7 @@ import {
   postProcess,
 } from "./shared.js";
 import type { LLMCallParams, LLMResult, ProviderType } from "./types.js";
+import { throttleLLMCall } from "../rate-limiter.js";
 
 export type { LLMResult, LLMCallParams, ProviderType } from "./types.js";
 export type { ModelInfo } from "./types.js";
@@ -54,7 +55,10 @@ async function callWithStructuredFallback(
   config: ProviderConfig,
   params: LLMCallParams,
   today: string,
+  intervalMs: number,
 ): Promise<LLMResult> {
+  await throttleLLMCall(intervalMs);
+
   const system = buildSystemPrompt({ ...params, today });
   const prompt = buildUserPrompt(params);
   const key = cacheKey(config);
@@ -145,6 +149,7 @@ function isAuthError(message: string): boolean {
 export async function callLLMWithProviders(
   params: LLMCallParams,
   configs: ProviderConfig[],
+  intervalMs = 0,
 ): Promise<LLMResult> {
   let lastError: unknown;
   const today = new Date().toISOString().slice(0, 10);
@@ -158,7 +163,7 @@ export async function callLLMWithProviders(
 
       const model = createModel(config);
       const object = await withRetry(() =>
-        callWithStructuredFallback(model, config, params, today),
+        callWithStructuredFallback(model, config, params, today, intervalMs),
       );
 
       const result = postProcess(object, today, params.mainCurrency);

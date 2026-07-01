@@ -473,6 +473,15 @@
 	let aiParallelTasks = $state(data.autoImportParallelTasks);
 	// svelte-ignore state_referenced_locally
 	let aiCategoryHints = $state(data.autoImportCategoryHints);
+	// svelte-ignore state_referenced_locally
+	let aiRateLimitSec = $state(Math.round(data.autoImportRateLimitMs / 1000));
+	// svelte-ignore state_referenced_locally
+	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
+	let customInstructionsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	function handleCustomInstructionsInput() {
+		if (customInstructionsDebounceTimer) clearTimeout(customInstructionsDebounceTimer);
+		customInstructionsDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 800);
+	}
 
 	// Advanced state
 	// svelte-ignore state_referenced_locally
@@ -482,11 +491,18 @@
 	let intelligenceFormEl = $state<HTMLFormElement | null>(null);
 	let advancedFormEl = $state<HTMLFormElement | null>(null);
 	let sliderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	let rateLimitDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function handleSliderChange(v: number[]) {
 		aiParallelTasks = v[0];
 		if (sliderDebounceTimer) clearTimeout(sliderDebounceTimer);
 		sliderDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 400);
+	}
+
+	function handleRateLimitSliderChange(v: number[]) {
+		aiRateLimitSec = v[0];
+		if (rateLimitDebounceTimer) clearTimeout(rateLimitDebounceTimer);
+		rateLimitDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 400);
 	}
 
 	// --- Provider list state ---
@@ -709,6 +725,8 @@
 			if (action === 'saveIntelligenceGlobal') {
 				aiParallelTasks = data.autoImportParallelTasks;
 				aiCategoryHints = data.autoImportCategoryHints;
+				aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
+				aiCustomInstructions = data.autoImportCustomInstructions;
 			}
 			if (action === 'saveGeneral') {
 				mainCur = data.currency;
@@ -904,6 +922,7 @@
 					>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
 						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
+						<input type="hidden" name="rateLimitMs" value={aiRateLimitSec * 1000} />
 						<div class="set-rows">
 							<div class="set-row">
 								<div>
@@ -925,6 +944,24 @@
 							</div>
 							<div class="set-row">
 								<div>
+									<div class="set-row-label">Rate limit</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">{aiRateLimitSec === 0 ? 'No delay between AI calls' : `Wait ${aiRateLimitSec}s between AI calls`}</div>
+								</div>
+								<div class="slider-row">
+									<Slider
+										type="multiple"
+										min={0}
+										max={30}
+										step={1}
+										value={[aiRateLimitSec]}
+										onValueChange={handleRateLimitSliderChange}
+										style="width:140px;"
+									/>
+									<span class="slider-val num">{aiRateLimitSec}s</span>
+								</div>
+							</div>
+							<div class="set-row">
+								<div>
 									<div class="set-row-label">Category hints</div>
 									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Learn from your last 100 categorised items</div>
 								</div>
@@ -938,6 +975,21 @@
 								>
 									<span class="toggle-thumb"></span>
 								</button>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Custom instructions</div>
+								<div class="set-row-value" style="font-size:12px; margin-top:2px; margin-bottom:6px;">
+									Extra guidance for the AI when reading your documents — e.g. recurring suppliers, unusual formats, or category rules specific to your business.
+								</div>
+								<textarea
+									name="customInstructions"
+									bind:value={aiCustomInstructions}
+									oninput={handleCustomInstructionsInput}
+									placeholder={'e.g. "Grab receipts are always a food expense" or "Invoices from Acme Corp use category Software"'}
+									rows="4"
+									maxlength="2000"
+									class="set-textarea"
+								></textarea>
 							</div>
 						</div>
 					</form>

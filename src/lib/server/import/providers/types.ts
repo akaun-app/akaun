@@ -7,6 +7,7 @@ export interface LLMCallParams {
   expenseCategories: string[];
   incomeCategories: string[];
   mainCurrency: string;
+  customInstructions?: string;
 }
 
 export interface ModelInfo {

@@ -29,6 +29,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	);
 	const autoImportCategoryHints =
 		(getSetting(db, SETTING_KEYS.autoImportCategoryHints) ?? 'true') === 'true';
+	const autoImportRateLimitMs = parseInt(
+		getSetting(db, SETTING_KEYS.autoImportRateLimitMs) ?? '0',
+		10
+	);
+	const autoImportCustomInstructions = getSetting(db, SETTING_KEYS.autoImportCustomInstructions) ?? '';
 
 	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
 
@@ -52,6 +57,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		username: locals.user!.username,
 		autoImportParallelTasks,
 		autoImportCategoryHints,
+		autoImportRateLimitMs,
+		autoImportCustomInstructions,
 		godModeEnabled,
 		companyName,
 		companyAddress,
@@ -196,9 +203,16 @@ export const actions: Actions = {
 			Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10))
 		);
 		const categoryHints = data.get('categoryHints') === 'true';
+		const rateLimitMs = Math.min(
+			30000,
+			Math.max(0, parseInt(String(data.get('rateLimitMs') ?? '0'), 10) || 0)
+		);
+		const customInstructions = String(data.get('customInstructions') ?? '').trim().slice(0, 2000);
 
 		setSetting(db, SETTING_KEYS.autoImportParallelTasks, String(parallelTasks));
 		setSetting(db, SETTING_KEYS.autoImportCategoryHints, String(categoryHints));
+		setSetting(db, SETTING_KEYS.autoImportRateLimitMs, String(rateLimitMs));
+		setSetting(db, SETTING_KEYS.autoImportCustomInstructions, customInstructions);
 
 		return { success: true, action: 'saveIntelligenceGlobal' };
 	},
