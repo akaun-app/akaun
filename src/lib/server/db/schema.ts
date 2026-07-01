@@ -226,16 +226,33 @@ export const claimAttachments = sqliteTable('claim_attachments', {
 	addedDate: text('added_date').notNull().default(sql`(date('now'))`)
 });
 
-// Global running-number sequences across the shared ledger (no per-user split).
+// Document types that get an auto-generated running number. A local enum (not
+// $lib/enums.ts's unrelated `DocumentType`/`TemplateDocumentType`) to avoid
+// import collisions in files that touch both areas.
+export const SEQUENCE_DOCUMENT_TYPE = {
+	expense: 0,
+	income: 1,
+	claim: 2,
+	quotation: 3,
+	invoice: 4
+} as const;
+export type SequenceDocumentType = keyof typeof SEQUENCE_DOCUMENT_TYPE;
+export type SequenceDocumentTypeCode =
+	(typeof SEQUENCE_DOCUMENT_TYPE)[keyof typeof SEQUENCE_DOCUMENT_TYPE];
+
+// Global running-number counters across the shared ledger (no per-user split).
+// Bucket = (documentType, bucketKey), where bucketKey is derived by resolving
+// {PREFIX}/date tokens in the shared template for a given date and stripping
+// the {SEQ[:N]} token — see running-number.ts / $lib/sequence-template.ts.
 export const appSequences = sqliteTable(
 	'app_sequences',
 	{
 		id: integer('id').primaryKey({ autoIncrement: true }),
-		prefix: text('prefix').notNull(),
-		dateKey: text('date_key').notNull(),
+		documentType: integer('document_type').notNull(), // SEQUENCE_DOCUMENT_TYPE code
+		bucketKey: text('bucket_key').notNull(),
 		lastSequence: integer('last_sequence').notNull().default(0)
 	},
-	(t) => [uniqueIndex('app_sequences_prefix_date_idx').on(t.prefix, t.dateKey)]
+	(t) => [uniqueIndex('app_sequences_doctype_bucket_idx').on(t.documentType, t.bucketKey)]
 );
 
 export const expenseSearchText = sqliteTable('expense_search_text', {
@@ -314,6 +331,9 @@ export const importQueue = sqliteTable('import_queue', {
 	state: integer('state').notNull().default(1),
 	tempFilePath: text('temp_file_path').notNull(),
 	originalFilename: text('original_filename').notNull(),
+	// Caller-supplied text (e.g. from client-side OCR) that skips server-side
+	// extraction/OCR entirely when present. See worker.ts processJob().
+	preExtractedText: text('pre_extracted_text'),
 	// DocumentType code (1 = expense, 2 = income). See enums.ts.
 	documentType: integer('document_type'),
 	itemName: text('item_name'),

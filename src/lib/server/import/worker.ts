@@ -111,23 +111,29 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		log.info({ jobId: job.id, filename: job.originalFilename, providerCount: providers.length }, 'Processing job');
 
-		// Extracting
-		db.update(importQueue)
-			.set({ state: ImportState.Extracting })
-			.where(eq(importQueue.id, job.id))
-			.run();
-		emitJobUpdate(job.id, userId);
-
-		const absPath = join(STORAGE_PATH, job.tempFilePath);
-		const mimeType = inferMimeType(job.originalFilename);
 		let text: string;
-		try {
-			text = await extractText(absPath, mimeType);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			log.error({ jobId: job.id, err }, 'Text extraction failed');
-			markFailed(job.id, userId, msg);
-			return;
+		if (job.preExtractedText && job.preExtractedText.trim().length > 0) {
+			// Caller already ran its own OCR/extraction — skip server-side extraction entirely.
+			text = job.preExtractedText.trim();
+			log.debug({ jobId: job.id, textLength: text.length }, 'Using caller-provided text (OCR bypassed)');
+		} else {
+			// Extracting
+			db.update(importQueue)
+				.set({ state: ImportState.Extracting })
+				.where(eq(importQueue.id, job.id))
+				.run();
+			emitJobUpdate(job.id, userId);
+
+			const absPath = join(STORAGE_PATH, job.tempFilePath);
+			const mimeType = inferMimeType(job.originalFilename);
+			try {
+				text = await extractText(absPath, mimeType);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				log.error({ jobId: job.id, err }, 'Text extraction failed');
+				markFailed(job.id, userId, msg);
+				return;
+			}
 		}
 
 		if (!text || text.length < 10) {

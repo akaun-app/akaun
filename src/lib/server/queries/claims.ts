@@ -63,7 +63,7 @@ export function getClaim(db: Db, id: number) {
 
 export function createClaim(db: Db, actingUserId: number, data: { date: string; expenseIds: number[] }) {
 	return db.transaction(() => {
-		const claimNumber = nextNumber(db, 'CL', data.date);
+		const claimNumber = nextNumber(db, 'claim', data.date);
 
 		const claim = db
 			.insert(claims)

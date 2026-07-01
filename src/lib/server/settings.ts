@@ -15,7 +15,8 @@ export const SETTING_KEYS = {
 	companyAddress: 'company.address',
 	companyRegistrationNo: 'company.registrationNo',
 	templateQuotationDefaultId: 'template.quotation.defaultId',
-	templateInvoiceDefaultId: 'template.invoice.defaultId'
+	templateInvoiceDefaultId: 'template.invoice.defaultId',
+	sequenceTemplate: 'documentNumbers.template'
 } as const;
 
 export function getSetting(

@@ -144,7 +144,7 @@ export function getExpense(db: Db, id: number) {
 }
 
 export function createExpense(db: Db, actingUserId: number, data: ExpenseCreate) {
-	const expenseNumber = nextNumber(db, 'EX', data.date);
+	const expenseNumber = nextNumber(db, 'expense', data.date);
 
 	const row = db
 		.insert(expenses)

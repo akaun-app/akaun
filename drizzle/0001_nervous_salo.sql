@@ -1,0 +1,1 @@
+ALTER TABLE `import_queue` ADD `pre_extracted_text` text;

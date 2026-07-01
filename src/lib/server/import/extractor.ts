@@ -52,7 +52,7 @@ function imageObjectToPngBuffer(data: Uint8ClampedArray, width: number, height: 
 
 async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promise<string> {
 	const pdf = await getDocumentProxy(new Uint8Array(buffer));
-	const worker = await createWorker('eng');
+	const worker = await createWorker('eng+chi_sim');
 	try {
 		const pageTexts: string[] = [];
 		for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
@@ -70,7 +70,7 @@ async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promis
 }
 
 async function extractFromImage(absPath: string): Promise<string> {
-	const worker = await createWorker('eng');
+	const worker = await createWorker('eng+chi_sim');
 	try {
 		const { data } = await worker.recognize(absPath);
 		return data.text.trim();

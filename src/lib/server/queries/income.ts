@@ -118,7 +118,7 @@ export function getIncome(db: Db, id: number) {
 }
 
 export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
-	const incomeNumber = nextNumber(db, 'IN', data.date);
+	const incomeNumber = nextNumber(db, 'income', data.date);
 
 	const row = db
 		.insert(incomes)

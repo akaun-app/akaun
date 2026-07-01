@@ -4,6 +4,7 @@ import { listTemplates } from '$lib/server/queries/templates.js';
 import { expenses, incomes } from '$lib/server/db/schema.js';
 import { getSetting, setSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { getCategories, saveCategories as saveCategoriesDB } from '$lib/server/queries/categories.js';
+import { DEFAULT_SEQUENCE_TEMPLATE, validateTemplate } from '$lib/sequence-template.js';
 import {
 	getAllProviders,
 	insertProvider,
@@ -24,6 +25,7 @@ function hasAnyTransactions(): boolean {
 export const load: PageServerLoad = async ({ locals }) => {
 	const expenseCategories = getCategories(db, 'expense');
 	const incomeCategories = getCategories(db, 'income');
+	const sequenceTemplate = getSetting(db, SETTING_KEYS.sequenceTemplate) ?? DEFAULT_SEQUENCE_TEMPLATE;
 	const currency = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
 	const currencyLocked = hasAnyTransactions();
 
@@ -49,6 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		expenseCategories,
 		incomeCategories,
+		sequenceTemplate,
 		currency,
 		currencyLocked,
 		username: locals.user!.username,
@@ -95,6 +98,15 @@ export const actions: Actions = {
 		} catch {
 			return fail(400, { error: 'Invalid categories data' });
 		}
+	},
+
+	saveSequenceTemplate: async ({ request }) => {
+		const data = await request.formData();
+		const template = String(data.get('template') ?? '').trim();
+		const err = validateTemplate(template);
+		if (err) return fail(400, { error: err });
+		setSetting(db, SETTING_KEYS.sequenceTemplate, template);
+		return { success: true, action: 'saveSequenceTemplate' };
 	},
 
 	addProvider: async ({ request }) => {

@@ -1,4 +1,4 @@
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, and, desc } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import { LexoRank } from 'lexorank';
 import { categories, CATEGORY_TYPE } from '../db/schema.js';
@@ -21,6 +21,33 @@ export function getCategories(db: BunSQLiteDatabase<any>, type: 'expense' | 'inc
 		.orderBy(asc(categories.rank))
 		.all()
 		.map((r) => r.name);
+}
+
+/** Inserts `name` into the type's registry if it isn't already there; leaves everything else untouched. */
+export function resolveOrCreateCategory(
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	db: BunSQLiteDatabase<any>,
+	type: 'expense' | 'income',
+	name: string
+): void {
+	const typeInt = CATEGORY_TYPE[type];
+	const trimmed = name.trim();
+	if (!trimmed) return;
+	const existing = db
+		.select({ id: categories.id })
+		.from(categories)
+		.where(and(eq(categories.type, typeInt), eq(categories.name, trimmed)))
+		.get();
+	if (existing) return;
+	const last = db
+		.select({ rank: categories.rank })
+		.from(categories)
+		.where(eq(categories.type, typeInt))
+		.orderBy(desc(categories.rank))
+		.limit(1)
+		.get();
+	const rank = last ? LexoRank.parse(last.rank).genNext().toString() : LexoRank.middle().toString();
+	db.insert(categories).values({ type: typeInt, name: trimmed, rank }).run();
 }
 
 export function saveCategories(

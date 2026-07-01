@@ -23,6 +23,7 @@ import {
 	appSequences
 } from '../src/lib/server/db/schema.js';
 import { resolveOrCreateContact } from '../src/lib/server/queries/contacts.js';
+import { resolveOrCreateCategory } from '../src/lib/server/queries/categories.js';
 import { Role, ExpenseStatus, ClaimStatus } from '../src/lib/enums.js';
 
 // Connects directly to the target SQLite file rather than importing
@@ -113,6 +114,8 @@ const incomeDateByNumber = new Map<string, string>();
 		const status = expenseStatusByLabel[String(e.ZSTATUS).toLowerCase()] ?? ExpenseStatus.Unpaid;
 		const contactId = resolveOrCreateContact(tx, e.ZSUPPLIER ?? '', Role.Supplier, actingUserId);
 		const claimId = e.claimNumber ? claimIdByNumber.get(e.claimNumber) ?? null : null;
+		const category = e.ZCATEGORY?.trim() || 'Other';
+		resolveOrCreateCategory(tx, 'expense', category);
 		const row = tx
 			.insert(expenses)
 			.values({
@@ -121,7 +124,7 @@ const incomeDateByNumber = new Map<string, string>();
 				contactId,
 				reference: e.ZREFERENCE ?? '',
 				remark: e.ZREMARK ?? '',
-				category: e.ZCATEGORY ?? 'Other',
+				category,
 				status,
 				date,
 				amount: e.ZAMOUNTCENTS / 100,
@@ -156,6 +159,8 @@ const incomeDateByNumber = new Map<string, string>();
 	for (const i of incomeRows) {
 		const date = coreDataDateToISO(i.ZDATE);
 		const contactId = resolveOrCreateContact(tx, i.ZSOURCE ?? '', Role.Customer, actingUserId);
+		const category = i.ZCATEGORY?.trim() || 'Other';
+		resolveOrCreateCategory(tx, 'income', category);
 		const row = tx
 			.insert(incomes)
 			.values({
@@ -164,7 +169,7 @@ const incomeDateByNumber = new Map<string, string>();
 				descriptionText: i.ZDESCRIPTIONTEXT ?? '',
 				reference: i.ZREFERENCE ?? '',
 				remark: i.ZREMARK ?? '',
-				category: i.ZCATEGORY ?? 'Other',
+				category,
 				date,
 				amount: i.ZAMOUNTCENTS / 100,
 				currency: 'MYR',

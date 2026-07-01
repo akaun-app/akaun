@@ -178,7 +178,7 @@ const SEED_EXPENSE_CATEGORIES = [
 ];
 const SEED_INCOME_CATEGORIES = [
 	'Client Project', 'Product Sales', 'Consulting',
-	'Salary', 'Investment', 'Rental', 'Other',
+	'Investment', 'Rental', 'Other',
 ];
 
 export function ensureDefaultCategories(): void {

@@ -164,7 +164,7 @@ export function createInvoice(db: Db, userId: number, data: InvoiceCreate) {
 		}
 
 		const totals = computeTotals(data.lines);
-		const invoiceNumber = nextNumber(tx, 'IV', data.issueDate);
+		const invoiceNumber = nextNumber(tx, 'invoice', data.issueDate);
 
 		const { id: newId } = tx
 			.insert(invoices)
@@ -287,7 +287,7 @@ export function markInvoicePaid(
 		if (!invoice) return { ok: false, reason: 'not_found' };
 		if (invoice.status === InvoiceStatus.Paid) return { ok: false, reason: 'already_paid' };
 
-		const incomeNumber = nextNumber(tx, 'IN', invoice.issueDate);
+		const incomeNumber = nextNumber(tx, 'income', invoice.issueDate);
 
 		const { id: newIncomeId } = tx
 			.insert(incomes)

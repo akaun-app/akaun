@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { untrack } from 'svelte';
 	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { toast } from 'svelte-sonner';
@@ -18,11 +20,19 @@
 	import { makeDefaultLayout } from '$lib/pdf/template-types.js';
 	import { TemplateDocumentType } from '$lib/enums.js';
 	import type { TemplateRow } from '$lib/pdf/template-types.js';
+	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'intelligence' | 'providers' | 'categories' | 'templates' | 'advanced';
+	type Tab =
+		| 'general'
+		| 'intelligence'
+		| 'providers'
+		| 'categories'
+		| 'numbering'
+		| 'templates'
+		| 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Mobile detection for Sheet side
@@ -58,6 +68,271 @@
 	// svelte-ignore state_referenced_locally
 	let incCats = $state<string[]>([...data.incomeCategories]);
 	let newIncCat = $state('');
+
+	// Document numbering state — one shared template, applied to every type
+	const SEQ_TYPES: SequenceDocType[] = ['expense', 'income', 'claim', 'quotation', 'invoice'];
+	const SEQ_LABELS: Record<SequenceDocType, string> = {
+		expense: 'Expense',
+		income: 'Income',
+		claim: 'Claim',
+		quotation: 'Quotation',
+		invoice: 'Invoice'
+	};
+	const SEQ_CHIPS: { token: string; label: string }[] = [
+		{ token: '{PREFIX}', label: 'PREFIX' },
+		{ token: '{YYYY}', label: 'YYYY' },
+		{ token: '{YY}', label: 'YY' },
+		{ token: '{MM}', label: 'MM' },
+		{ token: '{DD}', label: 'DD' },
+		{ token: '{SEQ:3}', label: 'SEQ' }
+	];
+
+	function seqTokenLabel(token: string): string {
+		return token.replace(/^\{|\}$/g, '').replace(/:\d+$/, '');
+	}
+
+	// svelte-ignore state_referenced_locally
+	let seqTemplate = $state(data.sequenceTemplate);
+	let seqFieldRef = $state<HTMLDivElement | null>(null);
+	let seqDragOver = $state(false);
+	let seqFlash = $state(false);
+	let seqDraggingChip = $state<string | null>(null);
+	let seqPoppingChip = $state<string | null>(null);
+	// Tracks an in-field badge being repositioned via drag — not reactive
+	// state, just bookkeeping read/written across native drag event handlers.
+	let seqDraggingInternalNode: HTMLElement | null = null;
+
+	const seqToday = new Date().toISOString().slice(0, 10);
+	const seqReducedMotion =
+		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+	const seqValidationError = $derived(validateTemplate(seqTemplate));
+	const seqPreviewLine = $derived(
+		seqValidationError ??
+			SEQ_TYPES.map((t) => `${SEQ_LABELS[t]} ${renderTemplate(seqTemplate, t, seqToday, 1)}`).join('   ·   ')
+	);
+
+	// Badges are plain DOM nodes (not Svelte-templated), so drag handlers for
+	// repositioning are wired up directly here rather than as component props.
+	function seqMakeBadgeEl(token: string): HTMLSpanElement {
+		const span = document.createElement('span');
+		span.contentEditable = 'false';
+		span.className = 'seq-inline-badge';
+		span.dataset.token = token;
+		span.textContent = seqTokenLabel(token);
+		span.draggable = true;
+		span.addEventListener('dragstart', (event) => {
+			event.dataTransfer?.setData('text/plain', token);
+			if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+			seqDraggingInternalNode = span;
+			span.classList.add('seq-inline-badge-dragging');
+		});
+		span.addEventListener('dragend', () => {
+			span.classList.remove('seq-inline-badge-dragging');
+			seqDraggingInternalNode = null;
+		});
+		return span;
+	}
+
+	// Rebuilds the field's DOM (text nodes + inline token badges) from a plain
+	// `{TOKEN}` template string. Only runs when the field itself (re)mounts —
+	// never reactively on every edit, since that would blow away the DOM
+	// selection/cursor mid-edit. See the $effect below.
+	function seqHydrate(el: HTMLElement, template: string) {
+		el.innerHTML = '';
+		let lastIndex = 0;
+		for (const match of template.matchAll(TOKEN_REGEX)) {
+			const index = match.index ?? 0;
+			if (index > lastIndex) el.appendChild(document.createTextNode(template.slice(lastIndex, index)));
+			el.appendChild(seqMakeBadgeEl(match[0]));
+			lastIndex = index + match[0].length;
+		}
+		if (lastIndex < template.length) el.appendChild(document.createTextNode(template.slice(lastIndex)));
+	}
+
+	// Walks the field's DOM back into the plain `{TOKEN}` string that
+	// validateTemplate/renderTemplate/deriveBucketKey operate on.
+	function seqSerialize(el: HTMLElement): string {
+		let out = '';
+		for (const node of el.childNodes) {
+			if (node.nodeType === Node.TEXT_NODE) {
+				out += node.textContent ?? '';
+			} else if (node instanceof HTMLElement && node.dataset.token) {
+				out += node.dataset.token;
+			}
+		}
+		return out;
+	}
+
+	function seqSyncFromDom() {
+		if (seqFieldRef) seqTemplate = seqSerialize(seqFieldRef);
+	}
+
+	$effect(() => {
+		const el = seqFieldRef;
+		if (el) seqHydrate(el, untrack(() => seqTemplate));
+	});
+
+	function seqFlashInsert() {
+		if (seqReducedMotion) return;
+		seqFlash = true;
+		setTimeout(() => (seqFlash = false), 400);
+	}
+
+	// The current selection if it's inside the field, otherwise the end of
+	// the field's content — used as the insertion point for click-inserts
+	// and as a drag-drop fallback if a precise point can't be resolved.
+	function seqCurrentRange(): Range | null {
+		const el = seqFieldRef;
+		if (!el) return null;
+		const sel = document.getSelection();
+		if (sel && sel.rangeCount > 0) {
+			const range = sel.getRangeAt(0);
+			if (el.contains(range.commonAncestorContainer)) return range.cloneRange();
+		}
+		const range = document.createRange();
+		range.selectNodeContents(el);
+		range.collapse(false);
+		return range;
+	}
+
+	function seqInsertTokenAtRange(token: string, range: Range) {
+		const el = seqFieldRef;
+		if (!el) return;
+		const badge = seqMakeBadgeEl(token);
+		range.deleteContents();
+		range.insertNode(badge);
+		range.setStartAfter(badge);
+		range.collapse(true);
+		const sel = document.getSelection();
+		sel?.removeAllRanges();
+		sel?.addRange(range);
+		el.focus();
+		seqSyncFromDom();
+		seqFlashInsert();
+	}
+
+	function seqChipClick(token: string) {
+		const range = seqCurrentRange();
+		if (range) seqInsertTokenAtRange(token, range);
+		if (!seqReducedMotion) {
+			seqPoppingChip = token;
+			setTimeout(() => {
+				if (seqPoppingChip === token) seqPoppingChip = null;
+			}, 180);
+		}
+	}
+
+	function seqChipDragStart(event: DragEvent, token: string) {
+		event.dataTransfer?.setData('text/plain', token);
+		if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+		seqDraggingChip = token;
+	}
+
+	function seqChipDragEnd() {
+		seqDraggingChip = null;
+	}
+
+	function seqTemplateDragOver(event: DragEvent) {
+		event.preventDefault();
+		seqDragOver = true;
+	}
+
+	function seqTemplateDragLeave() {
+		seqDragOver = false;
+	}
+
+	// Resolves a drop point to a precise DOM Range. Unlike a plain <input>,
+	// contenteditable content is real DOM text layout, so the browser's own
+	// caret-from-point APIs give pixel-accurate placement here.
+	function seqRangeFromPoint(x: number, y: number): Range | null {
+		const doc = document as Document & {
+			caretRangeFromPoint?: (x: number, y: number) => Range | null;
+			caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+		};
+		if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
+		if (doc.caretPositionFromPoint) {
+			const pos = doc.caretPositionFromPoint(x, y);
+			if (!pos) return null;
+			const range = document.createRange();
+			range.setStart(pos.offsetNode, pos.offset);
+			range.collapse(true);
+			return range;
+		}
+		return null;
+	}
+
+	function seqTemplateDrop(event: DragEvent) {
+		event.preventDefault();
+		seqDragOver = false;
+		const token = event.dataTransfer?.getData('text/plain');
+		const el = seqFieldRef;
+		const draggedNode = seqDraggingInternalNode;
+		seqDraggingInternalNode = null;
+		if (!token || !el) return;
+		const pointRange = seqRangeFromPoint(event.clientX, event.clientY);
+		const target = pointRange && el.contains(pointRange.startContainer) ? pointRange : seqCurrentRange();
+		if (!target) return;
+		seqInsertTokenAtRange(token, target);
+		// Repositioning an existing badge — drop the copy in at the new spot
+		// (above), then remove the original so it reads as a move, not a copy.
+		if (draggedNode?.isConnected) {
+			draggedNode.remove();
+			seqSyncFromDom();
+		}
+	}
+
+	// Force plain-text paste — pasted HTML/styling has no place in a
+	// single-line token template.
+	function seqHandlePaste(event: ClipboardEvent) {
+		event.preventDefault();
+		const text = event.clipboardData?.getData('text/plain') ?? '';
+		if (!text) return;
+		const range = seqCurrentRange();
+		if (!range) return;
+		range.deleteContents();
+		const textNode = document.createTextNode(text);
+		range.insertNode(textNode);
+		range.setStartAfter(textNode);
+		range.collapse(true);
+		const sel = document.getSelection();
+		sel?.removeAllRanges();
+		sel?.addRange(range);
+		seqSyncFromDom();
+	}
+
+	// Removes an adjacent token badge as one atomic unit on Backspace/Delete,
+	// instead of relying on inconsistent browser default handling of
+	// `contenteditable="false"` islands (some browsers select-then-delete
+	// over two keystrokes).
+	function seqHandleKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Backspace' && event.key !== 'Delete') return;
+		const el = seqFieldRef;
+		const sel = document.getSelection();
+		if (!el || !sel || !sel.isCollapsed || sel.rangeCount === 0) return;
+		const { startContainer, startOffset } = sel.getRangeAt(0);
+
+		let target: ChildNode | null = null;
+		if (event.key === 'Backspace') {
+			if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
+				target = startContainer.previousSibling;
+			} else if (startContainer === el && startOffset > 0) {
+				target = el.childNodes[startOffset - 1] ?? null;
+			}
+		} else {
+			if (startContainer.nodeType === Node.TEXT_NODE && startOffset === startContainer.textContent?.length) {
+				target = startContainer.nextSibling;
+			} else if (startContainer === el) {
+				target = el.childNodes[startOffset] ?? null;
+			}
+		}
+
+		if (target instanceof HTMLElement && target.dataset.token) {
+			event.preventDefault();
+			target.remove();
+			seqSyncFromDom();
+		}
+	}
 
 	// Global intelligence settings
 	// svelte-ignore state_referenced_locally
@@ -372,6 +647,7 @@
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'providers', label: 'Providers' },
 		{ id: 'categories', label: 'Categories' },
+		{ id: 'numbering', label: 'Numbering' },
 		{ id: 'templates', label: 'Templates' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
@@ -668,6 +944,73 @@
 					</form>
 				</div>
 
+			{:else if activeTab === 'numbering'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Numbering</h2>
+						<p class="set-section-sub">One format, applied to every document type</p>
+					</div>
+					<form
+						method="POST"
+						action="?/saveSequenceTemplate"
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
+						<input type="hidden" name="template" value={seqTemplate} />
+						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:14px;">
+							Drag or click a token to insert it — literal characters (dashes, custom text) are typed
+							by hand. <code>{'{PREFIX}'}</code> resolves to each type's fixed code (EX/IN/CL/QT/IV) —
+							include it or leave it out, but its value can't be changed. Exactly one
+							<code>{'{SEQ}'}</code> token is required; the sequence resets whenever the resolved date
+							portion of the template changes — a template with <code>{'{DD}'}</code> resets daily,
+							<code>{'{YYYY}'}</code> only resets yearly, no date token never resets.
+						</p>
+
+						<div class="seq-chip-row">
+							{#each SEQ_CHIPS as chip (chip.token)}
+								<Badge
+									variant="outline"
+									class="seq-chip {seqDraggingChip === chip.token ? 'seq-chip-dragging' : ''} {seqPoppingChip === chip.token ? 'seq-chip-pop' : ''}"
+									draggable={true}
+									role="button"
+									tabindex={0}
+									ondragstart={(e: DragEvent) => seqChipDragStart(e, chip.token)}
+									ondragend={seqChipDragEnd}
+									onclick={() => seqChipClick(chip.token)}
+									onkeydown={(e: KeyboardEvent) => {
+										if (e.key === 'Enter' || e.key === ' ') {
+											e.preventDefault();
+											seqChipClick(chip.token);
+										}
+									}}
+								>
+									{chip.label}
+								</Badge>
+							{/each}
+						</div>
+
+						<div
+							bind:this={seqFieldRef}
+							class="set-input-full seq-template-field {seqDragOver ? 'seq-drag-over' : ''} {seqFlash ? 'seq-flash' : ''}"
+							contenteditable="true"
+							role="textbox"
+							aria-multiline="false"
+							aria-label="Document number template"
+							tabindex={0}
+							oninput={seqSyncFromDom}
+							onkeydown={seqHandleKeydown}
+							onpaste={seqHandlePaste}
+							ondragover={seqTemplateDragOver}
+							ondragleave={seqTemplateDragLeave}
+							ondrop={seqTemplateDrop}
+						></div>
+
+						<p class="set-row-value" style="font-size:12px; margin-top:12px; word-break: break-word;">
+							Preview: <code>{seqPreviewLine}</code>
+						</p>
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
+				</div>
+
 			{:else if activeTab === 'templates'}
 				<div class="set-section tpl-section">
 					<div class="tpl-split">
@@ -953,6 +1296,125 @@
 	.chip-remove:hover {
 		opacity: 1;
 		background: oklch(0 0 0 / 0.1);
+	}
+
+	.seq-chip-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-bottom: 10px;
+	}
+
+	:global(.seq-chip) {
+		cursor: grab;
+		user-select: none;
+		background: var(--accent) !important;
+		color: var(--accent-foreground) !important;
+		border-color: transparent !important;
+		transition:
+			transform 120ms ease,
+			box-shadow 120ms ease,
+			opacity 150ms ease;
+	}
+
+	:global(.seq-chip:hover) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 6px oklch(0 0 0 / 0.12);
+	}
+
+	:global(.seq-chip:active) {
+		cursor: grabbing;
+	}
+
+	:global(.seq-chip-dragging) {
+		opacity: 0.4;
+		transform: scale(0.95);
+	}
+
+	:global(.seq-chip-pop) {
+		animation: seq-chip-pop 180ms ease;
+	}
+
+	@keyframes seq-chip-pop {
+		0% {
+			transform: scale(1);
+		}
+		50% {
+			transform: scale(1.15);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	.seq-template-field {
+		width: 100%;
+		min-height: 36px;
+		padding: 7px 10px;
+		font-size: 13.5px;
+		font-family: var(--font-mono, monospace);
+		line-height: 20px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--card);
+		color: var(--foreground);
+		outline: none;
+		white-space: pre-wrap;
+		word-break: break-word;
+		cursor: text;
+		transition:
+			border-color 150ms ease,
+			background-color 150ms ease;
+	}
+
+	.seq-template-field:focus {
+		border-color: var(--primary);
+	}
+
+	:global(.seq-inline-badge) {
+		display: inline-flex;
+		align-items: center;
+		vertical-align: middle;
+		padding: 1px 6px;
+		margin: 0 1px;
+		border-radius: 9999px;
+		background: var(--accent);
+		color: var(--accent-foreground);
+		font-size: 11.5px;
+		font-weight: 500;
+		font-family: inherit;
+		white-space: nowrap;
+		user-select: none;
+		cursor: grab;
+	}
+
+	:global(.seq-inline-badge-dragging) {
+		opacity: 0.4;
+	}
+
+	.seq-drag-over {
+		border-color: var(--primary) !important;
+		box-shadow: 0 0 0 3px var(--primary-soft);
+	}
+
+	.seq-flash {
+		border-color: var(--primary) !important;
+		box-shadow: 0 0 0 3px var(--primary-soft);
+		transition:
+			border-color 400ms ease,
+			box-shadow 400ms ease;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		:global(.seq-chip),
+		:global(.seq-chip:hover),
+		:global(.seq-chip-dragging),
+		:global(.seq-chip-pop),
+		.seq-template-field {
+			transition: none;
+			animation: none;
+			transform: none;
+		}
 	}
 
 	.warn-banner {

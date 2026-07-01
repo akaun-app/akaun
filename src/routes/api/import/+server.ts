@@ -46,6 +46,22 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
 
+	// Optional: caller already ran its own OCR/extraction (e.g. Apple Vision Framework
+	// via a client-side Shortcut) and wants the server to skip its own OCR.
+	const MAX_EXTRACTED_TEXT_LENGTH = 50_000;
+	const rawExtractedText = formData.get('extractedText');
+	let preExtractedText: string | null = null;
+	if (typeof rawExtractedText === 'string') {
+		const trimmed = rawExtractedText.trim();
+		if (trimmed.length > MAX_EXTRACTED_TEXT_LENGTH) {
+			return json(
+				{ error: `extractedText too long. Maximum length is ${MAX_EXTRACTED_TEXT_LENGTH} characters.` },
+				{ status: 400 }
+			);
+		}
+		if (trimmed.length > 0) preExtractedText = trimmed;
+	}
+
 	const allowedExtensions = /\.(pdf|jpe?g|png)$/i;
 	if (!allowedExtensions.test(file.name)) {
 		return json({ error: 'Unsupported file type. Upload a PDF, JPG, or PNG.' }, { status: 400 });
@@ -74,7 +90,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			createdBy: locals.user.id,
 			state: ImportState.Queued,
 			tempFilePath,
-			originalFilename: file.name
+			originalFilename: file.name,
+			preExtractedText
 		})
 		.run();
 

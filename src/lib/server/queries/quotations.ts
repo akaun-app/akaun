@@ -152,7 +152,7 @@ export function createQuotation(db: Db, userId: number, data: QuotationCreate) {
 		}
 
 		const totals = computeTotals(data.lines);
-		const quotationNumber = nextNumber(tx, 'QT', data.issueDate);
+		const quotationNumber = nextNumber(tx, 'quotation', data.issueDate);
 
 		const { id: newId } = tx
 			.insert(quotations)
@@ -269,7 +269,7 @@ export function convertQuotationToInvoice(
 			return { ok: false, reason: 'already_converted' };
 		}
 
-		const invoiceNumber = nextNumber(tx, 'IV', quotation.issueDate);
+		const invoiceNumber = nextNumber(tx, 'invoice', quotation.issueDate);
 
 		const { id: newInvoiceId } = tx
 			.insert(invoices)

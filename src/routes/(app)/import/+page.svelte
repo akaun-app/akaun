@@ -8,7 +8,8 @@
 		X,
 		AlertTriangle,
 		RotateCcw,
-		Camera
+		Camera,
+		ExternalLink
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
@@ -544,7 +545,17 @@
 						<div class="review-card" class:is-dup={dup}>
 							<!-- Header -->
 							<div class="review-head">
-								<div class="review-file"><Receipt size={15} /> {job.originalFilename}</div>
+								<a
+									href="/api/import/{job.id}/file"
+									target="_blank"
+									rel="noopener"
+									class="review-file"
+									aria-label="Open {job.originalFilename}"
+								>
+									<Receipt size={15} />
+									{job.originalFilename}
+									<ExternalLink size={11} color="var(--muted-foreground)" />
+								</a>
 								<div class="review-head-right">
 									{#if dup}
 										<span class="dup-badge">
