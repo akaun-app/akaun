@@ -16,13 +16,15 @@
 		value = $bindable<string | undefined>(undefined),
 		defaultToday = false,
 		onchange = undefined,
-		placeholder = 'Pick a date'
+		placeholder = 'Pick a date',
+		disabled = false
 	}: {
 		name?: string;
 		value?: string;
 		defaultToday?: boolean;
 		onchange?: (v: string) => void;
 		placeholder?: string;
+		disabled?: boolean;
 	} = $props();
 
 	const df = new DateFormatter('en-GB', { dateStyle: 'medium' });
@@ -62,8 +64,9 @@
 
 <Popover.Root bind:open>
 	<Popover.Trigger
+		{disabled}
 		class={cn(
-			"border-input flex h-9 w-full items-center gap-2 rounded-md border bg-card px-3 text-[13.5px] outline-none transition-[color,box-shadow]",
+			"border-input flex h-9 w-full items-center gap-2 rounded-md border bg-card px-3 text-[13.5px] outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50",
 			focusRingClass,
 			focusRingOpenClass
 		)}

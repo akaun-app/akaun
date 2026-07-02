@@ -30,8 +30,11 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	const godModeRaw = getSetting(db, SETTING_KEYS.godModeEnabled);
 	const godMode = godModeRaw === 'true';
 
-	if (body.amount !== undefined && !canEditAmount(expense)) {
-		return Response.json({ error: 'Amount cannot be edited on a claimed expense' }, { status: 403 });
+	if ((body.amount !== undefined || body.status !== undefined) && !canEditAmount(expense)) {
+		return Response.json(
+			{ error: 'Amount and status cannot be edited on a claimed expense' },
+			{ status: 403 }
+		);
 	}
 
 	const descriptiveFields = ['itemName', 'contactId', 'reference', 'remark', 'category', 'date'];

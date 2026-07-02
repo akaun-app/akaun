@@ -40,7 +40,7 @@
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol, currencyDecimals, formatCurrencyAmount } from '$lib/currency.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import { ExpenseStatus, ClaimStatus, Role } from '$lib/enums.js';
+	import { ExpenseStatus, ClaimStatus, Role, EntityType } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -95,6 +95,101 @@
 	let mobileSearchOpen = $state(false);
 	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
+
+	// --- Edit mode (detail sheet) ---
+	// Mirrors src/lib/server/locking.ts — amount/status lock has no god-mode override,
+	// descriptive fields do. Kept in sync manually since the server module can't be imported client-side.
+	const godMode = $derived(!!page.data.godMode);
+	function canEditAmount(e: { claimId: number | null }): boolean {
+		return e.claimId === null;
+	}
+	function canEditDescriptive(e: { claimId: number | null }): boolean {
+		return e.claimId === null || godMode;
+	}
+	const amountLocked = $derived(detailExpense ? !canEditAmount(detailExpense) : false);
+	const descriptiveLocked = $derived(detailExpense ? !canEditDescriptive(detailExpense) : false);
+
+	let isEditing = $state(false);
+	let saving = $state(false);
+	let saveError = $state('');
+	let editItemName = $state('');
+	let editDate = $state('');
+	let editAmount = $state('');
+	let editCurrency = $state(mainCurrency());
+	let editExchangeRate = $state('1');
+	let editContactId = $state<number | null>(null);
+	let editContactName = $state<string | null>(null);
+	let editCategory = $state('');
+	let editReference = $state('');
+	let editRemark = $state('');
+	let editStatus = $state<string>(String(ExpenseStatus.Unpaid));
+
+	function startEdit() {
+		if (!detailExpense) return;
+		editItemName = detailExpense.itemName;
+		editDate = detailExpense.date;
+		editAmount = String(detailExpense.amount);
+		editCurrency = detailExpense.currency;
+		editExchangeRate = String(detailExpense.exchangeRate);
+		editContactId = detailExpense.contactId;
+		editContactName = null;
+		editCategory = detailExpense.category;
+		editReference = detailExpense.reference ?? '';
+		editRemark = detailExpense.remark ?? '';
+		editStatus = String(detailExpense.status);
+		saveError = '';
+		isEditing = true;
+	}
+
+	async function saveEdit() {
+		if (!detailExpense) return;
+		saving = true;
+		saveError = '';
+		try {
+			const body: Record<string, unknown> = {};
+			if (!descriptiveLocked) {
+				let resolvedContactId = editContactId;
+				if (!resolvedContactId && editContactName) {
+					const cr = await fetch('/api/contacts', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Supplier] })
+					});
+					if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
+					resolvedContactId = (await cr.json()).id;
+				}
+				body.itemName = editItemName;
+				body.date = editDate;
+				body.contactId = resolvedContactId;
+				body.category = editCategory;
+				body.reference = editReference || null;
+				body.remark = editRemark || null;
+			}
+			if (!amountLocked) {
+				body.amount = parseFloat(editAmount) || 0;
+				body.currency = editCurrency;
+				body.exchangeRate = parseFloat(editExchangeRate) || 1;
+				body.status = Number(editStatus);
+			}
+			const res = await fetch(`/api/expenses/${detailExpense.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			if (!res.ok) {
+				const err = await res.json();
+				saveError = err.error ?? 'Save failed';
+			} else {
+				const refreshed = await fetch(`/api/expenses/${detailExpense.id}`);
+				if (refreshed.ok) detailExpense = await refreshed.json();
+				isEditing = false;
+			}
+		} catch {
+			saveError = 'Network error — try again';
+		} finally {
+			saving = false;
+		}
+	}
 	let newExpenseFiles = $state<File[]>([]);
 	let newExpenseDrag = $state(false);
 	let newExpenseFileInput = $state<HTMLInputElement | null>(null);
@@ -293,6 +388,7 @@
 
 	async function openExpense(e: (typeof data.expenses)[0], { push = true } = {}) {
 		detailExpense = { ...e, attachments: [] };
+		isEditing = false;
 		if (push) {
 			pushState(resolve('/(app)/expenses/[id]', { id: String(e.id) }), { viaPush: true });
 		}
@@ -302,6 +398,7 @@
 
 	function closeDetail() {
 		detailExpense = null;
+		isEditing = false;
 		if (page.state.viaPush) {
 			history.back();
 		} else {
@@ -674,93 +771,227 @@
 						<X size={16} />
 					</Sheet.Close>
 				</div>
-				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-					<div class="detail-amount">
-						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-						<span class="detail-amount-val">{formatMoney(detailExpense.mainAmount)}</span>
-						{#if detailExpense.claimId}
-							<span class="detail-amount-lock" title="Amount locked (linked to a claim)"><Lock size={15} /></span>
+				{#if isEditing}
+					<!-- Edit mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;">
+						{#if saveError}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{saveError}</div>
 						{/if}
-					</div>
-					{#if detailExpense.currency !== mainCurrency()}
-						<div class="detail-orig">
-							Original: {detailExpense.currency} {formatCurrencyAmount(detailExpense.amount, detailExpense.currency)}
-							· rate {detailExpense.exchangeRate}
-						</div>
-					{/if}
-					<div class="detail-statusrow">
-						<StatusBadge status={detailExpense.status} />
-					</div>
-					<div class="detail-list">
-						{#if detailExpense.contactName}
-							<div class="detail-row">
-								<div class="detail-key">Supplier</div>
-								<div class="detail-val">{detailExpense.contactName}</div>
-							</div>
-						{/if}
-						<div class="detail-row">
-							<div class="detail-key">Category</div>
-							<div class="detail-val">{detailExpense.category}</div>
-						</div>
-						<div class="detail-row">
-							<div class="detail-key">Date</div>
-							<div class="detail-val num">{formatDate(detailExpense.date)}</div>
-						</div>
-						{#if detailExpense.reference}
-							<div class="detail-row">
-								<div class="detail-key">Reference</div>
-								<div class="detail-val num">{detailExpense.reference}</div>
-							</div>
-						{/if}
-						{#if detailExpense.remark}
-							<div class="detail-row">
-								<div class="detail-key">Remark</div>
-								<div class="detail-val">{detailExpense.remark}</div>
-							</div>
-						{/if}
-					</div>
-					{#if detailExpense.claimId}
-						<div class="detail-section-label">Linked claim</div>
-						<button
-							type="button"
-							class="linked-claim-card related-link"
-							onclick={() => goto(resolve('/(app)/claims/[id]', { id: String(detailExpense?.claimId) }))}
-						>
-							<div class="linked-claim-icon"><Receipt size={16} /></div>
-							<div class="linked-claim-meta">
-								<div class="linked-claim-title">
-									Claim {detailExpense.claimNumber}
-									<StatusBadge
-										status={detailExpense.claimStatus === ClaimStatus.Done ? 'claimed' : 'pending'}
-									/>
-								</div>
-								{#if detailExpense.claimDate}
-									<div class="linked-claim-sub">{formatDate(detailExpense.claimDate)}</div>
+						{#if amountLocked || descriptiveLocked}
+							<div style="display:flex; align-items:center; gap:7px; background:var(--accent); color:var(--muted-foreground); border-radius:8px; padding:10px 14px; font-size:12.5px; margin-bottom:16px;">
+								<Lock size={13} />
+								{#if descriptiveLocked}
+									Linked to a claim — descriptive fields locked. Enable God Mode in Settings to edit them.
+								{:else}
+									Linked to a claim — amount and status are locked.
 								{/if}
 							</div>
-							<ChevronRight size={14} class="linked-claim-chevron" />
-						</button>
-					{/if}
-					<AttachmentManager apiBase={`/api/expenses/${detailExpense.id}`} bind:attachments={detailExpense.attachments} />
-				</div>
-				<div class="sheet-foot">
-					{#if detailExpense.claimId}
-						<div class="sheet-foot-note">
-							Linked to claim {detailExpense.claimNumber} — remove it from the claim to delete.
+						{/if}
+
+						<div class="field">
+							<label class="field-label" for="edit-itemName">Item name</label>
+							<Input id="edit-itemName" type="text" bind:value={editItemName} disabled={descriptiveLocked} />
 						</div>
-					{/if}
-					<div class="sheet-foot-actions">
-						<button
-							type="button"
-							class="sheet-btn sheet-btn-delete"
-							disabled={!!detailExpense.claimId}
-							title={detailExpense.claimId ? `Linked to claim ${detailExpense.claimNumber}` : undefined}
-							onclick={() => (deleteDialogOpen = true)}
-						>
-							<Trash2 size={14} /> Delete
-						</button>
+
+						<div class="field-grid field">
+							<div>
+								<label class="field-label" for="edit-date">Date</label>
+								<DatePicker name="editDate" bind:value={editDate} disabled={descriptiveLocked} />
+							</div>
+							<div>
+								<label class="field-label" for="edit-amount">Amount{editCurrency !== mainCurrency() ? ` (${editCurrency})` : ''}</label>
+								<AmountInput id="edit-amount" placeholder="0.00" bind:value={editAmount} prefix={currencySymbol(editCurrency)} disabled={amountLocked} />
+							</div>
+						</div>
+
+						<div class="field-grid field">
+							<div>
+								<label class="field-label" for="editCurrency">Currency</label>
+								<Select.Root type="single" bind:value={editCurrency} disabled={amountLocked}>
+									<Select.Trigger id="editCurrency" class="w-full">{editCurrency}</Select.Trigger>
+									<Select.Content>
+										{#each CURRENCIES as c (c.code)}
+											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							{#if editCurrency !== mainCurrency()}
+								<div>
+									<label class="field-label" for="editRate">Rate (1 {editCurrency} = ? {mainCurrency()})</label>
+									<Input id="editRate" type="text" inputmode="decimal" placeholder="1.0" bind:value={editExchangeRate} disabled={amountLocked} />
+								</div>
+							{/if}
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editStatus">Status</label>
+							<Select.Root type="single" bind:value={editStatus} disabled={amountLocked}>
+								<Select.Trigger id="editStatus" class="w-full">
+									{editStatus === String(ExpenseStatus.Paid) ? 'Paid' : editStatus === String(ExpenseStatus.Pending) ? 'Pending' : 'Unpaid'}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value={String(ExpenseStatus.Unpaid)} label="Unpaid" />
+									<Select.Item value={String(ExpenseStatus.Pending)} label="Pending" />
+									<Select.Item value={String(ExpenseStatus.Paid)} label="Paid" />
+								</Select.Content>
+							</Select.Root>
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="edit-supplier">Supplier</label>
+							<ContactSelect
+								role={Role.Supplier}
+								bind:value={editContactId}
+								bind:newName={editContactName}
+								placeholder="Search or add a supplier…"
+								initialLabel={detailExpense.contactName}
+								disabled={descriptiveLocked}
+							/>
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editCategory">Category</label>
+							<Select.Root type="single" bind:value={editCategory} disabled={descriptiveLocked}>
+								<Select.Trigger id="editCategory" class="w-full">
+									{editCategory || 'Select category'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each data.categories as cat}
+										<Select.Item value={cat} label={cat} />
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editReference">Reference</label>
+							<Input id="editReference" type="text" bind:value={editReference} disabled={descriptiveLocked} />
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editRemark">Remark</label>
+							<Textarea id="editRemark" placeholder="Optional notes…" class="leading-relaxed" bind:value={editRemark} disabled={descriptiveLocked} />
+						</div>
 					</div>
-				</div>
+
+					<div class="sheet-foot">
+						<div class="sheet-foot-actions">
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								disabled={!!detailExpense.claimId}
+								title={detailExpense.claimId ? `Linked to claim ${detailExpense.claimNumber}` : undefined}
+								onclick={() => (deleteDialogOpen = true)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+							<button
+								type="button"
+								class="sheet-btn"
+								style="margin-left:auto;"
+								onclick={() => (isEditing = false)}
+							>
+								Cancel
+							</button>
+							<button type="button" class="sheet-btn sheet-btn-primary" onclick={saveEdit} disabled={saving}>
+								{saving ? 'Saving…' : 'Save'}
+							</button>
+						</div>
+					</div>
+				{:else}
+					<!-- View mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+						<div class="detail-amount">
+							<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
+							<span class="detail-amount-val">{formatMoney(detailExpense.mainAmount)}</span>
+							{#if detailExpense.claimId}
+								<span class="detail-amount-lock" title="Amount locked (linked to a claim)"><Lock size={15} /></span>
+							{/if}
+						</div>
+						{#if detailExpense.currency !== mainCurrency()}
+							<div class="detail-orig">
+								Original: {detailExpense.currency} {formatCurrencyAmount(detailExpense.amount, detailExpense.currency)}
+								· rate {detailExpense.exchangeRate}
+							</div>
+						{/if}
+						<div class="detail-statusrow">
+							<StatusBadge status={detailExpense.status} />
+						</div>
+						<div class="detail-list">
+							{#if detailExpense.contactName}
+								<div class="detail-row">
+									<div class="detail-key">Supplier</div>
+									<div class="detail-val">{detailExpense.contactName}</div>
+								</div>
+							{/if}
+							<div class="detail-row">
+								<div class="detail-key">Category</div>
+								<div class="detail-val">{detailExpense.category}</div>
+							</div>
+							<div class="detail-row">
+								<div class="detail-key">Date</div>
+								<div class="detail-val num">{formatDate(detailExpense.date)}</div>
+							</div>
+							{#if detailExpense.reference}
+								<div class="detail-row">
+									<div class="detail-key">Reference</div>
+									<div class="detail-val num">{detailExpense.reference}</div>
+								</div>
+							{/if}
+							{#if detailExpense.remark}
+								<div class="detail-row">
+									<div class="detail-key">Remark</div>
+									<div class="detail-val">{detailExpense.remark}</div>
+								</div>
+							{/if}
+						</div>
+						{#if detailExpense.claimId}
+							<div class="detail-section-label">Linked claim</div>
+							<button
+								type="button"
+								class="linked-claim-card related-link"
+								onclick={() => goto(resolve('/(app)/claims/[id]', { id: String(detailExpense?.claimId) }))}
+							>
+								<div class="linked-claim-icon"><Receipt size={16} /></div>
+								<div class="linked-claim-meta">
+									<div class="linked-claim-title">
+										Claim {detailExpense.claimNumber}
+										<StatusBadge
+											status={detailExpense.claimStatus === ClaimStatus.Done ? 'claimed' : 'pending'}
+										/>
+									</div>
+									{#if detailExpense.claimDate}
+										<div class="linked-claim-sub">{formatDate(detailExpense.claimDate)}</div>
+									{/if}
+								</div>
+								<ChevronRight size={14} class="linked-claim-chevron" />
+							</button>
+						{/if}
+						<AttachmentManager apiBase={`/api/expenses/${detailExpense.id}`} bind:attachments={detailExpense.attachments} />
+					</div>
+					<div class="sheet-foot">
+						{#if detailExpense.claimId}
+							<div class="sheet-foot-note">
+								Linked to claim {detailExpense.claimNumber} — remove it from the claim to delete.
+							</div>
+						{/if}
+						<div class="sheet-foot-actions">
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								disabled={!!detailExpense.claimId}
+								title={detailExpense.claimId ? `Linked to claim ${detailExpense.claimNumber}` : undefined}
+								onclick={() => (deleteDialogOpen = true)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+							<button type="button" class="sheet-btn sheet-btn-primary" onclick={startEdit}>
+								Edit
+							</button>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</Sheet.Content>
 	</Sheet.Portal>

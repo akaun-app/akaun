@@ -1,9 +1,18 @@
-import { and, asc, desc, eq, gte, like, lte, or, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { quotations, quotationLines, invoices, invoiceLines, contacts } from '../db/schema.js';
+import {
+	quotations,
+	quotationLines,
+	quotationSearchText,
+	invoices,
+	invoiceLines,
+	contacts
+} from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 import { QuotationStatus, InvoiceStatus } from '$lib/enums.js';
+import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
+import { reindexInvoice } from './invoices.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -68,6 +77,40 @@ export function deriveExpired(q: { expiryDate: string | null; status: number }):
 }
 
 // ---------------------------------------------------------------------------
+// Search text
+// ---------------------------------------------------------------------------
+
+function contactNameFor(db: Db, contactId: number | null | undefined): string {
+	if (!contactId) return '';
+	const row = db
+		.select({ legalName: contacts.legalName })
+		.from(contacts)
+		.where(eq(contacts.id, contactId))
+		.get();
+	return row?.legalName ?? '';
+}
+
+/** Recomputes and upserts quotation_search_text for one quotation. Also used by the search-rebuild worker. */
+export function reindexQuotation(db: Db, quotationId: number) {
+	const row = db.select().from(quotations).where(eq(quotations.id, quotationId)).get();
+	if (!row) return;
+	const lines = db
+		.select({ description: quotationLines.description })
+		.from(quotationLines)
+		.where(eq(quotationLines.quotationId, quotationId))
+		.all();
+	const text = joinSearchText(
+		row.quotationNumber,
+		contactNameFor(db, row.contactId),
+		row.reference,
+		row.notes,
+		row.terms,
+		...lines.map((l) => l.description)
+	);
+	upsertSearchText(db, quotationSearchText, quotationSearchText.quotationId, quotationSearchText.text, quotationId, text);
+}
+
+// ---------------------------------------------------------------------------
 // Shared select shape
 // ---------------------------------------------------------------------------
 
@@ -95,12 +138,7 @@ export function listQuotations(db: Db, filters: QuotationFilters = {}) {
 	if (search) {
 		const term = `%${search}%`;
 		conditions.push(
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			or(
-				like(quotations.quotationNumber, term),
-				like(quotations.reference, term),
-				like(contacts.legalName, term)
-			)!
+			searchTextExists(quotationSearchText, quotationSearchText.quotationId, quotationSearchText.text, quotations.id, term)
 		);
 	}
 
@@ -188,6 +226,7 @@ export function createQuotation(db: Db, userId: number, data: QuotationCreate) {
 			)
 			.run();
 
+		reindexQuotation(tx, newId);
 		return getQuotation(tx, newId)!;
 	});
 }
@@ -230,6 +269,7 @@ export function updateQuotation(db: Db, id: number, userId: number, patch: Quota
 
 		tx.update(quotations).set(setValues).where(eq(quotations.id, id)).run();
 
+		reindexQuotation(tx, id);
 		return getQuotation(tx, id)!;
 	});
 }
@@ -302,6 +342,8 @@ export function convertQuotationToInvoice(
 				}))
 			)
 			.run();
+
+		reindexInvoice(tx, newInvoiceId);
 
 		tx.update(quotations)
 			.set({

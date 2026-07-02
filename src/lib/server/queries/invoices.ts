@@ -1,9 +1,11 @@
-import { and, asc, desc, eq, gte, like, lte, or, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import { invoices, invoiceLines, contacts, incomes } from '../db/schema.js';
+import { invoices, invoiceLines, invoiceSearchText, contacts, incomes } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 import { InvoiceStatus } from '$lib/enums.js';
+import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
+import { reindexIncome } from './income.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -72,6 +74,40 @@ export function deriveOverdue(inv: { dueDate: string | null; status: number }): 
 }
 
 // ---------------------------------------------------------------------------
+// Search text
+// ---------------------------------------------------------------------------
+
+function contactNameFor(db: Db, contactId: number | null | undefined): string {
+	if (!contactId) return '';
+	const row = db
+		.select({ legalName: contacts.legalName })
+		.from(contacts)
+		.where(eq(contacts.id, contactId))
+		.get();
+	return row?.legalName ?? '';
+}
+
+/** Recomputes and upserts invoice_search_text for one invoice. Also used by the search-rebuild worker. */
+export function reindexInvoice(db: Db, invoiceId: number) {
+	const row = db.select().from(invoices).where(eq(invoices.id, invoiceId)).get();
+	if (!row) return;
+	const lines = db
+		.select({ description: invoiceLines.description })
+		.from(invoiceLines)
+		.where(eq(invoiceLines.invoiceId, invoiceId))
+		.all();
+	const text = joinSearchText(
+		row.invoiceNumber,
+		contactNameFor(db, row.contactId),
+		row.reference,
+		row.notes,
+		row.terms,
+		...lines.map((l) => l.description)
+	);
+	upsertSearchText(db, invoiceSearchText, invoiceSearchText.invoiceId, invoiceSearchText.text, invoiceId, text);
+}
+
+// ---------------------------------------------------------------------------
 // Shared select shape
 // ---------------------------------------------------------------------------
 
@@ -107,12 +143,7 @@ export function listInvoices(db: Db, filters: InvoiceFilters = {}) {
 	if (search) {
 		const term = `%${search}%`;
 		conditions.push(
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			or(
-				like(invoices.invoiceNumber, term),
-				like(invoices.reference, term),
-				like(contacts.legalName, term)
-			)!
+			searchTextExists(invoiceSearchText, invoiceSearchText.invoiceId, invoiceSearchText.text, invoices.id, term)
 		);
 	}
 
@@ -201,6 +232,7 @@ export function createInvoice(db: Db, userId: number, data: InvoiceCreate) {
 			)
 			.run();
 
+		reindexInvoice(tx, newId);
 		return getInvoice(tx, newId)!;
 	});
 }
@@ -243,6 +275,7 @@ export function updateInvoice(db: Db, id: number, userId: number, patch: Invoice
 
 		tx.update(invoices).set(setValues).where(eq(invoices.id, id)).run();
 
+		reindexInvoice(tx, id);
 		return getInvoice(tx, id)!;
 	});
 }
@@ -289,7 +322,7 @@ export function markInvoicePaid(
 
 		const incomeNumber = nextNumber(tx, 'income', invoice.issueDate);
 
-		const { id: newIncomeId } = tx
+		const newIncome = tx
 			.insert(incomes)
 			.values({
 				incomeNumber,
@@ -303,8 +336,12 @@ export function markInvoicePaid(
 				createdBy: userId,
 				updatedBy: userId
 			})
-			.returning({ id: incomes.id })
+			.returning()
 			.get()!;
+		const newIncomeId = newIncome.id;
+		// markInvoicePaid bypasses services/income.ts (it's already inside this transaction),
+		// so it must index the new income row itself — createIncome() isn't called here.
+		reindexIncome(tx, newIncomeId, newIncome);
 
 		tx.update(invoices)
 			.set({

@@ -165,6 +165,11 @@ export const expenses = sqliteTable('expenses', {
 	status: integer('status').notNull().default(1),
 	date: text('date').notNull(),
 	amount: real('amount').notNull(),
+	// Raw OCR/PDF text captured during auto-import (or by the search-rebuild worker
+	// re-extracting from the stored attachment). Null for manually created records.
+	// Folded into expense_search_text so scanned content is searchable even when the
+	// LLM's structured fields didn't capture it.
+	extractedText: text('extracted_text'),
 	// The currency `amount` is denominated in. Main-currency value = amount * exchangeRate.
 	currency: text('currency').notNull().default('USD'),
 	// Main-currency units per 1 unit of `currency`. 1 when the record is already in the
@@ -188,6 +193,8 @@ export const incomes = sqliteTable('incomes', {
 	category: text('category').notNull().default('Other'),
 	date: text('date').notNull(),
 	amount: real('amount').notNull(),
+	// See expenses.extractedText.
+	extractedText: text('extracted_text'),
 	// See expenses.currency / expenses.exchangeRate.
 	currency: text('currency').notNull().default('USD'),
 	exchangeRate: real('exchange_rate').notNull().default(1),
@@ -334,6 +341,10 @@ export const importQueue = sqliteTable('import_queue', {
 	// Caller-supplied text (e.g. from client-side OCR) that skips server-side
 	// extraction/OCR entirely when present. See worker.ts processJob().
 	preExtractedText: text('pre_extracted_text'),
+	// Raw OCR/PDF text actually used for this job (either preExtractedText or the
+	// server-side extraction result), carried through to the confirmed expense/income
+	// row so it becomes searchable. See worker.ts processJob() and the confirm route.
+	extractedText: text('extracted_text'),
 	// DocumentType code (1 = expense, 2 = income). See enums.ts.
 	documentType: integer('document_type'),
 	itemName: text('item_name'),
@@ -441,6 +452,20 @@ export const invoiceLines = sqliteTable('invoice_lines', {
 	unitPrice: real('unit_price').notNull(),
 	lineTotal: real('line_total').notNull(),
 	sortOrder: integer('sort_order').notNull()
+});
+
+export const quotationSearchText = sqliteTable('quotation_search_text', {
+	quotationId: integer('quotation_id')
+		.primaryKey()
+		.references(() => quotations.id, { onDelete: 'cascade' }),
+	text: text('text').notNull()
+});
+
+export const invoiceSearchText = sqliteTable('invoice_search_text', {
+	invoiceId: integer('invoice_id')
+		.primaryKey()
+		.references(() => invoices.id, { onDelete: 'cascade' }),
+	text: text('text').notNull()
 });
 
 // --- document templates (Phase 7.5) ---

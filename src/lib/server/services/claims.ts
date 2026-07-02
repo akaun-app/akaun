@@ -4,7 +4,8 @@ import {
 	createClaim as _create,
 	getClaim,
 	updateClaim as _update,
-	deleteClaim as _delete
+	deleteClaim as _delete,
+	setClaimExpenses
 } from '$lib/server/queries/claims.js';
 import { getExpense } from '$lib/server/queries/expenses.js';
 import { ClaimStatus } from '$lib/enums.js';
@@ -30,12 +31,18 @@ export function patchClaim(
 	db: Db,
 	id: number,
 	actingUserId: number,
-	patch: { status?: number; date?: string }
+	patch: { status?: number; date?: string; expenseIds?: number[] }
 ) {
-	const updated = _update(db, id, actingUserId, patch);
+	const { expenseIds, ...rest } = patch;
+	const affectedExpenseIds = expenseIds !== undefined ? setClaimExpenses(db, id, expenseIds) : [];
+
+	const updated = _update(db, id, actingUserId, rest);
 	if (!updated) return null;
 	claimEvents.emit('claim-update', { item: getClaim(db, id) });
-	if (patch.status === ClaimStatus.Done) emitLinkedExpenses(db, id);
+	if (rest.status === ClaimStatus.Done) emitLinkedExpenses(db, id);
+	for (const expenseId of affectedExpenseIds) {
+		expenseEvents.emit('expense-update', { item: getExpense(db, expenseId) });
+	}
 	return updated;
 }
 

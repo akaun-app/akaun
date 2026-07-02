@@ -4,6 +4,7 @@ import * as schema from '../db/schema.js';
 import { expenses, expenseAttachments, expenseSearchText, contacts, claims } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 import { ExpenseStatus } from '$lib/enums.js';
+import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -33,6 +34,8 @@ export type ExpenseCreate = {
 	// callers; when omitted here the DB column defaults apply.
 	currency?: string;
 	exchangeRate?: number;
+	// Raw OCR/PDF text from auto-import (or a search-rebuild re-extraction). See schema.ts.
+	extractedText?: string | null;
 };
 
 export type ExpensePatch = Partial<ExpenseCreate & { claimId: number | null }>;
@@ -52,16 +55,29 @@ function buildSearchText(e: {
 	reference: string;
 	remark: string;
 	category: string;
+	extractedText: string | null;
 }, contactName: string): string {
-	return [e.itemName, contactName, e.reference, e.remark, e.category].filter(Boolean).join(' ');
+	return joinSearchText(e.itemName, contactName, e.reference, e.remark, e.category, e.extractedText);
 }
 
-function reindex(db: Db, expenseId: number, row: ExpenseRow) {
+/** Recomputes and upserts expense_search_text for one expense. Also used by the search-rebuild worker. */
+export function reindexExpense(db: Db, expenseId: number, row: ExpenseRow) {
 	const text = buildSearchText(row, contactNameFor(db, row.contactId));
-	db.insert(expenseSearchText)
-		.values({ expenseId, text })
-		.onConflictDoUpdate({ target: expenseSearchText.expenseId, set: { text } })
-		.run();
+	upsertSearchText(db, expenseSearchText, expenseSearchText.expenseId, expenseSearchText.text, expenseId, text);
+}
+
+/**
+ * Sets just the extracted-text column and re-indexes, without touching updatedBy/updatedAt —
+ * used by the search-rebuild worker so a bulk re-extraction doesn't look like a user edit.
+ */
+export function setExtractedText(db: Db, expenseId: number, text: string | null) {
+	const row = db
+		.update(expenses)
+		.set({ extractedText: text })
+		.where(eq(expenses.id, expenseId))
+		.returning()
+		.get();
+	if (row) reindexExpense(db, expenseId, row);
 }
 
 type ExpenseRow = typeof expenses.$inferSelect;
@@ -87,7 +103,7 @@ function expenseConditions(filters: ExpenseFilters): SQL[] {
 	if (search) {
 		const term = `%${search}%`;
 		conditions.push(
-			sql`EXISTS (SELECT 1 FROM ${expenseSearchText} WHERE ${expenseSearchText.expenseId} = ${expenses.id} AND ${expenseSearchText.text} LIKE ${term})`
+			searchTextExists(expenseSearchText, expenseSearchText.expenseId, expenseSearchText.text, expenses.id, term)
 		);
 	}
 	return conditions;
@@ -158,6 +174,7 @@ export function createExpense(db: Db, actingUserId: number, data: ExpenseCreate)
 			status: data.status ?? ExpenseStatus.Unpaid,
 			date: data.date,
 			amount: data.amount,
+			extractedText: data.extractedText ?? null,
 			currency: data.currency ?? undefined,
 			exchangeRate: data.exchangeRate ?? undefined,
 			createdBy: actingUserId,
@@ -166,7 +183,7 @@ export function createExpense(db: Db, actingUserId: number, data: ExpenseCreate)
 		.returning()
 		.get()!;
 
-	reindex(db, row.id, row);
+	reindexExpense(db, row.id, row);
 	return row;
 }
 
@@ -181,7 +198,7 @@ export function updateExpense(db: Db, id: number, actingUserId: number, patch: E
 		.returning()
 		.get()!;
 
-	reindex(db, id, updated);
+	reindexExpense(db, id, updated);
 	return updated;
 }
 

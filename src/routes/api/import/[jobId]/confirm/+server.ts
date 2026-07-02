@@ -121,7 +121,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			date,
 			amount,
 			currency,
-			exchangeRate
+			exchangeRate,
+			extractedText: row.extractedText
 		});
 		resultId = inserted.id;
 		number = inserted.incomeNumber;
@@ -144,7 +145,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			date,
 			amount,
 			currency,
-			exchangeRate
+			exchangeRate,
+			extractedText: row.extractedText
 		});
 		resultId = inserted.id;
 		number = inserted.expenseNumber;

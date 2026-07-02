@@ -75,6 +75,34 @@ Akaun is now running at `http://localhost:6969` (or your server's address, if `O
 
 **Running behind a different port, domain, or with HTTPS:** see the commented-out variables above and `.env.example` in this repo for details on every option.
 
+### Reverse Proxy Notes
+
+If you're fronting Akaun with nginx (including Nginx Proxy Manager) or a similar proxy, two settings matter:
+
+**1. SSE endpoints need unbuffered, long-lived connections.** Akaun uses Server-Sent Events (`/api/*/stream`) for real-time updates. Add a location block for these paths with buffering disabled and a long read timeout, or the proxy will buffer/kill the stream:
+
+```nginx
+location ~ ^/api/.*/stream$ {
+    proxy_pass http://<akaun-host>:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    chunked_transfer_encoding off;
+    proxy_read_timeout 24h;
+}
+```
+
+**2. The default location needs a larger header buffer.** SvelteKit sends a `Link` response header preloading every JS module a page needs. Pages with many components (e.g. Expenses) can produce a `Link` header bigger than nginx's default `proxy_buffer_size` (commonly 4k–8k), which causes nginx to reject the response with `upstream sent too big header while reading response header from upstream` — a 502 on the affected page's direct/fresh load only (client-side in-app navigation to the same page won't reproduce it, since that doesn't trigger a full page render). Size the buffers up for the default location:
+
+```nginx
+proxy_buffer_size 16k;
+proxy_buffers 4 16k;
+proxy_busy_buffers_size 32k;
+```
+
+In Nginx Proxy Manager, add both blocks via the proxy host's **Advanced** tab. Don't use the "Websockets Support" toggle as a substitute for the first block — it applies `proxy_http_version 1.1` with `Upgrade`/`Connection: upgrade` handling to the *entire* host including normal page traffic, which this app's server does not handle correctly and will make the whole site unreachable.
+
 ## Manual / From-Source Setup
 
 For developers who'd rather run Akaun directly with [Bun](https://bun.sh):
