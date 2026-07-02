@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { untrack } from 'svelte';
-	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap } from '@lucide/svelte';
+	import { untrack, tick, onMount, onDestroy } from 'svelte';
+	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -487,6 +487,44 @@
 	// svelte-ignore state_referenced_locally
 	let godMode = $state(data.godModeEnabled);
 
+	// Search index rebuild state
+	type RebuildStatus = {
+		running: boolean;
+		total: number;
+		processed: number;
+		startedAt: string | null;
+		finishedAt: string | null;
+		error: string | null;
+	};
+	let rebuildStatus = $state<RebuildStatus | null>(null);
+	let rebuildEventSource: EventSource | null = null;
+	const rebuildPercent = $derived(
+		rebuildStatus && rebuildStatus.total > 0
+			? Math.round((rebuildStatus.processed / rebuildStatus.total) * 100)
+			: 0
+	);
+
+	onMount(() => {
+		rebuildEventSource = new EventSource('/api/search-rebuild/stream');
+		rebuildEventSource.onmessage = (e) => {
+			const data = JSON.parse(e.data);
+			if (data.type === 'snapshot' || data.type === 'progress') rebuildStatus = data.status;
+		};
+	});
+
+	onDestroy(() => {
+		rebuildEventSource?.close();
+	});
+
+	async function triggerRebuild() {
+		const res = await fetch('/api/search-rebuild', { method: 'POST' });
+		if (res.ok) {
+			rebuildStatus = await res.json();
+		} else {
+			toast.error('Failed to start search index rebuild');
+		}
+	}
+
 	// Auto-save form refs (Intelligence + Advanced tabs)
 	let intelligenceFormEl = $state<HTMLFormElement | null>(null);
 	let advancedFormEl = $state<HTMLFormElement | null>(null);
@@ -970,7 +1008,7 @@
 									class="toggle-btn"
 									aria-label="Category hints"
 									class:on={aiCategoryHints}
-									onclick={() => { aiCategoryHints = !aiCategoryHints; intelligenceFormEl?.requestSubmit(); }}
+									onclick={async () => { aiCategoryHints = !aiCategoryHints; await tick(); intelligenceFormEl?.requestSubmit(); }}
 									aria-pressed={aiCategoryHints}
 								>
 									<span class="toggle-thumb"></span>
@@ -1267,7 +1305,7 @@
 									class="toggle-btn"
 									aria-label="God Mode"
 									class:on={godMode}
-									onclick={() => { godMode = !godMode; advancedFormEl?.requestSubmit(); }}
+									onclick={async () => { godMode = !godMode; await tick(); advancedFormEl?.requestSubmit(); }}
 									aria-pressed={godMode}
 								>
 									<span class="toggle-thumb"></span>
@@ -1280,6 +1318,47 @@
 							{/if}
 						</div>
 					</form>
+				</div>
+
+				<div class="set-section" style="margin-top:32px;">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Search index</h2>
+						<p class="set-section-sub">Rebuild searchable text for every expense, income, quotation, invoice and contact — including re-reading scanned documents.</p>
+					</div>
+					<div class="set-rows">
+						<div class="set-row">
+							<div>
+								<div class="set-row-label">Rebuild search index</div>
+								<div class="set-row-value" style="font-size:12px; margin-top:2px;">
+									{#if rebuildStatus?.running}
+										Rebuilding… {rebuildStatus.processed} / {rebuildStatus.total} ({rebuildPercent}%)
+									{:else if rebuildStatus?.finishedAt}
+										{#if rebuildStatus.error}
+											Last run failed: {rebuildStatus.error}
+										{:else}
+											Last rebuilt {rebuildStatus.processed} records.
+										{/if}
+									{:else}
+										Re-extracts text from stored files and recomputes search text for all records.
+									{/if}
+								</div>
+							</div>
+							<Button
+								type="button"
+								variant="ghost"
+								disabled={rebuildStatus?.running}
+								onclick={triggerRebuild}
+							>
+								<RefreshCw size={14} class={rebuildStatus?.running ? 'animate-spin' : ''} />
+								{rebuildStatus?.running ? 'Rebuilding…' : 'Rebuild'}
+							</Button>
+						</div>
+						{#if rebuildStatus?.running}
+							<div class="rebuild-progress-track">
+								<div class="rebuild-progress-fill" style="width:{rebuildPercent}%"></div>
+							</div>
+						{/if}
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -1683,6 +1762,21 @@
 		background: oklch(0.25 0.05 85 / 0.4);
 		border-color: oklch(0.4 0.1 85);
 		color: oklch(0.75 0.1 85);
+	}
+
+	.rebuild-progress-track {
+		height: 6px;
+		border-radius: 999px;
+		background: var(--accent);
+		overflow: hidden;
+		margin: 0 0 16px;
+	}
+
+	.rebuild-progress-fill {
+		height: 100%;
+		border-radius: 999px;
+		background: var(--primary);
+		transition: width 200ms ease;
 	}
 
 	/* Provider list */

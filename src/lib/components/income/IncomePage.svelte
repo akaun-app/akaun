@@ -30,7 +30,7 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import { Role } from '$lib/enums.js';
+	import { Role, EntityType } from '$lib/enums.js';
 	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol, currencyDecimals, formatCurrencyAmount } from '$lib/currency.js';
@@ -77,6 +77,82 @@
 	let deleteDialogOpen = $state(false);
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let selected = $state(new Set<number>());
+
+	// --- Edit mode (detail sheet) ---
+	let isEditing = $state(false);
+	let saving = $state(false);
+	let saveError = $state('');
+	let editContactId = $state<number | null>(null);
+	let editContactName = $state<string | null>(null);
+	let editCategory = $state('');
+	let editDate = $state('');
+	let editAmount = $state('');
+	let editCurrency = $state(mainCurrency());
+	let editExchangeRate = $state('1');
+	let editReference = $state('');
+	let editDescriptionText = $state('');
+	let editRemark = $state('');
+
+	function startEdit() {
+		if (!detailIncome) return;
+		editContactId = detailIncome.contactId;
+		editContactName = null;
+		editCategory = detailIncome.category;
+		editDate = detailIncome.date;
+		editAmount = String(detailIncome.amount);
+		editCurrency = detailIncome.currency;
+		editExchangeRate = String(detailIncome.exchangeRate);
+		editReference = detailIncome.reference ?? '';
+		editDescriptionText = detailIncome.descriptionText ?? '';
+		editRemark = detailIncome.remark ?? '';
+		saveError = '';
+		isEditing = true;
+	}
+
+	async function saveEdit() {
+		if (!detailIncome) return;
+		saving = true;
+		saveError = '';
+		try {
+			let resolvedContactId = editContactId;
+			if (!resolvedContactId && editContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Customer] })
+				});
+				if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
+				resolvedContactId = (await cr.json()).id;
+			}
+			const res = await fetch(`/api/income/${detailIncome.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					contactId: resolvedContactId,
+					category: editCategory,
+					date: editDate,
+					amount: parseFloat(editAmount) || 0,
+					currency: editCurrency,
+					exchangeRate: parseFloat(editExchangeRate) || 1,
+					reference: editReference || null,
+					descriptionText: editDescriptionText || null,
+					remark: editRemark || null
+				})
+			});
+			if (!res.ok) {
+				const err = await res.json();
+				saveError = err.error ?? 'Save failed';
+			} else {
+				const refreshed = await fetch(`/api/income/${detailIncome.id}`);
+				if (refreshed.ok) detailIncome = await refreshed.json();
+				isEditing = false;
+			}
+		} catch {
+			saveError = 'Network error — try again';
+		} finally {
+			saving = false;
+		}
+	}
 	let newIncomeFiles = $state<File[]>([]);
 	let newIncomeDrag = $state(false);
 	let newIncomeFileInput = $state<HTMLInputElement | null>(null);
@@ -248,6 +324,7 @@
 
 	async function openIncome(inc: (typeof data.incomes)[0], { push = true } = {}) {
 		detailIncome = { ...inc, attachments: [] };
+		isEditing = false;
 		if (push) {
 			pushState(resolve('/(app)/income/[id]', { id: String(inc.id) }), { viaPush: true });
 		}
@@ -257,6 +334,7 @@
 
 	function closeDetail() {
 		detailIncome = null;
+		isEditing = false;
 		if (page.state.viaPush) {
 			history.back();
 		} else {
@@ -604,65 +682,172 @@
 						<X size={16} />
 					</Sheet.Close>
 				</div>
-				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-					<div class="detail-amount">
-						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-						<span class="detail-amount-val inc">+{formatMoney(detailIncome.mainAmount)}</span>
+				{#if isEditing}
+					<!-- Edit mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;">
+						{#if saveError}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{saveError}</div>
+						{/if}
+
+						<div class="field">
+							<label class="field-label" for="edit-customer">Customer</label>
+							<ContactSelect
+								role={Role.Customer}
+								bind:value={editContactId}
+								bind:newName={editContactName}
+								placeholder="Search or add a customer…"
+								initialLabel={detailIncome.contactName}
+							/>
+						</div>
+
+						<div class="field-grid field">
+							<div>
+								<label class="field-label" for="edit-date">Date</label>
+								<DatePicker name="editDate" bind:value={editDate} />
+							</div>
+							<div>
+								<label class="field-label" for="edit-amount">Amount{editCurrency !== mainCurrency() ? ` (${editCurrency})` : ''}</label>
+								<AmountInput id="edit-amount" placeholder="0.00" bind:value={editAmount} prefix={currencySymbol(editCurrency)} />
+							</div>
+						</div>
+
+						<div class="field-grid field">
+							<div>
+								<label class="field-label" for="editCurrency">Currency</label>
+								<Select.Root type="single" bind:value={editCurrency}>
+									<Select.Trigger id="editCurrency" class="w-full">{editCurrency}</Select.Trigger>
+									<Select.Content>
+										{#each CURRENCIES as c (c.code)}
+											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							{#if editCurrency !== mainCurrency()}
+								<div>
+									<label class="field-label" for="editRate">Rate (1 {editCurrency} = ? {mainCurrency()})</label>
+									<Input id="editRate" type="text" inputmode="decimal" placeholder="1.0" bind:value={editExchangeRate} />
+								</div>
+							{/if}
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editCategory">Category</label>
+							<Select.Root type="single" bind:value={editCategory}>
+								<Select.Trigger id="editCategory" class="w-full">
+									{editCategory || 'Select category'}
+								</Select.Trigger>
+								<Select.Content>
+									{#each data.categories as cat}
+										<Select.Item value={cat} label={cat} />
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editReference">Reference</label>
+							<Input id="editReference" type="text" placeholder="e.g. INV-001" bind:value={editReference} />
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editDescriptionText">Description</label>
+							<Textarea id="editDescriptionText" placeholder="Optional notes…" class="leading-relaxed" bind:value={editDescriptionText} />
+						</div>
+
+						<div class="field">
+							<label class="field-label" for="editRemark">Remark</label>
+							<Textarea id="editRemark" placeholder="Optional remark…" class="leading-relaxed" bind:value={editRemark} />
+						</div>
 					</div>
-					{#if detailIncome.currency !== mainCurrency()}
-						<div class="detail-orig">
-							Original: {detailIncome.currency} {formatCurrencyAmount(detailIncome.amount, detailIncome.currency)}
-							· rate {detailIncome.exchangeRate}
+
+					<div class="sheet-foot">
+						<div class="sheet-foot-actions">
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								onclick={() => (deleteDialogOpen = true)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+							<button
+								type="button"
+								class="sheet-btn"
+								style="margin-left:auto;"
+								onclick={() => (isEditing = false)}
+							>
+								Cancel
+							</button>
+							<button type="button" class="sheet-btn sheet-btn-primary" onclick={saveEdit} disabled={saving}>
+								{saving ? 'Saving…' : 'Save'}
+							</button>
 						</div>
-					{/if}
-					<div class="detail-statusrow">
-						<StatusBadge status="received" />
 					</div>
-					<div class="detail-list">
-						<div class="detail-row">
-							<div class="detail-key">Customer</div>
-							<div class="detail-val">{detailIncome.contactName ?? '—'}</div>
+				{:else}
+					<!-- View mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+						<div class="detail-amount">
+							<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
+							<span class="detail-amount-val inc">+{formatMoney(detailIncome.mainAmount)}</span>
 						</div>
-						<div class="detail-row">
-							<div class="detail-key">Category</div>
-							<div class="detail-val">{detailIncome.category}</div>
-						</div>
-						<div class="detail-row">
-							<div class="detail-key">Date</div>
-							<div class="detail-val num">{formatDate(detailIncome.date)}</div>
-						</div>
-						{#if detailIncome.reference}
-							<div class="detail-row">
-								<div class="detail-key">Reference</div>
-								<div class="detail-val num">{detailIncome.reference}</div>
+						{#if detailIncome.currency !== mainCurrency()}
+							<div class="detail-orig">
+								Original: {detailIncome.currency} {formatCurrencyAmount(detailIncome.amount, detailIncome.currency)}
+								· rate {detailIncome.exchangeRate}
 							</div>
 						{/if}
-						{#if detailIncome.descriptionText}
+						<div class="detail-statusrow">
+							<StatusBadge status="received" />
+						</div>
+						<div class="detail-list">
 							<div class="detail-row">
-								<div class="detail-key">Description</div>
-								<div class="detail-val">{detailIncome.descriptionText}</div>
+								<div class="detail-key">Customer</div>
+								<div class="detail-val">{detailIncome.contactName ?? '—'}</div>
 							</div>
-						{/if}
-						{#if detailIncome.remark}
 							<div class="detail-row">
-								<div class="detail-key">Remark</div>
-								<div class="detail-val">{detailIncome.remark}</div>
+								<div class="detail-key">Category</div>
+								<div class="detail-val">{detailIncome.category}</div>
 							</div>
-						{/if}
+							<div class="detail-row">
+								<div class="detail-key">Date</div>
+								<div class="detail-val num">{formatDate(detailIncome.date)}</div>
+							</div>
+							{#if detailIncome.reference}
+								<div class="detail-row">
+									<div class="detail-key">Reference</div>
+									<div class="detail-val num">{detailIncome.reference}</div>
+								</div>
+							{/if}
+							{#if detailIncome.descriptionText}
+								<div class="detail-row">
+									<div class="detail-key">Description</div>
+									<div class="detail-val">{detailIncome.descriptionText}</div>
+								</div>
+							{/if}
+							{#if detailIncome.remark}
+								<div class="detail-row">
+									<div class="detail-key">Remark</div>
+									<div class="detail-val">{detailIncome.remark}</div>
+								</div>
+							{/if}
+						</div>
+						<AttachmentManager apiBase={`/api/income/${detailIncome.id}`} bind:attachments={detailIncome.attachments} />
 					</div>
-					<AttachmentManager apiBase={`/api/income/${detailIncome.id}`} bind:attachments={detailIncome.attachments} />
-				</div>
-				<div class="sheet-foot">
-					<div class="sheet-foot-actions">
-						<button
-							type="button"
-							class="sheet-btn sheet-btn-delete"
-							onclick={() => (deleteDialogOpen = true)}
-						>
-							<Trash2 size={14} /> Delete
-						</button>
+					<div class="sheet-foot">
+						<div class="sheet-foot-actions">
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								onclick={() => (deleteDialogOpen = true)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+							<button type="button" class="sheet-btn sheet-btn-primary" onclick={startEdit}>
+								Edit
+							</button>
+						</div>
 					</div>
-				</div>
+				{/if}
 			{/if}
 		</Sheet.Content>
 	</Sheet.Portal>

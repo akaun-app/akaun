@@ -3,6 +3,15 @@ import { extractText as pdfExtractText, getDocumentProxy, extractImages } from '
 import { createWorker } from 'tesseract.js';
 import { PNG } from 'pngjs';
 
+/** Infers the MIME type this module's extractors understand from a filename's extension. */
+export function inferMimeType(filename: string): string {
+	const lower = filename.toLowerCase();
+	if (lower.endsWith('.pdf')) return 'application/pdf';
+	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+	if (lower.endsWith('.png')) return 'image/png';
+	return 'application/octet-stream';
+}
+
 export async function extractText(absPath: string, mimeType: string): Promise<string> {
 	if (mimeType === 'application/pdf' || absPath.toLowerCase().endsWith('.pdf')) {
 		return extractFromPdf(absPath);

@@ -11,7 +11,8 @@ import {
 	quotations,
 	invoices
 } from '../db/schema.js';
-import { EntityType, Role, RoleLabels, EntityTypeLabels } from '$lib/enums.js';
+import { EntityType, RoleLabels, EntityTypeLabels } from '$lib/enums.js';
+import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -52,15 +53,13 @@ function buildSearchText(c: {
 	email?: string | null;
 	phone?: string | null;
 }): string {
-	return [c.legalName, c.registrationNo, c.email, c.phone].filter(Boolean).join(' ');
+	return joinSearchText(c.legalName, c.registrationNo, c.email, c.phone);
 }
 
-function reindex(db: Db, contactId: number, row: Parameters<typeof buildSearchText>[0]) {
+/** Recomputes and upserts contact_search_text for one contact. Also used by the search-rebuild worker. */
+export function reindexContact(db: Db, contactId: number, row: Parameters<typeof buildSearchText>[0]) {
 	const text = buildSearchText(row);
-	db.insert(contactSearchText)
-		.values({ contactId, text })
-		.onConflictDoUpdate({ target: contactSearchText.contactId, set: { text } })
-		.run();
+	upsertSearchText(db, contactSearchText, contactSearchText.contactId, contactSearchText.text, contactId, text);
 }
 
 /** Resolve the role codes attached to a set of contacts → { [contactId]: number[] }. */
@@ -100,7 +99,7 @@ export function listContacts(db: Db, filters: ContactFilters = {}) {
 	if (search) {
 		const term = `%${search}%`;
 		conditions.push(
-			sql`EXISTS (SELECT 1 FROM ${contactSearchText} WHERE ${contactSearchText.contactId} = ${contacts.id} AND ${contactSearchText.text} LIKE ${term})`
+			searchTextExists(contactSearchText, contactSearchText.contactId, contactSearchText.text, contacts.id, term)
 		);
 	}
 
@@ -157,7 +156,7 @@ export function createContact(db: Db, actingUserId: number, data: ContactCreate)
 		.get()!;
 
 	const roles = setContactRoles(db, row.id, data.roles ?? []);
-	reindex(db, row.id, row);
+	reindexContact(db, row.id, row);
 	return withLabels(row, roles);
 }
 
@@ -172,7 +171,7 @@ export function updateContact(db: Db, id: number, actingUserId: number, patch: C
 		.returning()
 		.get()!;
 
-	reindex(db, id, updated);
+	reindexContact(db, id, updated);
 	const roles = getContactRoles(db, id);
 	return withLabels(updated, roles);
 }
@@ -399,7 +398,7 @@ export function mergeContacts(
 
 	// Re-index survivor name in case a backfill changed searchable fields.
 	const survivor = db.select().from(contacts).where(eq(contacts.id, survivorId)).get();
-	if (survivor) reindex(db, survivorId, survivor);
+	if (survivor) reindexContact(db, survivorId, survivor);
 	return getContact(db, survivorId);
 }
 

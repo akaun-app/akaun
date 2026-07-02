@@ -1,11 +1,13 @@
 import type { Actions } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
-import { listClaims } from '$lib/server/queries/claims.js';
+import { listClaims, getClaim } from '$lib/server/queries/claims.js';
 import { listExpenses } from '$lib/server/queries/expenses.js';
 import { createClaim, patchClaim, removeClaim } from '$lib/server/services/claims.js';
 import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
+import { canDeleteClaim } from '$lib/server/locking.js';
+import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 
 export function loadClaimsPage(locals: App.Locals, openClaimId: number | null) {
 	if (!hasPermission(locals, 'claims', 'view')) throw redirect(302, '/dashboard');
@@ -51,6 +53,16 @@ export const claimsActions: Actions = {
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
+
+		const claim = getClaim(db, id);
+		if (!claim) return fail(404, { error: 'Claim not found' });
+
+		const godMode = getSetting(db, SETTING_KEYS.godModeEnabled) === 'true';
+		if (!canDeleteClaim(claim, godMode)) {
+			return fail(403, {
+				error: 'This claim is reimbursed and cannot be deleted. Enable God Mode to override.'
+			});
+		}
 
 		const ok = removeClaim(db, id);
 		if (!ok) return fail(404, { error: 'Claim not found' });

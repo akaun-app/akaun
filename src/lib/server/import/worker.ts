@@ -6,7 +6,7 @@ import { createLogger } from '../logger.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
 import { getCategories } from '../queries/categories.js';
 import { getEnabledProviders, insertProvider } from '../llmProviders.js';
-import { extractText } from './extractor.js';
+import { extractText, inferMimeType } from './extractor.js';
 import { callLLMWithProviders } from './llm.js';
 import { detectDuplicate } from './duplicate-detector.js';
 import { importEvents } from './events.js';
@@ -205,6 +205,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 			.set({
 				state: ImportState.PendingReview,
 				documentType: docType,
+				extractedText: text,
 				itemName: result.item_name,
 				supplier: result.supplier,
 				matchedContactId: matchedId,
@@ -239,10 +240,3 @@ function markFailed(jobId: string, userId: number, error: string) {
 	emitJobUpdate(jobId, userId);
 }
 
-function inferMimeType(filename: string): string {
-	const lower = filename.toLowerCase();
-	if (lower.endsWith('.pdf')) return 'application/pdf';
-	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-	if (lower.endsWith('.png')) return 'image/png';
-	return 'application/octet-stream';
-}

@@ -14,6 +14,7 @@
 
 	let drag = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
+	let error = $state('');
 
 	async function upload(files: FileList) {
 		for (const file of Array.from(files)) {
@@ -28,8 +29,14 @@
 	}
 
 	async function remove(attachmentId: number) {
-		await fetch(`${apiBase}/attachments/${attachmentId}`, { method: 'DELETE' });
-		attachments = attachments.filter((a) => a.id !== attachmentId);
+		error = '';
+		const res = await fetch(`${apiBase}/attachments/${attachmentId}`, { method: 'DELETE' });
+		if (res.ok) {
+			attachments = attachments.filter((a) => a.id !== attachmentId);
+		} else {
+			const body = await res.json().catch(() => null);
+			error = body?.error ?? 'Failed to delete attachment';
+		}
 	}
 
 	function onDrop(e: DragEvent) {
@@ -50,6 +57,9 @@
 		<Plus size={11} /> Add
 	</button>
 </div>
+{#if error}
+	<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:8px 12px; font-size:12.5px; margin-bottom:8px;">{error}</div>
+{/if}
 <div
 	class="attach-drop-area"
 	class:drag

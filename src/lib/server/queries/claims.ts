@@ -125,6 +125,57 @@ export function updateClaim(
 	);
 }
 
+/**
+ * Reconcile a claim's linked expenses against the given target id list. Expenses removed from
+ * the claim revert to Unpaid/unclaimed (same effect as deleteClaim, scoped to one expense);
+ * expenses added must currently be Unpaid and unclaimed (silently skipped otherwise, so a caller
+ * can't steal an expense already linked elsewhere). Returns the union of added + removed expense
+ * ids, so the caller can emit SSE updates for exactly the expenses that changed.
+ */
+export function setClaimExpenses(db: Db, claimId: number, expenseIds: number[]): number[] {
+	return db.transaction(() => {
+		const current = db
+			.select({ id: expenses.id })
+			.from(expenses)
+			.where(eq(expenses.claimId, claimId))
+			.all()
+			.map((r) => r.id);
+		const currentSet = new Set(current);
+		const nextSet = new Set(expenseIds);
+
+		const toRemove = current.filter((id) => !nextSet.has(id));
+		const requestedToAdd = expenseIds.filter((id) => !currentSet.has(id));
+
+		let toAdd: number[] = [];
+		if (requestedToAdd.length > 0) {
+			// Re-check eligibility (Unpaid + unclaimed) against live rows, not the caller's claim.
+			const eligibleRows = db
+				.select({ id: expenses.id, status: expenses.status, claimId: expenses.claimId })
+				.from(expenses)
+				.where(inArray(expenses.id, requestedToAdd))
+				.all();
+			toAdd = eligibleRows
+				.filter((r) => r.status === ExpenseStatus.Unpaid && r.claimId === null)
+				.map((r) => r.id);
+		}
+
+		if (toRemove.length > 0) {
+			db.update(expenses)
+				.set({ status: ExpenseStatus.Unpaid, claimId: null })
+				.where(inArray(expenses.id, toRemove))
+				.run();
+		}
+		if (toAdd.length > 0) {
+			db.update(expenses)
+				.set({ status: ExpenseStatus.Pending, claimId })
+				.where(inArray(expenses.id, toAdd))
+				.run();
+		}
+
+		return [...toRemove, ...toAdd];
+	});
+}
+
 export function deleteClaim(db: Db, id: number): boolean {
 	return db.transaction(() => {
 		const claim = db.select({ id: claims.id }).from(claims).where(eq(claims.id, id)).get();

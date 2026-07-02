@@ -3,6 +3,7 @@ import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import { incomes, incomeAttachments, incomeSearchText, contacts } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
+import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -29,6 +30,8 @@ export type IncomeCreate = {
 	// See ExpenseCreate.currency / exchangeRate.
 	currency?: string;
 	exchangeRate?: number;
+	// See ExpenseCreate.extractedText.
+	extractedText?: string | null;
 };
 
 export type IncomePatch = Partial<IncomeCreate>;
@@ -50,18 +53,29 @@ function buildSearchText(i: {
 	reference: string;
 	remark: string;
 	category: string;
+	extractedText: string | null;
 }, contactName: string): string {
-	return [contactName, i.descriptionText, i.reference, i.remark, i.category]
-		.filter(Boolean)
-		.join(' ');
+	return joinSearchText(contactName, i.descriptionText, i.reference, i.remark, i.category, i.extractedText);
 }
 
-function reindex(db: Db, incomeId: number, row: IncomeRow) {
+/** Recomputes and upserts income_search_text for one income. Also used by the search-rebuild worker. */
+export function reindexIncome(db: Db, incomeId: number, row: IncomeRow) {
 	const text = buildSearchText(row, contactNameFor(db, row.contactId));
-	db.insert(incomeSearchText)
-		.values({ incomeId, text })
-		.onConflictDoUpdate({ target: incomeSearchText.incomeId, set: { text } })
-		.run();
+	upsertSearchText(db, incomeSearchText, incomeSearchText.incomeId, incomeSearchText.text, incomeId, text);
+}
+
+/**
+ * Sets just the extracted-text column and re-indexes, without touching updatedBy/updatedAt —
+ * used by the search-rebuild worker so a bulk re-extraction doesn't look like a user edit.
+ */
+export function setExtractedText(db: Db, incomeId: number, text: string | null) {
+	const row = db
+		.update(incomes)
+		.set({ extractedText: text })
+		.where(eq(incomes.id, incomeId))
+		.returning()
+		.get();
+	if (row) reindexIncome(db, incomeId, row);
 }
 
 // `mainAmount` = amount × exchangeRate (converted main-currency value). See expenses.ts.
@@ -84,7 +98,7 @@ export function listIncomes(db: Db, filters: IncomeFilters = {}) {
 	if (search) {
 		const term = `%${search}%`;
 		conditions.push(
-			sql`EXISTS (SELECT 1 FROM ${incomeSearchText} WHERE ${incomeSearchText.incomeId} = ${incomes.id} AND ${incomeSearchText.text} LIKE ${term})`
+			searchTextExists(incomeSearchText, incomeSearchText.incomeId, incomeSearchText.text, incomes.id, term)
 		);
 	}
 
@@ -131,6 +145,7 @@ export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
 			category: data.category ?? 'Other',
 			date: data.date,
 			amount: data.amount,
+			extractedText: data.extractedText ?? null,
 			currency: data.currency ?? undefined,
 			exchangeRate: data.exchangeRate ?? undefined,
 			createdBy: actingUserId,
@@ -139,7 +154,7 @@ export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
 		.returning()
 		.get()!;
 
-	reindex(db, row.id, row);
+	reindexIncome(db, row.id, row);
 	return row;
 }
 
@@ -154,7 +169,7 @@ export function updateIncome(db: Db, id: number, actingUserId: number, patch: In
 		.returning()
 		.get()!;
 
-	reindex(db, id, updated);
+	reindexIncome(db, id, updated);
 	return updated;
 }
 

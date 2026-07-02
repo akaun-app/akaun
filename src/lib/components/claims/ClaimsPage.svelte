@@ -57,6 +57,86 @@
 	let newClaimDrag = $state(false);
 	let newClaimFileInput = $state<HTMLInputElement | null>(null);
 
+	// --- Edit mode (detail sheet) ---
+	// Mirrors src/lib/server/locking.ts. Editing a reconciled (Done) claim's date/linked expenses
+	// is an absolute lock — no god-mode override, unlike deleting it.
+	const godMode = $derived(!!page.data.godMode);
+	function canEditClaimData(c: { status: number }): boolean {
+		return c.status !== ClaimStatus.Done;
+	}
+	function canDeleteClaim(c: { status: number }): boolean {
+		return c.status !== ClaimStatus.Done || godMode;
+	}
+
+	let isEditing = $state(false);
+	let saving = $state(false);
+	let saveError = $state('');
+	let editDate = $state('');
+	let editSelIds = $state(new Set<number>());
+
+	type PickerExpense = {
+		id: number;
+		itemName: string;
+		expenseNumber: string;
+		contactName: string | null;
+		date: string;
+		mainAmount: number;
+		currency: string;
+		amount: number;
+	};
+	// Union of currently-linked expenses (so they show up checked even though they're not
+	// Unpaid) and the globally-unpaid pool available to add.
+	const editPickerList = $derived.by<PickerExpense[]>(() => {
+		if (!detailClaim) return [];
+		const seen = new Set<number>();
+		const out: PickerExpense[] = [];
+		for (const e of [...detailClaim.expenses, ...data.unpaidExpenses]) {
+			if (seen.has(e.id)) continue;
+			seen.add(e.id);
+			out.push(e);
+		}
+		return out;
+	});
+
+	function startEdit() {
+		if (!detailClaim) return;
+		editDate = detailClaim.date;
+		editSelIds = new Set(detailClaim.expenses.map((e) => e.id));
+		saveError = '';
+		isEditing = true;
+	}
+
+	function toggleEditSel(id: number) {
+		if (editSelIds.has(id)) editSelIds.delete(id);
+		else editSelIds.add(id);
+		editSelIds = new Set(editSelIds);
+	}
+
+	async function saveEdit() {
+		if (!detailClaim) return;
+		saving = true;
+		saveError = '';
+		try {
+			const res = await fetch(`/api/claims/${detailClaim.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ date: editDate, expenseIds: [...editSelIds] })
+			});
+			if (!res.ok) {
+				const err = await res.json();
+				saveError = err.error ?? 'Save failed';
+			} else {
+				const refreshed = await fetch(`/api/claims/${detailClaim.id}`);
+				if (refreshed.ok) detailClaim = await refreshed.json();
+				isEditing = false;
+			}
+		} catch {
+			saveError = 'Network error — try again';
+		} finally {
+			saving = false;
+		}
+	}
+
 	// Mobile panel detection — full-screen bottom sheet on mobile
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -116,6 +196,7 @@
 		if (!found) return;
 		expensesExpanded = false;
 		detailClaim = { ...found, attachments: [] };
+		isEditing = false;
 		if (push) {
 			pushState(resolve('/(app)/claims/[id]', { id: String(id) }), { viaPush: true });
 		}
@@ -125,6 +206,7 @@
 
 	function closeDetail() {
 		detailClaim = null;
+		isEditing = false;
 		if (page.state.viaPush) {
 			history.back();
 		} else {
@@ -319,105 +401,197 @@
 						<X size={16} />
 					</Sheet.Close>
 				</div>
-				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-					<div class="detail-amount">
-						<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-						<span class="detail-amount-val">{formatMoney(detailClaim.total)}</span>
-					</div>
-					<div class="detail-statusrow">
-						<StatusBadge status={detailClaim.status === ClaimStatus.Done ? 'claimed' : 'pending'} />
-						<span class="date-badge">
-							<Calendar size={12} />
-							{formatDate(detailClaim.date)}
-						</span>
-					</div>
+				{#if isEditing}
+					<!-- Edit mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;">
+						{#if saveError}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{saveError}</div>
+						{/if}
 
-					<div class="detail-section-label">
-						Expenses in this claim ({detailClaim.expenses.length})
+						<div class="field">
+							<label class="field-label" for="edit-claim-date">Claim date</label>
+							<DatePicker name="editDate" bind:value={editDate} />
+						</div>
+
+						<div class="field">
+							<div class="field-label">
+								<span>Linked expenses</span>
+								{#if editSelIds.size > 0}
+									<span style="font-size:12px; color:var(--primary); font-weight:500;">
+										{editSelIds.size} selected
+									</span>
+								{/if}
+							</div>
+							{#if editPickerList.length === 0}
+								<div style="color:var(--muted-foreground); font-size:13px; padding:16px; border:1px dashed var(--border); border-radius:8px; text-align:center;">
+									No unpaid expenses available to link.
+								</div>
+							{:else}
+								<div style="border:1px solid var(--border); border-radius:8px; overflow:hidden; max-height:320px; overflow-y:auto;">
+									{#each editPickerList as e (e.id)}
+										<button
+											type="button"
+											onclick={() => toggleEditSel(e.id)}
+											style="display:flex; align-items:center; gap:12px; padding:11px 14px; border-bottom:1px solid var(--border); cursor:pointer; width:100%; text-align:left; border-left:none; border-right:none; border-top:none; background:{editSelIds.has(e.id) ? 'var(--primary-soft)' : 'var(--card)'}; font-family:inherit; transition:background .1s;"
+										>
+											<span
+												style="width:17px; height:17px; border-radius:5px; border:1.5px solid {editSelIds.has(e.id) ? 'var(--primary)' : 'var(--border-strong)'}; background:{editSelIds.has(e.id) ? 'var(--primary)' : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;"
+											>
+												{#if editSelIds.has(e.id)}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M20 6 9 17l-5-5" /></svg>{/if}
+											</span>
+											<div style="flex:1; min-width:0;">
+												<div style="font-size:13px; font-weight:500; color:var(--foreground);">{e.itemName}</div>
+												<div style="font-size:11.5px; color:var(--muted-foreground);">
+													{e.expenseNumber}{e.contactName ? ' · ' + e.contactName : ''} · {formatDateShort(e.date)}
+												</div>
+											</div>
+											<div style="font-size:13px; font-weight:600; font-family:'Geist Mono',monospace; white-space:nowrap; color:var(--foreground); text-align:right;">
+												{mainCurrencySymbol()} {formatMoney(e.mainAmount)}
+												{#if e.currency !== mainCurrency()}
+													<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
+												{/if}
+											</div>
+										</button>
+									{/each}
+								</div>
+							{/if}
+						</div>
 					</div>
-					<div class="claim-exp-list">
-						{#each detailClaim.expenses.slice(0, expensesExpanded ? undefined : 5) as e (e.id)}
+					<div class="sheet-foot">
+						<div class="sheet-foot-actions">
 							<button
 								type="button"
-								class="claim-exp related-link"
-								onclick={() => goto(resolve('/(app)/expenses/[id]', { id: String(e.id) }))}
+								class="sheet-btn sheet-btn-delete"
+								style="margin-right:auto;"
+								disabled={!canDeleteClaim(detailClaim)}
+								title={!canDeleteClaim(detailClaim) ? 'Claim is reimbursed. Enable God Mode to delete.' : undefined}
+								onclick={() => (deleteDialogOpen = true)}
 							>
-								<div class="claim-exp-main">
-									<div class="claim-exp-name">{e.itemName}</div>
-									<div class="claim-exp-sub">
-										{e.contactName ? e.contactName + ' · ' : ''}{e.expenseNumber}
-									</div>
-								</div>
-								<StatusBadge status={e.status} />
-								<div class="claim-exp-amt num">
-									{mainCurrencySymbol()} {formatMoney(e.mainAmount)}
-									{#if e.currency !== mainCurrency()}
-										<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
-									{/if}
-								</div>
-								<ChevronRight size={13} class="claim-exp-chevron" />
+								<Trash2 size={14} /> Delete
 							</button>
-						{/each}
-						{#if detailClaim.expenses.length === 0}
-							<div
-								style="color:var(--muted-foreground); font-size:13px; text-align:center; padding:16px;"
-							>
-								No expenses linked
-							</div>
-						{/if}
-					</div>
-					{#if detailClaim.expenses.length > 5}
-						<button
-							type="button"
-							class="list-expand-btn"
-							onclick={() => (expensesExpanded = !expensesExpanded)}
-						>
-							{#if expensesExpanded}
-								Show less <ChevronUp size={13} />
-							{:else}
-								Show all ({detailClaim.expenses.length}) <ChevronDown size={13} />
-							{/if}
-						</button>
-					{/if}
-					<div>
-						<AttachmentManager apiBase={`/api/claims/${detailClaim.id}`} bind:attachments={detailClaim.attachments} />
-					</div>
-				</div>
-				<div class="sheet-foot">
-					<div class="sheet-foot-note">
-						{detailClaim.status === ClaimStatus.Pending
-							? 'Marking as claimed sets all linked expenses to paid. Deleting reverts them to unpaid.'
-							: 'All expenses in this claim are reimbursed and locked.'}
-					</div>
-					<div class="sheet-foot-actions">
-						<button
-							type="button"
-							class="sheet-btn sheet-btn-delete"
-							onclick={() => (deleteDialogOpen = true)}
-						>
-							<Trash2 size={14} /> Delete
-						</button>
-						<form
-							method="POST"
-							action="?/markDone"
-							use:enhance={() =>
-								async ({ result, update }) => {
-									if (result.type === 'success') closeDetail();
-									await update();
-								}}
-						>
-							<input type="hidden" name="id" value={detailClaim.id} />
+							<button type="button" class="sheet-btn" onclick={() => (isEditing = false)}>
+								Cancel
+							</button>
 							<button
-								type="submit"
+								type="button"
 								class="sheet-btn sheet-btn-primary"
-								disabled={detailClaim.status === ClaimStatus.Done}
+								onclick={saveEdit}
+								disabled={saving || editSelIds.size === 0}
 							>
-								<CheckCircle size={14} />
-								{detailClaim.status === ClaimStatus.Done ? 'Claimed' : 'Mark as claimed'}
+								{saving ? 'Saving…' : 'Save'}
 							</button>
-						</form>
+						</div>
 					</div>
-				</div>
+				{:else}
+					<!-- View mode -->
+					<div style="flex:1; overflow-y:auto; padding:20px 22px;">
+						<div class="detail-amount">
+							<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
+							<span class="detail-amount-val">{formatMoney(detailClaim.total)}</span>
+						</div>
+						<div class="detail-statusrow">
+							<StatusBadge status={detailClaim.status === ClaimStatus.Done ? 'claimed' : 'pending'} />
+							<span class="date-badge">
+								<Calendar size={12} />
+								{formatDate(detailClaim.date)}
+							</span>
+						</div>
+
+						<div class="detail-section-label">
+							Expenses in this claim ({detailClaim.expenses.length})
+						</div>
+						<div class="claim-exp-list">
+							{#each detailClaim.expenses.slice(0, expensesExpanded ? undefined : 5) as e (e.id)}
+								<button
+									type="button"
+									class="claim-exp related-link"
+									onclick={() => goto(resolve('/(app)/expenses/[id]', { id: String(e.id) }))}
+								>
+									<div class="claim-exp-main">
+										<div class="claim-exp-name">{e.itemName}</div>
+										<div class="claim-exp-sub">
+											{e.contactName ? e.contactName + ' · ' : ''}{e.expenseNumber}
+										</div>
+									</div>
+									<StatusBadge status={e.status} />
+									<div class="claim-exp-amt num">
+										{mainCurrencySymbol()} {formatMoney(e.mainAmount)}
+										{#if e.currency !== mainCurrency()}
+											<span class="amount-orig">{e.currency} {formatCurrencyAmount(e.amount, e.currency)}</span>
+										{/if}
+									</div>
+									<ChevronRight size={13} class="claim-exp-chevron" />
+								</button>
+							{/each}
+							{#if detailClaim.expenses.length === 0}
+								<div
+									style="color:var(--muted-foreground); font-size:13px; text-align:center; padding:16px;"
+								>
+									No expenses linked
+								</div>
+							{/if}
+						</div>
+						{#if detailClaim.expenses.length > 5}
+							<button
+								type="button"
+								class="list-expand-btn"
+								onclick={() => (expensesExpanded = !expensesExpanded)}
+							>
+								{#if expensesExpanded}
+									Show less <ChevronUp size={13} />
+								{:else}
+									Show all ({detailClaim.expenses.length}) <ChevronDown size={13} />
+								{/if}
+							</button>
+						{/if}
+						<div>
+							<AttachmentManager apiBase={`/api/claims/${detailClaim.id}`} bind:attachments={detailClaim.attachments} />
+						</div>
+					</div>
+					<div class="sheet-foot">
+						<div class="sheet-foot-note">
+							{detailClaim.status === ClaimStatus.Pending
+								? 'Marking as claimed sets all linked expenses to paid. Deleting reverts them to unpaid.'
+								: 'All expenses in this claim are reimbursed and locked.'}
+						</div>
+						<div class="sheet-foot-actions">
+							<button
+								type="button"
+								class="sheet-btn sheet-btn-delete"
+								style="margin-right:auto;"
+								disabled={!canDeleteClaim(detailClaim)}
+								title={!canDeleteClaim(detailClaim) ? 'Claim is reimbursed. Enable God Mode to delete.' : undefined}
+								onclick={() => (deleteDialogOpen = true)}
+							>
+								<Trash2 size={14} /> Delete
+							</button>
+							{#if canEditClaimData(detailClaim)}
+								<button type="button" class="sheet-btn" onclick={startEdit}>
+									Edit
+								</button>
+							{/if}
+							<form
+								method="POST"
+								action="?/markDone"
+								use:enhance={() =>
+									async ({ result, update }) => {
+										if (result.type === 'success') closeDetail();
+										await update();
+									}}
+							>
+								<input type="hidden" name="id" value={detailClaim.id} />
+								<button
+									type="submit"
+									class="sheet-btn sheet-btn-primary"
+									disabled={detailClaim.status === ClaimStatus.Done}
+								>
+									<CheckCircle size={14} />
+									{detailClaim.status === ClaimStatus.Done ? 'Claimed' : 'Mark as claimed'}
+								</button>
+							</form>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</Sheet.Content>
 	</Sheet.Portal>
