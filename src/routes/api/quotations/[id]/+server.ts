@@ -45,7 +45,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'quotations', 'delete')) return new Response('Forbidden', { status: 403 });
 	const id = parseInt(params.id!);
 
-	const result = removeQuotation(db, id);
+	const result = removeQuotation(db, id, locals.user!.id);
 	if (!result.ok) {
 		if (result.reason === 'not_found') return Response.json({ error: 'Not found' }, { status: 404 });
 		if (result.reason === 'converted') return Response.json({ error: 'Converted quotations cannot be deleted.' }, { status: 409 });

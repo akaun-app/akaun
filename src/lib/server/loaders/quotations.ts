@@ -30,10 +30,11 @@ export function loadQuotationsPage(locals: App.Locals, openQuotationId: number |
 export const quotationsActions: Actions = {
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'quotations', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid quotation' });
-		const result = removeQuotation(db, id);
+		const result = removeQuotation(db, id, userId);
 		if (!result.ok) {
 			if (result.reason === 'converted')
 				return fail(409, { error: 'Converted quotations cannot be deleted.' });

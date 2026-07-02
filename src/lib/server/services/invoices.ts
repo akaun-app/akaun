@@ -26,8 +26,8 @@ export function patchInvoice(db: Db, id: number, actingUserId: number, patch: In
 	return invoice;
 }
 
-export function removeInvoice(db: Db, id: number) {
-	const result = _delete(db, id);
+export function removeInvoice(db: Db, id: number, actingUserId: number) {
+	const result = _delete(db, id, actingUserId);
 	if (result.ok) invoiceEvents.emit('invoice-delete', { id });
 	return result;
 }

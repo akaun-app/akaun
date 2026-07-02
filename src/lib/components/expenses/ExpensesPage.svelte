@@ -25,6 +25,7 @@
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
@@ -88,6 +89,7 @@
 		claimDate?: string | null;
 	};
 	let detailExpense = $state<FullExpense | null>(null);
+	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let deleteDialogOpen = $state(false);
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let showNew = $state(false);
@@ -97,17 +99,12 @@
 	$effect(() => { if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus(); });
 
 	// --- Edit mode (detail sheet) ---
-	// Mirrors src/lib/server/locking.ts — amount/status lock has no god-mode override,
-	// descriptive fields do. Kept in sync manually since the server module can't be imported client-side.
-	const godMode = $derived(!!page.data.godMode);
+	// Mirrors src/lib/server/locking.ts's canEditAmount — amount/status is locked permanently
+	// once claimed. Kept in sync manually since the server module can't be imported client-side.
 	function canEditAmount(e: { claimId: number | null }): boolean {
 		return e.claimId === null;
 	}
-	function canEditDescriptive(e: { claimId: number | null }): boolean {
-		return e.claimId === null || godMode;
-	}
 	const amountLocked = $derived(detailExpense ? !canEditAmount(detailExpense) : false);
-	const descriptiveLocked = $derived(detailExpense ? !canEditDescriptive(detailExpense) : false);
 
 	let isEditing = $state(false);
 	let saving = $state(false);
@@ -147,24 +144,22 @@
 		saveError = '';
 		try {
 			const body: Record<string, unknown> = {};
-			if (!descriptiveLocked) {
-				let resolvedContactId = editContactId;
-				if (!resolvedContactId && editContactName) {
-					const cr = await fetch('/api/contacts', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Supplier] })
-					});
-					if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
-					resolvedContactId = (await cr.json()).id;
-				}
-				body.itemName = editItemName;
-				body.date = editDate;
-				body.contactId = resolvedContactId;
-				body.category = editCategory;
-				body.reference = editReference || null;
-				body.remark = editRemark || null;
+			let resolvedContactId = editContactId;
+			if (!resolvedContactId && editContactName) {
+				const cr = await fetch('/api/contacts', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Supplier] })
+				});
+				if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
+				resolvedContactId = (await cr.json()).id;
 			}
+			body.itemName = editItemName;
+			body.date = editDate;
+			body.contactId = resolvedContactId;
+			body.category = editCategory;
+			body.reference = editReference;
+			body.remark = editRemark;
 			if (!amountLocked) {
 				body.amount = parseFloat(editAmount) || 0;
 				body.currency = editCurrency;
@@ -183,6 +178,7 @@
 				const refreshed = await fetch(`/api/expenses/${detailExpense.id}`);
 				if (refreshed.ok) detailExpense = await refreshed.json();
 				isEditing = false;
+				auditTrailRef?.refresh();
 			}
 		} catch {
 			saveError = 'Network error — try again';
@@ -777,26 +773,22 @@
 						{#if saveError}
 							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{saveError}</div>
 						{/if}
-						{#if amountLocked || descriptiveLocked}
+						{#if amountLocked}
 							<div style="display:flex; align-items:center; gap:7px; background:var(--accent); color:var(--muted-foreground); border-radius:8px; padding:10px 14px; font-size:12.5px; margin-bottom:16px;">
 								<Lock size={13} />
-								{#if descriptiveLocked}
-									Linked to a claim — descriptive fields locked. Enable God Mode in Settings to edit them.
-								{:else}
-									Linked to a claim — amount and status are locked.
-								{/if}
+								Linked to a claim — amount and status are locked.
 							</div>
 						{/if}
 
 						<div class="field">
 							<label class="field-label" for="edit-itemName">Item name</label>
-							<Input id="edit-itemName" type="text" bind:value={editItemName} disabled={descriptiveLocked} />
+							<Input id="edit-itemName" type="text" bind:value={editItemName} />
 						</div>
 
 						<div class="field-grid field">
 							<div>
 								<label class="field-label" for="edit-date">Date</label>
-								<DatePicker name="editDate" bind:value={editDate} disabled={descriptiveLocked} />
+								<DatePicker name="editDate" bind:value={editDate} />
 							</div>
 							<div>
 								<label class="field-label" for="edit-amount">Amount{editCurrency !== mainCurrency() ? ` (${editCurrency})` : ''}</label>
@@ -846,13 +838,12 @@
 								bind:newName={editContactName}
 								placeholder="Search or add a supplier…"
 								initialLabel={detailExpense.contactName}
-								disabled={descriptiveLocked}
 							/>
 						</div>
 
 						<div class="field">
 							<label class="field-label" for="editCategory">Category</label>
-							<Select.Root type="single" bind:value={editCategory} disabled={descriptiveLocked}>
+							<Select.Root type="single" bind:value={editCategory}>
 								<Select.Trigger id="editCategory" class="w-full">
 									{editCategory || 'Select category'}
 								</Select.Trigger>
@@ -866,12 +857,12 @@
 
 						<div class="field">
 							<label class="field-label" for="editReference">Reference</label>
-							<Input id="editReference" type="text" bind:value={editReference} disabled={descriptiveLocked} />
+							<Input id="editReference" type="text" bind:value={editReference} />
 						</div>
 
 						<div class="field">
 							<label class="field-label" for="editRemark">Remark</label>
-							<Textarea id="editRemark" placeholder="Optional notes…" class="leading-relaxed" bind:value={editRemark} disabled={descriptiveLocked} />
+							<Textarea id="editRemark" placeholder="Optional notes…" class="leading-relaxed" bind:value={editRemark} />
 						</div>
 					</div>
 
@@ -969,6 +960,7 @@
 							</button>
 						{/if}
 						<AttachmentManager apiBase={`/api/expenses/${detailExpense.id}`} bind:attachments={detailExpense.attachments} />
+						<AuditTrail bind:this={auditTrailRef} recordType="expense" recordId={detailExpense.id} />
 					</div>
 					<div class="sheet-foot">
 						{#if detailExpense.claimId}

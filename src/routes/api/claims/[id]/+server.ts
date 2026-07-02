@@ -4,8 +4,7 @@ import { getClaim } from '$lib/server/queries/claims.js';
 import { patchClaim, removeClaim } from '$lib/server/services/claims.js';
 import { hasPermission } from '$lib/server/permissions.js';
 import { isValidDate } from '$lib/server/date.js';
-import { canEditClaimData, canDeleteClaim } from '$lib/server/locking.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { canEditClaimData } from '$lib/server/locking.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
@@ -38,8 +37,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 		patch.expenseIds = (body.expenseIds as unknown[]).map(Number).filter(Boolean);
 	}
 
-	// Editing a reconciled claim's date or linked expenses is never allowed, even in god mode —
-	// only its deletion is a guarded (god-mode-overridable) action.
+	// Editing a reconciled claim's date or linked expenses is never allowed.
 	if ((patch.date !== undefined || patch.expenseIds !== undefined) && !canEditClaimData(claim)) {
 		return Response.json(
 			{ error: 'This claim is reimbursed and its date/expenses can no longer be edited.' },
@@ -55,20 +53,20 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'delete')) return new Response('Forbidden', { status: 403 });
+	const user = locals.user!;
 	const id = parseInt(params.id!);
 
 	const claim = getClaim(db, id);
 	if (!claim) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	const godMode = getSetting(db, SETTING_KEYS.godModeEnabled) === 'true';
-	if (!canDeleteClaim(claim, godMode)) {
+	if (!canEditClaimData(claim)) {
 		return Response.json(
-			{ error: 'This claim is reimbursed and cannot be deleted. Enable God Mode to override.' },
+			{ error: 'This claim is reimbursed and cannot be deleted.' },
 			{ status: 403 }
 		);
 	}
 
-	const deleted = removeClaim(db, id);
+	const deleted = removeClaim(db, id, user.id);
 	if (!deleted) return Response.json({ error: 'Not found' }, { status: 404 });
 
 	return new Response(null, { status: 204 });

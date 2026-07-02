@@ -1,34 +1,24 @@
 import { QuotationStatus, InvoiceStatus, ClaimStatus } from '$lib/enums.js';
 
+// Amount and status are settled accounting data — locked permanently once the expense is
+// linked to a claim. No override.
 export function canEditAmount(expense: { claimId: number | null }): boolean {
 	return expense.claimId === null;
 }
 
-export function canEditDescriptive(
-	expense: { claimId: number | null },
-	godMode: boolean
-): boolean {
-	return expense.claimId === null || godMode;
+// Attachments are supporting documents, not accounting data, but once their claim is
+// reconciled (Done) they're locked permanently — same protection as the claim itself.
+export function canDeleteExpenseAttachment(expense: {
+	claimId: number | null;
+	claimStatus: number | null;
+}): boolean {
+	return expense.claimId === null || expense.claimStatus !== ClaimStatus.Done;
 }
 
-// Attachments are supporting documents, not accounting data — god mode may bypass this lock,
-// same as claim/claim-attachment deletion.
-export function canDeleteExpenseAttachment(
-	expense: { claimId: number | null; claimStatus: number | null },
-	godMode: boolean
-): boolean {
-	return expense.claimId === null || expense.claimStatus !== ClaimStatus.Done || godMode;
-}
-
-// A reconciled (Done) claim's date and linked expenses are immutable — no god-mode override.
-// Editing settled accounting data (unlike deleting it) is never allowed.
+// A reconciled (Done) claim's date and linked expenses are immutable, and so is the claim
+// itself — editing or deleting settled accounting data is never allowed.
 export function canEditClaimData(claim: { status: number }): boolean {
 	return claim.status !== ClaimStatus.Done;
-}
-
-// Deleting a Done claim/its attachments is a guarded action — god mode may bypass this lock.
-export function canDeleteClaim(claim: { status: number }, godMode: boolean): boolean {
-	return claim.status !== ClaimStatus.Done || godMode;
 }
 
 export function canEditQuotation(quotation: { status: number }): boolean {

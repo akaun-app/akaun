@@ -4,8 +4,7 @@ import { db } from '$lib/server/db/client.js';
 import { claimAttachments, claims } from '$lib/server/db/schema.js';
 import { deleteFile } from '$lib/server/file-storage.js';
 import { hasPermission } from '$lib/server/permissions.js';
-import { canDeleteClaim } from '$lib/server/locking.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { canEditClaimData } from '$lib/server/locking.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'change')) return new Response('Forbidden', { status: 403 });
@@ -20,12 +19,9 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 
 	if (!claim) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	const godMode = getSetting(db, SETTING_KEYS.godModeEnabled) === 'true';
-	if (!canDeleteClaim(claim, godMode)) {
+	if (!canEditClaimData(claim)) {
 		return Response.json(
-			{
-				error: 'This claim is reimbursed and its attachments cannot be deleted. Enable God Mode to override.'
-			},
+			{ error: 'This claim is reimbursed and its attachments cannot be deleted.' },
 			{ status: 403 }
 		);
 	}

@@ -483,10 +483,6 @@
 		customInstructionsDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 800);
 	}
 
-	// Advanced state
-	// svelte-ignore state_referenced_locally
-	let godMode = $state(data.godModeEnabled);
-
 	// Search index rebuild state
 	type RebuildStatus = {
 		running: boolean;
@@ -525,9 +521,8 @@
 		}
 	}
 
-	// Auto-save form refs (Intelligence + Advanced tabs)
+	// Auto-save form ref (Intelligence tab)
 	let intelligenceFormEl = $state<HTMLFormElement | null>(null);
-	let advancedFormEl = $state<HTMLFormElement | null>(null);
 	let sliderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let rateLimitDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1284,44 +1279,6 @@
 			{:else if activeTab === 'advanced'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">Advanced</h2>
-						<p class="set-section-sub">Power-user controls. Use with care.</p>
-					</div>
-					<form
-						method="POST"
-						action="?/saveAdvanced"
-						bind:this={advancedFormEl}
-						use:enhance={() => ({ update }) => update({ reset: false })}
-					>
-						<input type="hidden" name="godMode" value={String(godMode)} />
-						<div class="set-rows">
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">God Mode</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Allow editing descriptive fields on claimed expenses. Amounts stay locked.</div>
-								</div>
-								<button
-									type="button"
-									class="toggle-btn"
-									aria-label="God Mode"
-									class:on={godMode}
-									onclick={async () => { godMode = !godMode; await tick(); advancedFormEl?.requestSubmit(); }}
-									aria-pressed={godMode}
-								>
-									<span class="toggle-thumb"></span>
-								</button>
-							</div>
-							{#if godMode}
-								<div class="warn-banner">
-									<Lock size={13} /> God Mode is on — descriptive fields are editable on locked records.
-								</div>
-							{/if}
-						</div>
-					</form>
-				</div>
-
-				<div class="set-section" style="margin-top:32px;">
-					<div class="set-section-head">
 						<h2 class="set-section-title">Search index</h2>
 						<p class="set-section-sub">Rebuild searchable text for every expense, income, quotation, invoice and contact — including re-reading scanned documents.</p>
 					</div>
@@ -1743,25 +1700,6 @@
 			animation: none;
 			transform: none;
 		}
-	}
-
-	.warn-banner {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 8px 12px;
-		background: oklch(0.97 0.04 85 / 0.6);
-		border: 1px solid oklch(0.85 0.1 85);
-		border-radius: var(--radius);
-		font-size: 12px;
-		color: oklch(0.45 0.15 70);
-		margin: 0 16px;
-	}
-
-	:global(.dark) .warn-banner {
-		background: oklch(0.25 0.05 85 / 0.4);
-		border-color: oklch(0.4 0.1 85);
-		color: oklch(0.75 0.1 85);
 	}
 
 	.rebuild-progress-track {

@@ -22,6 +22,7 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
+	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import ContactMergeCompare from '$lib/components/ContactMergeCompare.svelte';
 	import { EntityType, Role, EntityTypeLabels, RoleLabels } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
@@ -197,6 +198,7 @@
 	// --- Create / edit sheet ---
 	let showForm = $state(false);
 	let editing = $state<Contact | null>(null);
+	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let fEntityType = $state<number | 0>(0);
 	let fRoles = $state<number[]>([]);
 
@@ -553,7 +555,10 @@
 			<form
 				method="POST"
 				action={editing ? '?/update' : '?/create'}
-				use:enhance
+				use:enhance={() => async ({ update }) => {
+					await update();
+					auditTrailRef?.refresh();
+				}}
 				style="flex:1; display:flex; flex-direction:column; overflow:hidden;"
 			>
 				{#if editing}<input type="hidden" name="id" value={editing.id} />{/if}
@@ -609,6 +614,9 @@
 						<label class="field-label" for="remark">Remark</label>
 						<Textarea id="remark" name="remark" rows={2} value={editing?.remark ?? ''} class="leading-relaxed" />
 					</div>
+					{#if editing}
+						<AuditTrail bind:this={auditTrailRef} recordType="contact" recordId={editing.id} />
+					{/if}
 				</div>
 				<div class="sheet-foot">
 					<div class="sheet-foot-actions">

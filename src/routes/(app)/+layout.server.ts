@@ -7,7 +7,6 @@ import { getUserNavOrder } from '$lib/server/navPreferences.js';
 import { DEFAULT_CURRENCY } from '$lib/currency.js';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
-	const godMode = getSetting(db, 'godMode.enabled') === 'true';
 	const mainCurrency = getSetting(db, SETTING_KEYS.currencyCode) ?? DEFAULT_CURRENCY;
 
 	const unpaidCount = countExpenses(db, { status: ExpenseStatus.Unpaid });
@@ -18,7 +17,6 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	return {
 		user: locals.user,
-		godMode,
 		mainCurrency,
 		unpaidCount,
 		isSuperuser: locals.isSuperuser,

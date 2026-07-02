@@ -23,6 +23,7 @@
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
@@ -74,6 +75,7 @@
 	type Attachment = { id: number; filename: string; displayName: string; addedDate: string };
 	type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
 	let detailIncome = $state<FullIncome | null>(null);
+	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let deleteDialogOpen = $state(false);
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let selected = $state(new Set<number>());
@@ -134,9 +136,9 @@
 					amount: parseFloat(editAmount) || 0,
 					currency: editCurrency,
 					exchangeRate: parseFloat(editExchangeRate) || 1,
-					reference: editReference || null,
-					descriptionText: editDescriptionText || null,
-					remark: editRemark || null
+					reference: editReference,
+					descriptionText: editDescriptionText,
+					remark: editRemark
 				})
 			});
 			if (!res.ok) {
@@ -146,6 +148,7 @@
 				const refreshed = await fetch(`/api/income/${detailIncome.id}`);
 				if (refreshed.ok) detailIncome = await refreshed.json();
 				isEditing = false;
+				auditTrailRef?.refresh();
 			}
 		} catch {
 			saveError = 'Network error — try again';
@@ -832,6 +835,7 @@
 							{/if}
 						</div>
 						<AttachmentManager apiBase={`/api/income/${detailIncome.id}`} bind:attachments={detailIncome.attachments} />
+						<AuditTrail bind:this={auditTrailRef} recordType="income" recordId={detailIncome.id} />
 					</div>
 					<div class="sheet-foot">
 						<div class="sheet-foot-actions">

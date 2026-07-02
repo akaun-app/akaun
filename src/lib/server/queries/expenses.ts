@@ -5,6 +5,7 @@ import { expenses, expenseAttachments, expenseSearchText, contacts, claims } fro
 import { nextNumber } from '../running-number.js';
 import { ExpenseStatus } from '$lib/enums.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
+import { recordAudit, diffRecords } from '../audit.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -184,6 +185,7 @@ export function createExpense(db: Db, actingUserId: number, data: ExpenseCreate)
 		.get()!;
 
 	reindexExpense(db, row.id, row);
+	recordAudit(db, { recordType: 'expense', recordId: row.id, userId: actingUserId, action: 'create' });
 	return row;
 }
 
@@ -199,17 +201,32 @@ export function updateExpense(db: Db, id: number, actingUserId: number, patch: E
 		.get()!;
 
 	reindexExpense(db, id, updated);
+	recordAudit(db, {
+		recordType: 'expense',
+		recordId: id,
+		userId: actingUserId,
+		action: 'update',
+		changes: diffRecords(existing, updated)
+	});
 	return updated;
 }
 
-export function deleteExpense(db: Db, id: number): boolean {
+export function deleteExpense(db: Db, id: number, actingUserId: number): boolean {
 	const result = db
 		.delete(expenses)
 		.where(eq(expenses.id, id))
-		.returning({ id: expenses.id })
+		.returning()
 		.get();
 
-	return !!result;
+	if (!result) return false;
+	recordAudit(db, {
+		recordType: 'expense',
+		recordId: id,
+		userId: actingUserId,
+		action: 'delete',
+		changes: diffRecords(result, null)
+	});
+	return true;
 }
 
 export function getExpensesByIds(db: Db, ids: number[]) {

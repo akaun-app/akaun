@@ -45,7 +45,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'invoices', 'delete')) return new Response('Forbidden', { status: 403 });
 	const id = parseInt(params.id!);
 
-	const result = removeInvoice(db, id);
+	const result = removeInvoice(db, id, locals.user!.id);
 	if (!result.ok) {
 		if (result.reason === 'not_found') return Response.json({ error: 'Not found' }, { status: 404 });
 		if (result.reason === 'paid') return Response.json({ error: 'Paid invoices cannot be deleted.' }, { status: 409 });

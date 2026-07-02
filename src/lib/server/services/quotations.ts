@@ -26,8 +26,8 @@ export function patchQuotation(db: Db, id: number, actingUserId: number, patch: 
 	return quotation;
 }
 
-export function removeQuotation(db: Db, id: number) {
-	const result = _delete(db, id);
+export function removeQuotation(db: Db, id: number, actingUserId: number) {
+	const result = _delete(db, id, actingUserId);
 	if (result.ok) quotationEvents.emit('quotation-delete', { id });
 	return result;
 }

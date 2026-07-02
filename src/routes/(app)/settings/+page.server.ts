@@ -35,8 +35,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 	);
 	const autoImportCustomInstructions = getSetting(db, SETTING_KEYS.autoImportCustomInstructions) ?? '';
 
-	const godModeEnabled = (getSetting(db, SETTING_KEYS.godModeEnabled) ?? 'false') === 'true';
-
 	const companyName = getSetting(db, SETTING_KEYS.companyName) ?? '';
 	const companyAddress = getSetting(db, SETTING_KEYS.companyAddress) ?? '';
 	const companyRegistrationNo = getSetting(db, SETTING_KEYS.companyRegistrationNo) ?? '';
@@ -59,7 +57,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		autoImportCategoryHints,
 		autoImportRateLimitMs,
 		autoImportCustomInstructions,
-		godModeEnabled,
 		companyName,
 		companyAddress,
 		companyRegistrationNo,
@@ -215,12 +212,5 @@ export const actions: Actions = {
 		setSetting(db, SETTING_KEYS.autoImportCustomInstructions, customInstructions);
 
 		return { success: true, action: 'saveIntelligenceGlobal' };
-	},
-
-	saveAdvanced: async ({ request }) => {
-		const data = await request.formData();
-		const godMode = data.get('godMode') === 'true';
-		setSetting(db, SETTING_KEYS.godModeEnabled, String(godMode));
-		return { success: true };
 	}
 };

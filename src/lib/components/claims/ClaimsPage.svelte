@@ -15,6 +15,7 @@
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import AttachmentManager from '$lib/components/ui/AttachmentManager.svelte';
+	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
@@ -48,6 +49,7 @@
 	let mobileSearchOpen = $state(false);
 	let mobileSearchEl = $state<HTMLInputElement | null>(null);
 	let detailClaim = $state<FullClaim | null>(null);
+	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let expensesExpanded = $state(false);
 	let deleteDialogOpen = $state(false);
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
@@ -58,14 +60,10 @@
 	let newClaimFileInput = $state<HTMLInputElement | null>(null);
 
 	// --- Edit mode (detail sheet) ---
-	// Mirrors src/lib/server/locking.ts. Editing a reconciled (Done) claim's date/linked expenses
-	// is an absolute lock — no god-mode override, unlike deleting it.
-	const godMode = $derived(!!page.data.godMode);
+	// Mirrors src/lib/server/locking.ts's canEditClaimData — a reconciled (Done) claim's
+	// date/linked expenses (and the claim itself) are locked permanently. No override.
 	function canEditClaimData(c: { status: number }): boolean {
 		return c.status !== ClaimStatus.Done;
-	}
-	function canDeleteClaim(c: { status: number }): boolean {
-		return c.status !== ClaimStatus.Done || godMode;
 	}
 
 	let isEditing = $state(false);
@@ -129,6 +127,7 @@
 				const refreshed = await fetch(`/api/claims/${detailClaim.id}`);
 				if (refreshed.ok) detailClaim = await refreshed.json();
 				isEditing = false;
+				auditTrailRef?.refresh();
 			}
 		} catch {
 			saveError = 'Network error — try again';
@@ -463,8 +462,8 @@
 								type="button"
 								class="sheet-btn sheet-btn-delete"
 								style="margin-right:auto;"
-								disabled={!canDeleteClaim(detailClaim)}
-								title={!canDeleteClaim(detailClaim) ? 'Claim is reimbursed. Enable God Mode to delete.' : undefined}
+								disabled={!canEditClaimData(detailClaim)}
+								title={!canEditClaimData(detailClaim) ? 'Claim is reimbursed.' : undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
 								<Trash2 size={14} /> Delete
@@ -547,6 +546,7 @@
 						<div>
 							<AttachmentManager apiBase={`/api/claims/${detailClaim.id}`} bind:attachments={detailClaim.attachments} />
 						</div>
+						<AuditTrail bind:this={auditTrailRef} recordType="claim" recordId={detailClaim.id} />
 					</div>
 					<div class="sheet-foot">
 						<div class="sheet-foot-note">
@@ -559,8 +559,8 @@
 								type="button"
 								class="sheet-btn sheet-btn-delete"
 								style="margin-right:auto;"
-								disabled={!canDeleteClaim(detailClaim)}
-								title={!canDeleteClaim(detailClaim) ? 'Claim is reimbursed. Enable God Mode to delete.' : undefined}
+								disabled={!canEditClaimData(detailClaim)}
+								title={!canEditClaimData(detailClaim) ? 'Claim is reimbursed.' : undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
 								<Trash2 size={14} /> Delete

@@ -33,7 +33,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	const id = parseInt(params.id!);
 	if (!getContact(db, id)) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	const ok = deleteContact(db, id);
+	const ok = deleteContact(db, id, locals.user!.id);
 	if (!ok) {
 		return Response.json(
 			{ error: 'Contact is referenced by existing records and cannot be deleted.' },

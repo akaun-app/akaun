@@ -108,6 +108,7 @@ export const expensesActions: Actions = {
 
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'expenses', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid expense' });
@@ -121,7 +122,7 @@ export const expensesActions: Actions = {
 			});
 		}
 
-		removeExpense(db, id);
+		removeExpense(db, id, userId);
 		return { success: true };
 	}
 };

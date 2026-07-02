@@ -12,7 +12,6 @@ export const SETTING_KEYS = {
 	autoImportRateLimitMs: 'autoImport.rateLimitMs',
 	autoImportFreeModelsOnly: 'autoImport.freeModelsOnly',
 	autoImportCustomInstructions: 'autoImport.customInstructions',
-	godModeEnabled: 'godMode.enabled',
 	companyName: 'company.name',
 	companyAddress: 'company.address',
 	companyRegistrationNo: 'company.registrationNo',

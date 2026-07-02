@@ -18,6 +18,7 @@
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
@@ -90,6 +91,7 @@
 	type FullQuotation = (typeof data.quotations)[0] & { lines: QuotationLine[] };
 
 	let detailQuotation = $state<FullQuotation | null>(null);
+	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let isEditing = $state(false);
 	let deleteDialogOpen = $state(false);
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
@@ -355,6 +357,7 @@
 			} else {
 				detailQuotation = await res.json();
 				isEditing = false;
+				auditTrailRef?.refresh();
 			}
 		} catch {
 			saveError = 'Network error — try again';
@@ -1057,6 +1060,7 @@
 								</div>
 							</div>
 						{/if}
+						<AuditTrail bind:this={auditTrailRef} recordType="quotation" recordId={detailQuotation.id} />
 					</div>
 
 					<div class="sheet-foot">

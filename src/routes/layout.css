@@ -619,6 +619,16 @@ th.sortable:hover .th-idle { opacity: .5; }
 .list-expand-btn { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; margin-top: 4px; border: none; background: none; font-family: inherit; font-size: 12px; font-weight: 500; color: var(--muted-foreground); cursor: pointer; padding: 2px 0; }
 .list-expand-btn:hover { color: var(--primary); }
 
+/* ===================== Audit trail ===================== */
+.audit-list { display: flex; flex-direction: column; gap: 2px; }
+.audit-entry { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.audit-entry:last-child { border-bottom: none; }
+.audit-entry-icon { width: 24px; height: 24px; border-radius: 6px; background: var(--accent); color: var(--muted-foreground); display: grid; place-items: center; flex-shrink: 0; margin-top: 1px; }
+.audit-entry-main { flex: 1; min-width: 0; }
+.audit-entry-line { font-size: 12.5px; line-height: 1.5; color: var(--foreground); }
+.audit-entry-user { font-weight: 600; }
+.audit-entry-time { font-size: 11px; color: var(--muted-foreground); margin-top: 2px; }
+
 /* ---------- Linked-claim card (expense detail sheet) ---------- */
 .linked-claim-card { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; width: 100%; background: var(--card); font-family: inherit; text-align: left; }
 .linked-claim-icon { width: 34px; height: 34px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--muted-foreground); flex-shrink: 0; }

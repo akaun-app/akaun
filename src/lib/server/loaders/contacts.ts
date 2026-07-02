@@ -88,10 +88,11 @@ export const contactsActions: Actions = {
 
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'contacts', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid contact' });
-		const ok = deleteContact(db, id);
+		const ok = deleteContact(db, id, userId);
 		if (!ok) return fail(409, { error: 'Contact is referenced by records and cannot be deleted.' });
 		return { success: true };
 	},

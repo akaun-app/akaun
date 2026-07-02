@@ -4,6 +4,7 @@ import * as schema from '../db/schema.js';
 import { incomes, incomeAttachments, incomeSearchText, contacts } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
+import { recordAudit, diffRecords } from '../audit.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -155,6 +156,7 @@ export function createIncome(db: Db, actingUserId: number, data: IncomeCreate) {
 		.get()!;
 
 	reindexIncome(db, row.id, row);
+	recordAudit(db, { recordType: 'income', recordId: row.id, userId: actingUserId, action: 'create' });
 	return row;
 }
 
@@ -170,15 +172,26 @@ export function updateIncome(db: Db, id: number, actingUserId: number, patch: In
 		.get()!;
 
 	reindexIncome(db, id, updated);
+	recordAudit(db, {
+		recordType: 'income',
+		recordId: id,
+		userId: actingUserId,
+		action: 'update',
+		changes: diffRecords(existing, updated)
+	});
 	return updated;
 }
 
-export function deleteIncome(db: Db, id: number): boolean {
-	const result = db
-		.delete(incomes)
-		.where(eq(incomes.id, id))
-		.returning({ id: incomes.id })
-		.get();
+export function deleteIncome(db: Db, id: number, actingUserId: number): boolean {
+	const result = db.delete(incomes).where(eq(incomes.id, id)).returning().get();
 
-	return !!result;
+	if (!result) return false;
+	recordAudit(db, {
+		recordType: 'income',
+		recordId: id,
+		userId: actingUserId,
+		action: 'delete',
+		changes: diffRecords(result, null)
+	});
+	return true;
 }

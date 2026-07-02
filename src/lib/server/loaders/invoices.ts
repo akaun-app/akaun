@@ -41,10 +41,11 @@ export const invoicesActions: Actions = {
 	},
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'invoices', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid invoice' });
-		const result = removeInvoice(db, id);
+		const result = removeInvoice(db, id, userId);
 		if (!result.ok) {
 			if (result.reason === 'paid') return fail(409, { error: 'Paid invoices cannot be deleted.' });
 			return fail(404, { error: 'Invoice not found' });

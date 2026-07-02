@@ -2,6 +2,7 @@ import {
 	createContact as _create,
 	updateContact as _update,
 	setContactRoles as _setRoles,
+	getContactRoles,
 	hardDeleteContact as _hardDelete,
 	mergeContacts as _merge,
 	getContact,
@@ -9,6 +10,7 @@ import {
 	type ContactPatch
 } from '$lib/server/queries/contacts.js';
 import { contactEvents } from '$lib/server/finance/events.js';
+import { recordAudit, diffRecords } from '$lib/server/audit.js';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -27,14 +29,22 @@ export function patchContact(db: Db, id: number, actingUserId: number, patch: Co
 }
 
 export function replaceContactRoles(db: Db, id: number, actingUserId: number, roles: number[]) {
-	_setRoles(db, id, roles);
+	const before = getContactRoles(db, id);
+	const after = _setRoles(db, id, roles);
+	recordAudit(db, {
+		recordType: 'contact',
+		recordId: id,
+		userId: actingUserId,
+		action: 'update',
+		changes: diffRecords({ roles: before }, { roles: after })
+	});
 	const contact = getContact(db, id);
 	if (contact) contactEvents.emit('contact-update', { item: contact });
 	return contact;
 }
 
-export function deleteContact(db: Db, id: number): boolean {
-	const ok = _hardDelete(db, id);
+export function deleteContact(db: Db, id: number, actingUserId: number): boolean {
+	const ok = _hardDelete(db, id, actingUserId);
 	if (ok) contactEvents.emit('contact-delete', { id });
 	return ok;
 }

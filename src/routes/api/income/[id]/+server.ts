@@ -42,7 +42,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'income', 'delete')) return new Response('Forbidden', { status: 403 });
 	const id = parseInt(params.id!);
 
-	const deleted = removeIncome(db, id);
+	const deleted = removeIncome(db, id, locals.user!.id);
 	if (!deleted) return Response.json({ error: 'Not found' }, { status: 404 });
 
 	return new Response(null, { status: 204 });

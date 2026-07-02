@@ -24,8 +24,8 @@ export function patchExpense(db: Db, id: number, actingUserId: number, patch: Ex
 	return expense;
 }
 
-export function removeExpense(db: Db, id: number) {
-	const ok = _delete(db, id);
+export function removeExpense(db: Db, id: number, actingUserId: number) {
+	const ok = _delete(db, id, actingUserId);
 	if (ok) expenseEvents.emit('expense-delete', { id });
 	return ok;
 }

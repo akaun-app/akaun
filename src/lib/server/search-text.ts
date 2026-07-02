@@ -1,4 +1,4 @@
-import { sql, type SQL } from 'drizzle-orm';
+import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { AnySQLiteColumn, AnySQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 
@@ -20,11 +20,18 @@ export function upsertSearchText(
 	id: number,
 	text: string
 ) {
+	// .values()/.set() key on the TS field name (e.g. "expenseId"), not the SQL column
+	// name (e.g. "expense_id") that idColumn.name/textColumn.name hold — resolve those
+	// keys from the table's column map instead of guessing from the column objects.
+	const columns = getTableColumns(table);
+	const idKey = Object.keys(columns).find((k) => columns[k] === idColumn)!;
+	const textKey = Object.keys(columns).find((k) => columns[k] === textColumn)!;
+
 	db.insert(table)
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		.values({ [idColumn.name]: id, [textColumn.name]: text } as any)
+		.values({ [idKey]: id, [textKey]: text } as any)
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		.onConflictDoUpdate({ target: idColumn, set: { [textColumn.name]: text } as any })
+		.onConflictDoUpdate({ target: idColumn, set: { [textKey]: text } as any })
 		.run();
 }
 

@@ -6,8 +6,7 @@ import { createClaim, patchClaim, removeClaim } from '$lib/server/services/claim
 import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
-import { canDeleteClaim } from '$lib/server/locking.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
+import { canEditClaimData } from '$lib/server/locking.js';
 
 export function loadClaimsPage(locals: App.Locals, openClaimId: number | null) {
 	if (!hasPermission(locals, 'claims', 'view')) throw redirect(302, '/dashboard');
@@ -50,6 +49,7 @@ export const claimsActions: Actions = {
 
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'claims', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid claim ID' });
@@ -57,14 +57,11 @@ export const claimsActions: Actions = {
 		const claim = getClaim(db, id);
 		if (!claim) return fail(404, { error: 'Claim not found' });
 
-		const godMode = getSetting(db, SETTING_KEYS.godModeEnabled) === 'true';
-		if (!canDeleteClaim(claim, godMode)) {
-			return fail(403, {
-				error: 'This claim is reimbursed and cannot be deleted. Enable God Mode to override.'
-			});
+		if (!canEditClaimData(claim)) {
+			return fail(403, { error: 'This claim is reimbursed and cannot be deleted.' });
 		}
 
-		const ok = removeClaim(db, id);
+		const ok = removeClaim(db, id, userId);
 		if (!ok) return fail(404, { error: 'Claim not found' });
 
 		return { success: true };

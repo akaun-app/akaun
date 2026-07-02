@@ -13,6 +13,7 @@ import {
 } from '../db/schema.js';
 import { EntityType, RoleLabels, EntityTypeLabels } from '$lib/enums.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
+import { recordAudit, diffRecords } from '../audit.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -157,6 +158,7 @@ export function createContact(db: Db, actingUserId: number, data: ContactCreate)
 
 	const roles = setContactRoles(db, row.id, data.roles ?? []);
 	reindexContact(db, row.id, row);
+	recordAudit(db, { recordType: 'contact', recordId: row.id, userId: actingUserId, action: 'create' });
 	return withLabels(row, roles);
 }
 
@@ -172,6 +174,13 @@ export function updateContact(db: Db, id: number, actingUserId: number, patch: C
 		.get()!;
 
 	reindexContact(db, id, updated);
+	recordAudit(db, {
+		recordType: 'contact',
+		recordId: id,
+		userId: actingUserId,
+		action: 'update',
+		changes: diffRecords(existing, updated)
+	});
 	const roles = getContactRoles(db, id);
 	return withLabels(updated, roles);
 }
@@ -237,10 +246,18 @@ export function getContactUsageCounts(
 }
 
 /** Hard delete — refuses if referenced. Returns false when blocked / missing. */
-export function hardDeleteContact(db: Db, id: number): boolean {
+export function hardDeleteContact(db: Db, id: number, actingUserId: number): boolean {
 	if (isContactReferenced(db, id)) return false;
-	const result = db.delete(contacts).where(eq(contacts.id, id)).returning({ id: contacts.id }).get();
-	return !!result;
+	const result = db.delete(contacts).where(eq(contacts.id, id)).returning().get();
+	if (!result) return false;
+	recordAudit(db, {
+		recordType: 'contact',
+		recordId: id,
+		userId: actingUserId,
+		action: 'delete',
+		changes: diffRecords(result, null)
+	});
+	return true;
 }
 
 type MatchSignal = 'name' | 'email' | 'phone' | 'registrationNo';
@@ -345,6 +362,11 @@ export function mergeContacts(
 	const losers = loserIds.filter((id) => id !== survivorId);
 	if (losers.length === 0) return getContact(db, survivorId);
 
+	const before = getContact(db, survivorId);
+	const loserSnapshots = losers
+		.map((id) => db.select().from(contacts).where(eq(contacts.id, id)).get())
+		.filter((r): r is typeof contacts.$inferSelect => !!r);
+
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(db as any).transaction((tx: Db) => {
 		// a/b. Repoint references — extend this block per new contact FK.
@@ -399,7 +421,26 @@ export function mergeContacts(
 	// Re-index survivor name in case a backfill changed searchable fields.
 	const survivor = db.select().from(contacts).where(eq(contacts.id, survivorId)).get();
 	if (survivor) reindexContact(db, survivorId, survivor);
-	return getContact(db, survivorId);
+
+	const after = getContact(db, survivorId);
+	recordAudit(db, {
+		recordType: 'contact',
+		recordId: survivorId,
+		userId: actingUserId,
+		action: 'update',
+		changes: diffRecords(before, after)
+	});
+	for (const loser of loserSnapshots) {
+		recordAudit(db, {
+			recordType: 'contact',
+			recordId: loser.id,
+			userId: actingUserId,
+			action: 'delete',
+			changes: diffRecords(loser, null)
+		});
+	}
+
+	return after;
 }
 
 // ---------------------------------------------------------------------------

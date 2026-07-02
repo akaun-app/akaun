@@ -6,7 +6,6 @@ import { expenseAttachments } from '$lib/server/db/schema.js';
 import { deleteFile } from '$lib/server/file-storage.js';
 import { hasPermission } from '$lib/server/permissions.js';
 import { canDeleteExpenseAttachment } from '$lib/server/locking.js';
-import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
@@ -16,13 +15,9 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	const expense = getExpense(db, expenseId);
 	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	const godMode = getSetting(db, SETTING_KEYS.godModeEnabled) === 'true';
-	if (!canDeleteExpenseAttachment(expense, godMode)) {
+	if (!canDeleteExpenseAttachment(expense)) {
 		return Response.json(
-			{
-				error:
-					'Attachment is locked — expense is linked to a completed claim. Enable God Mode to override.'
-			},
+			{ error: 'Attachment is locked — expense is linked to a completed claim.' },
 			{ status: 403 }
 		);
 	}

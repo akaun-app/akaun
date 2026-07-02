@@ -6,6 +6,7 @@ import { nextNumber } from '../running-number.js';
 import { InvoiceStatus } from '$lib/enums.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
 import { reindexIncome } from './income.js';
+import { recordAudit, diffRecords } from '../audit.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -233,6 +234,7 @@ export function createInvoice(db: Db, userId: number, data: InvoiceCreate) {
 			.run();
 
 		reindexInvoice(tx, newId);
+		recordAudit(tx, { recordType: 'invoice', recordId: newId, userId, action: 'create' });
 		return getInvoice(tx, newId)!;
 	});
 }
@@ -276,6 +278,14 @@ export function updateInvoice(db: Db, id: number, userId: number, patch: Invoice
 		tx.update(invoices).set(setValues).where(eq(invoices.id, id)).run();
 
 		reindexInvoice(tx, id);
+		const updatedRow = tx.select().from(invoices).where(eq(invoices.id, id)).get();
+		recordAudit(tx, {
+			recordType: 'invoice',
+			recordId: id,
+			userId,
+			action: 'update',
+			changes: diffRecords(existing, updatedRow)
+		});
 		return getInvoice(tx, id)!;
 	});
 }
@@ -286,17 +296,21 @@ export function updateInvoice(db: Db, id: number, userId: number, patch: Invoice
 
 export function deleteInvoice(
 	db: Db,
-	id: number
+	id: number,
+	userId: number
 ): { ok: boolean; reason?: 'paid' | 'not_found' } {
 	return db.transaction((tx) => {
-		const existing = tx
-			.select({ status: invoices.status })
-			.from(invoices)
-			.where(eq(invoices.id, id))
-			.get();
+		const existing = tx.select().from(invoices).where(eq(invoices.id, id)).get();
 		if (!existing) return { ok: false, reason: 'not_found' };
 		if (existing.status === InvoiceStatus.Paid) return { ok: false, reason: 'paid' };
 		tx.delete(invoices).where(eq(invoices.id, id)).run();
+		recordAudit(tx, {
+			recordType: 'invoice',
+			recordId: id,
+			userId,
+			action: 'delete',
+			changes: diffRecords(existing, null)
+		});
 		return { ok: true };
 	});
 }
@@ -342,6 +356,7 @@ export function markInvoicePaid(
 		// markInvoicePaid bypasses services/income.ts (it's already inside this transaction),
 		// so it must index the new income row itself — createIncome() isn't called here.
 		reindexIncome(tx, newIncomeId, newIncome);
+		recordAudit(tx, { recordType: 'income', recordId: newIncomeId, userId, action: 'create' });
 
 		tx.update(invoices)
 			.set({
@@ -353,6 +368,17 @@ export function markInvoicePaid(
 			})
 			.where(eq(invoices.id, id))
 			.run();
+		recordAudit(tx, {
+			recordType: 'invoice',
+			recordId: id,
+			userId,
+			action: 'update',
+			changes: [
+				{ field: 'status', before: invoice.status, after: InvoiceStatus.Paid },
+				{ field: 'amountPaid', before: invoice.amountPaid, after: invoice.total },
+				{ field: 'resultIncomeId', before: invoice.resultIncomeId, after: newIncomeId }
+			]
+		});
 
 		return { ok: true, invoiceId: id, incomeId: newIncomeId };
 	});

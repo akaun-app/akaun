@@ -487,3 +487,25 @@ export const documentTemplates = sqliteTable('document_templates', {
 	createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
 	updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`)
 });
+
+// ---------------------------------------------------------------------------
+// Audit trail — one row per create/update/delete across every editable record
+// type. Standard editing (no more "god mode") is offset by always knowing who
+// changed what and when. See src/lib/server/audit.ts.
+// ---------------------------------------------------------------------------
+export const auditLog = sqliteTable(
+	'audit_log',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		// 'expense' | 'income' | 'claim' | 'contact' | 'quotation' | 'invoice'
+		recordType: text('record_type').notNull(),
+		recordId: integer('record_id').notNull(),
+		userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+		// 'create' | 'update' | 'delete'
+		action: text('action').notNull(),
+		// JSON: FieldChange[] — [{ field, before, after }]. Null for create/delete.
+		changes: text('changes'),
+		createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+	},
+	(t) => [index('audit_log_record_idx').on(t.recordType, t.recordId, t.createdAt)]
+);

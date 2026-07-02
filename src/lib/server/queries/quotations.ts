@@ -13,6 +13,7 @@ import { nextNumber } from '../running-number.js';
 import { QuotationStatus, InvoiceStatus } from '$lib/enums.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
 import { reindexInvoice } from './invoices.js';
+import { recordAudit, diffRecords } from '../audit.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -227,6 +228,7 @@ export function createQuotation(db: Db, userId: number, data: QuotationCreate) {
 			.run();
 
 		reindexQuotation(tx, newId);
+		recordAudit(tx, { recordType: 'quotation', recordId: newId, userId, action: 'create' });
 		return getQuotation(tx, newId)!;
 	});
 }
@@ -270,6 +272,14 @@ export function updateQuotation(db: Db, id: number, userId: number, patch: Quota
 		tx.update(quotations).set(setValues).where(eq(quotations.id, id)).run();
 
 		reindexQuotation(tx, id);
+		const updatedRow = tx.select().from(quotations).where(eq(quotations.id, id)).get();
+		recordAudit(tx, {
+			recordType: 'quotation',
+			recordId: id,
+			userId,
+			action: 'update',
+			changes: diffRecords(existing, updatedRow)
+		});
 		return getQuotation(tx, id)!;
 	});
 }
@@ -278,12 +288,23 @@ export function updateQuotation(db: Db, id: number, userId: number, patch: Quota
 // Delete
 // ---------------------------------------------------------------------------
 
-export function deleteQuotation(db: Db, id: number): { ok: boolean; reason?: 'converted' | 'not_found' } {
+export function deleteQuotation(
+	db: Db,
+	id: number,
+	userId: number
+): { ok: boolean; reason?: 'converted' | 'not_found' } {
 	return db.transaction((tx) => {
-		const existing = tx.select({ status: quotations.status }).from(quotations).where(eq(quotations.id, id)).get();
+		const existing = tx.select().from(quotations).where(eq(quotations.id, id)).get();
 		if (!existing) return { ok: false, reason: 'not_found' };
 		if (existing.status === QuotationStatus.Converted) return { ok: false, reason: 'converted' };
 		tx.delete(quotations).where(eq(quotations.id, id)).run();
+		recordAudit(tx, {
+			recordType: 'quotation',
+			recordId: id,
+			userId,
+			action: 'delete',
+			changes: diffRecords(existing, null)
+		});
 		return { ok: true };
 	});
 }
@@ -344,6 +365,7 @@ export function convertQuotationToInvoice(
 			.run();
 
 		reindexInvoice(tx, newInvoiceId);
+		recordAudit(tx, { recordType: 'invoice', recordId: newInvoiceId, userId, action: 'create' });
 
 		tx.update(quotations)
 			.set({
@@ -354,6 +376,16 @@ export function convertQuotationToInvoice(
 			})
 			.where(eq(quotations.id, quotationId))
 			.run();
+		recordAudit(tx, {
+			recordType: 'quotation',
+			recordId: quotationId,
+			userId,
+			action: 'update',
+			changes: [
+				{ field: 'status', before: quotation.status, after: QuotationStatus.Converted },
+				{ field: 'convertedInvoiceId', before: quotation.convertedInvoiceId, after: newInvoiceId }
+			]
+		});
 
 		return { ok: true, quotationId, invoiceId: newInvoiceId };
 	});

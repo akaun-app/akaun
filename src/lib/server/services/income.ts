@@ -24,8 +24,8 @@ export function patchIncome(db: Db, id: number, actingUserId: number, patch: Inc
 	return income;
 }
 
-export function removeIncome(db: Db, id: number) {
-	const ok = _delete(db, id);
+export function removeIncome(db: Db, id: number, actingUserId: number) {
+	const ok = _delete(db, id, actingUserId);
 	if (ok) incomeEvents.emit('income-delete', { id });
 	return ok;
 }

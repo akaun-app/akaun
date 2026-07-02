@@ -86,11 +86,12 @@ export const incomeActions: Actions = {
 
 	delete: async ({ locals, request }) => {
 		if (!hasPermission(locals, 'income', 'delete')) return fail(403, { error: 'Forbidden' });
+		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));
 		if (!id) return fail(400, { error: 'Invalid income' });
 
-		const ok = removeIncome(db, id);
+		const ok = removeIncome(db, id, userId);
 		if (!ok) return fail(404, { error: 'Income not found' });
 
 		return { success: true };
