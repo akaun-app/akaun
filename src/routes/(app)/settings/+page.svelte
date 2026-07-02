@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { untrack, tick, onMount, onDestroy } from 'svelte';
+	import { untrack, onMount, onDestroy } from 'svelte';
 	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -25,15 +25,8 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab =
-		| 'general'
-		| 'intelligence'
-		| 'providers'
-		| 'categories'
-		| 'numbering'
-		| 'templates'
-		| 'advanced';
-	let activeTab = $state<Tab>('general');
+	type Tab = 'workspace' | 'documents' | 'ai' | 'templates' | 'advanced';
+	let activeTab = $state<Tab>('workspace');
 
 	// Mobile detection for Sheet side
 	const screenState = useIsMobile();
@@ -477,11 +470,6 @@
 	let aiRateLimitSec = $state(Math.round(data.autoImportRateLimitMs / 1000));
 	// svelte-ignore state_referenced_locally
 	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
-	let customInstructionsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-	function handleCustomInstructionsInput() {
-		if (customInstructionsDebounceTimer) clearTimeout(customInstructionsDebounceTimer);
-		customInstructionsDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 800);
-	}
 
 	// Search index rebuild state
 	type RebuildStatus = {
@@ -521,30 +509,18 @@
 		}
 	}
 
-	// Auto-save form ref (Intelligence tab)
-	let intelligenceFormEl = $state<HTMLFormElement | null>(null);
-	let sliderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let rateLimitDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-
 	function handleSliderChange(v: number[]) {
 		aiParallelTasks = v[0];
-		if (sliderDebounceTimer) clearTimeout(sliderDebounceTimer);
-		sliderDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 400);
 	}
 
 	function handleRateLimitSliderChange(v: number[]) {
 		aiRateLimitSec = v[0];
-		if (rateLimitDebounceTimer) clearTimeout(rateLimitDebounceTimer);
-		rateLimitDebounceTimer = setTimeout(() => intelligenceFormEl?.requestSubmit(), 400);
 	}
 
 	// --- Provider list state ---
 	type ProviderRow = (typeof data.providers)[0];
 	// svelte-ignore state_referenced_locally
 	let providers = $state<ProviderRow[]>([...data.providers]);
-
-	let reorderFormEl = $state<HTMLFormElement | null>(null);
-	let reorderInputEl = $state<HTMLInputElement | null>(null);
 
 	function reorderItems<T extends { id: string | number }>(
 		arr: T[],
@@ -572,8 +548,6 @@
 	function handleDrop(state: DragDropState<ProviderRow>) {
 		if (!state.draggedItem) return;
 		providers = reorderItems(providers, state.draggedItem, state.targetElement, state.dropPosition);
-		if (reorderInputEl) reorderInputEl.value = JSON.stringify(providers.map((p) => p.id));
-		reorderFormEl?.requestSubmit();
 	}
 
 	// --- Provider Sheet state ---
@@ -751,9 +725,9 @@
 	$effect(() => {
 		if (form?.success) {
 			const action = (form as { action?: string }).action;
-			if (action === 'addProvider' || action === 'updateProvider' || action === 'deleteProvider' || action === 'reorderProviders') {
+			if (action === 'addProvider' || action === 'updateProvider' || action === 'deleteProvider' || action === 'saveProviderList') {
 				providers = [...data.providers];
-				if (action !== 'reorderProviders') closeSheet();
+				if (action !== 'saveProviderList') closeSheet();
 			}
 			if (action === 'saveIntelligenceGlobal') {
 				aiParallelTasks = data.autoImportParallelTasks;
@@ -828,11 +802,9 @@
 	}
 
 	const TABS: { id: Tab; label: string }[] = [
-		{ id: 'general', label: 'General' },
-		{ id: 'intelligence', label: 'Intelligence' },
-		{ id: 'providers', label: 'Providers' },
-		{ id: 'categories', label: 'Categories' },
-		{ id: 'numbering', label: 'Numbering' },
+		{ id: 'workspace', label: 'Workspace' },
+		{ id: 'documents', label: 'Documents' },
+		{ id: 'ai', label: 'AI & Import' },
 		{ id: 'templates', label: 'Templates' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
@@ -866,10 +838,10 @@
 
 		<!-- Content -->
 		<div class="set-content" style={activeTab === 'templates' ? 'overflow:hidden;padding:0;display:flex;flex-direction:column;' : ''}>
-			{#if activeTab === 'general'}
+			{#if activeTab === 'workspace'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">General</h2>
+						<h2 class="set-section-title">Workspace</h2>
 						<p class="set-section-sub">Account and display settings</p>
 					</div>
 					<form method="POST" action="?/saveGeneral" use:enhance={() => ({ update }) => update({ reset: false })}>
@@ -941,193 +913,21 @@
 					</form>
 				</div>
 
-			{:else if activeTab === 'intelligence'}
+			{:else if activeTab === 'documents'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">Intelligence</h2>
-						<p class="set-section-sub">Global settings for auto-import processing.</p>
-					</div>
-					<form
-						method="POST"
-						action="?/saveIntelligenceGlobal"
-						bind:this={intelligenceFormEl}
-						use:enhance={() => ({ update }) => update({ reset: false })}
-					>
-						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
-						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
-						<input type="hidden" name="rateLimitMs" value={aiRateLimitSec * 1000} />
-						<div class="set-rows">
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">Parallel tasks</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Process up to {aiParallelTasks} file{aiParallelTasks !== 1 ? 's' : ''} at once</div>
-								</div>
-								<div class="slider-row">
-									<Slider
-										type="multiple"
-										min={1}
-										max={10}
-										step={1}
-										value={[aiParallelTasks]}
-										onValueChange={handleSliderChange}
-										style="width:140px;"
-									/>
-									<span class="slider-val num">{aiParallelTasks}</span>
-								</div>
-							</div>
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">Rate limit</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">{aiRateLimitSec === 0 ? 'No delay between AI calls' : `Wait ${aiRateLimitSec}s between AI calls`}</div>
-								</div>
-								<div class="slider-row">
-									<Slider
-										type="multiple"
-										min={0}
-										max={30}
-										step={1}
-										value={[aiRateLimitSec]}
-										onValueChange={handleRateLimitSliderChange}
-										style="width:140px;"
-									/>
-									<span class="slider-val num">{aiRateLimitSec}s</span>
-								</div>
-							</div>
-							<div class="set-row">
-								<div>
-									<div class="set-row-label">Category hints</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Learn from your last 100 categorised items</div>
-								</div>
-								<button
-									type="button"
-									class="toggle-btn"
-									aria-label="Category hints"
-									class:on={aiCategoryHints}
-									onclick={async () => { aiCategoryHints = !aiCategoryHints; await tick(); intelligenceFormEl?.requestSubmit(); }}
-									aria-pressed={aiCategoryHints}
-								>
-									<span class="toggle-thumb"></span>
-								</button>
-							</div>
-							<div class="set-row set-row-col">
-								<div class="set-row-label">Custom instructions</div>
-								<div class="set-row-value" style="font-size:12px; margin-top:2px; margin-bottom:6px;">
-									Extra guidance for the AI when reading your documents — e.g. recurring suppliers, unusual formats, or category rules specific to your business.
-								</div>
-								<textarea
-									name="customInstructions"
-									bind:value={aiCustomInstructions}
-									oninput={handleCustomInstructionsInput}
-									placeholder={'e.g. "Grab receipts are always a food expense" or "Invoices from Acme Corp use category Software"'}
-									rows="4"
-									maxlength="2000"
-									class="set-textarea"
-								></textarea>
-							</div>
-						</div>
-					</form>
-				</div>
-
-			{:else if activeTab === 'providers'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">LLM Providers</h2>
-						<p class="set-section-sub">AI models used for receipt extraction. Providers are tried in priority order — drag to reorder.</p>
+						<h2 class="set-section-title">Documents</h2>
+						<p class="set-section-sub">Categories and document numbering</p>
 					</div>
 
-					<div class="prov-header">
-						<span class="set-row-label" style="margin:0;">Configured providers</span>
-						<button type="button" class="sheet-btn sheet-btn-primary" style="padding:6px 12px; font-size:13px;" onclick={openAddSheet}>
-							<Plus size={14} /> Add provider
-						</button>
-					</div>
-
-					<!-- Hidden reorder form -->
-					<form
-						bind:this={reorderFormEl}
-						method="POST"
-						action="?/reorderProviders"
-						use:enhance={() => ({ update }) => update({ reset: false })}
-						style="display:none;"
-					>
-						<input bind:this={reorderInputEl} type="hidden" name="orderedIds" value={JSON.stringify(providers.map((p) => p.id))} />
-					</form>
-
-					{#if providers.length === 0}
-						<div class="prov-empty">
-							<Zap size={20} style="opacity:0.3;" />
-							<span>No providers configured — add one to enable auto-import.</span>
-						</div>
-					{:else}
-						<div class="prov-list">
-							{#each providers as prov (prov.id)}
-								<div
-									class="prov-row"
-									class:prov-row-disabled={!prov.enabled}
-									data-id={String(prov.id)}
-									animate:flip={{ duration: flipDurationMs }}
-									use:draggable={{
-										container: 'prov-list',
-										dragData: prov,
-										handle: '.prov-handle',
-										disabled: providers.length <= 1
-									}}
-									use:droppable={{
-										container: 'prov-list',
-										callbacks: { onDrop: handleDrop },
-										disabled: providers.length <= 1
-									}}
-								>
-									<span class="prov-handle" aria-hidden="true" class:prov-handle-hidden={providers.length <= 1}><GripVertical size={15} /></span>
-									<span class="prov-type-badge">{PROVIDER_LABELS[prov.type] ?? prov.type}</span>
-									<div class="prov-info">
-										<span class="prov-name">{prov.name}</span>
-										<span class="prov-model">{truncateModel(prov.model)}</span>
-									</div>
-									<form
-										method="POST"
-										action="?/updateProvider"
-										use:enhance={({ formData }) => {
-											const newEnabled = formData.get('enabled') === 'true';
-											providers = providers.map((p) =>
-												p.id === prov.id ? { ...p, enabled: newEnabled } : p
-											);
-											return async ({ update }) => update({ reset: false });
-										}}
-										style="display:contents;"
-									>
-										<input type="hidden" name="id" value={prov.id} />
-										<input type="hidden" name="enabled" value={String(!prov.enabled)} />
-										<button
-											type="submit"
-											class="toggle-btn"
-											class:on={prov.enabled}
-											aria-pressed={prov.enabled}
-											aria-label={prov.enabled ? 'Disable provider' : 'Enable provider'}
-										>
-											<span class="toggle-thumb"></span>
-										</button>
-									</form>
-									<button type="button" class="prov-edit-btn" title="Edit provider" onclick={() => openEditSheet(prov)}>
-										<Pencil size={13} />
-									</button>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-
-			{:else if activeTab === 'categories'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Categories</h2>
-						<p class="set-section-sub">Categories available when recording expenses and income</p>
-					</div>
+					<p class="set-subsection-label">Categories</p>
 					<form method="POST" action="?/saveCategories" use:enhance>
 						<input type="hidden" name="expenseCategories" value={JSON.stringify(expCats)} />
 						<input type="hidden" name="incomeCategories" value={JSON.stringify(incCats)} />
 
-						<p class="set-subsection-label">Expense</p>
+						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">Categories available when recording expenses and income</p>
+
+						<p class="set-subsection-label" style="margin-top:0;">Expense</p>
 						<div class="cat-chips">
 							{#each expCats as cat (cat)}
 								<span class="cat-chip-removable">
@@ -1161,20 +961,15 @@
 
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
-				</div>
 
-			{:else if activeTab === 'numbering'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Numbering</h2>
-						<p class="set-section-sub">One format, applied to every document type</p>
-					</div>
+					<p class="set-subsection-label" style="margin-top:32px;">Numbering</p>
 					<form
 						method="POST"
 						action="?/saveSequenceTemplate"
 						use:enhance={() => ({ update }) => update({ reset: false })}
 					>
 						<input type="hidden" name="template" value={seqTemplate} />
+						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">One format, applied to every document type</p>
 						{#if data.sequenceTemplateLocked}
 							<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:14px;">
 								This format generated at least one document number, so it's now fixed.
@@ -1240,6 +1035,169 @@
 						{:else}
 							<Button type="submit" class="mt-4">Save</Button>
 						{/if}
+					</form>
+				</div>
+
+			{:else if activeTab === 'ai'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">AI & Import</h2>
+						<p class="set-section-sub">Providers used for receipt extraction, and how auto-import processes files.</p>
+					</div>
+
+					<p class="set-subsection-label" style="margin-top:0;">Providers</p>
+					<form
+						method="POST"
+						action="?/saveProviderList"
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
+						<input
+							type="hidden"
+							name="providers"
+							value={JSON.stringify(providers.map((p) => ({ id: p.id, enabled: p.enabled })))}
+						/>
+
+						<div class="prov-header">
+							<span class="set-row-label" style="margin:0;">Configured providers</span>
+							<button type="button" class="sheet-btn sheet-btn-primary" style="padding:6px 12px; font-size:13px;" onclick={openAddSheet}>
+								<Plus size={14} /> Add provider
+							</button>
+						</div>
+
+						{#if providers.length === 0}
+							<div class="prov-empty">
+								<Zap size={20} style="opacity:0.3;" />
+								<span>No providers configured — add one to enable auto-import.</span>
+							</div>
+						{:else}
+							<div class="prov-list">
+								{#each providers as prov (prov.id)}
+									<div
+										class="prov-row"
+										class:prov-row-disabled={!prov.enabled}
+										data-id={String(prov.id)}
+										animate:flip={{ duration: flipDurationMs }}
+										use:draggable={{
+											container: 'prov-list',
+											dragData: prov,
+											handle: '.prov-handle',
+											disabled: providers.length <= 1
+										}}
+										use:droppable={{
+											container: 'prov-list',
+											callbacks: { onDrop: handleDrop },
+											disabled: providers.length <= 1
+										}}
+									>
+										<span class="prov-handle" aria-hidden="true" class:prov-handle-hidden={providers.length <= 1}><GripVertical size={15} /></span>
+										<span class="prov-type-badge">{PROVIDER_LABELS[prov.type] ?? prov.type}</span>
+										<div class="prov-info">
+											<span class="prov-name">{prov.name}</span>
+											<span class="prov-model">{truncateModel(prov.model)}</span>
+										</div>
+										<button
+											type="button"
+											class="toggle-btn"
+											class:on={prov.enabled}
+											aria-pressed={prov.enabled}
+											aria-label={prov.enabled ? 'Disable provider' : 'Enable provider'}
+											onclick={() => {
+												providers = providers.map((p) =>
+													p.id === prov.id ? { ...p, enabled: !p.enabled } : p
+												);
+											}}
+										>
+											<span class="toggle-thumb"></span>
+										</button>
+										<button type="button" class="prov-edit-btn" title="Edit provider" onclick={() => openEditSheet(prov)}>
+											<Pencil size={13} />
+										</button>
+									</div>
+								{/each}
+							</div>
+							<Button type="submit" class="mt-4">Save changes</Button>
+						{/if}
+					</form>
+
+					<p class="set-subsection-label" style="margin-top:28px;">Processing</p>
+					<form
+						method="POST"
+						action="?/saveIntelligenceGlobal"
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
+						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
+						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
+						<input type="hidden" name="rateLimitMs" value={aiRateLimitSec * 1000} />
+						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">Global settings for auto-import processing</p>
+						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Parallel tasks</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Process up to {aiParallelTasks} file{aiParallelTasks !== 1 ? 's' : ''} at once</div>
+								</div>
+								<div class="slider-row">
+									<Slider
+										type="multiple"
+										min={1}
+										max={10}
+										step={1}
+										value={[aiParallelTasks]}
+										onValueChange={handleSliderChange}
+										style="width:140px;"
+									/>
+									<span class="slider-val num">{aiParallelTasks}</span>
+								</div>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Rate limit</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">{aiRateLimitSec === 0 ? 'No delay between AI calls' : `Wait ${aiRateLimitSec}s between AI calls`}</div>
+								</div>
+								<div class="slider-row">
+									<Slider
+										type="multiple"
+										min={0}
+										max={30}
+										step={1}
+										value={[aiRateLimitSec]}
+										onValueChange={handleRateLimitSliderChange}
+										style="width:140px;"
+									/>
+									<span class="slider-val num">{aiRateLimitSec}s</span>
+								</div>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Category hints</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Learn from your last 100 categorised items</div>
+								</div>
+								<button
+									type="button"
+									class="toggle-btn"
+									aria-label="Category hints"
+									class:on={aiCategoryHints}
+									onclick={() => { aiCategoryHints = !aiCategoryHints; }}
+									aria-pressed={aiCategoryHints}
+								>
+									<span class="toggle-thumb"></span>
+								</button>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Custom instructions</div>
+								<div class="set-row-value" style="font-size:12px; margin-top:2px; margin-bottom:6px;">
+									Extra guidance for the AI when reading your documents — e.g. recurring suppliers, unusual formats, or category rules specific to your business.
+								</div>
+								<textarea
+									name="customInstructions"
+									bind:value={aiCustomInstructions}
+									placeholder={'e.g. "Grab receipts are always a food expense" or "Invoices from Acme Corp use category Software"'}
+									rows="4"
+									maxlength="2000"
+									class="set-textarea"
+								></textarea>
+							</div>
+						</div>
+						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
 

@@ -157,13 +157,11 @@ export const actions: Actions = {
 		const apiKey = String(data.get('apiKey') ?? '').trim();
 		const model = String(data.get('model') ?? '').trim();
 		const baseUrlRaw = data.get('baseUrl');
-		const enabledRaw = data.get('enabled');
 
 		if (name) updates.name = name;
 		if (model) updates.model = model;
 		if (apiKey) updates.apiKey = apiKey;
 		if (baseUrlRaw !== null) updates.baseUrl = String(baseUrlRaw).trim() || null;
-		if (enabledRaw !== null) updates.enabled = enabledRaw === 'true';
 
 		updateProvider(db, id, updates as Parameters<typeof updateProvider>[2]);
 
@@ -180,17 +178,30 @@ export const actions: Actions = {
 		return { success: true, action: 'deleteProvider' };
 	},
 
-	reorderProviders: async ({ request }) => {
+	saveProviderList: async ({ request }) => {
 		const data = await request.formData();
-		const raw = String(data.get('orderedIds') ?? '[]');
+		const raw = String(data.get('providers') ?? '[]');
+
+		let entries: { id: string; enabled: boolean }[];
 		try {
-			const ids = JSON.parse(raw);
-			if (!Array.isArray(ids)) throw new Error('not array');
-			reorderProviders(db, ids as string[]);
-			return { success: true, action: 'reorderProviders' };
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) throw new Error('not array');
+			entries = parsed.map((e) => ({ id: String(e?.id ?? ''), enabled: Boolean(e?.enabled) }));
+			if (entries.some((e) => !e.id)) throw new Error('missing id');
 		} catch {
-			return fail(400, { error: 'Invalid order data' });
+			return fail(400, { error: 'Invalid provider list data' });
 		}
+
+		reorderProviders(db, entries.map((e) => e.id));
+
+		const current = new Map(getAllProviders(db).map((p) => [p.id, p.enabled]));
+		for (const e of entries) {
+			if (current.get(e.id) !== e.enabled) {
+				updateProvider(db, e.id, { enabled: e.enabled });
+			}
+		}
+
+		return { success: true, action: 'saveProviderList' };
 	},
 
 	saveIntelligenceGlobal: async ({ request }) => {
