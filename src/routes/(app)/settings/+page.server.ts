@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client.js';
 import { listTemplates } from '$lib/server/queries/templates.js';
 import { getSetting, setSetting, SETTING_KEYS, hasAnyDocuments } from '$lib/server/settings.js';
 import { getCategories, saveCategories as saveCategoriesDB } from '$lib/server/queries/categories.js';
+import { saveCompanyLogo, deleteFile, sniffAllowedType, MAX_LOGO_BYTES } from '$lib/server/file-storage.js';
 import { DEFAULT_SEQUENCE_TEMPLATE, validateTemplate } from '$lib/sequence-template.js';
 import {
 	getAllProviders,
@@ -38,6 +39,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const companyName = getSetting(db, SETTING_KEYS.companyName) ?? '';
 	const companyAddress = getSetting(db, SETTING_KEYS.companyAddress) ?? '';
 	const companyRegistrationNo = getSetting(db, SETTING_KEYS.companyRegistrationNo) ?? '';
+	const companyLogoPath = getSetting(db, SETTING_KEYS.companyLogoPath) ?? '';
+	const companyLogoUrl = companyLogoPath ? `/api/files/${encodeURIComponent(companyLogoPath)}` : null;
 
 	const providers = getAllProviders(db).map((p) => ({
 		...p,
@@ -60,6 +63,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		companyName,
 		companyAddress,
 		companyRegistrationNo,
+		companyLogoUrl,
 		providers,
 		templates: listTemplates(db)
 	};
@@ -91,6 +95,29 @@ export const actions: Actions = {
 		const companyName = String(data.get('companyName') ?? '').trim();
 		const companyAddress = String(data.get('companyAddress') ?? '').trim();
 		const companyRegistrationNo = String(data.get('companyRegistrationNo') ?? '').trim();
+		const removeLogo = data.get('removeLogo') === 'true';
+		const logoFile = data.get('companyLogo');
+
+		if (logoFile instanceof File && logoFile.size > 0) {
+			if (logoFile.size > MAX_LOGO_BYTES) {
+				return fail(413, { error: 'Logo image must be 5MB or smaller.' });
+			}
+			const buffer = Buffer.from(await logoFile.arrayBuffer());
+			const type = sniffAllowedType(buffer);
+			if (type !== 'jpeg' && type !== 'png') {
+				return fail(415, { error: 'Logo must be a JPEG or PNG image.' });
+			}
+			const oldPath = getSetting(db, SETTING_KEYS.companyLogoPath);
+			const rel = saveCompanyLogo(buffer, logoFile.name);
+			setSetting(db, SETTING_KEYS.companyLogoPath, rel);
+			if (oldPath) deleteFile(oldPath);
+		} else if (removeLogo) {
+			const oldPath = getSetting(db, SETTING_KEYS.companyLogoPath);
+			if (oldPath) {
+				setSetting(db, SETTING_KEYS.companyLogoPath, '');
+				deleteFile(oldPath);
+			}
+		}
 
 		setSetting(db, SETTING_KEYS.companyName, companyName);
 		setSetting(db, SETTING_KEYS.companyAddress, companyAddress);

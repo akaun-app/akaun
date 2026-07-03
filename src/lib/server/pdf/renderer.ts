@@ -7,6 +7,7 @@ import { GRID_COLUMNS, migrateLayout } from './template-types.js';
 
 // Block renderer imports
 import { render as renderCompanyName }    from './blocks/company-name.js';
+import { render as renderCompanyLogo }    from './blocks/company-logo.js';
 import { render as renderCompanyAddress } from './blocks/company-address.js';
 import { render as renderCompanyRegInfo } from './blocks/company-reg-info.js';
 import { render as renderDocumentTitle }  from './blocks/document-title.js';
@@ -47,6 +48,7 @@ export function renderBlock(
 	const d = data as any;
 	switch (block.type) {
 		case 'company-name':    return renderCompanyName(doc, block, d, theme, bounds, fonts);
+		case 'company-logo':    return renderCompanyLogo(doc, block, d, theme, bounds, fonts);
 		case 'company-address': return renderCompanyAddress(doc, block, d, theme, bounds, fonts);
 		case 'company-reg-info':return renderCompanyRegInfo(doc, block, d, theme, bounds, fonts);
 		case 'document-title':  return renderDocumentTitle(doc, block, d, theme, bounds, fonts);
@@ -74,7 +76,12 @@ export type LayoutRenderData = {
 		total: number;
 		currency: string;
 	};
-	settings: { companyName?: string; companyAddress?: string; companyRegistrationNo?: string };
+	settings: {
+		companyName?: string;
+		companyAddress?: string;
+		companyRegistrationNo?: string;
+		companyLogoPath?: string;
+	};
 	docTypeLabel: string;
 };
 

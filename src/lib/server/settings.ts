@@ -15,6 +15,7 @@ export const SETTING_KEYS = {
 	companyName: 'company.name',
 	companyAddress: 'company.address',
 	companyRegistrationNo: 'company.registrationNo',
+	companyLogoPath: 'company.logoPath',
 	templateQuotationDefaultId: 'template.quotation.defaultId',
 	templateInvoiceDefaultId: 'template.invoice.defaultId',
 	sequenceTemplate: 'documentNumbers.template'

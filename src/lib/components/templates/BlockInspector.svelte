@@ -65,6 +65,8 @@
 		</div>
 	{:else if block.type === 'customer-block'}
 		<p class="insp-info">Shows bill-to name, address, reg no., and phone from the linked contact.</p>
+	{:else if block.type === 'company-logo'}
+		<p class="insp-info">Shows the company logo uploaded in Settings → Company. No per-block configuration.</p>
 	{:else if block.type === 'document-meta'}
 		<p class="insp-info">Shows document number and date.</p>
 	{:else if block.type === 'totals-block'}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileText, Building2, User, List, Calculator, StickyNote, Stamp, UserCheck, Type, Image, Minus, Space, MapPin, Hash, BookOpen } from '@lucide/svelte';
+	import { FileText, Building2, User, List, Calculator, StickyNote, Stamp, UserCheck, Type, Image, ImagePlus, Minus, Space, MapPin, Hash, BookOpen } from '@lucide/svelte';
 	import type { BlockType } from '$lib/pdf/template-types.js';
 
 	type Props = {
@@ -13,7 +13,8 @@
 			items: [
 				{ type: 'company-name',    label: 'Company Name',    icon: Building2 },
 				{ type: 'company-address', label: 'Company Address', icon: MapPin },
-				{ type: 'company-reg-info',label: 'Reg Info',        icon: Hash }
+				{ type: 'company-reg-info',label: 'Reg Info',        icon: Hash },
+				{ type: 'company-logo',    label: 'Company Logo',    icon: ImagePlus }
 			]
 		},
 		{

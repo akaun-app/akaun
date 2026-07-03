@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { untrack, onMount, onDestroy } from 'svelte';
-	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw } from '@lucide/svelte';
+	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -41,6 +41,36 @@
 	let companyAddress = $state(data.companyAddress);
 	// svelte-ignore state_referenced_locally
 	let companyRegistrationNo = $state(data.companyRegistrationNo);
+	// svelte-ignore state_referenced_locally
+	let logoPreviewUrl = $state<string | null>(data.companyLogoUrl);
+	let logoChange = $state<'none' | 'replace' | 'remove'>('none');
+	let logoFileInput = $state<HTMLInputElement | null>(null);
+	// Plain (non-reactive) — tracks the current unsaved blob: URL for cleanup.
+	// Deliberately not $state: reading it inside the saveCompany $effect below would make
+	// logoPreviewUrl a dependency of that effect, and the effect's own write to
+	// logoPreviewUrl would then re-trigger itself, double-firing toast.success().
+	let pendingBlobUrl: string | null = null;
+
+	function revokePendingBlobUrl() {
+		if (pendingBlobUrl) URL.revokeObjectURL(pendingBlobUrl);
+		pendingBlobUrl = null;
+	}
+
+	function handleLogoFileChange(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		if (!file) return;
+		revokePendingBlobUrl();
+		pendingBlobUrl = URL.createObjectURL(file);
+		logoPreviewUrl = pendingBlobUrl;
+		logoChange = 'replace';
+	}
+
+	function handleLogoRemove() {
+		revokePendingBlobUrl();
+		logoPreviewUrl = null;
+		logoChange = 'remove';
+		if (logoFileInput) logoFileInput.value = '';
+	}
 
 	// Currency settings state
 	// svelte-ignore state_referenced_locally
@@ -773,9 +803,17 @@
 		return model.slice(0, max - 1) + '…';
 	}
 
+	// Tracked dependency is `form` alone — this effect must only re-run in response to a
+	// new form submission. Everything inside is untracked because it's one-time sync/toast
+	// logic, not a condition that should itself retrigger the effect: e.g. reading
+	// `logoFileInput`/`seqFieldRef` (DOM refs that get set to null whenever their tab's
+	// {#if} block unmounts) would otherwise make tab switches replay this whole block —
+	// including toast.success() — since `form?.success` stays true until the next submit.
 	$effect(() => {
-		if (form?.success) {
-			const action = (form as { action?: string }).action;
+		const f = form;
+		if (!f?.success) return;
+		untrack(() => {
+			const action = (f as { action?: string }).action;
 			if (action === 'updateProvider' || action === 'deleteProvider' || action === 'saveProviderList') {
 				providers = [...data.providers];
 				if (action !== 'saveProviderList') closeSheet();
@@ -793,6 +831,10 @@
 				companyName = data.companyName;
 				companyAddress = data.companyAddress;
 				companyRegistrationNo = data.companyRegistrationNo;
+				revokePendingBlobUrl();
+				logoPreviewUrl = data.companyLogoUrl;
+				logoChange = 'none';
+				if (logoFileInput) logoFileInput.value = '';
 			}
 			if (action === 'saveCategories') {
 				expCats = [...data.expenseCategories];
@@ -803,7 +845,7 @@
 				if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
 			}
 			toast.success('Settings saved');
-		}
+		});
 	});
 
 	// --- Unsaved-changes guard ---
@@ -825,6 +867,7 @@
 		companyName !== data.companyName ||
 		companyAddress !== data.companyAddress ||
 		companyRegistrationNo !== data.companyRegistrationNo ||
+		logoChange !== 'none' ||
 		JSON.stringify(expCats) !== JSON.stringify(data.expenseCategories) ||
 		JSON.stringify(incCats) !== JSON.stringify(data.incomeCategories) ||
 		providersDirty ||
@@ -841,6 +884,10 @@
 		companyName = data.companyName;
 		companyAddress = data.companyAddress;
 		companyRegistrationNo = data.companyRegistrationNo;
+		revokePendingBlobUrl();
+		logoPreviewUrl = data.companyLogoUrl;
+		logoChange = 'none';
+		if (logoFileInput) logoFileInput.value = '';
 		expCats = [...data.expenseCategories];
 		incCats = [...data.incomeCategories];
 		newExpCat = '';
@@ -1115,8 +1162,49 @@
 						<h2 class="set-section-title">Company</h2>
 						<p class="set-section-sub">Shown on printed quotations and invoices</p>
 					</div>
-					<form method="POST" action="?/saveCompany" use:enhance={() => ({ update }) => update({ reset: false })}>
+					<form
+						method="POST"
+						action="?/saveCompany"
+						enctype="multipart/form-data"
+						use:enhance={() => ({ update }) => update({ reset: false })}
+					>
+						{#if form?.error}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+						{/if}
 						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Logo</div>
+								</div>
+								<div class="logo-field">
+									<div class="logo-thumb" class:logo-thumb-empty={!logoPreviewUrl}>
+										{#if logoPreviewUrl}
+											<img src={logoPreviewUrl} alt="Company logo" />
+										{:else}
+											<ImageIcon size={22} />
+										{/if}
+									</div>
+									<div class="logo-actions">
+										<Button type="button" variant="outline" size="sm" onclick={() => logoFileInput?.click()}>
+											<Upload size={13} /> {logoPreviewUrl ? 'Replace' : 'Upload'}
+										</Button>
+										{#if logoPreviewUrl}
+											<Button type="button" variant="outline" size="sm" onclick={handleLogoRemove}>
+												<Trash2 size={13} /> Remove
+											</Button>
+										{/if}
+									</div>
+									<input
+										type="file"
+										name="companyLogo"
+										accept="image/jpeg,image/png"
+										bind:this={logoFileInput}
+										onchange={handleLogoFileChange}
+										style="display:none"
+									/>
+									<input type="hidden" name="removeLogo" value={logoChange === 'remove' ? 'true' : 'false'} />
+								</div>
+							</div>
 							<div class="set-row set-row-col">
 								<div class="set-row-label">Company Name</div>
 								<Input
@@ -1650,6 +1738,42 @@
 />
 
 <style>
+	.logo-field {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.logo-thumb {
+		width: 88px;
+		height: 88px;
+		flex-shrink: 0;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--card);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: hidden;
+	}
+
+	.logo-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+	}
+
+	.logo-thumb-empty {
+		border-style: dashed;
+		color: var(--muted-foreground);
+	}
+
+	.logo-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
 	.cat-add-row {
 		display: flex;
 		gap: 8px;

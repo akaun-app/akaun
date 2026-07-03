@@ -1,9 +1,17 @@
 import PDFDocument from 'pdfkit';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { STORAGE_PATH } from '$lib/server/env.js';
 import type { getInvoice } from '../queries/invoices.js';
 import { M, CW, COL_DESC, COL_QTY, COL_PRICE, COL_TOTAL, TX_QTY, TX_PRICE, TX_TOTAL, C, fmt, fmtDate } from './layout.js';
 
 type Invoice = NonNullable<ReturnType<typeof getInvoice>>;
-type Settings = { companyName: string; companyAddress: string; companyRegistrationNo: string };
+type Settings = {
+	companyName: string;
+	companyAddress: string;
+	companyRegistrationNo: string;
+	companyLogoPath: string;
+};
 
 export function buildInvoicePdf(invoice: Invoice, settings: Settings): Promise<Buffer> {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,8 +28,16 @@ export function buildInvoicePdf(invoice: Invoice, settings: Settings): Promise<B
 	const rightW = CW / 2;
 
 	// Company block (left side)
+	let headerY = y;
+	if (settings.companyLogoPath) {
+		const absLogoPath = join(STORAGE_PATH, settings.companyLogoPath);
+		if (existsSync(absLogoPath)) {
+			doc.image(absLogoPath, M, headerY, { height: 32, fit: [CW / 2, 32] });
+			headerY += 32 + 6;
+		}
+	}
 	doc.font('Helvetica-Bold').fontSize(20).fillColor(C.dark)
-		.text(companyName, M, y, { width: CW / 2 });
+		.text(companyName, M, headerY, { width: CW / 2 });
 	let companyBottomY = doc.y;
 
 	if (settings.companyAddress) {

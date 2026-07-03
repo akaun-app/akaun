@@ -7,6 +7,9 @@ import { STORAGE_PATH } from './env.js';
 /** Largest accepted upload, in bytes. */
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
 
+/** Largest accepted company logo upload, in bytes. */
+export const MAX_LOGO_BYTES = 5 * 1024 * 1024; // 5 MB
+
 /**
  * Verify the buffer's leading "magic bytes" identify an allowed type (PDF/JPEG/PNG).
  * This is content-based and cannot be spoofed by the client-supplied MIME or extension.
@@ -123,4 +126,22 @@ export function listTemplateAssets(templateUuid: string): string[] {
 export function deleteTemplateAssetFolder(templateUuid: string): void {
 	const dir = join(STORAGE_PATH, 'templates', templateUuid);
 	if (existsSync(dir)) rmSync(dir, { recursive: true });
+}
+
+// ---------------------------------------------------------------------------
+// Company logo helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Save the company logo image. Returns the relative path within STORAGE_PATH.
+ * Caller must validate file type (jpeg/png only) before calling.
+ */
+export function saveCompanyLogo(buffer: Buffer, originalFilename: string): string {
+	const uuid = randomUUID();
+	const ext = extname(originalFilename).toLowerCase();
+	const filename = `${uuid}${ext}`;
+	const dir = join(STORAGE_PATH, 'company');
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, filename), buffer);
+	return join('company', filename);
 }

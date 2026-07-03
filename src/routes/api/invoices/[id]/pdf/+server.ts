@@ -19,7 +19,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	const settings = {
 		companyName: getSetting(db, 'company.name') ?? '',
 		companyAddress: getSetting(db, 'company.address') ?? '',
-		companyRegistrationNo: getSetting(db, 'company.registrationNo') ?? ''
+		companyRegistrationNo: getSetting(db, 'company.registrationNo') ?? '',
+		companyLogoPath: getSetting(db, 'company.logoPath') ?? ''
 	};
 
 	try {

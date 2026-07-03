@@ -28,6 +28,7 @@ export type BlockType =
 	| 'company-name'
 	| 'company-address'
 	| 'company-reg-info'
+	| 'company-logo'
 	| 'document-title'
 	| 'document-meta'
 	| 'customer-block'
@@ -94,7 +95,7 @@ export const SYSTEM_REQUIRED_BLOCKS: BlockType[] = [
 	'line-items-table',
 	'totals-block'
 ];
-export const SYSTEM_OPTIONAL_BLOCKS: BlockType[] = ['notes', 'paid-stamp', 'issued-by'];
+export const SYSTEM_OPTIONAL_BLOCKS: BlockType[] = ['notes', 'paid-stamp', 'issued-by', 'company-logo'];
 export const CUSTOM_BLOCKS: BlockType[] = ['text', 'image', 'divider', 'spacer'];
 
 // ---------------------------------------------------------------------------

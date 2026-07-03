@@ -56,6 +56,7 @@
 			'company-name':    'Company Name',
 			'company-address': 'Company Address',
 			'company-reg-info':'Reg Info',
+			'company-logo':    'Company Logo',
 			'document-title':  'Doc Title',
 			'document-meta':   'Document Meta',
 			'customer-block':  'Customer',

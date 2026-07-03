@@ -8,6 +8,7 @@ import {
 	incomeAttachments,
 	claimAttachments
 } from '$lib/server/db/schema.js';
+import { getSetting, SETTING_KEYS } from '$lib/server/settings.js';
 import { STORAGE_PATH } from '$lib/server/env.js';
 
 const MIME: Record<string, string> = {
@@ -48,7 +49,10 @@ export const GET: RequestHandler = ({ locals, params }) => {
 			.where(eq(claimAttachments.filename, filePath))
 			.get();
 
-	if (!owned) return new Response('Forbidden', { status: 403 });
+	const companyLogoPath = getSetting(db, SETTING_KEYS.companyLogoPath);
+	const isCompanyLogo = !!companyLogoPath && filePath === companyLogoPath;
+
+	if (!owned && !isCompanyLogo) return new Response('Forbidden', { status: 403 });
 
 	let content: Blob;
 	try {
