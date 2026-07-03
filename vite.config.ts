@@ -84,20 +84,49 @@ export default defineConfig({
 			// Root layout — loaded on every page
 			'mode-watcher',
 			'svelte-sonner',
-			'@lucide/svelte/icons/*', // glob covers all subpaths: toast icons + calendar/select/sheet/checkbox icons
+			'@lucide/svelte', // named icon imports
+
+			// Icons imported via single subpath (`@lucide/svelte/icons/<name>`) instead of the
+			// named barrel import above. List only the icons actually used — regenerate with:
+			//   grep -rhoE "@lucide/svelte/icons/[a-z0-9-]+" src/ | sort -u
+			// Do NOT go back to the `@lucide/svelte/icons/*` glob: it pre-bundles all ~1700 icons
+			// in the package regardless of usage, needlessly bloating cold start and the
+			// optimizer's tracked-dep surface. Add a line here when a component starts importing
+			// a new icon by subpath.
+			'@lucide/svelte/icons/calendar',
+			'@lucide/svelte/icons/check',
+			'@lucide/svelte/icons/chevron-down',
+			'@lucide/svelte/icons/chevron-left',
+			'@lucide/svelte/icons/chevron-right',
+			'@lucide/svelte/icons/chevron-up',
+			'@lucide/svelte/icons/circle-check',
+			'@lucide/svelte/icons/info',
+			'@lucide/svelte/icons/loader-2',
+			'@lucide/svelte/icons/minus',
+			'@lucide/svelte/icons/octagon-x',
+			'@lucide/svelte/icons/triangle-alert',
+			'@lucide/svelte/icons/x',
 
 			// Expenses page — first post-login page
 			'bits-ui',
 			'@internationalized/date', // DatePicker transitive dep
 			'tailwind-variants',
-			'@lucide/svelte', // named icon imports
 
 			// Utilities used across almost every component
 			'tailwind-merge',
 			'clsx',
 
 			// Dashboard charts — large bundle, worth pre-bundling explicitly
-			'chart.js'
+			'chart.js',
+
+			// Settings / profile pages — drag-and-drop reordering (nav prefs, custom fields).
+			// Previously missing here; only discoverable live via server.warmup crawling those
+			// pages, which forces an unrelated full-reload of any already-connected client.
+			'@thisux/sveltednd',
+
+			// Scanner feature — client-side PDF assembly from scanned pages
+			// (src/lib/components/scanner/pdf-assembly.ts). Same missing-dep risk as above.
+			'jspdf'
 		]
 	},
 	// bun:sqlite is a Bun builtin; unpdf and tesseract.js skip Vite SSR transform
