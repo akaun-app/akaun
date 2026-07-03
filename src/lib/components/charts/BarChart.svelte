@@ -28,14 +28,14 @@
 					{
 						label: 'Income',
 						data: d.map((r) => r.income),
-						backgroundColor: 'oklch(0.646 0.187 41.6)',
+						backgroundColor: 'oklch(0.6 0.13 156)',
 						borderRadius: 4,
 						borderSkipped: false
 					},
 					{
 						label: 'Expense',
 						data: d.map((r) => r.expense),
-						backgroundColor: 'oklch(0.87 0.005 286.3)',
+						backgroundColor: 'oklch(0.585 0.205 27.3)',
 						borderRadius: 4,
 						borderSkipped: false
 					}

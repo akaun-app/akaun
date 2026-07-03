@@ -7,25 +7,21 @@
 		ArrowUpRight,
 		FileText,
 		TrendingDown,
-		ChevronDown,
-		Receipt
+		ChevronDown
 	} from '@lucide/svelte';
 	import LazyChart from '$lib/components/ui/LazyChart.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import { formatMoney, formatDateShort } from '$lib/format.js';
 	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
+	import { periodOptions } from '$lib/dashboard-periods.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
 
-	const PERIODS = [
-		{ id: '2m', label: 'Last 2 months' },
-		{ id: 'mtd', label: 'This month' },
-		{ id: 'ytd', label: 'Year to date' }
-	];
+	const PERIODS = periodOptions();
 
 	// svelte-ignore state_referenced_locally
-	let period = $state(data.period ?? '2m');
+	let period = $state(data.period ?? 'm');
 	let mobilePeriodOpen = $state(false);
 
 	$effect(() => {
@@ -148,20 +144,6 @@
 				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}</div>
 				<div class="kpi-sub">Unpaid · all time</div>
 			</div>
-			<div
-				class="kpi"
-				class:tone-red={data.invoicesOverdueCount > 0}
-				class:tone-amber={data.invoicesOverdueCount === 0 && data.invoicesOutstanding.count > 0}
-			>
-				<div class="kpi-top">
-					<span class="kpi-icon"><Receipt size={16} /></span>
-					<span class="kpi-label">Invoice AR</span>
-				</div>
-				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.invoicesOutstanding.total)}</div>
-				<div class="kpi-sub">
-					{data.invoicesOutstanding.count} unpaid{data.invoicesOverdueCount > 0 ? ` · ${data.invoicesOverdueCount} overdue` : ''}
-				</div>
-			</div>
 		</div>
 
 		<!-- Charts row 1 -->
@@ -170,14 +152,14 @@
 				<div class="panel-head">
 					<div>
 						<div class="panel-title">Cash flow</div>
-						<div class="panel-sub">Income vs expenses · last 6 months</div>
+						<div class="panel-sub">Income vs expenses · {periodLabel}</div>
 					</div>
 					<div class="chart-legend">
 						<span class="lg"
-							><span class="lg-dot" style="background:oklch(0.646 0.187 41.6);"></span> Income</span
+							><span class="lg-dot" style="background:oklch(0.6 0.13 156);"></span> Income</span
 						>
 						<span class="lg"
-							><span class="lg-dot" style="background:oklch(0.87 0.005 286.3);"></span> Expense</span
+							><span class="lg-dot" style="background:oklch(0.585 0.205 27.3);"></span> Expense</span
 						>
 					</div>
 				</div>
@@ -205,7 +187,7 @@
 				<div class="panel-head">
 					<div>
 						<div class="panel-title">Net trend</div>
-						<div class="panel-sub">Monthly surplus / deficit · last 6 months</div>
+						<div class="panel-sub">Monthly surplus / deficit · {periodLabel}</div>
 					</div>
 				</div>
 				<LazyChart load={() => import('$lib/components/charts/TrendBars.svelte')} data={data.trendData} />
