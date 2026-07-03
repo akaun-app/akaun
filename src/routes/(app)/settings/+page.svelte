@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { beforeNavigate, goto } from '$app/navigation';
 	import { untrack, onMount, onDestroy } from 'svelte';
 	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw } from '@lucide/svelte';
 	import { Slider } from '$lib/components/ui/slider/index.js';
@@ -25,8 +26,8 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'workspace' | 'documents' | 'ai' | 'templates' | 'advanced';
-	let activeTab = $state<Tab>('workspace');
+	type Tab = 'general' | 'company' | 'category' | 'intelligence' | 'templates' | 'advanced';
+	let activeTab = $state<Tab>('general');
 
 	// Mobile detection for Sheet side
 	const screenState = useIsMobile();
@@ -518,7 +519,10 @@
 	}
 
 	// --- Provider list state ---
-	type ProviderRow = (typeof data.providers)[0];
+	// isNew marks a locally-staged row that hasn't been persisted yet — it holds
+	// the real apiKey (server-persisted rows always have it stripped to '') and
+	// has no real DB id until the page-level "Save changes" click creates it.
+	type ProviderRow = (typeof data.providers)[0] & { isNew?: boolean };
 	// svelte-ignore state_referenced_locally
 	let providers = $state<ProviderRow[]>([...data.providers]);
 
@@ -675,13 +679,16 @@
 		editingProvider = prov;
 		sfType = prov.type;
 		sfName = prov.name;
-		sfApiKey = '';
+		// A staged (not-yet-saved) row still holds its real key locally — prefill
+		// it so re-editing doesn't look like the key was lost, and let the
+		// existing debounced $effect below re-fetch its model list from that key.
+		sfApiKey = prov.isNew ? prov.apiKey : '';
 		sfModel = prov.model;
 		sfModels = [];
 		sfError = '';
 		sfShowFreeOnly = false;
 		sheetOpen = true;
-		if (prov.hasApiKey) fetchServerModels(prov.id);
+		if (!prov.isNew && prov.hasApiKey) fetchServerModels(prov.id);
 	}
 
 	async function fetchServerModels(providerId: string) {
@@ -699,6 +706,44 @@
 		}
 	}
 
+	// Add, and editing a not-yet-saved row, both stage into the local `providers`
+	// list instead of hitting the DB — actual persistence happens once, when the
+	// page-level "Save changes" button submits ?/saveProviderList. Editing an
+	// already-persisted provider still saves immediately via ?/updateProvider.
+	function handleSheetSubmit(e: SubmitEvent) {
+		if (!editingProvider) {
+			e.preventDefault();
+			providers = [
+				...providers,
+				{
+					id: crypto.randomUUID(),
+					type: sfType,
+					name: sfName,
+					apiKey: sfApiKey,
+					model: sfModel,
+					baseUrl: null,
+					enabled: true,
+					sortKey: '',
+					createdAt: '',
+					hasApiKey: sfApiKey.length > 0,
+					isNew: true
+				}
+			];
+			closeSheet();
+			return;
+		}
+		if (editingProvider.isNew) {
+			e.preventDefault();
+			const id = editingProvider.id;
+			providers = providers.map((p) =>
+				p.id === id
+					? { ...p, type: sfType, name: sfName, apiKey: sfApiKey, model: sfModel, hasApiKey: sfApiKey.length > 0 }
+					: p
+			);
+			closeSheet();
+		}
+	}
+
 	function closeSheet() {
 		sheetOpen = false;
 	}
@@ -713,7 +758,13 @@
 	}
 
 	function confirmDeleteProvider() {
-		deleteFormEl?.requestSubmit();
+		if (deleteTarget?.isNew) {
+			const id = deleteTarget.id;
+			providers = providers.filter((p) => p.id !== id);
+			closeSheet();
+		} else {
+			deleteFormEl?.requestSubmit();
+		}
 		deleteConfirmOpen = false;
 	}
 
@@ -725,7 +776,7 @@
 	$effect(() => {
 		if (form?.success) {
 			const action = (form as { action?: string }).action;
-			if (action === 'addProvider' || action === 'updateProvider' || action === 'deleteProvider' || action === 'saveProviderList') {
+			if (action === 'updateProvider' || action === 'deleteProvider' || action === 'saveProviderList') {
 				providers = [...data.providers];
 				if (action !== 'saveProviderList') closeSheet();
 			}
@@ -738,8 +789,110 @@
 			if (action === 'saveGeneral') {
 				mainCur = data.currency;
 			}
+			if (action === 'saveCompany') {
+				companyName = data.companyName;
+				companyAddress = data.companyAddress;
+				companyRegistrationNo = data.companyRegistrationNo;
+			}
+			if (action === 'saveCategories') {
+				expCats = [...data.expenseCategories];
+				incCats = [...data.incomeCategories];
+			}
+			if (action === 'saveSequenceTemplate') {
+				seqTemplate = data.sequenceTemplate;
+				if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
+			}
 			toast.success('Settings saved');
 		}
+	});
+
+	// --- Unsaved-changes guard ---
+	// Every section below is local $state seeded once from `data.*` and only
+	// persisted on that section's own Save click. `data.*` itself updates
+	// reactively after a successful save (SvelteKit re-runs `load`), and the
+	// effect above keeps local state in sync with it — so comparing against
+	// live `data.*` (rather than a frozen snapshot) is self-correcting.
+	const providersDirty = $derived(
+		providers.length !== data.providers.length ||
+		providers.some(
+			(p, i) => p.isNew || p.id !== data.providers[i]?.id || p.enabled !== data.providers[i]?.enabled
+		)
+	);
+
+	const isDirty = $derived(
+		mainCur !== data.currency ||
+		seqTemplate !== data.sequenceTemplate ||
+		companyName !== data.companyName ||
+		companyAddress !== data.companyAddress ||
+		companyRegistrationNo !== data.companyRegistrationNo ||
+		JSON.stringify(expCats) !== JSON.stringify(data.expenseCategories) ||
+		JSON.stringify(incCats) !== JSON.stringify(data.incomeCategories) ||
+		providersDirty ||
+		aiParallelTasks !== data.autoImportParallelTasks ||
+		aiCategoryHints !== data.autoImportCategoryHints ||
+		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
+		aiCustomInstructions !== data.autoImportCustomInstructions
+	);
+
+	function resetAllUnsaved() {
+		mainCur = data.currency;
+		seqTemplate = data.sequenceTemplate;
+		if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
+		companyName = data.companyName;
+		companyAddress = data.companyAddress;
+		companyRegistrationNo = data.companyRegistrationNo;
+		expCats = [...data.expenseCategories];
+		incCats = [...data.incomeCategories];
+		newExpCat = '';
+		newIncCat = '';
+		providers = [...data.providers];
+		aiParallelTasks = data.autoImportParallelTasks;
+		aiCategoryHints = data.autoImportCategoryHints;
+		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
+		aiCustomInstructions = data.autoImportCustomInstructions;
+		sheetOpen = false;
+	}
+
+	let pendingTab = $state<Tab | null>(null);
+	let pendingUrl: URL | null = null;
+	let unsavedConfirmOpen = $state(false);
+	let allowNavigation = false;
+
+	function requestTabChange(id: Tab) {
+		if (id === activeTab) return;
+		if (isDirty) {
+			pendingTab = id;
+			unsavedConfirmOpen = true;
+		} else {
+			activeTab = id;
+		}
+	}
+
+	function discardAndProceed() {
+		resetAllUnsaved();
+		if (pendingTab) {
+			activeTab = pendingTab;
+			pendingTab = null;
+		} else if (pendingUrl) {
+			const url = pendingUrl;
+			pendingUrl = null;
+			allowNavigation = true;
+			// `url` is the already-resolved internal destination SvelteKit itself
+			// handed us via beforeNavigate's `nav.to.url` — it isn't a route id we
+			// can pass through resolve().
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			goto(url);
+		}
+		unsavedConfirmOpen = false;
+	}
+
+	beforeNavigate((nav) => {
+		if (isDirty && !allowNavigation) {
+			nav.cancel();
+			pendingUrl = nav.to?.url ?? null;
+			unsavedConfirmOpen = true;
+		}
+		allowNavigation = false;
 	});
 
 	function addExpCat() {
@@ -802,9 +955,10 @@
 	}
 
 	const TABS: { id: Tab; label: string }[] = [
-		{ id: 'workspace', label: 'Workspace' },
-		{ id: 'documents', label: 'Documents' },
-		{ id: 'ai', label: 'AI & Import' },
+		{ id: 'general', label: 'General' },
+		{ id: 'company', label: 'Company' },
+		{ id: 'category', label: 'Category' },
+		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'templates', label: 'Templates' },
 		{ id: 'advanced', label: 'Advanced' }
 	];
@@ -829,7 +983,7 @@
 				<button
 					class="set-nav-item"
 					class:active={activeTab === tab.id}
-					onclick={() => (activeTab = tab.id)}
+					onclick={() => requestTabChange(tab.id)}
 				>
 					{tab.label}
 				</button>
@@ -838,11 +992,11 @@
 
 		<!-- Content -->
 		<div class="set-content" style={activeTab === 'templates' ? 'overflow:hidden;padding:0;display:flex;flex-direction:column;' : ''}>
-			{#if activeTab === 'workspace'}
+			{#if activeTab === 'general'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">Workspace</h2>
-						<p class="set-section-sub">Account and display settings</p>
+						<h2 class="set-section-title">General</h2>
+						<p class="set-section-sub">Currency and document numbering</p>
 					</div>
 					<form method="POST" action="?/saveGeneral" use:enhance={() => ({ update }) => update({ reset: false })}>
 						{#if !data.currencyLocked}
@@ -876,89 +1030,6 @@
 								Currency is locked once transactions exist — changing it would silently corrupt historical amounts.
 							</p>
 						{/if}
-
-						<p class="set-subsection-label">Company</p>
-						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">Shown on printed quotations and invoices</p>
-						<div class="set-rows">
-							<div class="set-row set-row-col">
-								<div class="set-row-label">Company Name</div>
-								<Input
-									name="companyName"
-									bind:value={companyName}
-									placeholder="e.g. Acme Sdn Bhd"
-									class="set-input-full"
-								/>
-							</div>
-							<div class="set-row set-row-col">
-								<div class="set-row-label">Address</div>
-								<textarea
-									name="companyAddress"
-									bind:value={companyAddress}
-									placeholder="Street, City, State, Postcode"
-									rows="3"
-									class="set-textarea"
-								></textarea>
-							</div>
-							<div class="set-row set-row-col">
-								<div class="set-row-label">Registration No.</div>
-								<Input
-									name="companyRegistrationNo"
-									bind:value={companyRegistrationNo}
-									placeholder="e.g. 202301012345"
-									class="set-input-full"
-								/>
-							</div>
-						</div>
-						<Button type="submit" class="mt-4">Save</Button>
-					</form>
-				</div>
-
-			{:else if activeTab === 'documents'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Documents</h2>
-						<p class="set-section-sub">Categories and document numbering</p>
-					</div>
-
-					<p class="set-subsection-label">Categories</p>
-					<form method="POST" action="?/saveCategories" use:enhance>
-						<input type="hidden" name="expenseCategories" value={JSON.stringify(expCats)} />
-						<input type="hidden" name="incomeCategories" value={JSON.stringify(incCats)} />
-
-						<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">Categories available when recording expenses and income</p>
-
-						<p class="set-subsection-label" style="margin-top:0;">Expense</p>
-						<div class="cat-chips">
-							{#each expCats as cat (cat)}
-								<span class="cat-chip-removable">
-									{cat}
-									<button type="button" class="chip-remove" onclick={() => removeExpCat(cat)} aria-label="Remove {cat}">
-										<X size={11} />
-									</button>
-								</span>
-							{/each}
-						</div>
-						<div class="cat-add-row">
-							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
-							<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
-						</div>
-
-						<p class="set-subsection-label" style="margin-top:24px;">Income</p>
-						<div class="cat-chips">
-							{#each incCats as cat (cat)}
-								<span class="cat-chip-removable">
-									{cat}
-									<button type="button" class="chip-remove" onclick={() => removeIncCat(cat)} aria-label="Remove {cat}">
-										<X size={11} />
-									</button>
-								</span>
-							{/each}
-						</div>
-						<div class="cat-add-row">
-							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
-							<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
-						</div>
-
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 
@@ -1038,10 +1109,98 @@
 					</form>
 				</div>
 
-			{:else if activeTab === 'ai'}
+			{:else if activeTab === 'company'}
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">AI & Import</h2>
+						<h2 class="set-section-title">Company</h2>
+						<p class="set-section-sub">Shown on printed quotations and invoices</p>
+					</div>
+					<form method="POST" action="?/saveCompany" use:enhance={() => ({ update }) => update({ reset: false })}>
+						<div class="set-rows">
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Company Name</div>
+								<Input
+									name="companyName"
+									bind:value={companyName}
+									placeholder="e.g. Acme Sdn Bhd"
+									class="set-input-full"
+								/>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Address</div>
+								<textarea
+									name="companyAddress"
+									bind:value={companyAddress}
+									placeholder="Street, City, State, Postcode"
+									rows="3"
+									class="set-textarea"
+								></textarea>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Registration No.</div>
+								<Input
+									name="companyRegistrationNo"
+									bind:value={companyRegistrationNo}
+									placeholder="e.g. 202301012345"
+									class="set-input-full"
+								/>
+							</div>
+						</div>
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
+				</div>
+
+			{:else if activeTab === 'category'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Category</h2>
+						<p class="set-section-sub">Categories available when recording expenses and income</p>
+					</div>
+
+					<form method="POST" action="?/saveCategories" use:enhance>
+						<input type="hidden" name="expenseCategories" value={JSON.stringify(expCats)} />
+						<input type="hidden" name="incomeCategories" value={JSON.stringify(incCats)} />
+
+						<p class="set-subsection-label" style="margin-top:0;">Expense</p>
+						<div class="cat-chips">
+							{#each expCats as cat (cat)}
+								<span class="cat-chip-removable">
+									{cat}
+									<button type="button" class="chip-remove" onclick={() => removeExpCat(cat)} aria-label="Remove {cat}">
+										<X size={11} />
+									</button>
+								</span>
+							{/each}
+						</div>
+						<div class="cat-add-row">
+							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
+							<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
+						</div>
+
+						<p class="set-subsection-label" style="margin-top:24px;">Income</p>
+						<div class="cat-chips">
+							{#each incCats as cat (cat)}
+								<span class="cat-chip-removable">
+									{cat}
+									<button type="button" class="chip-remove" onclick={() => removeIncCat(cat)} aria-label="Remove {cat}">
+										<X size={11} />
+									</button>
+								</span>
+							{/each}
+						</div>
+						<div class="cat-add-row">
+							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
+							<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
+						</div>
+
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
+				</div>
+
+			{:else if activeTab === 'intelligence'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Intelligence</h2>
 						<p class="set-section-sub">Providers used for receipt extraction, and how auto-import processes files.</p>
 					</div>
 
@@ -1054,7 +1213,22 @@
 						<input
 							type="hidden"
 							name="providers"
-							value={JSON.stringify(providers.map((p) => ({ id: p.id, enabled: p.enabled })))}
+							value={JSON.stringify(
+								providers.map((p) =>
+									p.isNew
+										? {
+												isNew: true,
+												tempId: p.id,
+												type: p.type,
+												name: p.name,
+												apiKey: p.apiKey,
+												model: p.model,
+												baseUrl: p.baseUrl,
+												enabled: p.enabled
+											}
+										: { id: p.id, enabled: p.enabled }
+								)
+							)}
 						/>
 
 						<div class="prov-header">
@@ -1303,11 +1477,12 @@
 
 			<form
 				method="POST"
-				action={editingProvider ? '?/updateProvider' : '?/addProvider'}
+				action="?/updateProvider"
 				use:enhance={() => ({ update }) => update({ reset: false })}
+				onsubmit={handleSheetSubmit}
 				style="flex:1; display:flex; flex-direction:column; overflow:hidden;"
 			>
-				{#if editingProvider}
+				{#if editingProvider && !editingProvider.isNew}
 					<input type="hidden" name="id" value={editingProvider.id} />
 				{/if}
 
@@ -1464,6 +1639,15 @@
 		<input type="hidden" name="id" value={deleteTarget.id} />
 	</form>
 {/if}
+
+<ConfirmDialog
+	bind:open={unsavedConfirmOpen}
+	title="Unsaved changes"
+	description="You have unsaved changes on this page. Leave and discard them?"
+	confirmLabel="Discard changes"
+	cancelLabel="Keep editing"
+	onConfirm={discardAndProceed}
+/>
 
 <style>
 	.cat-add-row {

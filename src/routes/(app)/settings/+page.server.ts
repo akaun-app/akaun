@@ -69,9 +69,6 @@ export const actions: Actions = {
 	saveGeneral: async ({ request }) => {
 		const data = await request.formData();
 		const code = String(data.get('currencyCode') ?? '').trim().toUpperCase();
-		const companyName = String(data.get('companyName') ?? '').trim();
-		const companyAddress = String(data.get('companyAddress') ?? '').trim();
-		const companyRegistrationNo = String(data.get('companyRegistrationNo') ?? '').trim();
 
 		if (code) {
 			const currentCode = getSetting(db, SETTING_KEYS.currencyCode) ?? 'USD';
@@ -85,11 +82,21 @@ export const actions: Actions = {
 				setSetting(db, SETTING_KEYS.currencyCode, code);
 			}
 		}
+
+		return { success: true, action: 'saveGeneral' };
+	},
+
+	saveCompany: async ({ request }) => {
+		const data = await request.formData();
+		const companyName = String(data.get('companyName') ?? '').trim();
+		const companyAddress = String(data.get('companyAddress') ?? '').trim();
+		const companyRegistrationNo = String(data.get('companyRegistrationNo') ?? '').trim();
+
 		setSetting(db, SETTING_KEYS.companyName, companyName);
 		setSetting(db, SETTING_KEYS.companyAddress, companyAddress);
 		setSetting(db, SETTING_KEYS.companyRegistrationNo, companyRegistrationNo);
 
-		return { success: true, action: 'saveGeneral' };
+		return { success: true, action: 'saveCompany' };
 	},
 
 	saveCategories: async ({ request }) => {
@@ -120,31 +127,6 @@ export const actions: Actions = {
 		if (err) return fail(400, { error: err });
 		setSetting(db, SETTING_KEYS.sequenceTemplate, template);
 		return { success: true, action: 'saveSequenceTemplate' };
-	},
-
-	addProvider: async ({ request }) => {
-		const data = await request.formData();
-		const type = String(data.get('type') ?? '').trim();
-		const name = String(data.get('name') ?? '').trim();
-		const apiKey = String(data.get('apiKey') ?? '').trim();
-		const model = String(data.get('model') ?? '').trim();
-		const baseUrl = String(data.get('baseUrl') ?? '').trim() || null;
-
-		const VALID_TYPES: ProviderType[] = ['openrouter', 'google_ai_studio', 'groq'];
-		if (!VALID_TYPES.includes(type as ProviderType))
-			return fail(400, { error: 'Invalid provider type' });
-		if (!name) return fail(400, { error: 'Name is required' });
-		if (!model) return fail(400, { error: 'Model is required' });
-
-		insertProvider(db, {
-			type: type as ProviderType,
-			name,
-			apiKey,
-			model,
-			baseUrl: baseUrl ?? undefined
-		});
-
-		return { success: true, action: 'addProvider' };
 	},
 
 	updateProvider: async ({ request }) => {
@@ -182,22 +164,73 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const raw = String(data.get('providers') ?? '[]');
 
-		let entries: { id: string; enabled: boolean }[];
+		type ExistingEntry = { id: string; enabled: boolean };
+		type NewEntry = {
+			isNew: true;
+			tempId: string;
+			type: string;
+			name: string;
+			apiKey: string;
+			model: string;
+			baseUrl: string | null;
+			enabled: boolean;
+		};
+
+		const VALID_TYPES: ProviderType[] = ['openrouter', 'google_ai_studio', 'groq'];
+
+		let entries: (ExistingEntry | NewEntry)[];
 		try {
 			const parsed = JSON.parse(raw);
 			if (!Array.isArray(parsed)) throw new Error('not array');
-			entries = parsed.map((e) => ({ id: String(e?.id ?? ''), enabled: Boolean(e?.enabled) }));
-			if (entries.some((e) => !e.id)) throw new Error('missing id');
+			entries = parsed.map((e) => {
+				if (e?.isNew) {
+					const tempId = String(e.tempId ?? '');
+					if (!tempId) throw new Error('missing tempId');
+					return {
+						isNew: true,
+						tempId,
+						type: String(e.type ?? '').trim(),
+						name: String(e.name ?? '').trim(),
+						apiKey: String(e.apiKey ?? '').trim(),
+						model: String(e.model ?? '').trim(),
+						baseUrl: String(e.baseUrl ?? '').trim() || null,
+						enabled: Boolean(e.enabled)
+					} satisfies NewEntry;
+				}
+				return { id: String(e?.id ?? ''), enabled: Boolean(e?.enabled) };
+			});
+			if (entries.some((e) => !('isNew' in e) && !e.id)) throw new Error('missing id');
 		} catch {
 			return fail(400, { error: 'Invalid provider list data' });
 		}
 
-		reorderProviders(db, entries.map((e) => e.id));
+		const tempIdToRealId = new Map<string, string>();
+		for (const e of entries) {
+			if (!('isNew' in e)) continue;
+			if (!VALID_TYPES.includes(e.type as ProviderType))
+				return fail(400, { error: 'Invalid provider type' });
+			if (!e.name) return fail(400, { error: 'Name is required' });
+			if (!e.model) return fail(400, { error: 'Model is required' });
+
+			const created = insertProvider(db, {
+				type: e.type as ProviderType,
+				name: e.name,
+				apiKey: e.apiKey,
+				model: e.model,
+				baseUrl: e.baseUrl ?? undefined
+			});
+			tempIdToRealId.set(e.tempId, created.id);
+		}
+
+		const resolveId = (e: ExistingEntry | NewEntry) => ('isNew' in e ? tempIdToRealId.get(e.tempId)! : e.id);
+
+		reorderProviders(db, entries.map(resolveId));
 
 		const current = new Map(getAllProviders(db).map((p) => [p.id, p.enabled]));
 		for (const e of entries) {
-			if (current.get(e.id) !== e.enabled) {
-				updateProvider(db, e.id, { enabled: e.enabled });
+			const id = resolveId(e);
+			if (current.get(id) !== e.enabled) {
+				updateProvider(db, id, { enabled: e.enabled });
 			}
 		}
 
