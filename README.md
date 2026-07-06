@@ -12,7 +12,7 @@
 
 Akaun is a small web app for keeping track of money in and out of a business or household: expenses, income, who paid for what, and which expenses still need to be reimbursed. You run it yourself — on your own server, NAS, or VPS — and your financial data never leaves your machine.
 
-Instead of typing every receipt in by hand, you can snap a photo or upload a scan and Akaun will read the amount, date, and supplier off it automatically (OCR), suggest a matching contact, and flag anything that looks like a duplicate before it's saved.
+Instead of typing every receipt in by hand, you can snap a photo or upload a scan and Akaun will read the amount, date, and supplier off it automatically (OCR + AI extraction), suggest a matching contact, and flag anything that looks like a duplicate before it's saved.
 
 ## Why self-host?
 
@@ -23,12 +23,13 @@ Instead of typing every receipt in by hand, you can snap a photo or upload a sca
 ## Key Features
 
 - **Expenses & Income** — record transactions with amounts, dates, categories, and linked contacts.
-- **Receipt/Invoice Import (OCR)** — upload a photo or PDF and Akaun extracts the details for you, with fuzzy contact matching and duplicate detection.
+- **Receipt/Invoice Import (OCR)** — upload a photo or PDF and Akaun extracts the details for you, with fuzzy contact matching and duplicate detection. Structured extraction is powered by an LLM you bring the API key for (OpenRouter, Google AI Studio, or Groq — configured under Settings → Providers).
 - **Reimbursement Claims** — group a batch of expenses into a claim for approval and repayment.
+- **Quotations & Invoices** — draft quotations, convert accepted ones straight into invoices, and track their status (draft/sent/accepted/paid/etc.) through to payment.
 - **Contacts Directory** — one shared list of suppliers, customers, and employees, reused across expenses and income.
 - **Roles & Permissions** — invite teammates and control exactly what each person/group can view, add, edit, or delete.
 - **Real-time Updates** — changes made by one person (or in another browser tab) show up instantly for everyone else, no refresh needed.
-- **PDF Export** — generate printable summaries of claims and records.
+- **PDF Export** — customizable document templates (with your own company logo) drive printable/downloadable quotations, invoices, and claim summaries.
 
 ## Screenshots
 
@@ -132,7 +133,7 @@ Database migrations are generated with `bun run db:generate` and applied automat
 
 ## Tech Stack
 
-For the curious: Akaun is built with [SvelteKit](https://kit.svelte.dev/) (Svelte 5) and runs on the [Bun](https://bun.sh) runtime. Data is stored in **SQLite** via the [Drizzle ORM](https://orm.drizzle.team/), styling is [Tailwind CSS](https://tailwindcss.com/), receipt scanning uses [Tesseract.js](https://github.com/naptha/tesseract.js) for OCR, and live updates are pushed to the browser over Server-Sent Events.
+For the curious: Akaun is built with [SvelteKit](https://kit.svelte.dev/) (Svelte 5) and runs on the [Bun](https://bun.sh) runtime. Data is stored in **SQLite** via the [Drizzle ORM](https://orm.drizzle.team/), styling is [Tailwind CSS](https://tailwindcss.com/), and live updates are pushed to the browser over Server-Sent Events. Receipt import uses [Tesseract.js](https://github.com/naptha/tesseract.js) to OCR the raw text off a photo/PDF, then an LLM (via the [Vercel AI SDK](https://sdk.vercel.ai/), bring-your-own-key against OpenRouter, Google AI Studio, or Groq) turns that text into structured amount/date/supplier/category fields. PDFs (quotations, invoices, claim summaries) are generated with pdfkit/jsPDF from user-customizable templates.
 
 ## Development
 
