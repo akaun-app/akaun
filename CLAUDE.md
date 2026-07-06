@@ -30,6 +30,22 @@ All features that need live UI updates must use **Server-Sent Events (SSE)**, no
 **Why not polling?**
 Polling was considered and rejected. SSE gives instant updates, no wasted requests, and simpler client code once the pattern is established.
 
+### Permissions (RBAC)
+
+Every resource action gates through `hasPermission(locals, resource, action)` (`src/lib/server/permissions.ts`) — never through role checks or client-side hiding alone.
+
+- `ResourceName` is a closed union (`dashboard`, `expenses`, `income`, `claims`, `import`, `contacts`, `quotations`, `invoices`); `ActionName` is `view | add | change | delete`. Adding a new resource means adding it to `ResourceName`/`ALL_RESOURCES` in `permissions.ts`.
+- `hooks.server.ts` calls `getEffectivePermissions(db, userId)` once per request and stores the result on `locals.permissions` / `locals.isSuperuser`. Route code never queries permissions itself — it only calls `hasPermission`.
+- Effective permissions = union of the user's group permissions (`groupPermissions`), OR'd with any per-user overrides (`userPermissions`) — overrides are additive, never restrictive. A group with `isSuperuser: true` bypasses all checks (`hasPermission` short-circuits on `locals.isSuperuser`).
+- Every API route that reads or mutates a resource must call `hasPermission(locals, resource, action)` and return a `403` on failure — see `src/routes/api/income/+server.ts` for the reference shape (`view` for GET, `add`/`change`/`delete` for the corresponding verbs).
+
+### Settings Page Patterns
+
+The consolidated Settings page (`src/routes/(app)/settings/+page.svelte`) established two patterns other multi-field or list-editing pages should reuse:
+
+- **Unsaved-changes guard**: an `isDirty` `$derived` compares live `$state` against the server-loaded snapshot. `beforeNavigate` intercepts in-app navigation while dirty and opens `ConfirmDialog` (`unsavedConfirmOpen`) instead of navigating away.
+- **Stage locally, save once**: edits to list-like settings (providers, categories, company logo) mutate local `$state` only — nothing hits the DB until the page's single Save action runs. A locally-added, not-yet-persisted row is marked (e.g. `isNew`) so it can be told apart from saved rows without a round-trip.
+
 ### Drawer / Detail Sheet Standard
 
 Every record-detail and create/edit drawer (claims, contacts, expenses, income, etc.) is built on the shared `Sheet` primitive (`$lib/components/ui/sheet`, a bits-ui `Dialog` wrapper) and must follow this shape. The goal is that a user can't tell which feature they're in from the drawer chrome alone.
@@ -49,6 +65,7 @@ Every record-detail and create/edit drawer (claims, contacts, expenses, income, 
 - Hero amount (`.detail-amount`) for records with a monetary value.
 - A true lifecycle status renders via `StatusBadge.svelte` inside `.detail-statusrow`, directly under the hero amount — never in the header.
 - Forms use the existing `.field` / `.field-label` conventions.
+- Attachments and the audit trail go at the bottom of the body, in that order: `AttachmentManager.svelte` first, then `<AuditTrail recordType="..." recordId={...} />` last. Every create/update/delete action must call `recordAudit`/`diffRecords` (`src/lib/server/audit.ts`) after the DB write; the client holds a `bind:this` ref to `AuditTrail` and calls `.refresh()` on it after a successful save so the trail updates without a full reload.
 
 **Footer** (`.sheet-foot`, defined once in `layout.css` — don't redeclare it per page)
 - Sticky: lives *outside* the scrollable body, not inside it. For forms, this means the `<form>` itself is the flex column (`flex:1; display:flex; flex-direction:column; overflow:hidden;`) with a scrollable fields div and a non-scrolling `.sheet-foot` as siblings inside it — see `contacts/+page.svelte` for the reference implementation.
@@ -93,3 +110,7 @@ Every record detail (expenses, income, contacts, claims) is reachable at a real 
 - On mount, if `openId` was passed in (a real navigation to `/<feature>/[id]`, not an in-app click), the open-detail function is called with `{ push: false }` since the URL is already correct.
 - Cross-feature navigation buttons (e.g. an expense's linked-claim card) call `goto(resolve('/(app)/<feature>/[id]', { id: String(targetId) }))` directly — no query strings.
 - Reference implementations: `openExpense`/`closeDetail` in `ExpensesPage.svelte`, `openDetail`/`closeDetail` in `ClaimsPage.svelte`. Contacts is a variant — `/contacts/[id]` opens the existing shared edit form directly (`openEdit(c, { push: false })`); only editing an *existing* contact gets a URL, "Add contact" does not. Copy this pattern verbatim for any new feature that needs a detail sheet.
+
+## Gotchas
+
+**`$lib/server` can't be imported client-side.** SvelteKit strips/blocks `$lib/server/*` imports from `.svelte` files at build time. Record-locking rules live server-side in `src/lib/server/locking.ts` (e.g. `canEditAmount`, `canEditClaimData`), but detail-sheet components need the same check to disable fields in the UI. The established workaround is to hand-duplicate the specific function client-side with a `// Mirrors src/lib/server/locking.ts's <fnName> — ...` comment explaining the rule (see `ExpensesPage.svelte`, `ClaimsPage.svelte`). Keep both copies in sync manually when the rule changes — there's no shared import to enforce it.
