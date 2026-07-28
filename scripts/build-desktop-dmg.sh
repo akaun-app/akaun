@@ -42,7 +42,23 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG_PATH"
 
-bash "$CREATE_DMG" \
+# Force-detach any leftover "Akaun" mount from a previous failed attempt so a
+# retry doesn't immediately collide with a stuck volume of the same name.
+force_detach_stale_mounts() {
+	hdiutil info | grep -B 8 '/Volumes/Akaun' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
+		while read -r dev; do
+			hdiutil detach "$dev" -force >/dev/null 2>&1 || true
+		done
+}
+
+# create-dmg only auto-retries on "Resource busy"; a DiskArbitration detach
+# timeout (seen in CI on this app's large sidecar payload — 14k+ files in
+# node_modules, which gives Spotlight/diskarbitrationd a lot more to settle
+# on than a small native app bundle) exits immediately instead. Retry the
+# whole create-dmg run ourselves for that case.
+MAX_ATTEMPTS=3
+attempt=1
+until bash "$CREATE_DMG" \
 	--volname "Akaun" \
 	--window-size 500 320 \
 	--icon-size 96 \
@@ -50,7 +66,18 @@ bash "$CREATE_DMG" \
 	--app-drop-link 350 160 \
 	--no-internet-enable \
 	--skip-jenkins \
+	--hdiutil-retries 8 \
 	"$DMG_PATH" \
-	"$APP_PATH"
+	"$APP_PATH"; do
+	if (( attempt >= MAX_ATTEMPTS )); then
+		echo "error: create-dmg failed after $MAX_ATTEMPTS attempts" >&2
+		exit 1
+	fi
+	echo "==> create-dmg failed (attempt $attempt/$MAX_ATTEMPTS) — likely a transient DiskArbitration detach timeout; cleaning up and retrying" >&2
+	force_detach_stale_mounts
+	rm -f "$DMG_PATH"
+	attempt=$(( attempt + 1 ))
+	sleep 5
+done
 
 echo "==> Done: $DMG_PATH"
