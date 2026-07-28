@@ -2,11 +2,10 @@ import { Database } from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { hash } from 'argon2';
-import { randomBytes } from 'node:crypto';
 import { count, eq } from 'drizzle-orm';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { DATABASE_PATH, ADMIN_PASSWORD } from '../env.js';
+import { DATABASE_PATH } from '../env.js';
 import { createLogger } from '../logger.js';
 import * as schema from './schema.js';
 import { users, groups, groupPermissions, userGroups, documentTemplates, categories, CATEGORY_TYPE } from './schema.js';
@@ -15,6 +14,8 @@ import { TemplateDocumentType, TemplateFont } from '$lib/enums.js';
 import { makeDefaultLayout } from '../pdf/template-types.js';
 
 const log = createLogger('db');
+
+const DEFAULT_ADMIN_PASSWORD = 'akaun-admin';
 
 function createDb() {
 	mkdirSync(dirname(DATABASE_PATH), { recursive: true });
@@ -37,20 +38,13 @@ export async function ensureDefaultAdmin(): Promise<void> {
 		.get();
 
 	if (!exists) {
-		const generated = !ADMIN_PASSWORD;
-		const password = ADMIN_PASSWORD || randomBytes(18).toString('base64url');
-		const passwordHash = await hash(password);
+		const passwordHash = await hash(DEFAULT_ADMIN_PASSWORD);
 		db.insert(users)
 			.values({ email: 'admin@localhost', username: 'admin', passwordHash, role: 'owner' })
 			.run();
-		if (generated) {
-			// Print the generated password exactly once so the operator can log in and change it.
-			log.warn(
-				`Default admin user created (username: admin). Generated password: ${password} — log in and change it now. Set ADMIN_PASSWORD to control this.`
-			);
-		} else {
-			log.info('Default admin user created (username: admin) with password from ADMIN_PASSWORD.');
-		}
+		log.warn(
+			`Default admin user created (username: admin, password: ${DEFAULT_ADMIN_PASSWORD}). Log in and change this password immediately.`
+		);
 	}
 }
 

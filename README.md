@@ -57,7 +57,6 @@ services:
       - PUID=1000 # Set to $(id -u) to match your host user
       - PGID=1000 # Set to $(id -g) to match your host group
       - BODY_SIZE_LIMIT=15M
-      # - ADMIN_PASSWORD=  # Only read on first boot to seed the admin account password
       # - LOG_LEVEL=info
       # - SSL_ENABLED=true
       # - SSL_KEY_PATH=/app/data/ssl/key.pem
@@ -72,7 +71,7 @@ docker compose up -d
 
 Akaun is now running at `http://localhost:6969` (or your server's address, if `ORIGIN` is updated to match). All data — the database and any uploaded files — is stored in the `./data` folder next to your `docker-compose.yml`, so back up that folder to back up your whole instance.
 
-**First login:** an `admin` account is created automatically on first boot. If you didn't set `ADMIN_PASSWORD` in the compose file, check the container logs once (`docker compose logs akaun`) for the randomly generated password — it's only printed the first time.
+**First login:** an `admin` account is created automatically on first boot with the password `akaun-admin`. Log in and change it right away from the Profile page.
 
 **Running behind a different port, domain, or with HTTPS:** see the commented-out variables above and `.env.example` in this repo for details on every option.
 
@@ -123,7 +122,6 @@ Configure the app via environment variables (copy `.env.example` to `.env` and e
 | `DATABASE_PATH`   | `./data/akaun.db`   | SQLite database file location                                |
 | `STORAGE_PATH`    | `./data/storage`    | Where uploaded files (receipts, attachments) are stored      |
 | `BODY_SIZE_LIMIT` | `15M`               | Max upload size                                              |
-| `ADMIN_PASSWORD`  | _(auto-generated)_  | Initial password for the `admin` account, first boot only    |
 | `LOG_LEVEL`       | `info`              | `trace` \| `debug` \| `info` \| `warn` \| `error`            |
 | `SSL_ENABLED`     | `false`             | Serve over HTTPS                                             |
 | `SSL_KEY_PATH`    | _(none)_            | Path to TLS private key, required if `SSL_ENABLED=true`      |
