@@ -23,9 +23,9 @@
 
 <AlertDialog.Root bind:open>
 	<AlertDialog.Portal>
-		<AlertDialog.Overlay class="fixed inset-0 z-50 bg-black/35" />
+		<AlertDialog.Overlay class="fixed inset-0 z-[60] bg-black/35" />
 		<AlertDialog.Content
-			class="bg-popover text-popover-foreground fixed top-1/2 left-1/2 z-50 w-[min(90vw,400px)] -translate-x-1/2 -translate-y-1/2 rounded-lg p-5 shadow-lg [border:1px_solid_var(--border)]"
+			class="bg-popover text-popover-foreground fixed top-1/2 left-1/2 z-[60] w-[min(90vw,400px)] -translate-x-1/2 -translate-y-1/2 rounded-lg p-5 shadow-lg [border:1px_solid_var(--border)]"
 		>
 			<AlertDialog.Title class="text-[15px] font-semibold">{title}</AlertDialog.Title>
 			<AlertDialog.Description class="text-muted-foreground mt-2 text-[13px] leading-relaxed">

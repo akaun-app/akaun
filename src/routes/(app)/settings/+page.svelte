@@ -738,7 +738,7 @@
 
 	// Add, and editing a not-yet-saved row, both stage into the local `providers`
 	// list instead of hitting the DB — actual persistence happens once, when the
-	// page-level "Save changes" button submits ?/saveProviderList. Editing an
+	// Intelligence tab's "Save" button submits ?/saveIntelligence. Editing an
 	// already-persisted provider still saves immediately via ?/updateProvider.
 	function handleSheetSubmit(e: SubmitEvent) {
 		if (!editingProvider) {
@@ -814,11 +814,11 @@
 		if (!f?.success) return;
 		untrack(() => {
 			const action = (f as { action?: string }).action;
-			if (action === 'updateProvider' || action === 'deleteProvider' || action === 'saveProviderList') {
+			if (action === 'updateProvider' || action === 'deleteProvider' || action === 'saveIntelligence') {
 				providers = [...data.providers];
-				if (action !== 'saveProviderList') closeSheet();
+				if (action !== 'saveIntelligence') closeSheet();
 			}
-			if (action === 'saveIntelligenceGlobal') {
+			if (action === 'saveIntelligence') {
 				aiParallelTasks = data.autoImportParallelTasks;
 				aiCategoryHints = data.autoImportCategoryHints;
 				aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
@@ -1292,12 +1292,12 @@
 						<p class="set-section-sub">Providers used for receipt extraction, and how auto-import processes files.</p>
 					</div>
 
-					<p class="set-subsection-label" style="margin-top:0;">Providers</p>
 					<form
 						method="POST"
-						action="?/saveProviderList"
+						action="?/saveIntelligence"
 						use:enhance={() => ({ update }) => update({ reset: false })}
 					>
+						<p class="set-subsection-label" style="margin-top:0;">Providers</p>
 						<input
 							type="hidden"
 							name="providers"
@@ -1377,16 +1377,9 @@
 									</div>
 								{/each}
 							</div>
-							<Button type="submit" class="mt-4">Save changes</Button>
 						{/if}
-					</form>
 
-					<p class="set-subsection-label" style="margin-top:28px;">Processing</p>
-					<form
-						method="POST"
-						action="?/saveIntelligenceGlobal"
-						use:enhance={() => ({ update }) => update({ reset: false })}
-					>
+						<p class="set-subsection-label" style="margin-top:28px;">Processing</p>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
 						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
 						<input type="hidden" name="rateLimitMs" value={aiRateLimitSec * 1000} />

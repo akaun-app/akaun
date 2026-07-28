@@ -187,7 +187,7 @@ export const actions: Actions = {
 		return { success: true, action: 'deleteProvider' };
 	},
 
-	saveProviderList: async ({ request }) => {
+	saveIntelligence: async ({ request }) => {
 		const data = await request.formData();
 		const raw = String(data.get('providers') ?? '[]');
 
@@ -261,11 +261,6 @@ export const actions: Actions = {
 			}
 		}
 
-		return { success: true, action: 'saveProviderList' };
-	},
-
-	saveIntelligenceGlobal: async ({ request }) => {
-		const data = await request.formData();
 		const parallelTasks = Math.min(
 			10,
 			Math.max(1, parseInt(String(data.get('parallelTasks') ?? '3'), 10))
@@ -282,6 +277,6 @@ export const actions: Actions = {
 		setSetting(db, SETTING_KEYS.autoImportRateLimitMs, String(rateLimitMs));
 		setSetting(db, SETTING_KEYS.autoImportCustomInstructions, customInstructions);
 
-		return { success: true, action: 'saveIntelligenceGlobal' };
+		return { success: true, action: 'saveIntelligence' };
 	}
 };
