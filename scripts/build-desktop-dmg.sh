@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 # Builds Akaun.app via Tauri and packages it into a .dmg, for use both
 # locally and in CI. Deliberately does NOT use Tauri's built-in "dmg" bundle
-# target (bundle_dmg.sh), which invokes the same underlying create-dmg tool
-# but always runs its Finder-prettifying AppleScript step — that requires an
-# interactive session with Automation permission granted and times out in
-# headless/restricted environments. Instead this calls the create-dmg
-# submodule (scripts/create-dmg, same tool/pattern used by the native Akaun
-# macOS app) directly with --skip-jenkins, which keeps the nice icon-position
-# + drop-to-Applications window layout but skips only the AppleScript step.
+# target (bundle_dmg.sh) or the create-dmg tool, both of which build the DMG
+# by mounting a temporary read-write image, copying files in via Finder/an
+# external script, then calling a plain (non -force) "hdiutil detach" — that
+# detach reliably hangs for ~120s and fails with "hdiutil: detach: timeout
+# for DiskArbitration expired" on GitHub Actions' macOS runners once this
+# app's ~14k+ file sidecar payload is involved (root cause isn't Spotlight:
+# disabling indexing made no measurable difference — see git history).
+# `hdiutil create -srcfolder` builds the compressed image directly, with no
+# separate mount → touch-every-file → detach dance to hang on, and is the
+# standard approach for a DMG with no custom Finder background/icon layout
+# (which this app doesn't use anyway).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
-
-CREATE_DMG="scripts/create-dmg/create-dmg"
-if [ ! -x "$CREATE_DMG" ]; then
-	echo "error: $CREATE_DMG not found or not executable — did you run 'git submodule update --init'?" >&2
-	exit 1
-fi
 
 echo "==> Building Akaun.app via Tauri"
 bun run desktop:build
@@ -42,52 +40,33 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG_PATH"
 
-# Attempted mitigation, kept as a harmless no-op-if-ineffective precaution:
-# disabling Spotlight indexing was suspected to reduce diskarbitrationd
-# contention. In practice it made no measurable difference in CI (identical
-# ~120s hang with or without it), so it is not relied on as the fix below.
-sudo mdutil -i off -a >/dev/null 2>&1 || true
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
 
-# Force-detach any leftover mount from a previous failed attempt so a retry
-# doesn't immediately collide with a stuck volume. create-dmg mounts the
-# intermediate rw image under a randomized "/Volumes/dmg.XXXXXX" name (not
-# "/Volumes/Akaun", which is only the final read-only volume's label), so
-# match both. The trailing `|| true` on the pipeline (not just inside the
-# while loop) is required: under `set -e`, a pipeline that ends in "no stale
-# mount found" (grep exits 1 on no match) aborts the whole script the moment
-# this function is called — a bare `return 0` on the next line is never
-# reached, since `set -e` triggers as soon as the failing pipeline's exit
-# status is checked, before execution reaches the following statement.
+cp -R "$APP_PATH" "$STAGE_DIR/"
+ln -s /Applications "$STAGE_DIR/Applications"
+
+# Force-detach any leftover "Akaun" mount from a previous failed attempt so a
+# retry doesn't collide with a stuck volume of the same name. The trailing
+# `|| true` on the pipeline (not just inside the while loop) matters: under
+# `set -e`, a pipeline that ends in "no stale mount found" (grep exits 1 on
+# no match) would otherwise abort this whole script the moment this function
+# is called.
 force_detach_stale_mounts() {
-	hdiutil info | grep -B 8 -E '/Volumes/(Akaun|dmg\.)' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
+	hdiutil info | grep -B 8 '/Volumes/Akaun' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
 		while read -r dev; do
 			hdiutil detach "$dev" -force >/dev/null 2>&1 || true
 		done || true
 }
 
-# create-dmg only auto-retries on "Resource busy"; a DiskArbitration detach
-# timeout (seen in CI on this app's large sidecar payload — 14k+ files in
-# node_modules, which gives Spotlight/diskarbitrationd a lot more to settle
-# on than a small native app bundle) exits immediately instead. Retry the
-# whole create-dmg run ourselves for that case.
 MAX_ATTEMPTS=3
 attempt=1
-until bash "$CREATE_DMG" \
-	--volname "Akaun" \
-	--window-size 500 320 \
-	--icon-size 96 \
-	--icon "Akaun.app" 150 160 \
-	--app-drop-link 350 160 \
-	--no-internet-enable \
-	--skip-jenkins \
-	--hdiutil-retries 8 \
-	"$DMG_PATH" \
-	"$APP_PATH"; do
+until hdiutil create -volname "Akaun" -srcfolder "$STAGE_DIR" -fs HFS+ -format UDZO -ov -o "$DMG_PATH"; do
 	if (( attempt >= MAX_ATTEMPTS )); then
-		echo "error: create-dmg failed after $MAX_ATTEMPTS attempts" >&2
+		echo "error: hdiutil create failed after $MAX_ATTEMPTS attempts" >&2
 		exit 1
 	fi
-	echo "==> create-dmg failed (attempt $attempt/$MAX_ATTEMPTS) — likely a transient DiskArbitration detach timeout; cleaning up and retrying" >&2
+	echo "==> hdiutil create failed (attempt $attempt/$MAX_ATTEMPTS) — cleaning up and retrying" >&2
 	force_detach_stale_mounts
 	rm -f "$DMG_PATH"
 	attempt=$(( attempt + 1 ))
