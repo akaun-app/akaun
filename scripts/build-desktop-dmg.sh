@@ -42,13 +42,26 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG_PATH"
 
-# Force-detach any leftover "Akaun" mount from a previous failed attempt so a
-# retry doesn't immediately collide with a stuck volume of the same name.
+# Spotlight/mdworker indexing the DMG volume while it holds ~14k+ sidecar
+# files is what causes "hdiutil: detach: timeout for DiskArbitration expired"
+# on GitHub Actions' virtualized macOS runners (never seen on a local Mac's
+# real SSD, which settles fast enough). Disabling indexing up front removes
+# the contention instead of just retrying around it.
+sudo mdutil -i off -a >/dev/null 2>&1 || true
+
+# Force-detach any leftover mount from a previous failed attempt so a retry
+# doesn't immediately collide with a stuck volume. create-dmg mounts the
+# intermediate rw image under a randomized "/Volumes/dmg.XXXXXX" name (not
+# "/Volumes/Akaun", which is only the final read-only volume's label), so
+# match both. The trailing `return 0` is required: under `set -e`, a plain
+# "no stale mount found" (grep exits 1 on no match) would otherwise abort
+# this whole script the moment the retry loop below calls this function.
 force_detach_stale_mounts() {
-	hdiutil info | grep -B 8 '/Volumes/Akaun' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
+	hdiutil info | grep -B 8 -E '/Volumes/(Akaun|dmg\.)' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
 		while read -r dev; do
 			hdiutil detach "$dev" -force >/dev/null 2>&1 || true
 		done
+	return 0
 }
 
 # create-dmg only auto-retries on "Resource busy"; a DiskArbitration detach
