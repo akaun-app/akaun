@@ -1,7 +1,19 @@
-import { readFileSync } from 'fs';
+import { readFileSync, mkdirSync } from 'fs';
 import { extractText as pdfExtractText, getDocumentProxy, extractImages } from 'unpdf';
 import { createWorker } from 'tesseract.js';
 import { PNG } from 'pngjs';
+import { OCR_CACHE_PATH } from '../env.js';
+
+const OCR_LANGS = 'eng+chi_sim';
+
+/**
+ * Creates a tesseract worker with an explicit cache dir. Without `cachePath`
+ * tesseract.js downloads its `*.traineddata` files into the process CWD.
+ */
+async function createOcrWorker() {
+	mkdirSync(OCR_CACHE_PATH, { recursive: true });
+	return createWorker(OCR_LANGS, undefined, { cachePath: OCR_CACHE_PATH });
+}
 
 /** Infers the MIME type this module's extractors understand from a filename's extension. */
 export function inferMimeType(filename: string): string {
@@ -61,7 +73,7 @@ function imageObjectToPngBuffer(data: Uint8ClampedArray, width: number, height: 
 
 async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promise<string> {
 	const pdf = await getDocumentProxy(new Uint8Array(buffer));
-	const worker = await createWorker('eng+chi_sim');
+	const worker = await createOcrWorker();
 	try {
 		const pageTexts: string[] = [];
 		for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
@@ -79,7 +91,7 @@ async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promis
 }
 
 async function extractFromImage(absPath: string): Promise<string> {
-	const worker = await createWorker('eng+chi_sim');
+	const worker = await createOcrWorker();
 	try {
 		const { data } = await worker.recognize(absPath);
 		return data.text.trim();
