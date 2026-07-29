@@ -16,7 +16,10 @@
 		"test": "npm run test:unit -- --run",
 		"db:generate": "drizzle-kit generate",
 		"desktop:dev": "tauri dev",
-		"desktop:build": "tauri build"
+		"desktop:build": "tauri build",
+		"desktop:dmg": "bash scripts/build-desktop-dmg.sh",
+		"admin:create": "bun run scripts/create-admin.ts",
+		"icons:maskable": "bun run scripts/gen-maskable-icon.ts"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

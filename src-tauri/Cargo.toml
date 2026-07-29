@@ -1,10 +1,13 @@
 [package]
+# NOTE: the crate name is load-bearing — .github/workflows/desktop-publish.yml
+# stages the Windows portable build from target/release/app.exe, a path derived
+# from this name. Renaming it silently breaks that workflow step.
 name = "app"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+description = "Akaun — personal bookkeeping and expense tracking, as a desktop app"
+authors = ["Akaun contributors"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/akaun-app/akaun"
 edition = "2021"
 rust-version = "1.77.2"
 

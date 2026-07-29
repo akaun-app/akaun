@@ -1,12 +1,16 @@
 services:
   akaun:
     build:
-      context: .
+      # Context is the repo root so the build can see src/, static/, etc.
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: akaun_dev
     ports:
       - 6969:6969
     volumes:
-      - ./data:/app/data
+      # Compose resolves volume paths relative to this file, so `..` keeps the
+      # data dir at the repo root (where .gitignore already excludes it).
+      - ../data:/app/data
     environment:
       - ORIGIN=http://localhost:6969
       - PUID=1000   # Set to $(id -u) to match your host user

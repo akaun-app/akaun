@@ -3,7 +3,7 @@
 # (named per Tauri's externalBin target-triple convention) plus a pruned,
 # production-only `node_modules` + `build/` + `drizzle/` + `server.js` tree,
 # run verbatim with the sidecar's cwd set to this directory. This mirrors the
-# Dockerfile's runtime stage (see Dockerfile) rather than using
+# Dockerfile's runtime stage (see deploy/Dockerfile) rather than using
 # `bun build --compile`, because argon2's native binding, tesseract.js-core's
 # .wasm files, and pdfkit's .afm/.icc files are all loaded from real
 # filesystem paths at runtime and don't survive being flattened into a single

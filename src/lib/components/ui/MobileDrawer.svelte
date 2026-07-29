@@ -94,7 +94,7 @@
 	>
 		<!-- Brand -->
 		<div class="drawer-brand">
-			<img class="drawer-logo" src="/icons/icon-512.png" alt="Akaun" />
+			<img class="drawer-logo" src="/icons/icon-192.png" alt="Akaun" />
 			<div class="drawer-brand-name">Akaun</div>
 		</div>
 

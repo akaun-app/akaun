@@ -16,7 +16,12 @@ const MAIN_WINDOW_LABEL: &str = "main";
 
 /// Solid white monogram on a transparent background — the shape macOS
 /// expects for a tray/menu-bar "template" image (auto-tinted for light/dark).
+/// Windows/Linux have no such convention, so they use the real, full-color
+/// app icon instead so the tray icon matches the taskbar/app icon.
+#[cfg(target_os = "macos")]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
 /// Holds everything the tray menu / shutdown path needs to talk to the
 /// already-spawned Bun sidecar.
@@ -267,19 +272,24 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
 
-            // Dedicated monochrome, alpha-only mark (not the colorful app
-            // icon) so macOS can auto-tint it for light/dark menu bars.
+            // macOS gets the dedicated monochrome, alpha-only mark (auto-tinted
+            // for light/dark menu bars via `icon_as_template`); other
+            // platforms get the real, full-color app icon.
             let tray_icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?;
-            TrayIconBuilder::new()
+            #[allow(unused_mut)]
+            let mut tray_builder = TrayIconBuilder::new()
                 .icon(tray_icon)
-                .icon_as_template(true)
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_or_create_window(app),
                     "quit" => quit_app(app),
                     _ => {}
-                })
-                .build(app)?;
+                });
+            #[cfg(target_os = "macos")]
+            {
+                tray_builder = tray_builder.icon_as_template(true);
+            }
+            tray_builder.build(app)?;
 
             // First-launch UX: wait until the sidecar's port accepts
             // connections (DB migrations/seeding run synchronously before

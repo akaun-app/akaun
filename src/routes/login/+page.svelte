@@ -18,7 +18,7 @@
 		<!-- Logo mark -->
 		<div class="form-logo">
 			<div class="mark">
-				<img src="/icons/icon-512.png" alt="Akaun" />
+				<img src="/icons/icon-192.png" alt="Akaun" />
 			</div>
 		</div>
 

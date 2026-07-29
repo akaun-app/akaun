@@ -35,3 +35,8 @@ node_modules/
 .vercel
 .superpowers/
 __MACOSX
+
+# tesseract.js OCR language caches — downloaded at runtime into the worker's
+# cachePath (see src/lib/server/import/extractor.ts). Older versions of this
+# repo accidentally committed these from the CWD; never track them.
+*.traineddata

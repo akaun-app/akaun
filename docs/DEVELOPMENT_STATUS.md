@@ -40,7 +40,7 @@ All planned tables are present in `src/lib/server/db/schema.ts`. Additional tabl
 - **Logout**: `POST /logout` deletes session row and clears cookie
 - **Sessions**: 30-day expiry; `auth.ts` sweeps expired rows on each session lookup
 - **`scripts/create-admin.ts`**: CLI to create additional admin users (username + password; slightly different from the email-based approach in the plan)
-- **`scripts/migrate-from-akaun.ts` + `.sh`**: one-time data migration from the macOS Akaun SwiftData SQLite store *(not in plan)*
+- **macOS Akaun migration scripts**: removed once the one-time migration was complete; recoverable from git history if ever needed again *(not in plan)*
 
 ---
 
@@ -186,7 +186,7 @@ In-browser scanning overlay accessible from the Import page:
 Beyond the group permission grid, individual users can have per-resource permission overrides stored in `userPermissions`. Managed via `/api/users/[id]/permissions`. The resolver in `permissions.ts` ORs group permissions and user-level overrides together.
 
 ### 6. Data Migration from macOS Akaun
-`scripts/migrate-from-akaun.ts` + `migrate-from-akaun.sh`: one-time import from the original macOS app's SwiftData SQLite store (`default.store`). Migrates users, expenses, incomes, claims, and attachment file paths into the new schema.
+A one-time import from the original macOS app's SwiftData SQLite store (`default.store`) migrated users, expenses, incomes, claims, and attachment file paths into the new schema. The scripts that did it (`scripts/migrate-from-akaun.ts` + `.sh`) have since been removed — retrieve them from git history if the migration ever needs re-running.
 
 ### 7. Profile Page
 `/profile` — logged-in user's own profile management, separate from the superuser-only Settings page.

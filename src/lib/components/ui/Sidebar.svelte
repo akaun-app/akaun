@@ -78,7 +78,7 @@
 
 <aside class="sidebar" class:collapsed style="position:relative">
 	<div class="sb-brand">
-		<img class="sb-logo" src="/icons/icon-512.png" alt="Akaun" />
+		<img class="sb-logo" src="/icons/icon-192.png" alt="Akaun" />
 		{#if !collapsed}
 			<div class="sb-brand-name">Akaun</div>
 		{/if}

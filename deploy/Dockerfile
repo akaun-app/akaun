@@ -22,7 +22,7 @@ COPY --from=builder   /app/build       ./build
 COPY --from=builder   /app/drizzle     ./drizzle
 COPY --from=builder   /app/package.json ./package.json
 COPY server.js ./server.js
-COPY entrypoint.sh /entrypoint.sh
+COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production
 ENV PORT=6969
