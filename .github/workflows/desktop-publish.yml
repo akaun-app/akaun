@@ -13,8 +13,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - uses: oven-sh/setup-bun@v2
         with:

@@ -1,3 +1,0 @@
-[submodule "scripts/create-dmg"]
-	path = scripts/create-dmg
-	url = https://github.com/tanghq33/create-dmg.git
