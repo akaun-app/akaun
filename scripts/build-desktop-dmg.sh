@@ -42,26 +42,27 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 rm -f "$DMG_PATH"
 
-# Spotlight/mdworker indexing the DMG volume while it holds ~14k+ sidecar
-# files is what causes "hdiutil: detach: timeout for DiskArbitration expired"
-# on GitHub Actions' virtualized macOS runners (never seen on a local Mac's
-# real SSD, which settles fast enough). Disabling indexing up front removes
-# the contention instead of just retrying around it.
+# Attempted mitigation, kept as a harmless no-op-if-ineffective precaution:
+# disabling Spotlight indexing was suspected to reduce diskarbitrationd
+# contention. In practice it made no measurable difference in CI (identical
+# ~120s hang with or without it), so it is not relied on as the fix below.
 sudo mdutil -i off -a >/dev/null 2>&1 || true
 
 # Force-detach any leftover mount from a previous failed attempt so a retry
 # doesn't immediately collide with a stuck volume. create-dmg mounts the
 # intermediate rw image under a randomized "/Volumes/dmg.XXXXXX" name (not
 # "/Volumes/Akaun", which is only the final read-only volume's label), so
-# match both. The trailing `return 0` is required: under `set -e`, a plain
-# "no stale mount found" (grep exits 1 on no match) would otherwise abort
-# this whole script the moment the retry loop below calls this function.
+# match both. The trailing `|| true` on the pipeline (not just inside the
+# while loop) is required: under `set -e`, a pipeline that ends in "no stale
+# mount found" (grep exits 1 on no match) aborts the whole script the moment
+# this function is called — a bare `return 0` on the next line is never
+# reached, since `set -e` triggers as soon as the failing pipeline's exit
+# status is checked, before execution reaches the following statement.
 force_detach_stale_mounts() {
 	hdiutil info | grep -B 8 -E '/Volumes/(Akaun|dmg\.)' | grep '^/dev/disk' | awk '{print $1}' | sort -u |
 		while read -r dev; do
 			hdiutil detach "$dev" -force >/dev/null 2>&1 || true
-		done
-	return 0
+		done || true
 }
 
 # create-dmg only auto-retries on "Resource busy"; a DiskArbitration detach
