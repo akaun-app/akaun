@@ -64,9 +64,13 @@ if [ -z "$TARGET_TRIPLE" ]; then
 	echo "error: could not determine target triple via 'rustc -vV'" >&2
 	exit 1
 fi
-cp "$BUN_BIN" "$BINARIES_DIR/bun-$TARGET_TRIPLE"
-chmod +x "$BINARIES_DIR/bun-$TARGET_TRIPLE"
+EXE_SUFFIX=""
+case "$TARGET_TRIPLE" in
+	*windows*) EXE_SUFFIX=".exe" ;;
+esac
+cp "$BUN_BIN" "$BINARIES_DIR/bun-$TARGET_TRIPLE$EXE_SUFFIX"
+chmod +x "$BINARIES_DIR/bun-$TARGET_TRIPLE$EXE_SUFFIX"
 
 echo "==> Done"
 echo "    payload:  $(du -sh "$STAGING_DIR" | cut -f1)  ($(find "$STAGING_DIR" -type f | wc -l | tr -d ' ') files)"
-echo "    sidecar:  $BINARIES_DIR/bun-$TARGET_TRIPLE"
+echo "    sidecar:  $BINARIES_DIR/bun-$TARGET_TRIPLE$EXE_SUFFIX"
