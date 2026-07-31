@@ -36,9 +36,12 @@ Instructions:
 - Determine if this is an expense (money paid out) or income (money received). Set document_type accordingly.
 - For expenses: item_name = what was purchased, supplier = who was paid, category = one of [${safeExpCats.join(", ")}]
 - For income: item_name = income source/payer, supplier = description of what the income is for, category = one of [${safeIncCats.join(", ")}]
-- item_name and supplier must be short labels — a few words, not a full sentence. If the document
-  lists many items or a long description, summarize or shorten it rather than copying it verbatim
-  (aim for under 60 characters each).
+- item_name must be a short label — a few words, not a full sentence. If the document lists many
+  items or a long description, summarize or shorten it rather than copying it verbatim (aim for
+  under 60 characters).
+- supplier must be copied exactly as printed on the document (the full legal/business name) —
+  never shortened, abbreviated, or paraphrased. It is used to match against saved contacts, so an
+  altered name will fail to match even when the supplier is already known.
 - date must be YYYY-MM-DD format. If unclear, use today (${today}).
 - amount must be a positive number (no currency symbol).
 - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
@@ -62,7 +65,9 @@ export function postProcess(
   return {
     ...obj,
     item_name: truncate(obj.item_name, MAX_LABEL_LENGTH),
-    supplier: truncate(obj.supplier, MAX_LABEL_LENGTH),
+    // Never truncated: this is matched against contacts.legal_name (see worker.ts), so
+    // cutting it short would break matches against an already-known supplier.
+    supplier: String(obj.supplier ?? "").trim(),
     amount: parseAmount(obj.amount),
     date: parseDate(obj.date, today),
     currency: parseCurrency(obj.currency, mainCurrency),
