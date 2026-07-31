@@ -23,6 +23,7 @@ jobs:
 
   build-and-push:
     needs: ci
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
