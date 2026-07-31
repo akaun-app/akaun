@@ -216,7 +216,6 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 				exchangeRate,
 				reference: result.reference,
 				category: result.category,
-				remark: result.remark,
 				duplicateOf: dup?.duplicateOf ?? null,
 				duplicateSignal: dup?.duplicateSignal ?? null,
 				processedAt: now
