@@ -9,7 +9,6 @@ export const LLMResultSchema = z.object({
   currency: z.string(),
   reference: z.string(),
   category: z.string(),
-  remark: z.string(),
 });
 
 export type LLMResult = z.infer<typeof LLMResultSchema>;
@@ -37,11 +36,16 @@ Instructions:
 - Determine if this is an expense (money paid out) or income (money received). Set document_type accordingly.
 - For expenses: item_name = what was purchased, supplier = who was paid, category = one of [${safeExpCats.join(", ")}]
 - For income: item_name = income source/payer, supplier = description of what the income is for, category = one of [${safeIncCats.join(", ")}]
+- item_name must be a short label — a few words, not a full sentence. If the document lists many
+  items or a long description, summarize or shorten it rather than copying it verbatim (aim for
+  under 60 characters).
+- supplier must be copied exactly as printed on the document (the full legal/business name) —
+  never shortened, abbreviated, or paraphrased. It is used to match against saved contacts, so an
+  altered name will fail to match even when the supplier is already known.
 - date must be YYYY-MM-DD format. If unclear, use today (${today}).
 - amount must be a positive number (no currency symbol).
 - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
 - reference = invoice/receipt/transaction number if present, else empty string.
-- remark = any useful notes, else empty string.
 - If a field cannot be determined, use an empty string or 0 for amount.
 ${customInstructions ? `\nAdditional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):\n${customInstructions}\n` : ""}
 Respond with valid JSON only, matching the schema exactly. No markdown, no extra text.`;
@@ -51,6 +55,8 @@ export function buildUserPrompt(params: Pick<PromptParams, "text">): string {
   return `<document>\n${params.text.slice(0, 6000)}\n</document>`;
 }
 
+const MAX_LABEL_LENGTH = 80;
+
 export function postProcess(
   obj: LLMResult,
   today: string,
@@ -58,10 +64,19 @@ export function postProcess(
 ): LLMResult {
   return {
     ...obj,
+    item_name: truncate(obj.item_name, MAX_LABEL_LENGTH),
+    // Never truncated: this is matched against contacts.legal_name (see worker.ts), so
+    // cutting it short would break matches against an already-known supplier.
+    supplier: String(obj.supplier ?? "").trim(),
     amount: parseAmount(obj.amount),
     date: parseDate(obj.date, today),
     currency: parseCurrency(obj.currency, mainCurrency),
   };
+}
+
+function truncate(v: string, maxLength: number): string {
+  const s = String(v ?? "").trim();
+  return s.length > maxLength ? `${s.slice(0, maxLength - 1).trimEnd()}…` : s;
 }
 
 function parseAmount(v: unknown): number {

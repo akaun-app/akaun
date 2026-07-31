@@ -27,7 +27,12 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json();
 
-	if ((body.amount !== undefined || body.status !== undefined) && !canEditAmount(expense)) {
+	const editsLockedFields =
+		body.amount !== undefined ||
+		body.status !== undefined ||
+		body.currency !== undefined ||
+		body.exchangeRate !== undefined;
+	if (editsLockedFields && !canEditAmount(expense)) {
 		return Response.json(
 			{ error: 'Amount and status cannot be edited on a claimed expense' },
 			{ status: 403 }
@@ -36,7 +41,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const descriptiveFields = ['itemName', 'contactId', 'reference', 'remark', 'category', 'date'];
 	const patch: Record<string, unknown> = {};
-	for (const field of [...descriptiveFields, 'amount', 'status']) {
+	for (const field of [...descriptiveFields, 'amount', 'status', 'currency', 'exchangeRate']) {
 		if (body[field] !== undefined) patch[field] = body[field];
 	}
 	// Allow a raw supplier name on PATCH too (resolve to a contact).

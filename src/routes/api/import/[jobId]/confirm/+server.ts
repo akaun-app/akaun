@@ -59,7 +59,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 	const amount = (overrides.amount as number) ?? row.amount ?? 0;
 	const reference = (overrides.reference as string) ?? row.reference ?? '';
 	const category = (overrides.category as string) ?? row.category ?? 'Other';
-	const remark = (overrides.remark as string) ?? row.remark ?? '';
+	// remark is human-entered only — the import pipeline never sources it from the LLM.
+	const remark = (overrides.remark as string) ?? '';
 
 	// Resolve currency + rate (overrides win, then the queued values). For a foreign
 	// currency with no rate yet, fetch for the date; if still unavailable, require one.
