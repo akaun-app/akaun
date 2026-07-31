@@ -1212,6 +1212,21 @@ th.sortable:hover .th-idle { opacity: .5; }
   }
 }
 
+/* Installed PWA on a touchscreen: iOS/Android auto-zoom the whole app shell
+   when a focused text field's font-size is under ~16px, and pinch/double-tap
+   gestures can zoom it further — with no browser chrome to zoom back out
+   with, that reads as the app being broken rather than a normal browser zoom.
+   Neither is an issue in a regular mobile browser tab, where zoom is expected
+   and trivially undone, so both are scoped to standalone + coarse-pointer
+   (touch) only — desktop-installed PWAs and browser tabs are unaffected.
+   !important mirrors the .amount-field pattern above: it needs to win over
+   both Tailwind's utility layer and components' own scoped <style> rules. */
+@media (display-mode: standalone) and (pointer: coarse) {
+  html, body { touch-action: manipulation; }
+
+  input, textarea, select { font-size: 16px !important; }
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) { animation: none; }
 
