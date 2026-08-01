@@ -121,6 +121,14 @@
 	let editRemark = $state('');
 	let editStatus = $state<string>(String(ExpenseStatus.Unpaid));
 
+	// Switching the edit-currency select back to the main currency hides the rate field but
+	// left editExchangeRate holding the stale foreign rate, so a later amount edit was still
+	// converted (mainAmount = amount × exchangeRate) using that stale rate. Keep it pinned to 1
+	// whenever the selected currency is the main currency.
+	$effect(() => {
+		if (editCurrency === mainCurrency()) editExchangeRate = '1';
+	});
+
 	function startEdit() {
 		if (!detailExpense) return;
 		editItemName = detailExpense.itemName;
