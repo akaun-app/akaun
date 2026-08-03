@@ -338,6 +338,9 @@ export const importQueue = sqliteTable('import_queue', {
 	state: integer('state').notNull().default(1),
 	tempFilePath: text('temp_file_path').notNull(),
 	originalFilename: text('original_filename').notNull(),
+	// SHA-256 hex of the raw uploaded bytes, for byte-identical duplicate detection.
+	// Null for rows uploaded before this column existed.
+	fileHash: text('file_hash'),
 	// Caller-supplied text (e.g. from client-side OCR) that skips server-side
 	// extraction/OCR entirely when present. See worker.ts processJob().
 	preExtractedText: text('pre_extracted_text'),

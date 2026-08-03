@@ -175,6 +175,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 		// Duplicate detection
 		const dup = detectDuplicate(db, {
 			originalFilename: job.originalFilename,
+			fileHash: job.fileHash,
 			itemName: result.item_name,
 			supplier: result.supplier,
 			amount: result.amount,

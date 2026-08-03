@@ -28,7 +28,12 @@ export const ImportState = {
 } as const;
 // DocumentType is also used for import_queue.result_type
 export const DocumentType = { Expense: 1, Income: 2 } as const;
-export const DuplicateSignal = { Filename: 1, Reference: 2, AmountDateSupplier: 3 } as const;
+export const DuplicateSignal = {
+	Filename: 1,
+	Reference: 2,
+	AmountDateSupplier: 3,
+	FileHash: 4
+} as const;
 
 // --- reset scope ---
 export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
@@ -88,7 +93,8 @@ export const DocumentTypeLabels: Record<number, string> = {
 export const DuplicateSignalLabels: Record<number, string> = {
 	[DuplicateSignal.Filename]: 'filename',
 	[DuplicateSignal.Reference]: 'reference',
-	[DuplicateSignal.AmountDateSupplier]: 'amount_date_supplier'
+	[DuplicateSignal.AmountDateSupplier]: 'amount_date_supplier',
+	[DuplicateSignal.FileHash]: 'identical_file'
 };
 
 export const ResetScopeLabels: Record<number, string> = {

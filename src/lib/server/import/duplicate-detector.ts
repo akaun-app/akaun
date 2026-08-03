@@ -5,6 +5,7 @@ import { ImportState, DuplicateSignal } from '$lib/enums.js';
 
 type JobSnapshot = {
 	originalFilename: string;
+	fileHash: string | null;
 	itemName: string | null;
 	supplier: string | null;
 	amount: number | null;
@@ -23,19 +24,19 @@ export function detectDuplicate(
 	db: BunSQLiteDatabase<any>,
 	job: JobSnapshot
 ): DuplicateResult {
-	// 1. Filename — another imported queue row with the same original filename.
-	const byFilename = db
-		.select({ id: importQueue.resultId })
-		.from(importQueue)
-		.where(
-			and(
-				eq(importQueue.originalFilename, job.originalFilename),
-				eq(importQueue.state, ImportState.Imported)
+	// 1. File hash — byte-identical re-upload of a file already imported. Strongest
+	// possible signal: two files are the same document regardless of filename/rename.
+	if (job.fileHash) {
+		const byHash = db
+			.select({ id: importQueue.resultId })
+			.from(importQueue)
+			.where(
+				and(eq(importQueue.fileHash, job.fileHash), eq(importQueue.state, ImportState.Imported))
 			)
-		)
-		.get();
-	if (byFilename?.id != null) {
-		return { duplicateOf: byFilename.id, duplicateSignal: DuplicateSignal.Filename };
+			.get();
+		if (byHash?.id != null) {
+			return { duplicateOf: byHash.id, duplicateSignal: DuplicateSignal.FileHash };
+		}
 	}
 
 	// 2. Reference — non-empty reference match in expenses or incomes.
@@ -48,7 +49,31 @@ export function detectDuplicate(
 		if (byIncRef) return { duplicateOf: byIncRef.id, duplicateSignal: DuplicateSignal.Reference };
 	}
 
-	// 3. Amount + date + supplier (matched via the linked contact's legal name).
+	// 3. Filename + amount + date. A shared filename alone isn't a reliable signal —
+	// scanners commonly reuse generic names (e.g. "scan0001.pdf") for unrelated
+	// documents — but combined with a matching extracted amount and date it's a strong
+	// corroborated signal. Reference is deliberately not part of this OR: a reference
+	// match already returns above, so requiring it here would only mask the exact
+	// scanner false-positive (same filename, different reference) this replaces.
+	if (job.amount && job.date) {
+		const byFilename = db
+			.select({ id: importQueue.resultId })
+			.from(importQueue)
+			.where(
+				and(
+					eq(importQueue.originalFilename, job.originalFilename),
+					eq(importQueue.amount, job.amount),
+					eq(importQueue.date, job.date),
+					eq(importQueue.state, ImportState.Imported)
+				)
+			)
+			.get();
+		if (byFilename?.id != null) {
+			return { duplicateOf: byFilename.id, duplicateSignal: DuplicateSignal.Filename };
+		}
+	}
+
+	// 4. Amount + date + supplier (matched via the linked contact's legal name).
 	if (job.amount && job.date && job.supplier) {
 		const byTriple = db
 			.select({ id: expenses.id })

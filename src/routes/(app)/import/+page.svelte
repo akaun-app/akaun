@@ -100,6 +100,11 @@
 	// Store original file references for retry
 	const fileStore = new Map<string, File>();
 
+	// Raw in-progress text for an amount field being typed into, keyed by job id.
+	// Formatting (2 decimals) is only applied on blur — see amountDisplay()/onAmountBlur()
+	// below — so reformatting mid-keystroke doesn't fight the user's cursor/input.
+	let amountDrafts = $state<Record<string, string>>({});
+
 	let drag = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
 
@@ -371,14 +376,17 @@
 	}
 
 	function dupSignalLabel(sig: string | null): string {
-		if (sig === 'filename') return 'filename';
+		if (sig === 'identical_file') return 'identical file';
+		if (sig === 'filename') return 'filename · amount · date';
 		if (sig === 'reference') return 'reference match';
 		return 'supplier · amount · date';
 	}
 
 	function dupMessage(job: Job): string {
+		if (job.duplicateSignal === 'identical_file')
+			return `This exact file was already imported.`;
 		if (job.duplicateSignal === 'filename')
-			return `A file named "${job.originalFilename}" was already imported.`;
+			return `A file named "${job.originalFilename}" with the same amount & date was already imported.`;
 		if (job.duplicateSignal === 'reference')
 			return `Reference ${job.reference} matches an existing record.`;
 		return `Same supplier, amount & date as an existing record.`;
@@ -398,6 +406,24 @@
 	function formatMoney(n: number | null): string {
 		if (n == null) return '—';
 		return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+	}
+
+	// While the user is typing, show their raw text instead of the reformatted amount —
+	// otherwise every keystroke gets rounded to 2dp and stomps the cursor mid-edit.
+	function amountDisplay(job: Job): string {
+		return amountDrafts[job.id] ?? formatMoney(editedValue(job, 'amount') as number);
+	}
+
+	function onAmountInput(jobId: string, e: Event) {
+		const raw = (e.target as HTMLInputElement).value;
+		amountDrafts = { ...amountDrafts, [jobId]: raw };
+		const v = parseFloat(raw.replace(/,/g, ''));
+		if (!isNaN(v)) updateEdit(jobId, 'amount', v);
+	}
+
+	function onAmountBlur(jobId: string) {
+		const { [jobId]: _discard, ...rest } = amountDrafts;
+		amountDrafts = rest;
 	}
 </script>
 
@@ -645,11 +671,9 @@
 									{:else}
 										<AmountInput
 											wrapperClass="sm"
-											value={formatMoney(editedValue(job, 'amount') as number)}
-											oninput={(e) => {
-												const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
-												if (!isNaN(v)) updateEdit(job.id, 'amount', v);
-											}}
+											value={amountDisplay(job)}
+											oninput={(e) => onAmountInput(job.id, e)}
+											onblur={() => onAmountBlur(job.id)}
 										/>
 									{/if}
 								</div>
@@ -679,11 +703,9 @@
 										<AmountInput
 											wrapperClass="sm"
 											prefix={currencySymbol(jobCurrency(job))}
-											value={formatMoney(editedValue(job, 'amount') as number)}
-											oninput={(e) => {
-												const v = parseFloat((e.target as HTMLInputElement).value.replace(/,/g, ''));
-												if (!isNaN(v)) updateEdit(job.id, 'amount', v);
-											}}
+											value={amountDisplay(job)}
+											oninput={(e) => onAmountInput(job.id, e)}
+											onblur={() => onAmountBlur(job.id)}
 										/>
 									</div>
 									<div class="rfield">

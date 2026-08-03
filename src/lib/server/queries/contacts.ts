@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
 import {
@@ -108,6 +108,7 @@ export function listContacts(db: Db, filters: ContactFilters = {}) {
 		.select()
 		.from(contacts)
 		.where(conditions.length ? and(...conditions) : undefined)
+		.orderBy(asc(contacts.legalName))
 		.limit(limit)
 		.offset(offset)
 		.all();

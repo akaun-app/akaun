@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { eq, inArray } from 'drizzle-orm';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
@@ -82,6 +82,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 
 	const tempFilePath = saveToTemp(buffer, file.name);
+	const fileHash = createHash('sha256').update(buffer).digest('hex');
 
 	const jobId = randomUUID();
 	db.insert(importQueue)
@@ -91,6 +92,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			state: ImportState.Queued,
 			tempFilePath,
 			originalFilename: file.name,
+			fileHash,
 			preExtractedText
 		})
 		.run();

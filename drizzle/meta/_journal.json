@@ -43,6 +43,13 @@
       "when": 1782995708124,
       "tag": "0005_open_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785752951968,
+      "tag": "0006_daily_centennial",
+      "breakpoints": true
     }
   ]
 }
