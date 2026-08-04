@@ -19,7 +19,7 @@
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
-	import { Role, importStateEnum, documentTypeEnum, duplicateSignalEnum } from '$lib/enums.js';
+	import { Role, importStateEnum, documentTypeEnum } from '$lib/enums.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
 	import type { PageData } from './$types.js';
@@ -55,7 +55,8 @@
 		category: string | null;
 		remark: string | null;
 		duplicateOf: number | null;
-		duplicateSignal: string | null;
+		duplicateConfidence: number | null;
+		duplicateReasons: string[];
 		error: string | null;
 		// client-side tracking
 		_edits?: Record<string, string | number>;
@@ -69,6 +70,12 @@
 			candidates = j.matchCandidates ? JSON.parse(j.matchCandidates) : [];
 		} catch {
 			candidates = [];
+		}
+		let reasons: string[] = [];
+		try {
+			reasons = j.duplicateReasons ? JSON.parse(j.duplicateReasons) : [];
+		} catch {
+			reasons = [];
 		}
 		return {
 			id: j.id,
@@ -87,7 +94,8 @@
 			category: j.category,
 			remark: j.remark,
 			duplicateOf: j.duplicateOf,
-			duplicateSignal: duplicateSignalEnum.toLabel(j.duplicateSignal),
+			duplicateConfidence: j.duplicateConfidence ?? null,
+			duplicateReasons: reasons,
 			error: j.error,
 			_edits: {}
 		};
@@ -151,7 +159,7 @@
 	const history = $derived(
 		jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state))
 	);
-	const confirmable = $derived(review.filter((j) => !j.duplicateSignal).length);
+	const confirmable = $derived(review.filter((j) => !j.duplicateOf).length);
 	let _es: EventSource | null = null;
 
 	// onMount/onDestroy guarantee exactly one connection per page visit — no reactive re-runs
@@ -265,7 +273,7 @@
 	}
 
 	async function confirmAll() {
-		const toConfirm = review.filter((j) => !j.duplicateSignal);
+		const toConfirm = review.filter((j) => !j.duplicateOf);
 		await Promise.all(toConfirm.map((j) => confirmJob(j.id)));
 	}
 
@@ -375,21 +383,23 @@
 		return Object.keys(job._edits ?? {}).filter((k) => k !== 'document_type').length;
 	}
 
-	function dupSignalLabel(sig: string | null): string {
-		if (sig === 'identical_file') return 'identical file';
-		if (sig === 'filename') return 'filename · amount · date';
-		if (sig === 'reference') return 'reference match';
-		return 'supplier · amount · date';
+	const DUP_REASON_LABELS: Record<string, string> = {
+		file_hash: 'identical file',
+		reference: 'reference',
+		amount: 'amount',
+		date: 'date',
+		supplier: 'supplier',
+		filename: 'filename',
+		content: 'content'
+	};
+
+	function dupReasonsLabel(job: Job): string {
+		return job.duplicateReasons.map((r) => DUP_REASON_LABELS[r] ?? r).join(' · ');
 	}
 
 	function dupMessage(job: Job): string {
-		if (job.duplicateSignal === 'identical_file')
-			return `This exact file was already imported.`;
-		if (job.duplicateSignal === 'filename')
-			return `A file named "${job.originalFilename}" with the same amount & date was already imported.`;
-		if (job.duplicateSignal === 'reference')
-			return `Reference ${job.reference} matches an existing record.`;
-		return `Same supplier, amount & date as an existing record.`;
+		if (job.duplicateReasons.includes('file_hash')) return `This exact file was already imported.`;
+		return `${job.duplicateConfidence}% match on ${dupReasonsLabel(job)} against an existing record.`;
 	}
 
 	function bucketPath(job: Job): string {
@@ -566,7 +576,7 @@
 				<div class="review-list">
 					{#each review as job (job.id)}
 						{@const isIncome = job.documentType === 'income'}
-						{@const dup = !!job.duplicateSignal}
+						{@const dup = !!job.duplicateOf}
 						{@const numEdits = editedCount(job)}
 						<div class="review-card" class:is-dup={dup}>
 							<!-- Header -->
@@ -585,7 +595,7 @@
 								<div class="review-head-right">
 									{#if dup}
 										<span class="dup-badge">
-											<AlertTriangle size={11} /> Duplicate · {dupSignalLabel(job.duplicateSignal)}
+											<AlertTriangle size={11} /> Duplicate · {job.duplicateConfidence}% · {dupReasonsLabel(job)}
 										</span>
 									{/if}
 									<div class="seg sm type-seg">
@@ -811,7 +821,7 @@
 									<span class="skip-check"><X size={11} /></span>
 									<span>{displayTitle(job)}</span>
 								</div>
-								<span class="proc-type">Skipped{job.duplicateSignal ? ' · duplicate' : ''}</span>
+								<span class="proc-type">Skipped{job.duplicateOf ? ' · duplicate' : ''}</span>
 								<span class="skip-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
 							</div>
 						{:else}

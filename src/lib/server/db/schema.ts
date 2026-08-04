@@ -369,8 +369,10 @@ export const importQueue = sqliteTable('import_queue', {
 	category: text('category'),
 	remark: text('remark'),
 	duplicateOf: integer('duplicate_of'),
-	// DuplicateSignal code. See enums.ts.
-	duplicateSignal: integer('duplicate_signal'),
+	// 0-100 weighted-match confidence; set only when duplicateOf is set. See duplicate-detector.ts.
+	duplicateConfidence: integer('duplicate_confidence'),
+	// JSON array of contributing signal labels (e.g. ["reference","content"]), highest-weight first.
+	duplicateReasons: text('duplicate_reasons'),
 	resultId: integer('result_id'),
 	// DocumentType code, mirrors document_type post-confirm.
 	resultType: integer('result_type'),

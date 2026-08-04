@@ -172,6 +172,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
 		log.info({ jobId: job.id, documentType: result.document_type, amount: result.amount, date: result.date }, 'LLM result');
 
+		const docType = documentTypeEnum.fromLabel(result.document_type) ?? DocumentType.Expense;
+
 		// Duplicate detection
 		const dup = detectDuplicate(db, {
 			originalFilename: job.originalFilename,
@@ -180,13 +182,14 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 			supplier: result.supplier,
 			amount: result.amount,
 			date: result.date,
-			reference: result.reference
+			reference: result.reference,
+			extractedText: text,
+			documentType: docType
 		});
 
 		// Contact resolution — deterministic backend step (LLM is never given the
 		// contact list). For an expense the party is the supplier; for income the
 		// payer/customer is carried in item_name (supplier holds the description).
-		const docType = documentTypeEnum.fromLabel(result.document_type) ?? DocumentType.Expense;
 		const role = docType === DocumentType.Income ? Role.Customer : Role.Supplier;
 		const partyName = docType === DocumentType.Income ? result.item_name : result.supplier;
 		const { matchedId, candidates } = resolveContactCandidates(db, partyName ?? '', role);
@@ -218,7 +221,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 				reference: result.reference,
 				category: result.category,
 				duplicateOf: dup?.duplicateOf ?? null,
-				duplicateSignal: dup?.duplicateSignal ?? null,
+				duplicateConfidence: dup?.confidence ?? null,
+				duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,
 				processedAt: now
 			})
 			.where(eq(importQueue.id, job.id))
