@@ -59,16 +59,24 @@
 			.catch(() => (results = []));
 	});
 
-	// Merge fuzzy suggestions ahead of live results (dedup by id).
+	// Merge fuzzy suggestions ahead of live results (dedup by id). Suggestions keep their
+	// score order (relevant "did you mean" hints); the rest is sorted alphabetically.
 	const shown = $derived.by(() => {
 		const seen = new Set<number>();
-		const out: Candidate[] = [];
-		for (const c of [...suggestions, ...results]) {
+		const suggested: Candidate[] = [];
+		for (const c of suggestions) {
 			if (seen.has(c.id)) continue;
 			seen.add(c.id);
-			out.push(c);
+			suggested.push(c);
 		}
-		return out;
+		const rest: Candidate[] = [];
+		for (const c of results) {
+			if (seen.has(c.id)) continue;
+			seen.add(c.id);
+			rest.push(c);
+		}
+		rest.sort((a, b) => a.legalName.localeCompare(b.legalName, undefined, { sensitivity: 'base' }));
+		return [...suggested, ...rest];
 	});
 
 	const typed = $derived(query.trim());
@@ -160,6 +168,15 @@
 		<div
 			class="bg-popover text-popover-foreground ring-foreground/10 absolute top-[calc(100%+4px)] left-0 right-0 z-50 max-h-64 overflow-y-auto rounded-lg p-1.5 shadow-md ring-1"
 		>
+			{#if showCreate}
+				<button
+					type="button"
+					class="hover:bg-accent text-primary block w-full rounded-md px-2 py-1.5 text-left text-sm"
+					onclick={createNew}
+				>
+					Create "{typed}"
+				</button>
+			{/if}
 			{#each shown as c (c.id)}
 				<button
 					type="button"
@@ -173,15 +190,6 @@
 					<div class="text-muted-foreground px-2 py-1.5 text-sm">No matching contacts</div>
 				{/if}
 			{/each}
-			{#if showCreate}
-				<button
-					type="button"
-					class="hover:bg-accent text-primary block w-full rounded-md px-2 py-1.5 text-left text-sm"
-					onclick={createNew}
-				>
-					Create "{typed}"
-				</button>
-			{/if}
 		</div>
 	{/if}
 </div>

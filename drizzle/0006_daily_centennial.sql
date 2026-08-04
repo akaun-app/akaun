@@ -1,0 +1,1 @@
+ALTER TABLE `import_queue` ADD `file_hash` text;

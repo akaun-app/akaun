@@ -338,6 +338,9 @@ export const importQueue = sqliteTable('import_queue', {
 	state: integer('state').notNull().default(1),
 	tempFilePath: text('temp_file_path').notNull(),
 	originalFilename: text('original_filename').notNull(),
+	// SHA-256 hex of the raw uploaded bytes, for byte-identical duplicate detection.
+	// Null for rows uploaded before this column existed.
+	fileHash: text('file_hash'),
 	// Caller-supplied text (e.g. from client-side OCR) that skips server-side
 	// extraction/OCR entirely when present. See worker.ts processJob().
 	preExtractedText: text('pre_extracted_text'),
@@ -366,8 +369,10 @@ export const importQueue = sqliteTable('import_queue', {
 	category: text('category'),
 	remark: text('remark'),
 	duplicateOf: integer('duplicate_of'),
-	// DuplicateSignal code. See enums.ts.
-	duplicateSignal: integer('duplicate_signal'),
+	// 0-100 weighted-match confidence; set only when duplicateOf is set. See duplicate-detector.ts.
+	duplicateConfidence: integer('duplicate_confidence'),
+	// JSON array of contributing signal labels (e.g. ["reference","content"]), highest-weight first.
+	duplicateReasons: text('duplicate_reasons'),
 	resultId: integer('result_id'),
 	// DocumentType code, mirrors document_type post-confirm.
 	resultType: integer('result_type'),

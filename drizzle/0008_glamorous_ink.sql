@@ -1,0 +1,1 @@
+ALTER TABLE `import_queue` DROP COLUMN `duplicate_signal`;

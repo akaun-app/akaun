@@ -28,7 +28,6 @@ export const ImportState = {
 } as const;
 // DocumentType is also used for import_queue.result_type
 export const DocumentType = { Expense: 1, Income: 2 } as const;
-export const DuplicateSignal = { Filename: 1, Reference: 2, AmountDateSupplier: 3 } as const;
 
 // --- reset scope ---
 export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
@@ -44,7 +43,6 @@ export type ExpenseStatusCode = (typeof ExpenseStatus)[keyof typeof ExpenseStatu
 export type ClaimStatusCode = (typeof ClaimStatus)[keyof typeof ClaimStatus];
 export type ImportStateCode = (typeof ImportState)[keyof typeof ImportState];
 export type DocumentTypeCode = (typeof DocumentType)[keyof typeof DocumentType];
-export type DuplicateSignalCode = (typeof DuplicateSignal)[keyof typeof DuplicateSignal];
 export type ResetScopeCode = (typeof ResetScope)[keyof typeof ResetScope];
 
 export const EntityTypeLabels: Record<number, string> = {
@@ -85,12 +83,6 @@ export const DocumentTypeLabels: Record<number, string> = {
 	[DocumentType.Income]: 'income'
 };
 
-export const DuplicateSignalLabels: Record<number, string> = {
-	[DuplicateSignal.Filename]: 'filename',
-	[DuplicateSignal.Reference]: 'reference',
-	[DuplicateSignal.AmountDateSupplier]: 'amount_date_supplier'
-};
-
 export const ResetScopeLabels: Record<number, string> = {
 	[ResetScope.Settings]: 'settings',
 	[ResetScope.Data]: 'data',
@@ -123,7 +115,6 @@ export const expenseStatusEnum = makeEnum(ExpenseStatusLabels);
 export const claimStatusEnum = makeEnum(ClaimStatusLabels);
 export const importStateEnum = makeEnum(ImportStateLabels);
 export const documentTypeEnum = makeEnum(DocumentTypeLabels);
-export const duplicateSignalEnum = makeEnum(DuplicateSignalLabels);
 export const resetScopeEnum = makeEnum(ResetScopeLabels);
 
 // --- quotations ---
