@@ -54,7 +54,8 @@
 		{ id: 'income', label: 'Income' },
 		{ id: 'claims', label: 'Claims' },
 		{ id: 'import', label: 'Auto Import' },
-		{ id: 'contacts', label: 'Contacts' }
+		{ id: 'contacts', label: 'Contacts' },
+		{ id: 'reconciliation', label: 'Reconciliation' }
 	] as const;
 	const ACTIONS = ['view', 'add', 'change', 'delete'] as const;
 

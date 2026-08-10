@@ -9,7 +9,7 @@ import {
 	invoices,
 	contacts
 } from '../db/schema.js';
-import { extractText, inferMimeType } from '../import/extractor.js';
+import { extractText, inferMimeType } from '../extraction/document-text.js';
 import { urlForFile } from '../file-storage.js';
 import { createLogger } from '../logger.js';
 import { searchRebuildEvents } from './events.js';

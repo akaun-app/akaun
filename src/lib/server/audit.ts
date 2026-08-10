@@ -5,7 +5,14 @@ import { auditLog, users } from './db/schema.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<any>;
 
-export type RecordType = 'expense' | 'income' | 'claim' | 'contact' | 'quotation' | 'invoice';
+export type RecordType =
+	| 'expense'
+	| 'income'
+	| 'claim'
+	| 'contact'
+	| 'quotation'
+	| 'invoice'
+	| 'reconciliation';
 export type AuditAction = 'create' | 'update' | 'delete';
 export type FieldChange = { field: string; before: unknown; after: unknown };
 

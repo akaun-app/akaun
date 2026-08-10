@@ -50,6 +50,8 @@ The consolidated Settings page (`src/routes/(app)/settings/+page.svelte`) establ
 
 Every record-detail and create/edit drawer (claims, contacts, expenses, income, etc.) is built on the shared `Sheet` primitive (`$lib/components/ui/sheet`, a bits-ui `Dialog` wrapper) and must follow this shape. The goal is that a user can't tell which feature they're in from the drawer chrome alone.
 
+**Named exception — task workspaces:** A route whose primary purpose is a multi-step working surface may use a full-page workspace instead of a drawer/detail sheet. The reconciliation matching route, `/reconciliation/[id]/match`, is the reference exception: matching needs simultaneous access to bank transactions, candidate records, selection state, and reconciliation actions, so the available width and persistent context of a full workspace are essential. This exception changes only the visual treatment; each workspace must still have its own real, deep-linkable and shareable URL, and navigation to it must preserve the deep-link rules documented below.
+
 **Shell**
 - Desktop: slides in from the right, `width: 500px; max-width: 95vw`.
 - Always include `gap:0;` in the `Sheet.Content` inline `style=`. The base `sheet-content.svelte` ships a Tailwind `gap-4` (16px) flex gap between its children; since header/body/footer already control their own spacing via padding, the extra flex gap just adds unwanted dead space above the hero amount/first field.

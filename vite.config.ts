@@ -104,6 +104,7 @@ export default defineConfig({
 			'@lucide/svelte/icons/loader-2',
 			'@lucide/svelte/icons/minus',
 			'@lucide/svelte/icons/octagon-x',
+			'@lucide/svelte/icons/scale',
 			'@lucide/svelte/icons/triangle-alert',
 			'@lucide/svelte/icons/x',
 

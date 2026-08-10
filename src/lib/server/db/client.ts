@@ -67,7 +67,9 @@ const SEED_GROUPS = [
 			contacts: { canView: true, canAdd: true, canChange: true, canDelete: false },
 			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
 			quotations: { canView: true, canAdd: true, canChange: true, canDelete: false },
-			invoices: { canView: true, canAdd: true, canChange: true, canDelete: false }
+			invoices: { canView: true, canAdd: true, canChange: true, canDelete: false },
+			// reconciliation added Phase 8 — existing deployments: add perms manually in Settings → Users & Groups
+			reconciliation: { canView: true, canAdd: true, canChange: true, canDelete: false }
 		}
 	},
 	{
@@ -82,7 +84,9 @@ const SEED_GROUPS = [
 			contacts: { canView: true, canAdd: true, canChange: false, canDelete: false },
 			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
 			quotations: { canView: false, canAdd: true, canChange: false, canDelete: false },
-			invoices: { canView: false, canAdd: true, canChange: false, canDelete: false }
+			invoices: { canView: false, canAdd: true, canChange: false, canDelete: false },
+			// reconciliation added Phase 8 — existing deployments: add perms manually in Settings → Users & Groups
+			reconciliation: { canView: false, canAdd: false, canChange: false, canDelete: false }
 		}
 	},
 	{
@@ -97,7 +101,9 @@ const SEED_GROUPS = [
 			contacts: { canView: true, canAdd: false, canChange: false, canDelete: false },
 			// quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
 			quotations: { canView: true, canAdd: false, canChange: false, canDelete: false },
-			invoices: { canView: true, canAdd: false, canChange: false, canDelete: false }
+			invoices: { canView: true, canAdd: false, canChange: false, canDelete: false },
+			// reconciliation added Phase 8 — existing deployments: add perms manually in Settings → Users & Groups
+			reconciliation: { canView: true, canAdd: false, canChange: false, canDelete: false }
 		}
 	}
 ];

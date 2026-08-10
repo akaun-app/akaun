@@ -185,7 +185,10 @@
 		| { type: 'claim-update'; item: (typeof data.claims)[0] }
 		| { type: 'claim-delete'; id: number };
 	createResourceStream<ClaimStreamMsg>('/api/claims/stream', (msg) => {
-		if (msg.type === 'claim-update') claims = mergeById(claims, [msg.item]);
+		if (msg.type === 'claim-update') {
+			claims = mergeById(claims, [msg.item]);
+			if (detailClaim?.id === msg.item.id) detailClaim = { ...detailClaim, ...msg.item };
+		}
 		else if (msg.type === 'claim-delete') claims = claims.filter((c) => c.id !== msg.id);
 	});
 
@@ -210,6 +213,14 @@
 			history.back();
 		} else {
 			goto(resolve('/claims'), { replaceState: true, noScroll: true });
+		}
+	}
+
+	function openClaimReconciliation(claim: ClaimRow) {
+		if (claim.clearedSessionId !== null) {
+			goto(resolve('/(app)/reconciliation/[id]', { id: String(claim.clearedSessionId) }));
+		} else {
+			goto(resolve('/reconciliation'));
 		}
 	}
 
@@ -495,6 +506,29 @@
 								{formatDate(detailClaim.date)}
 							</span>
 						</div>
+
+						<div class="detail-section-label">Bank reconciliation</div>
+						<button
+							type="button"
+							class="claim-exp related-link"
+							onclick={() => openClaimReconciliation(detailClaim!)}
+						>
+							<span
+								aria-hidden="true"
+								style="width:32px; height:32px; border-radius:8px; display:grid; place-items:center; flex-shrink:0; color:{detailClaim.cleared ? 'var(--green)' : 'var(--muted-foreground)'}; background:{detailClaim.cleared ? 'var(--green-soft)' : 'var(--muted)'};"
+							>
+								<CheckCircle size={16} />
+							</span>
+							<div class="claim-exp-main">
+								<div class="claim-exp-name">{detailClaim.cleared ? 'Cleared' : 'Not cleared'}</div>
+								<div class="claim-exp-sub">
+									{detailClaim.cleared
+										? `Reimbursement cleared in reconciliation #${detailClaim.clearedSessionId}`
+										: 'Reconcile this reimbursement as a whole'}
+								</div>
+							</div>
+							<ChevronRight size={13} class="claim-exp-chevron" />
+						</button>
 
 						<div class="detail-section-label">
 							Expenses in this claim ({detailClaim.expenses.length})

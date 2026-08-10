@@ -1,6 +1,7 @@
 node_modules/
 .svelte-kit/
 build/
+coverage/
 /data/
 .env
 .env.local
@@ -9,5 +10,7 @@ build/
 .env.production
 .git/
 .gitignore
+Dockerfile*
+.dockerignore
 *.md
 *.traineddata

@@ -1,4 +1,14 @@
-import { LayoutDashboard, Wallet, TrendingUp, FileText, Upload, Users, ScrollText, Receipt } from '@lucide/svelte';
+import {
+	LayoutDashboard,
+	Wallet,
+	TrendingUp,
+	FileText,
+	Upload,
+	Users,
+	ScrollText,
+	Receipt,
+	Scale
+} from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type { ResourceName } from '$lib/server/permissions.js';
 
@@ -18,7 +28,14 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
 	{ id: 'quotations', label: 'Quotations', href: '/quotations', Icon: ScrollText, resource: 'quotations' },
 	{ id: 'invoices', label: 'Invoices', href: '/invoices', Icon: Receipt, resource: 'invoices' },
 	{ id: 'contacts', label: 'Contacts', href: '/contacts', Icon: Users, resource: 'contacts' },
-	{ id: 'import', label: 'Auto Import', href: '/import', Icon: Upload, resource: 'import' }
+	{ id: 'import', label: 'Auto Import', href: '/import', Icon: Upload, resource: 'import' },
+	{
+		id: 'reconciliation',
+		label: 'Reconciliation',
+		href: '/reconciliation',
+		Icon: Scale,
+		resource: 'reconciliation'
+	}
 ];
 
 export const MAX_MOBILE_NAV_ITEMS = 5;

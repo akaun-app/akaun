@@ -1,7 +1,4 @@
 import { generateObject, generateText, APICallError } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createGroq } from "@ai-sdk/groq";
 import type { LanguageModel } from "ai";
 import { createLogger } from "../../logger.js";
 import {
@@ -10,21 +7,17 @@ import {
   buildUserPrompt,
   postProcess,
 } from "./shared.js";
-import type { LLMCallParams, LLMResult, ProviderType } from "./types.js";
-import { throttleLLMCall } from "../rate-limiter.js";
+import type { LLMCallParams, LLMResult } from "./types.js";
+import { throttleLLMCall } from "../../llm/rate-limiter.js";
+import { createModel, type LLMProviderConfig } from "../../llm/model-factory.js";
+import { withRetry } from "../../llm/retry.js";
 
 export type { LLMResult, LLMCallParams, ProviderType } from "./types.js";
 export type { ModelInfo } from "./types.js";
 
 const log = createLogger("import:llm");
 
-interface ProviderConfig {
-  type: string;
-  model: string;
-  apiKey: string;
-  baseUrl?: string | null;
-  name: string;
-}
+type ProviderConfig = LLMProviderConfig;
 
 // Models confirmed at runtime not to support json_schema. Keyed "type:model".
 // Resets on server restart; warm-up cost is one failed attempt per unsupported model.
@@ -32,22 +25,6 @@ const jsonSchemaUnsupportedModels = new Set<string>();
 
 function cacheKey(config: ProviderConfig): string {
   return `${config.type}:${config.model}`;
-}
-
-function createModel(config: ProviderConfig): LanguageModel {
-  switch (config.type as ProviderType) {
-    case "openrouter":
-      return createOpenAI({
-        baseURL: config.baseUrl ?? "https://openrouter.ai/api/v1",
-        apiKey: config.apiKey,
-      })(config.model);
-    case "google_ai_studio":
-      return createGoogleGenerativeAI({ apiKey: config.apiKey })(config.model);
-    case "groq":
-      return createGroq({ apiKey: config.apiKey })(config.model);
-    default:
-      throw new Error(`Unknown provider type: ${config.type}`);
-  }
 }
 
 async function callWithStructuredFallback(
@@ -111,33 +88,6 @@ function extractJsonFromText(text: string): string {
     }
   }
   throw new Error(`Unclosed JSON object in LLM text response: ${text.slice(0, 200)}`);
-}
-
-async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxAttempts - 1 && isRetryableHttpError(err)) {
-        const waitMs = Math.pow(2, attempt) * 1000;
-        log.warn({ attempt, waitMs }, "Transient provider error, retrying");
-        await new Promise((r) => setTimeout(r, waitMs));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr;
-}
-
-function isRetryableHttpError(err: unknown): boolean {
-  if (APICallError.isInstance(err)) {
-    const s = err.statusCode;
-    return s === 429 || (s !== undefined && s >= 500);
-  }
-  return false;
 }
 
 function isAuthError(message: string): boolean {

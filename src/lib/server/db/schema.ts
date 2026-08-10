@@ -514,3 +514,111 @@ export const auditLog = sqliteTable(
 	},
 	(t) => [index('audit_log_record_idx').on(t.recordType, t.recordId, t.createdAt)]
 );
+
+// ---------------------------------------------------------------------------
+// Reconciliation — checks the ledger against a bank statement without changing
+// the cash-basis single-entry model. No column is added to expenses, incomes,
+// or claims: cleared state lives in reconciliation_item_state, keyed
+// polymorphically the same way audit_log is.
+// See specs/001-bank-reconciliation/data-model.md.
+// ---------------------------------------------------------------------------
+export const reconciliationSessions = sqliteTable(
+	'reconciliation_sessions',
+	{
+		// Also the chain order — "the most recent session" is the highest id.
+		// Period dates can overlap, so they cannot order the chain; creation can.
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		startingBalance: real('starting_balance').notNull(),
+		// YYYY-MM-DD — the date the starting balance is true as of.
+		startingDate: text('starting_date').notNull(),
+		// YYYY-MM-DD — upper bound of the uncleared-to-date sweep.
+		periodEndDate: text('period_end_date').notNull(),
+		statementEndingBalance: real('statement_ending_balance').notNull(),
+		// Snapshot of the Step 1 result at close. Null while open.
+		computedBalance: real('computed_balance'),
+		// ReconSessionStatus code (1 = open, 2 = closed matched, 3 = closed with
+		// leftovers). See enums.ts.
+		status: integer('status').notNull().default(1),
+		// Snapshots taken at close, never re-derived — re-deriving later would give
+		// a different answer once new back-dated records exist, silently rewriting
+		// history.
+		clearedCount: integer('cleared_count').notNull().default(0),
+		unclearedCount: integer('uncleared_count').notNull().default(0),
+		unmatchedLineCount: integer('unmatched_line_count').notNull().default(0),
+		// StatementExtractionState code for the latest upload. See enums.ts.
+		statementState: integer('statement_state').notNull().default(1),
+		// User-facing explanation when statementState is Failed.
+		statementError: text('statement_error'),
+		// Cleared again on reopen.
+		closedAt: text('closed_at'),
+		createdBy: integer('created_by').references(() => users.id),
+		updatedBy: integer('updated_by').references(() => users.id),
+		createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+	},
+	(t) => [index('reconciliation_sessions_status_idx').on(t.status)]
+);
+
+export const bankStatementLines = sqliteTable(
+	'bank_statement_lines',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		sessionId: integer('session_id')
+			.notNull()
+			.references(() => reconciliationSessions.id, { onDelete: 'cascade' }),
+		date: text('date').notNull(),
+		description: text('description').notNull().default(''),
+		// Always positive; the sign is carried by `direction`.
+		amount: real('amount').notNull(),
+		// StatementDirection code (1 = in, 2 = out). See enums.ts.
+		direction: integer('direction').notNull(),
+		// ReconItemType code. Non-null ⟺ the line is cleared — there is no separate
+		// `cleared` column, so two fields can never disagree.
+		matchedItemType: integer('matched_item_type'),
+		// No FK: the reference must survive deletion of the record it points at.
+		matchedItemId: integer('matched_item_id'),
+		note: text('note').notNull().default(''),
+		// Relative path of the uploaded statement; null when added by hand.
+		sourceFile: text('source_file'),
+		createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+	},
+	(t) => [index('bank_statement_lines_session_idx').on(t.sessionId, t.date)]
+);
+
+export const reconciliationItemState = sqliteTable(
+	'reconciliation_item_state',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		// ReconItemType code. See enums.ts.
+		itemType: integer('item_type').notNull(),
+		// Polymorphic, no FK — the row must survive deletion of the ledger record
+		// it points at, because that survival is what makes post-close drift
+		// detectable.
+		itemId: integer('item_id').notNull(),
+		// SET NULL, not CASCADE: deleting a session returns its items to uncleared
+		// without destroying leftover annotations, which describe the item and
+		// outlive any one session.
+		clearedSessionId: integer('cleared_session_id').references(
+			() => reconciliationSessions.id,
+			{ onDelete: 'set null' }
+		),
+		clearedLineId: integer('cleared_line_id').references(() => bankStatementLines.id, {
+			onDelete: 'set null'
+		}),
+		// Main-currency value at the moment of clearing — the drift-detection baseline.
+		clearedAmount: real('cleared_amount'),
+		clearedAt: text('cleared_at'),
+		// LeftoverAnnotation code. See enums.ts.
+		annotation: integer('annotation'),
+		annotationSessionId: integer('annotation_session_id').references(
+			() => reconciliationSessions.id,
+			{ onDelete: 'set null' }
+		),
+		annotationNote: text('annotation_note').notNull().default(''),
+		updatedBy: integer('updated_by').references(() => users.id),
+		updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`)
+	},
+	(t) => [
+		uniqueIndex('reconciliation_item_state_item_idx').on(t.itemType, t.itemId),
+		index('reconciliation_item_state_session_idx').on(t.clearedSessionId)
+	]
+);

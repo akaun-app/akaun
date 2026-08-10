@@ -6,7 +6,7 @@ import { createLogger } from '../logger.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
 import { getCategories } from '../queries/categories.js';
 import { getEnabledProviders, insertProvider } from '../llmProviders.js';
-import { extractText, inferMimeType } from './extractor.js';
+import { extractText, inferMimeType } from '../extraction/document-text.js';
 import { callLLMWithProviders } from './llm.js';
 import { detectDuplicate } from './duplicate-detector.js';
 import { importEvents } from './events.js';

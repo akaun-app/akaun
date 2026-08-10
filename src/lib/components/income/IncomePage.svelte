@@ -13,7 +13,10 @@
 		X,
 		Paperclip,
 		Upload,
-		Trash2
+		Trash2,
+		Circle,
+		CircleCheck,
+		ChevronRight
 	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
@@ -810,6 +813,34 @@
 						<div class="detail-statusrow">
 							<StatusBadge status="received" />
 						</div>
+						<div class="detail-section-label">Bank reconciliation</div>
+						<button
+							type="button"
+							class="related-link reconciliation-control"
+							onclick={() => {
+								const sessionId = detailIncome?.clearedSessionId;
+								goto(
+									sessionId
+										? resolve('/(app)/reconciliation/[id]', { id: String(sessionId) })
+										: resolve('/reconciliation')
+								);
+							}}
+						>
+							<span class:cleared={detailIncome.cleared} class="reconciliation-control-icon">
+								{#if detailIncome.cleared}<CircleCheck size={17} />{:else}<Circle size={17} />{/if}
+							</span>
+							<span class="reconciliation-control-copy">
+								<span class="reconciliation-control-title">
+									{detailIncome.cleared ? 'Cleared' : 'Not cleared'}
+								</span>
+								<span class="reconciliation-control-sub">
+									{detailIncome.cleared
+										? `Matched in reconciliation #${detailIncome.clearedSessionId}`
+										: 'Match this income to a bank statement line'}
+								</span>
+							</span>
+							<ChevronRight size={14} class="reconciliation-control-chevron" />
+						</button>
 						<div class="detail-list">
 							<div class="detail-row">
 								<div class="detail-key">Customer</div>
@@ -864,6 +895,61 @@
 		</Sheet.Content>
 	</Sheet.Portal>
 </Sheet.Root>
+
+<style>
+	.reconciliation-control {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		gap: 11px;
+		margin-bottom: 16px;
+		padding: 11px 12px;
+		text-align: left;
+	}
+
+	.reconciliation-control-icon {
+		display: grid;
+		width: 32px;
+		height: 32px;
+		flex: 0 0 32px;
+		place-items: center;
+		border-radius: 8px;
+		background: var(--secondary);
+		color: var(--muted-foreground);
+	}
+
+	.reconciliation-control-icon.cleared {
+		background: var(--green-soft);
+		color: var(--green);
+	}
+
+	.reconciliation-control-copy {
+		display: flex;
+		min-width: 0;
+		flex: 1;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.reconciliation-control-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--foreground);
+	}
+
+	.reconciliation-control-sub {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+	}
+
+	.reconciliation-control-chevron {
+		flex: none;
+		color: var(--muted-foreground);
+	}
+</style>
 
 {#if detailIncome}
 	<ConfirmDialog

@@ -44,6 +44,22 @@ export function saveToTemp(buffer: Buffer, originalFilename: string): string {
 	return rel;
 }
 
+export function saveReconciliationStatement(
+	buffer: Buffer,
+	sessionId: number,
+	originalFilename: string
+): string {
+	if (!Number.isInteger(sessionId) || sessionId <= 0) throw new Error('Invalid reconciliation session');
+	const safeName = basename(originalFilename).replace(/[^a-zA-Z0-9._-]/g, '_');
+	const rel = join('reconciliation', String(sessionId), `${randomUUID()}_${safeName}`);
+	const abs = resolve(STORAGE_PATH, rel);
+	const root = resolve(STORAGE_PATH);
+	if (!abs.startsWith(root + sep)) throw new Error('Resolved destination escapes storage root');
+	mkdirSync(dirname(abs), { recursive: true });
+	writeFileSync(abs, buffer);
+	return rel;
+}
+
 export function moveToFinal(
 	tempRelPath: string,
 	type: 'expenses' | 'income' | 'claims',
@@ -125,6 +141,14 @@ export function listTemplateAssets(templateUuid: string): string[] {
 /** Delete the entire asset folder for a template (called on template DELETE). */
 export function deleteTemplateAssetFolder(templateUuid: string): void {
 	const dir = join(STORAGE_PATH, 'templates', templateUuid);
+	if (existsSync(dir)) rmSync(dir, { recursive: true });
+}
+
+export function deleteReconciliationFolder(sessionId: number): void {
+	if (!Number.isInteger(sessionId) || sessionId <= 0) return;
+	const dir = resolve(STORAGE_PATH, 'reconciliation', String(sessionId));
+	const root = resolve(STORAGE_PATH, 'reconciliation');
+	if (!dir.startsWith(root + sep)) return;
 	if (existsSync(dir)) rmSync(dir, { recursive: true });
 }
 

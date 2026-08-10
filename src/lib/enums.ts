@@ -154,6 +154,63 @@ export const TemplateDocumentTypeLabels: Record<number, string> = {
 };
 export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
 
+// --- reconciliation ---
+// Which ledger table a polymorphic reconciliation reference points at. `Expense`
+// is only ever a DIRECT (unclaimed) expense — a claimed one rides inside its claim.
+export const ReconItemType = { Expense: 1, Claim: 2, Income: 3 } as const;
+// ClosedMatched = tied out at Step 1; ClosedWithLeftovers = escalated to the
+// line-by-line workspace and closed with leftovers on one or both sides.
+export const ReconSessionStatus = { Open: 1, ClosedMatched: 2, ClosedWithLeftovers: 3 } as const;
+// Statement amounts are stored positive; the sign lives here.
+export const StatementDirection = { In: 1, Out: 2 } as const;
+// NotYetCleared = a timing difference, the item stays in scope. WillNotClear =
+// never a bank transaction, excluded from the computation and from leftovers.
+export const LeftoverAnnotation = { NotYetCleared: 1, WillNotClear: 2 } as const;
+// Progress of the most recent statement upload into a session.
+export const StatementExtractionState = { Idle: 1, Extracting: 2, Ready: 3, Failed: 4 } as const;
+
+export type ReconItemTypeCode = (typeof ReconItemType)[keyof typeof ReconItemType];
+export type ReconSessionStatusCode = (typeof ReconSessionStatus)[keyof typeof ReconSessionStatus];
+export type StatementDirectionCode = (typeof StatementDirection)[keyof typeof StatementDirection];
+export type LeftoverAnnotationCode = (typeof LeftoverAnnotation)[keyof typeof LeftoverAnnotation];
+export type StatementExtractionStateCode =
+	(typeof StatementExtractionState)[keyof typeof StatementExtractionState];
+
+export const ReconItemTypeLabels: Record<number, string> = {
+	[ReconItemType.Expense]: 'expense',
+	[ReconItemType.Claim]: 'claim',
+	[ReconItemType.Income]: 'income'
+};
+
+export const ReconSessionStatusLabels: Record<number, string> = {
+	[ReconSessionStatus.Open]: 'open',
+	[ReconSessionStatus.ClosedMatched]: 'matched',
+	[ReconSessionStatus.ClosedWithLeftovers]: 'leftovers'
+};
+
+export const StatementDirectionLabels: Record<number, string> = {
+	[StatementDirection.In]: 'in',
+	[StatementDirection.Out]: 'out'
+};
+
+export const LeftoverAnnotationLabels: Record<number, string> = {
+	[LeftoverAnnotation.NotYetCleared]: 'not_yet_cleared',
+	[LeftoverAnnotation.WillNotClear]: 'will_not_clear'
+};
+
+export const StatementExtractionStateLabels: Record<number, string> = {
+	[StatementExtractionState.Idle]: 'idle',
+	[StatementExtractionState.Extracting]: 'extracting',
+	[StatementExtractionState.Ready]: 'ready',
+	[StatementExtractionState.Failed]: 'failed'
+};
+
+export const reconItemTypeEnum = makeEnum(ReconItemTypeLabels);
+export const reconSessionStatusEnum = makeEnum(ReconSessionStatusLabels);
+export const statementDirectionEnum = makeEnum(StatementDirectionLabels);
+export const leftoverAnnotationEnum = makeEnum(LeftoverAnnotationLabels);
+export const statementExtractionStateEnum = makeEnum(StatementExtractionStateLabels);
+
 export const TemplateFont = { Inter: 1, Roboto: 2, Lato: 3, Merriweather: 4 } as const;
 export type TemplateFontCode = (typeof TemplateFont)[keyof typeof TemplateFont];
 export const TemplateFontLabels: Record<number, string> = {

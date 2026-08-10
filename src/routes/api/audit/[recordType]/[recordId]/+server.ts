@@ -10,7 +10,8 @@ const RESOURCE_BY_RECORD_TYPE: Record<RecordType, ResourceName> = {
 	claim: 'claims',
 	contact: 'contacts',
 	quotation: 'quotations',
-	invoice: 'invoices'
+	invoice: 'invoices',
+	reconciliation: 'reconciliation'
 };
 
 export const GET: RequestHandler = ({ locals, params }) => {

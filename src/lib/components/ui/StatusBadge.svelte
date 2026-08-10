@@ -27,7 +27,12 @@
 		cancelled: { label: 'Cancelled', tone: 'red' },
 		// Derived statuses (never stored, computed at read time)
 		expired: { label: 'Expired', tone: 'amber' },
-		overdue: { label: 'Overdue', tone: 'red' }
+		overdue: { label: 'Overdue', tone: 'red' },
+		// Reconciliation statuses are passed by label because their integer codes
+		// overlap the expense status codes above.
+		open: { label: 'Open', tone: 'blue' },
+		matched: { label: 'Matched', tone: 'green' },
+		leftovers: { label: 'Leftovers', tone: 'amber' }
 	};
 
 	const m = $derived(

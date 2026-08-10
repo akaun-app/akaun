@@ -1,12 +1,32 @@
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
+import { alias } from 'drizzle-orm/sqlite-core';
 import * as schema from '../db/schema.js';
-import { claims, claimAttachments, expenses, contacts } from '../db/schema.js';
+import {
+	claims,
+	claimAttachments,
+	expenses,
+	contacts,
+	reconciliationItemState
+} from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
-import { ClaimStatus, ExpenseStatus } from '$lib/enums.js';
+import { ClaimStatus, ExpenseStatus, ReconItemType } from '$lib/enums.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
+
+const claimReconciliationState = alias(reconciliationItemState, 'claim_reconciliation_state');
+
+const claimWithReconciliationState = {
+	...getTableColumns(claims),
+	cleared: sql<boolean>`${claimReconciliationState.clearedSessionId} is not null`.mapWith(Boolean),
+	clearedSessionId: claimReconciliationState.clearedSessionId
+};
+
+const claimReconciliationJoin = and(
+	eq(claimReconciliationState.itemType, ReconItemType.Claim),
+	eq(claimReconciliationState.itemId, claims.id)
+);
 
 // Minimal expense projection for the claim view (does not leak full expense detail).
 function claimExpensesFor(db: Db, claimId: number) {
@@ -33,7 +53,12 @@ function claimExpensesFor(db: Db, claimId: number) {
 }
 
 export function listClaims(db: Db) {
-	const rows = db.select().from(claims).orderBy(desc(claims.date)).all();
+	const rows = db
+		.select(claimWithReconciliationState)
+		.from(claims)
+		.leftJoin(claimReconciliationState, claimReconciliationJoin)
+		.orderBy(desc(claims.date))
+		.all();
 
 	return rows.map((claim) => {
 		const claimExpenses = claimExpensesFor(db, claim.id);
@@ -44,7 +69,12 @@ export function listClaims(db: Db) {
 }
 
 export function getClaim(db: Db, id: number) {
-	const claim = db.select().from(claims).where(eq(claims.id, id)).get();
+	const claim = db
+		.select(claimWithReconciliationState)
+		.from(claims)
+		.leftJoin(claimReconciliationState, claimReconciliationJoin)
+		.where(eq(claims.id, id))
+		.get();
 	if (!claim) return null;
 
 	const claimExpenses = claimExpensesFor(db, id);

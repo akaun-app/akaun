@@ -946,7 +946,7 @@
 							{/if}
 						</div>
 						{#if detailExpense.claimId}
-							<div class="detail-section-label">Linked claim</div>
+							<div class="detail-section-label">Cleared via claim</div>
 							<button
 								type="button"
 								class="linked-claim-card related-link"
@@ -960,9 +960,40 @@
 											status={detailExpense.claimStatus === ClaimStatus.Done ? 'claimed' : 'pending'}
 										/>
 									</div>
-									{#if detailExpense.claimDate}
-										<div class="linked-claim-sub">{formatDate(detailExpense.claimDate)}</div>
-									{/if}
+									<div class="linked-claim-sub">
+										{detailExpense.clearedViaClaimId
+											? 'Cleared at the reimbursement level'
+											: 'Clearing is managed by this claim'}
+										{#if detailExpense.claimDate} · {formatDate(detailExpense.claimDate)}{/if}
+									</div>
+								</div>
+								<ChevronRight size={14} class="linked-claim-chevron" />
+							</button>
+						{:else}
+							<div class="detail-section-label">Bank reconciliation</div>
+							<button
+								type="button"
+								class="linked-claim-card cleared-control related-link"
+								onclick={() =>
+									goto(
+										detailExpense?.clearedSessionId
+											? resolve('/(app)/reconciliation/[id]', {
+													id: String(detailExpense.clearedSessionId)
+												})
+											: resolve('/reconciliation')
+									)
+								}
+							>
+								<span class="cleared-checkbox" class:checked={detailExpense.cleared} aria-hidden="true">
+									{detailExpense.cleared ? '✓' : ''}
+								</span>
+								<div class="linked-claim-meta">
+									<div class="linked-claim-title">Cleared</div>
+									<div class="linked-claim-sub">
+										{detailExpense.cleared
+											? `Cleared in reconciliation #${detailExpense.clearedSessionId}`
+											: 'Not cleared · Reconcile this expense'}
+									</div>
 								</div>
 								<ChevronRight size={14} class="linked-claim-chevron" />
 							</button>
@@ -1216,6 +1247,24 @@
 </Sheet.Root>
 
 <style>
+	.cleared-checkbox {
+		display: grid;
+		width: 18px;
+		height: 18px;
+		place-items: center;
+		flex-shrink: 0;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--primary-foreground);
+		font-size: 12px;
+		font-weight: 700;
+	}
+
+	.cleared-checkbox.checked {
+		border-color: var(--primary);
+		background: var(--primary);
+	}
+
 	@media (max-width: 767px) {
 		/* Status leads, then category chip, then supplier text, then date */
 		td[data-label="Category"] { order: 6 !important; }
