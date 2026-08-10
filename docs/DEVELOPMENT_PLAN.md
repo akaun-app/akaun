@@ -1,13 +1,13 @@
 # Akaun Web — SvelteKit Rebuild Plan
-
+ 
 ## Context
-
+ 
 Rebuilding the SwiftUI personal finance tracker (Akaun) as a SvelteKit webapp hosted on a public VPS. The app tracks expenses, income, and reimbursement claims for a single user (freelancer/small business). Key requirements: web UI for daily use, a token-authenticated REST API so external clients/scripts can log expenses and upload receipt/income documents programmatically, SQLite now with a clean PostgreSQL migration path. Reference docs: `/Users/tanghaoquan/Code/Akaun/WEBAPP_REFERENCE.md`, `/Users/tanghaoquan/Code/Akaun/CLAUDE.md`.
-
+ 
 ---
-
+ 
 ## Architecture Decisions
-
+ 
 - **ORM**: Drizzle ORM (`drizzle-orm` + `better-sqlite3`) — same schema works for SQLite and PostgreSQL; swapping DB is a one-file change
 - **Adapter**: `@sveltejs/adapter-node` (required for `better-sqlite3`; replaces `adapter-auto`)
 - **Auth**: Session-based auth for web UI (login page + `httpOnly` session cookie); Bearer token for all `/api/*` routes (programmatic clients/scripts). Schema is multi-user-ready from day one; single active user at launch.
@@ -17,21 +17,20 @@ Rebuilding the SwiftUI personal finance tracker (Akaun) as a SvelteKit webapp ho
 - **Charts**: Chart.js (bar, donut, grouped bar) via Svelte 5 `$effect` canvas wrappers
 - **Svelte 5**: All state with `$state`/`$derived`/`$effect` runes — no legacy stores
 - **Enums**: All closed-set enums (`expenses.status`, `claims.status`, `import_queue.state` / `document_type` / `result_type` / `duplicate_signal`, `contacts.entity_type`, `contact_roles.role`, reset `scope`) are stored as **`INTEGER`** codes, never TEXT. The backend owns the INT↔label mapping in a single source-of-truth module, `src/lib/server/enums.ts`. Codes are **append-only** — never reuse or renumber a retired code, or historical rows silently change meaning. Open-ended string keys that grow as the app gains features (e.g. `group_permissions.resource`, user-defined `category`) stay TEXT — they are keys, not value enums. Tradeoff: raw DB rows read as `status = 2` not `status = 'paid'`, so `enums.ts` is the authoritative legend.
-
 ---
-
+ 
 ## Phase 1 — Foundation
-
+ 
 ### Packages to Install
 ```bash
 bun add drizzle-orm better-sqlite3 argon2
 bun add -d @sveltejs/adapter-node drizzle-kit @types/better-sqlite3
 ```
-
+ 
 ### Files to Create/Modify
-
+ 
 **`vite.config.ts`** — Change `adapter-auto` import to `adapter-node`
-
+ 
 **`src/lib/server/db/schema.ts`** — All Drizzle table definitions:
 - `users` — id, email (UNIQUE), password_hash, name, bearer_token (TEXT, UNIQUE, nullable — for `/api/*` programmatic auth), created_at. No role/permission columns — access is entirely group-derived (see Phase 2.5).
 - `groups` — id, name (UNIQUE), description, is_superuser (boolean, default `false`)
@@ -48,71 +47,66 @@ bun add -d @sveltejs/adapter-node drizzle-kit @types/better-sqlite3
 - `sessions` — id (UUID PK), user_id (FK → users), created_at, expires_at
 - `settings` — key TEXT (PK), value TEXT — app-wide settings shared by all users (currency, categories, godMode, etc.)
 - `import_queue` — see Phase 5 for full definition; table created in Phase 1 so the schema is complete from the start
-
 **Amount field naming**: `amount` (REAL) throughout. On PostgreSQL migration, change column type to `NUMERIC(10,2)` for exact decimal storage.
-
+ 
 **`src/lib/server/db/client.ts`** — SQLite singleton via `better-sqlite3`; enables WAL mode; runs Drizzle migrations on startup. This is the only file that changes for SQLite→PostgreSQL migration.
-
+ 
 **`drizzle.config.ts`** — Points to schema file, output dir `drizzle/`
-
+ 
 **`src/lib/server/running-number.ts`** — `nextNumber(db, prefix, date)` → atomic SQLite transaction with `INSERT … ON CONFLICT DO UPDATE SET last_sequence = last_sequence + 1 RETURNING last_sequence`; returns `EX20260610-001`. Sequence is global across the shared ledger (not per-user).
-
+ 
 **`src/lib/server/file-storage.ts`** — `saveToTemp()`, `moveToFinal()`, `urlForFile()`, `displayName()`, `deleteFile()`. Base path from `STORAGE_PATH` env var. All paths stored in DB are **relative to `STORAGE_PATH`**; `urlForFile()` prepends the base path at read time.
-
+ 
 File path strategy:
 - **Temp** (at upload): `import/temp/{uuid}_{originalFilename}` — used while job is in any pre-confirmed state
 - **Final** (after confirm): `{type}/{year}/{month}/{uuid}_{originalFilename}` — bucketed by document date, e.g. `expenses/2026/06/...`, `income/2026/06/...`, `claims/2026/06/...`
-
 Year/month bucketing uses the **document's date** (not upload date) so receipts for the same period stay together. `moveToFinal(tempPath, type, documentDate)` handles the directory creation and atomic rename. Temp files for `failed` or `skipped` jobs are swept by a startup cleanup that deletes temp files older than 7 days with no corresponding active queue row.
-
+ 
 **`src/lib/server/settings.ts`** — Typed `getSetting(key)` / `setSetting(key, value)` wrapping the global `settings` KV table (single row per key, shared by all users). Keys mirror Swift UserDefaults: `display.currencyCode`, `expense.categories`, `income.categories`, `autoImport.apiKey`, `autoImport.model`, `godMode.enabled`, etc.
-
+ 
 **`src/lib/server/env.ts`** — Reads `STORAGE_PATH`, `DATABASE_PATH` from `process.env`; throws clearly on missing required vars. (Bearer tokens are now per-user, stored in the `users` table — see Phase 2.5 — not a single shared `API_BEARER_TOKEN`.)
-
+ 
 **`.env.example`** — Template documenting all env vars.
-
+ 
 ---
-
+ 
 ## Phase 2 — Authentication
-
+ 
 ### Files to Create
-
+ 
 **`src/hooks.server.ts`** — SvelteKit handle hook:
 - `/api/*` routes: validate `Authorization: Bearer <token>` against the token stored on the matching `users` row (see `bearer_token` column, Phase 2.5); return 401 otherwise; attach the resolved user + their effective permission set to `event.locals`
 - All other routes: check for valid session cookie in `sessions` table; redirect to `/login` if missing/expired; attach `event.locals.user` + `event.locals.permissions` (effective view/add/change/delete per resource, resolved from group membership)
-
 **`src/routes/login/+page.svelte`** — Simple login form (email + password fields)
-
+ 
 **`src/routes/login/+page.server.ts`** — Form action: verify password with argon2; create session row; set `httpOnly` session cookie; redirect to `/`
-
+ 
 **`src/routes/logout/+server.ts`** — DELETE session from DB; clear cookie
-
+ 
 **`src/lib/server/auth.ts`** — `validateSession(cookie)` helper; `getSessionUser(cookie)` returns user row; `getEffectivePermissions(userId)` returns the resolved `{ resource: { view, add, change, delete } }` map (superuser short-circuit + union across groups) — see Phase 2.5
-
+ 
 ### Setup Utility
 **`scripts/create-admin.ts`** — One-time script: `bun run scripts/create-admin.ts <email> <password> [name]` → creates the first user and adds it to the seeded `Administrators` group (`is_superuser = true`). Subsequent users/groups are managed via Settings → Users (Phase 2.5).
-
+ 
 ### Multi-User Readiness
 - Data is a **single shared ledger** — no `WHERE user_id = ?` filtering on reads. Every query in `src/lib/server/queries/*.ts` instead passes through `hasPermission(locals, resource, action)` before running, enforced centrally rather than per-row.
 - `created_by` / `updated_by` columns on entity tables provide an audit trail without restricting visibility.
 - The `sessions` table already links to `users`, so login/session handling needs no changes when groups/permissions are introduced — Phase 2.5 is additive on top of this.
-
 ---
-
+ 
 ## Phase 2.5 — User Management & Permissions
-
+ 
 ### Concept
-
+ 
 Replaces the old owner/editor/viewer role idea with **groups**, modeled loosely on Linux users/groups:
-
+ 
 - A **group** has a name, description, an `is_superuser` flag, and (if not superuser) a permission grid: for each **resource**, whether members can **view / add / change / delete**.
 - A **user** belongs to zero or more groups. Effective permission for a resource/action is `true` if *any* of the user's groups grants it (union, most-permissive-wins), or unconditionally `true` for every resource/action if the user belongs to *any* `is_superuser` group.
 - A user with **zero groups** can still log in but sees an effectively empty app (no nav items render, all routes 403/404) — a "deactivated but not deleted" state, surfaced in the user list with a warning badge rather than blocked at creation time.
 - Resources in the grantable grid: `expenses`, `income`, `claims`, `import`, `categories`, `contacts`. System-level areas — `settings` (general/intelligence/backup/reset/advanced), user & group management, and backup/restore — are **superuser-only** and never appear in the grid, so a non-superuser can never escalate their own access.
 - **Claims minimal view**: the claims list/detail always shows only a minimal summary (item name, amount, date) for the expenses attached to a claim, regardless of the viewer's `expenses.view` — so `claims.view` is sufficient on its own and doesn't leak full expense detail.
-
 ### Schema (added in Phase 1, see above)
-
+ 
 ```
 groups            — id, name (UNIQUE), description, is_superuser BOOLEAN DEFAULT false
 group_permissions — group_id FK, resource TEXT, can_view, can_add, can_change, can_delete BOOLEAN DEFAULT false
@@ -120,33 +114,31 @@ group_permissions — group_id FK, resource TEXT, can_view, can_add, can_change,
 user_groups       — user_id FK, group_id FK
                     PK (user_id, group_id)
 ```
-
+ 
 `users.bearer_token` (added in Phase 1) gives each user their own API token; `/api/*` auth resolves the token to a user, then applies that user's effective permissions exactly like a session would.
-
+ 
 ### Seed Data
-
+ 
 On first migration, seed:
 - `Administrators` group — `is_superuser = true`, no `group_permissions` rows needed (short-circuited). Cannot be renamed or deleted (enforced in the API).
 - A few starter groups with pre-filled `group_permissions`, editable/deletable by any superuser:
-
 | Group | Expenses | Income | Claims | Import | Categories | Contacts |
 |---|---|---|---|---|---|---|
 | Bookkeeper | view, add, change | view, add, change | view, add, change | view, add | view, change | view, add, change |
 | Data Entry | add | add | — | add | view | view, add |
 | Reviewer | view | view | view | view | view | view |
-
+ 
 `scripts/create-admin.ts` creates the first user and adds them to `Administrators`.
-
+ 
 ### Files to Create
-
+ 
 **`src/lib/server/permissions.ts`**:
 - `getEffectivePermissions(userId)` → `{ [resource]: { view, add, change, delete } }`, with an `isSuperuser` flag. Queries `user_groups` joined to `groups`/`group_permissions` once; superuser short-circuits to all-true.
 - `hasPermission(locals, resource, action)` → boolean, used in every `+server.ts` / `+page.server.ts` before reads or mutations.
-
 **`src/hooks.server.ts`** (extends Phase 2 version) — after resolving the session user or bearer token, calls `getEffectivePermissions` once and attaches the result to `event.locals.permissions` / `event.locals.isSuperuser`.
-
+ 
 ### API Routes
-
+ 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `/api/users` | GET, POST | List users (with group memberships + superuser-derived flag); create user (name, email, password, optional bearer token, group IDs). Superuser only. |
@@ -155,60 +147,58 @@ On first migration, seed:
 | `/api/groups` | GET, POST | List groups with permission grids; create a new group. Superuser only. |
 | `/api/groups/[id]` | GET, PATCH, DELETE | Edit name/description/is_superuser; DELETE blocked for `Administrators` and for any group with members (reassign first). Superuser only. |
 | `/api/groups/[id]/permissions` | GET, PATCH | Get/replace the view/add/change/delete grid for a group (no-op if `is_superuser`). Superuser only. |
-
+ 
 ### Enforcement Pattern
-
+ 
 ```ts
 // In a +server.ts handler, e.g. POST /api/expenses
 if (!hasPermission(locals, 'expenses', 'add')) {
   return new Response('Forbidden', { status: 403 });
 }
 ```
-
+ 
 ```ts
 // GET handlers: hide existence rather than reveal-then-deny
 if (!hasPermission(locals, 'import', 'view')) {
   return new Response('Not Found', { status: 404 });
 }
 ```
-
+ 
 PATCH handlers run this permission check **first**, then apply the existing field-level locking from `src/lib/server/locking.ts` (e.g. amount-locking on claimed expenses) — permission governs *whether you can touch this resource at all*, locking governs *which fields, given the resource's current state*.
-
+ 
 ### UI
-
+ 
 - `settings/users/+page.svelte` (superuser-only tab) — table of users (name, email, groups, "no groups" warning badge, last login); create/edit user form (name, email, password); per-user group multi-select; password reset / regenerate bearer token actions.
 - `settings/groups/+page.svelte` (superuser-only tab) — list of groups; create/edit group (name, description, is_superuser toggle — disabled for `Administrators`); permission grid editor (checkboxes, disabled entirely if `is_superuser` is on).
 - `+layout.svelte` sidebar — display the user's `name` (fallback to email) in the user menu; nav items conditionally rendered from `locals.permissions` (e.g. no `import.view` → no "Import" link); Settings → Users/Groups/Backup/Reset/Advanced tabs only render for `locals.isSuperuser`.
 - Server-side route guards remain the actual enforcement; hidden nav items are convenience only.
-
 ---
-
+ 
 ## Phase 2.6 — Contacts
-
+ 
 ### Concept
-
+ 
 Replaces the free-text `supplier` (on expenses) and `source` (on incomes) fields with a **first-class Contacts entity** — a shared directory of the people and businesses the ledger transacts with. This is the foundation for future features (invoicing, payroll, quotations, statements, per-contact statistics) that all need a stable, deduplicated party record rather than repeated name strings.
-
+ 
 Two orthogonal axes describe a contact:
-
+ 
 - **Entity type** — *what the contact is*: `individual` or `business`. Drives which descriptive fields are meaningful (a business has a registration number; an individual typically doesn't). **Mandatory at creation — no default.** The create form forces an explicit choice; only the one-time data migration assigns a value without a user (see **Migration** below).
 - **Roles** — *what the contact does for the ledger*: `customer`, `supplier`, `employee` (extensible). A contact may hold **multiple roles** simultaneously (e.g. a contractor who is both a supplier and an employee), stored in a `contact_roles` join table rather than a column on `contacts`. This avoids the duplicate-contact problem that a single-role column would create.
-
 ### Enum Storage
-
+ 
 `entity_type` and `role` are stored as **`INTEGER`** codes per the project-wide enum convention (see Architecture Decisions). The INT↔label maps live in `src/lib/server/enums.ts` alongside every other enum (`ExpenseStatus`, `ClaimStatus`, `ImportState`, etc.). Codes are append-only.
-
+ 
 ```ts
 // src/lib/server/enums.ts — single source of truth for ALL enum codes (append-only)
-
+ 
 // --- contacts ---
 export const EntityType = { Individual: 1, Business: 2 } as const;
 export const Role       = { Customer: 1, Supplier: 2, Employee: 3 } as const;
-
+ 
 // --- expenses / claims ---
 export const ExpenseStatus = { Unpaid: 1, Pending: 2, Paid: 3 } as const;
 export const ClaimStatus   = { Pending: 1, Done: 2 } as const;
-
+ 
 // --- import_queue ---
 export const ImportState = {
   Queued: 1, Extracting: 2, Processing: 3, PendingReview: 4,
@@ -216,16 +206,16 @@ export const ImportState = {
 } as const;
 export const DocumentType   = { Expense: 1, Income: 2 } as const;  // also import_queue.result_type
 export const DuplicateSignal = { Filename: 1, Reference: 2, AmountDateSupplier: 3 } as const;
-
+ 
 // --- reset scope ---
 export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
-
+ 
 // Label maps + helpers (toLabel / fromLabel) accompany each; API bodies use INT codes,
 // responses may also include resolved labels for client convenience.
 ```
-
+ 
 ### Schema (added in Phase 1, alongside the rest)
-
+ 
 ```
 contacts
   id              INTEGER PK
@@ -242,52 +232,51 @@ contacts
   updated_by      INTEGER FK → users
   created_at      TIMESTAMP
   updated_at      TIMESTAMP
-
+ 
 contact_roles
   contact_id      INTEGER FK → contacts (CASCADE)
   role            INTEGER            ← Role code; see enums.ts
   PK (contact_id, role)
   INDEX (role, contact_id)           ← REQUIRED: makes "all suppliers" filter index-only
 ```
-
+ 
 **Index rationale**: the composite PK `(contact_id, role)` covers "what roles does this contact have" (detail view). The dropdown filter "all suppliers" queries by `role` first, a non-leading PK column, so it needs the explicit `(role, contact_id)` index to stay index-only rather than scanning. Without it the join table can be *slower* than boolean flags — this index is what justifies the join-table choice.
-
+ 
 ### Entity Table Changes
-
+ 
 `expenses` and `incomes` lose their text name columns and gain a contact FK (reflected in the Phase 1 schema above):
-
+ 
 ```
 expenses:  DROP COLUMN supplier  → ADD contact_id INTEGER FK → contacts (SET NULL)
 incomes:   DROP COLUMN source    → ADD contact_id INTEGER FK → contacts (SET NULL)
 ```
-
+ 
 `SET NULL` (not CASCADE): deactivating or deleting a contact must never delete financial records — it nulls the link instead. `is_active = false` is the normal "retire a contact" path; hard delete is reserved for merge losers.
-
+ 
 `import_queue` keeps its `supplier` column as the **raw LLM-extracted name string** (a contact may not exist yet at extraction time) and gains `matched_contact_id` + `match_candidates` (see the `import_queue` schema and **Contact Resolution** in Phase 5). During processing the worker fuzzy-matches the extracted name against `contacts.legal_name` (role-appropriate) and the review combobox lets the user accept the match, pick another contact, or type a new name created on confirm. This is the only place a raw name string survives — the entity tables themselves carry no text name.
-
+ 
 ### Validation Policy — Soft
-
+ 
 Role-to-entity assignment is **soft-validated**: the contact dropdown on the expense form filters to `role = Supplier`, the income form to `role = Customer`, but there is **no DB constraint** tying an entity row to a contact's roles. Rationale:
-
+ 
 - A hard constraint would orphan or block historical expenses the moment a contact is reclassified (supplier role removed).
 - It would fight the merge transaction (merging a supplier into a contact lacking the flag mid-transaction would fail the constraint).
 - The FK already guarantees the contact *exists*; the role is UI guidance, not a gate.
-
 The backend may optionally emit a non-blocking warning when an assignment crosses roles, but never rejects it.
-
+ 
 ### Permissions
-
+ 
 `contacts` is a grantable resource in the Phase 2.5 grid (`view / add / change / delete`) — already reflected in the resources list and seed-group table above. **Merge** is gated behind **both** `contacts.change` and `contacts.delete` (it repoints records *and* hard-deletes the losers).
-
+ 
 ### Merge
-
+ 
 Solves the existing duplicate-name mess (`ABC Sdn Bhd` / `ABC SDN BHD` / `ABC`). The operation picks a **survivor** and one or more **losers**, moves every reference onto the survivor, then **hard-deletes the losers**. No tombstone, no `merged_into` redirect, no unmerge — once references are repointed, nothing in the DB points at a loser, so the delete is safe and permanent.
-
+ 
 > "Repoint references" is simply the `UPDATE` statements that move child rows (expenses, incomes, future invoices/payroll) onto the survivor *before* the delete. It is not a persistent link — after the transaction commits there is no trace of the loser anywhere in the schema.
-
+ 
 ```
 POST /api/contacts/merge   { survivorId, loserIds[] }
-
+ 
 1. Permission: hasPermission(locals, 'contacts', 'change') && hasPermission(locals, 'contacts', 'delete')
 2. Validate: survivorId ∉ loserIds; all ids exist
 3. BEGIN
@@ -306,26 +295,26 @@ POST /api/contacts/merge   { survivorId, loserIds[] }
       -- contact_roles rows for losers cascade away automatically
 4. COMMIT
 ```
-
+ 
 **Every future table that FKs `contacts` must be added to step 3b.** Centralize the repoint statements in one `mergeContacts(tx, survivorId, loserIds)` helper so adding invoicing later means adding one line, not hunting for missed references.
-
+ 
 Merge is **irreversible** (no unmerge by design). A mistaken merge is fixed by re-creating the contact and reassigning by hand.
-
+ 
 ### Find Duplicates
-
+ 
 A cleanup view that clusters contacts by **normalized `legal_name`** (lowercased, trimmed, punctuation/whitespace-collapsed) and surfaces likely-duplicate groups with a bulk "merge into one" action — the primary tool for cleaning up the migrated free-text names.
-
+ 
 ```
 GET /api/contacts/duplicates
 → [ { normalized: "abc sdn bhd", contacts: [ {id, legal_name, ...}, ... ] }, ... ]
 ```
-
+ 
 Normalization is computed at query time (or cached in a generated column later if it becomes slow).
-
+ 
 ### API Routes
-
+ 
 All under `src/routes/api/contacts/`. Permission-gated against `contacts.*` exactly like the expense/income pattern (404 on missing `view`, 403 on missing `add`/`change`/`delete`).
-
+ 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `/api/contacts` | GET, POST | GET requires `contacts.view`; filter by `role` / `entity_type` / search on `legal_name`; only `is_active = true` unless `?includeInactive=1`. POST requires `contacts.add`; body must include `entity_type` (no default) + `legal_name` + optional `roles[]`. |
@@ -333,11 +322,11 @@ All under `src/routes/api/contacts/`. Permission-gated against `contacts.*` exac
 | `/api/contacts/[id]/roles` | GET, PATCH | Replace the contact's role set (array of Role codes, may be empty). Requires `contacts.change`. |
 | `/api/contacts/merge` | POST | `{ survivorId, loserIds[] }` — transactional repoint + hard delete. Requires `contacts.change` + `contacts.delete`. |
 | `/api/contacts/duplicates` | GET | Normalized-name clusters for the cleanup UI. Requires `contacts.view`. |
-
+ 
 ### Migration (one-time, Phase 1.5-style data step)
-
+ 
 Run after the `contacts` / `contact_roles` tables exist and before dropping the old text columns:
-
+ 
 ```
 1. Create contacts + contact_roles tables.
 2. Build the deduplicated contact set from existing data:
@@ -360,32 +349,32 @@ Run after the `contacts` / `contact_roles` tables exist and before dropping the 
 8. Point the user at /contacts/duplicates to merge near-duplicates that differ beyond
    case/whitespace ("ABC" vs "ABC Sdn Bhd"), and to reclassify the few individuals.
 ```
-
+ 
 ### Files to Create / Modify
-
+ 
 **`src/lib/server/enums.ts`** — INT↔label maps + `toLabel`/`fromLabel` helpers for **all** enums (contacts, expense/claim status, import states, reset scope); single source of truth, append-only.
-
+ 
 **`src/lib/server/db/schema.ts`** (Phase 1 additions) — `contacts`, `contact_roles` tables; `contact_id` FK on `expenses`/`incomes`; `matched_contact_id` on `import_queue`.
-
+ 
 **`src/lib/server/queries/contacts.ts`** — Drizzle builders: list/filter by role+entity_type+search, role-set read/replace, duplicate clustering, and the `mergeContacts(tx, survivorId, loserIds)` transaction helper (the one place every contact-referencing table is enumerated).
-
+ 
 **`src/routes/api/contacts/**`** — the route handlers above.
-
+ 
 **`src/routes/contacts/+page.svelte`, `+page.server.ts`** — contact list (search, role/entity filters, active/inactive toggle, "no roles" badge), create/edit form (entity-type required selector, role multi-select, descriptive fields), and the find-duplicates / merge UI.
-
+ 
 **`src/lib/components/ui/ContactSelect.svelte`** — role-filtered contact picker used by the expense (suppliers) and income (customers) forms; soft validation only.
-
+ 
 **Expense/Income forms & detail** (Phase 4) — swap the free-text supplier/source input for `ContactSelect`; display resolves `contact_id → legal_name`.
-
+ 
 **Auto Import** (Phase 5) — review UI shows `matched_contact_id` (link existing) or "create new contact"; confirm writes the resolved contact onto the new record.
-
+ 
 ---
-
+ 
 ## Phase 3 — Core CRUD API (token-authenticated programmatic endpoints)
-
+ 
 ### Route Structure
 All under `src/routes/api/`:
-
+ 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `/api/expenses` | GET, POST | GET requires `expenses.view` (404 if absent); POST requires `expenses.add`. Filter by status/category/date/amount/search; POST: direct structured create (programmatic clients) |
@@ -408,12 +397,12 @@ All under `src/routes/api/`:
 | `/api/backup/export` | GET | Stream ZIP — superuser only |
 | `/api/backup/import` | POST | Restore from ZIP — superuser only |
 | `/api/reset` | POST | `{ scope: ResetScope }` (settings / data / everything — INT code, see `enums.ts`) — superuser only |
-
+ 
 ### Key Server Utilities
 **`src/lib/server/locking.ts`** — `canEditDescriptive(expense, godMode)` / `canEditAmount(expense)` — field-level edit-locking logic (e.g. amount-locking on claimed expenses)
-
+ 
 **`src/lib/server/queries/expenses.ts`**, `income.ts`, `claims.ts` — Drizzle query builders for list/filter/search; keeps `+server.ts` files thin
-
+ 
 ### Programmatic Create — JSON Contract
 ```json
 POST /api/expenses
@@ -421,25 +410,25 @@ Authorization: Bearer <token>
 { "itemName": "...", "supplier": "...", "date": "2026-06-10", "amount": 8.50, "category": "Food & Beverage", "reference": "", "remark": "" }
 → 201 { "id": 42, "expenseNumber": "EX20260610-001", ... }
 ```
-
+ 
 This is the direct, queue-bypassing create path for external clients/scripts that already have clean structured data. The client sends `supplier` as a **name string** (it has no contact IDs). The backend resolves it to a `contact_id`: exact-then-normalized match against `contacts.legal_name` among `Role.Supplier` contacts → link if found; otherwise auto-create a `business` contact with the `supplier` role and link it (so programmatic logging never blocks on contact management). Passing a numeric `contactId` instead of `supplier` is also accepted and bypasses resolution. Income POSTs resolve `source` against `Role.Customer` the same way. `status` defaults to `ExpenseStatus.Unpaid` when omitted. Unlike the document-upload path (Phase 5), this endpoint inserts immediately with no review step — the caller is trusted to send final data.
-
+ 
 ---
-
+ 
 ## Phase 4 — Web UI
-
+ 
 ### Additional Packages
 ```bash
 bun add chart.js
 ```
-
+ 
 ### Route Structure
 ```
 src/routes/
   +layout.svelte              — sidebar nav, session user
   +layout.server.ts           — load settings (currency, godMode) into PageData
   +page.svelte                — redirect to /dashboard
-
+ 
   dashboard/+page.svelte, +page.server.ts
   expenses/+page.svelte, +page.server.ts
   expenses/new/+page.svelte, +page.server.ts
@@ -451,7 +440,7 @@ src/routes/
   settings/+layout.svelte     — tab nav for panes (Users/Groups tabs only render for superusers)
   settings/general, intelligence, categories, backup, reset, advanced, users, groups
 ```
-
+ 
 ### Component Library (`src/lib/components/`)
 - `ui/StatusBadge.svelte` — colored badge keyed off the `ExpenseStatus`/`ClaimStatus` INT code (unpaid=red, pending=amber, paid=green), label via `enums.ts`
 - `ui/CurrencyDisplay.svelte` — renders float amount via `Intl.NumberFormat`
@@ -463,12 +452,11 @@ src/routes/
 - `ui/ConfirmDialog.svelte` — modal confirmation
 - `ui/ContactSelect.svelte` — role-filtered contact picker (suppliers on expense form, customers on income form); soft validation only (see Phase 2.6)
 - `charts/BarChart.svelte`, `DonutChart.svelte`, `LineBarChart.svelte` — Chart.js wrappers via `$effect`
-
 ### Svelte 5 Patterns
 ```ts
 // Global app state (src/lib/state/app.svelte.ts)
 export const appState = $state({ godMode: false, currency: 'MYR' });
-
+ 
 // Debounced search (in +page.svelte)
 let search = $state('');
 let query = $state('');
@@ -476,31 +464,30 @@ $effect(() => {
   const t = setTimeout(() => query = search, 300);
   return () => clearTimeout(t);
 });
-
+ 
 // Locking
 const canEditAmount = $derived(!expense.claimId);
 ```
-
+ 
 ### Dashboard
 Pure-function helpers in `src/lib/dashboard-helpers.ts` (no Svelte deps, port from Swift):
 - `computeTrendData()`, `computeCashFlowData()`, `computeCategoryData()`, `computePeriodTotals()`
-
 Period selector (last 2 months / current month / current year) is client-side `$state` — no page reload.
-
+ 
 ---
-
+ 
 ## Phase 5 — Auto Import (Document Upload API)
-
+ 
 The ingestion counterpart to the direct create endpoint: a token-authenticated **document upload API** so external clients/scripts can POST receipt/income documents (PDF/image) to the backend. Uploads land in a processing **queue** (OCR/text extraction → LLM field extraction), then surface in the web UI for the user to **review and confirm** before anything is inserted into the ledger. Nothing reaches `expenses`/`incomes` without an explicit human confirm.
-
+ 
 ### Additional Packages
 ```bash
 bun add pdf-parse tesseract.js pdfjs-dist uuid
 bun add -d @types/uuid @types/pdf-parse
 ```
-
+ 
 ### Import Flow
-
+ 
 ```
 POST /api/import (upload)
   → file saved to import/temp/{uuid}_{filename}
@@ -516,19 +503,19 @@ POST /api/import (upload)
       → file moved: import/temp/... → {type}/{year}/{month}/{uuid}_{filename}
       → state: imported
 ```
-
+ 
 ### `import_queue` Schema (create in Phase 1)
-
+ 
 ```
 import_queue:
   id                UUID PK          ← also the jobId exposed in the API
   created_by        FK → users NOT NULL ← who uploaded the file; not used for visibility filtering
   state             INTEGER NOT NULL ← ImportState code: Queued|Extracting|Processing|PendingReview|Confirmed|Imported|Skipped|Failed (see enums.ts)
-
+ 
   -- file
   temp_file_path    TEXT NOT NULL    ← relative to STORAGE_PATH, e.g. import/temp/{uuid}_{filename}
   original_filename TEXT NOT NULL    ← display name shown in UI
-
+ 
   -- LLM extraction results (populated after processing)
   document_type     INTEGER          ← DocumentType code: Expense|Income — determined by LLM, not caller (see enums.ts)
   item_name         TEXT
@@ -540,45 +527,44 @@ import_queue:
   reference         TEXT
   category          TEXT
   remark            TEXT
-
+ 
   -- duplicate detection
   duplicate_of      INTEGER          ← FK to expenses.id or incomes.id, nullable
   duplicate_signal  INTEGER          ← DuplicateSignal code: Filename|Reference|AmountDateSupplier (see enums.ts)
-
+ 
   -- outcome
   result_id         INTEGER          ← FK to the created expense/income id after import
   result_type       INTEGER          ← DocumentType code (mirrors document_type post-confirm)
   error             TEXT
-
+ 
   created_at        TIMESTAMP
   processed_at      TIMESTAMP        ← when LLM finished
   confirmed_at      TIMESTAMP
   completed_at      TIMESTAMP        ← when record was inserted + file moved
 ```
-
+ 
 ### Files to Create
-
+ 
 **`src/lib/server/import/extractor.ts`** — `extractText(filePath)`:
 - Text PDFs → `pdf-parse`
 - Scanned PDFs (< 50 avg chars/page) → `pdfjs-dist` page render → Tesseract.js
 - Images → Tesseract.js directly
-
 **`src/lib/server/import/llm.ts`** — calls OpenRouter API with a structured JSON schema; the LLM determines `document_type` (expense or income) and extracts fields including the raw `supplier` name string (it is NOT given the contact list — contact matching is a separate backend step, see Contact Resolution below). Exponential backoff (3 retries for 429/5xx), `parseAmount()`, `parseReceiptDate()`
-
+ 
 **`src/lib/server/import/duplicate-detector.ts`** — checks filename, reference value, and amount+date+supplier signal; writes `duplicate_of` + `duplicate_signal` onto the queue row
-
+ 
 **`src/lib/server/import/category-hint.ts`** — Generates categorisation hint from last 100 unique (item, category) pairs; triggers after 5 records, regenerates every 10 new entries; stored in `settings` table
-
+ 
 **`src/lib/server/import/worker.ts`** — `startImportWorker()`: long-lived async loop started in `src/hooks.server.ts` at server startup. Picks up `queued` jobs from the DB (recovers in-flight jobs on restart), processes them through the state machine, enforces a configurable concurrency limit (1–10 parallel tasks) + rate-limit delay between LLM calls. Worker runs entirely outside the request/response cycle.
-
+ 
 ```ts
 // src/hooks.server.ts (startup side effect)
 import { startImportWorker } from '$lib/server/import/worker';
 startImportWorker();
 ```
-
+ 
 ### API Contract
-
+ 
 ```
 POST /api/import
 Authorization: Bearer <token>
@@ -586,14 +572,14 @@ Content-Type: multipart/form-data
   file: <binary>
 → 202 { "jobId": "uuid" }
 ```
-
+ 
 No `document_type` in the request — the LLM determines it during processing.
-
+ 
 ```
 POST /api/import/[jobId]/confirm
 Authorization: Bearer <token>
 Content-Type: application/json
-
+ 
 // Body is optional — only include fields the user actually corrected
 {
   "item_name": "...",
@@ -603,33 +589,31 @@ Content-Type: application/json
 }
 → 201 { "id": 42, "expenseNumber": "EX20260611-001" }
 ```
-
+ 
 The backend performs a **field-level merge**: only fields present in the body override the LLM-extracted values; omitted fields use the queue row as-is. Edits are never written back to `import_queue` — they go directly into the final `expenses` or `incomes` record.
-
+ 
 ### Contact Resolution (the one contact-aware addition to this phase)
-
+ 
 The document carries a supplier/source *name*, not a contact ID, so the extracted name must be reconciled against the Contacts directory (Phase 2.6) before the record can be inserted. The work splits across three stages; **the LLM is never given the contact list** — matching is a deterministic backend job, not a model task.
-
+ 
 **Stage 1 — extraction (worker, `processing` state).** The LLM extracts the raw `supplier` string onto the queue row exactly as today. No change.
-
+ 
 **Stage 2 — fuzzy matching (worker, after extraction).** A `resolveContactCandidates(name, role)` step normalizes the extracted name (lowercase, trim, collapse whitespace/punctuation) and fuzzy-matches it against `contacts.legal_name`, filtered to the role-appropriate set (`Role.Supplier` for an expense document, `Role.Customer` for income). Outcome written to the queue row:
-
+ 
 - **Confident exact-normalized hit** → set `matched_contact_id`; the UI will pre-select it.
 - **Near matches above a similarity threshold** → store a small ranked candidate list (top ~5) as `match_candidates` (JSON on the queue row) to feed the UI combobox as suggestions; `matched_contact_id` stays null.
 - **No match** → both null; the combobox falls back to the raw extracted name as a free-text "create new" value.
-
 Fuzzy matching is a **hint generator, never an auto-link** unless the match is exact-normalized. Auto-linking on a fuzzy guess would silently misattribute receipts — worse than leaving a row unmatched for the human to resolve.
-
+ 
 **Stage 3 — resolve at confirm (UI combobox + create-on-confirm).** The review row's contact field is a **combobox** that: pre-selects `matched_contact_id` if set; offers `match_candidates` and live search over all role-appropriate contacts; and accepts a typed **new name** that matches nothing. The user ends with exactly one of three intents, expressed in the confirm payload:
-
+ 
 - `{ contactId: 42 }` — picked an existing contact (matched candidate or searched).
 - `{ newContactName: "ABC Trading" }` — typed a name with no match → **create on confirm**.
 - (nothing) — left the pre-selected match as-is → backend uses `matched_contact_id`.
-
 No contact is created while typing/reviewing — only on confirm, inside the insert transaction (below). This keeps abandoned/skipped reviews from littering the directory with orphan contacts, which matters precisely because the directory cleanup is a core motivation for Contacts. New contacts created this way **default to `entity_type = business`** with the role-appropriate role attached; the user reclassifies the occasional individual later via the Contacts cleanup view.
-
+ 
 ### Confirm Backend Logic
-
+ 
 ```
 1. Load import_queue row; assert state = ImportState.PendingReview; assert caller has `import.change` permission (not restricted to the original uploader — shared ledger)
 2. Merge optional request body fields onto queue row (in memory only)
@@ -653,7 +637,7 @@ No contact is created while typing/reviewing — only on confirm, inside the ins
 7. Move file: import/temp/... → {type}/{year}/{month}/{uuid}_{filename}
    (file move after commit — if move fails, log error; temp file remains recoverable)
 ```
-
+ 
 ### Auto Import UI
 `src/routes/import/+page.svelte`:
 - File drop zone + file picker
@@ -661,61 +645,59 @@ No contact is created while typing/reviewing — only on confirm, inside the ins
 - Review table: editable fields inline; **contact field is a combobox** — pre-selects the matched contact, suggests fuzzy `match_candidates`, allows searching all role-appropriate contacts, and accepts a new typed name flagged "will create (Business) on confirm"; duplicate warning badge with "Skip" action per row
 - Confirm button per row; payload sends only changed fields plus the contact intent (`contactId` | `newContactName` | omitted)
 - Poll `GET /api/import` every 2 seconds while any job is in `queued | extracting | processing`; stops when all jobs reach a terminal or reviewable state
-
 ---
-
+ 
 ## Phase 6 — Backup & Advanced
-
+ 
 ### Additional Packages
 ```bash
 bun add archiver
 bun add -d @types/archiver
 ```
-
+ 
 **Backup export** (`GET /api/backup/export`): ZIP stream containing `database.sqlite` (via `VACUUM INTO`), `documents/`, `settings.json`, `manifest.json`
-
+ 
 **Backup import** (`POST /api/backup/import`): validate manifest version, replace DB + documents, reimport settings
-
+ 
 **Reset** (`POST /api/reset`): scoped data deletion with transactions
-
+ 
 **God Mode**: toggle in Settings → Advanced; server reads from `settings` table in every PATCH handler
-
+ 
 ---
-
+ 
 ## Phase 7 — Quotations & Invoicing
-
+ 
 ### Concept
-
+ 
 A **simple** sales-document module: issue quotations to customers, convert accepted quotations into invoices, and mark invoices paid (which records the money as an income). Cash-basis and single-entry, consistent with the rest of the app — no journals, no accruals.
-
+ 
 Design principle for this phase: **keep the surface simple, but build the structure so that advanced features (tax, partial payments, multi-currency conversion, recurring, e-invoice) are purely additive later — no migration that reinterprets existing financial rows.** Hard-to-retrofit structure is added now; easy-to-add behaviour is deferred. Concretely:
-
+ 
 - **Header totals are stored as `subtotal` + `tax_amount` + `total`** even though `tax_amount = 0` and `subtotal = total` today. When SST registration happens, tax lands at line level and rolls up into these existing columns — additive, no backfill. A single `total` column would make every historical row ambiguous (tax-inclusive vs tax-free) and unreconstructable.
 - **`amount_paid` column exists** but behaviour is all-or-nothing (`pay` sets `amount_paid = total`). Partial-payment support later is then pure logic with no schema change and no "what is `amount_paid` for already-paid rows" backfill.
 - **`currency` / `exchange_rate` carried** for consistency with `expenses`/`incomes` and the existing multi-currency module; conversion UI deferred.
 - **`Expired` (quotation) and `Overdue` (invoice) are derived at read time**, never stored — no nightly status-flipping job. Their enum codes are *reserved in comments* so the append-only numbering stays safe if they ever become stored.
 - **Line-level `tax_rate` / `tax_amount` deliberately omitted** — they are nullable and cheap to `ALTER` in later, so they are the correct thing to defer.
-
 This phase also extends the contact-merge helper (Phase 2.6) — the `mergeContacts()` "future: invoices, payroll, quotations" note is finally cashed in here.
-
+ 
 ### Enum Storage
-
+ 
 Append-only additions to `src/lib/server/enums.ts`:
-
+ 
 ```ts
 // --- quotations / invoices ---
 export const QuotationStatus = { Draft: 1, Sent: 2, Accepted: 3, Declined: 4, Converted: 5 } as const;
 // reserved (DERIVED at read time, never stored): Expired — expiry_date < today && status ∈ {Draft, Sent}
-
+ 
 export const InvoiceStatus = { Draft: 1, Sent: 2, Paid: 3, Cancelled: 4 } as const;
 // reserved (DERIVED at read time, never stored): Overdue — due_date < today && status != Paid
 // reserved (FUTURE, append next free code if/when partial payments ship): PartiallyPaid
 ```
-
+ 
 Codes are append-only like every other enum. The *reserved* labels are documented so a future contributor neither reuses a code nor renumbers.
-
+ 
 ### Schema (added in Phase 1's `schema.ts`, alongside the rest)
-
+ 
 ```
 quotations
   id                INTEGER PK
@@ -737,7 +719,7 @@ quotations
   updated_by        INTEGER FK → users
   created_at        TIMESTAMP
   updated_at        TIMESTAMP
-
+ 
 invoices
   id                INTEGER PK
   invoice_number    TEXT UNIQUE        ← IV-prefix via nextNumber, e.g. IV20260628-001
@@ -760,7 +742,7 @@ invoices
   updated_by        INTEGER FK → users
   created_at        TIMESTAMP
   updated_at        TIMESTAMP
-
+ 
 quotation_lines
   id            INTEGER PK
   quotation_id  INTEGER FK → quotations (CASCADE)
@@ -770,7 +752,7 @@ quotation_lines
   line_total    REAL NOT NULL      ← quantity * unit_price
   sort_order    INTEGER NOT NULL
   -- tax_rate / tax_amount deliberately omitted: nullable, cheap to ALTER in with SST
-
+ 
 invoice_lines
   id            INTEGER PK
   invoice_id    INTEGER FK → invoices (CASCADE)
@@ -780,38 +762,36 @@ invoice_lines
   line_total    REAL NOT NULL
   sort_order    INTEGER NOT NULL
 ```
-
+ 
 `quotations.converted_invoice_id` and `invoices.source_quotation_id` are the two-way link between a quotation and the invoice it became — mutual `SET NULL` so deleting either side never cascades into financial data loss.
-
+ 
 ### Lifecycle
-
+ 
 ```
 Quotation:  Draft → Sent → Accepted ──convert──▶ Invoice (Draft)
                          └→ Declined
             Expired = DERIVED (expiry_date < today && status ∈ {Draft, Sent})
-
+ 
 Invoice:    Draft → Sent → Paid ──▶ INSERT income (nextNumber), back-link result_income_id
                          └→ Cancelled
             Overdue = DERIVED (due_date < today && status != Paid)
 ```
-
+ 
 - **Convert** copies `contact_id`, `currency`, `exchange_rate`, all line items, and totals onto a new `Draft` invoice; sets quotation `status = Converted` and links both directions. Refuses if the quotation is already `Converted`.
 - **Pay** mirrors the claims→expense-status workflow: a transaction that sets `status = Paid`, `amount_paid = total`, runs `nextNumber` for an income record, INSERTs the `incomes` row (resolving `contact_id` → income's customer), and stores `result_income_id`. Idempotent guard: refuses if already `Paid`.
-
 ### Permissions
-
+ 
 Two new grantable resources in the Phase 2.5 grid: `quotations` and `invoices` (`view / add / change / delete`). Add columns to the seed-group grid (e.g. Bookkeeper: view/add/change on both; Reviewer: view only; Data Entry: add). Standard pattern — 404 on missing `view`, 403 on missing `add`/`change`/`delete`.
-
+ 
 ### Contacts Integration
-
+ 
 - Both documents link to a `Role.Customer` contact via `ContactSelect`.
 - **Add `quotations` and `invoices` to `mergeContacts()` step 3b** — the one-line-per-table extension the helper was designed for. This is mandatory: a merge that misses these tables would orphan a survivor's invoices.
 - **Usage-count guard**: a contact referenced by any quotation or invoice cannot be hard-deleted (extend the existing Phase 2.6 / Contacts-module 409 guard to count these tables).
-
 ### API Routes
-
+ 
 All under `src/routes/api/`. Permission-gated against `quotations.*` / `invoices.*` exactly like the expense/income pattern.
-
+ 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `/api/quotations` | GET, POST | GET requires `quotations.view` (filter by status/contact/date/search); POST requires `quotations.add`, body includes header + `lines[]`; computes `subtotal`/`total`, assigns `QT` number |
@@ -823,66 +803,65 @@ All under `src/routes/api/`. Permission-gated against `quotations.*` / `invoices
 | `/api/invoices/[id]/pay` | POST | Requires `invoices.change`; transactional mark-paid + income insert + `result_income_id` back-link; 409 if already `Paid` |
 | `/api/invoices/[id]/pdf` | GET | Requires `invoices.view`; branded PDF |
 | `/api/quotations/stream`, `/api/invoices/stream` | GET (SSE) | `quotation-update`/`-delete`, `invoice-update`/`-delete`; SSR provides initial state (no snapshot), per the established stream pattern |
-
+ 
 ### PDF Export
-
+ 
 Shared server-side template for both document types (line-item table, totals block, customer block from `contact_id`, company branding — logo/address/registration from `settings`). Use the `pdf` skill. The totals block already renders a tax line (showing `0.00` today) so enabling SST later is template-free.
-
+ 
 ### Files to Create / Modify
-
+ 
 **`src/lib/server/enums.ts`** — append `QuotationStatus`, `InvoiceStatus` (+ reserved-label comments) and their label maps.
-
+ 
 **`src/lib/server/db/schema.ts`** — `quotations`, `invoices`, `quotation_lines`, `invoice_lines` tables.
-
+ 
 **`src/lib/server/queries/quotations.ts`, `invoices.ts`** — Drizzle builders: list/filter/search, header+lines read/replace (lines replaced as a set inside a transaction), derived `Expired`/`Overdue` computation, the `convertQuotationToInvoice(tx, id)` and `markInvoicePaid(tx, id)` transaction helpers.
-
+ 
 **`src/lib/server/queries/contacts.ts`** — extend `mergeContacts()` (add quotations + invoices repoint) and the usage-count guard.
-
+ 
 **`src/routes/api/quotations/**`, `src/routes/api/invoices/**`** — the route handlers above, including the two `stream` endpoints wired to a `quotationEvents` / `invoiceEvents` emitter (mirror `import/events.ts`).
-
+ 
 **`src/routes/quotations/+page.svelte`, `[id]/+page.svelte`** and **`src/routes/invoices/+page.svelte`, `[id]/+page.svelte`** — list (status/overdue badges, search, customer filter) + detail/edit (header form + line-item editor); "Convert to Invoice" and "Record Payment" actions.
-
+ 
 **`src/lib/components/ui/LineItemEditor.svelte`** — reusable add/remove/reorder line rows, live `line_total` and `subtotal`/`total` computation; shared by both document forms.
-
+ 
 **`src/lib/components/ui/StatusBadge.svelte`** — extend to key off `QuotationStatus`/`InvoiceStatus` (including derived `Expired`/`Overdue`) via `enums.ts`.
-
+ 
 **Dashboard** (Phase 4) — add an "Outstanding & Overdue" widget: count + total of unpaid invoices, with overdue highlighted.
-
+ 
 **Sidebar nav** — add `Quotations` and `Invoices` items, conditionally rendered from `locals.permissions`.
-
+ 
 ### Deferred (additive later — no migration that reinterprets existing rows)
-
+ 
 Tax fields (line `tax_rate`/`tax_amount` + header rollup already wired), partial payments (`amount_paid` already present), multi-currency conversion UI, recurring invoices, payment-method field, email-send, and myInvois/Peppol e-invoice fields. Each is a new nullable column or a new endpoint — none forces reinterpretation of rows written in this phase.
-
+ 
 ---
-
+ 
 ## Phase 7.5 — PDF Template Builder
-
+ 
 ### Concept
-
+ 
 A drag-and-drop template designer that lets users configure how their quotations and invoices look when exported as PDFs. The designer produces a `layout_json` blob stored in the DB; the PDF renderer reads it at export time to compose the document. The document data (line items, contact, totals) is always live — the template only controls structure and presentation.
-
+ 
 Design constraints locked in for this phase:
 - **One active default template** per document type, configured in Settings. The active template is always used for PDF export — no per-document override.
 - **Shared template** for both quotations and invoices (document type = `Both`). Separate QT/IV templates are supported by the schema but not required now.
 - **Three-zone layout** — Header (multi-column), Body (single-column), Footer (multi-column). Multi-column is only available in the header and footer zones; the body is always a strict vertical stack. This matches real invoice structure and makes PDF rendering tractable.
 - **Global theme** — one brand color + one font family applied uniformly. No per-block styling beyond alignment and spacing.
 - **Primitive custom blocks** — text, image, divider, spacer. Purpose-specific blocks (bank account, certification, T&C) are intentionally not built; users compose them from primitives. This keeps the block catalogue small and the renderer simple.
-
 ### Enum Storage
-
+ 
 Append-only additions to `src/lib/server/enums.ts`:
-
+ 
 ```ts
 // --- document templates ---
 export const TemplateDocumentType = { Quotation: 1, Invoice: 2, Both: 3 } as const;
 export const TemplateFont = { Inter: 1, Roboto: 2, Lato: 3, Merriweather: 4 } as const;
 ```
-
+ 
 ### Schema
-
+ 
 One new table added to `src/lib/server/db/schema.ts`:
-
+ 
 ```
 document_templates
   id              INTEGER PK
@@ -898,19 +877,18 @@ document_templates
   created_at      TIMESTAMP
   updated_at      TIMESTAMP
 ```
-
+ 
 No migrations needed on `quotations` or `invoices` — the active default template is resolved at export time from `document_templates WHERE is_default = 1 AND document_type IN (?, 3)`, so existing document rows carry no template reference.
-
+ 
 **`settings` table** — the existing KV table gains two new keys:
 - `template.quotation.defaultId` — integer ID of the active quotation template
 - `template.invoice.defaultId` — integer ID of the active invoice template
-
 These are set via Settings → Templates and read by the PDF export endpoint.
-
+ 
 ### Template Asset Storage
-
+ 
 Each template's image assets (used by `image` blocks) are stored on disk under:
-
+ 
 ```
 {STORAGE_PATH}/
   templates/
@@ -918,11 +896,11 @@ Each template's image assets (used by `image` blocks) are stored on disk under:
       assets/
         {asset-uuid}.ext
 ```
-
+ 
 `image` block config stores only the filename (`{asset-uuid}.ext`). The renderer resolves the full path as `{STORAGE_PATH}/templates/{template-uuid}/assets/{filename}` at render time. Deleting a template deletes the entire `{template-uuid}/` folder — no orphan asset cleanup required.
-
+ 
 ### Layout JSON Shape
-
+ 
 ```ts
 type TemplateLayout = {
   header: {
@@ -935,12 +913,12 @@ type TemplateLayout = {
     columns: ColumnDef[]       // 1–3 columns; widths must sum to 100
   }
 }
-
+ 
 type ColumnDef = {
   width: number                // percentage of zone width
   blocks: BlockDef[]
 }
-
+ 
 type BlockDef = {
   id: string                   // stable uuid within the layout; used as React key equivalent
   type: BlockType
@@ -952,11 +930,11 @@ type BlockDef = {
   }
 }
 ```
-
+ 
 ### Block Catalogue
-
+ 
 **System blocks** — data-bound; repositionable within their zone but not deletable:
-
+ 
 | `type` | Config fields | Notes |
 |---|---|---|
 | `company-header` | `showLogo: bool`, `showAddress: bool` | Logo + company name + address from `settings` |
@@ -964,47 +942,47 @@ type BlockDef = {
 | `customer-block` | `showRegistrationNo: bool` | Contact name, address, reg number |
 | `line-items-table` | `showUnitPrice: bool`, `showQty: bool` | Always present in body; cannot be moved to header/footer |
 | `totals-block` | `showTaxRow: bool` | Subtotal, tax (0.00 today), total, amount paid if invoice |
-
+ 
 **Optional system blocks** — data-bound; removable:
-
+ 
 | `type` | Config fields | Notes |
 |---|---|---|
 | `notes` | `label: string` | Renders `quotations.notes` / `invoices.notes` if non-empty |
 | `paid-stamp` | `color: string`, `opacity: number` | Diagonal "PAID" overlay; only renders when `InvoiceStatus.Paid` |
 | `issued-by` | `label: string` | Name of the `created_by` user |
-
+ 
 **Primitive custom blocks** — freely added, configured, removed:
-
+ 
 | `type` | Config fields | Notes |
 |---|---|---|
 | `text` | `title?: string`, `body: string`, `fontSize: number` | Plain text; `\n` respected. Use for bank details, T&C, notes, etc. |
 | `image` | `filename: string`, `widthPercent: number`, `align: 'left'\|'center'\|'right'` | Asset from template's asset folder. Use for stamps, signatures, certification logos. |
 | `divider` | `color: string`, `thickness: number` | Horizontal rule |
 | `spacer` | `heightMm: number` | Blank vertical gap |
-
+ 
 ### Default Template (seeded on first boot)
-
+ 
 A sensible starting layout is seeded automatically if no template exists yet — no placeholder text, only system blocks:
-
+ 
 ```
 Header (2 columns):
   Col 1 (40%): company-header  { showLogo: true, showAddress: true }
   Col 2 (60%): document-meta   { showReference: true }
-
+ 
 Body:
   customer-block    { showRegistrationNo: true }
   line-items-table  { showUnitPrice: true, showQty: true }
   totals-block      { showTaxRow: true }
   notes             { label: 'Notes' }
-
+ 
 Footer (1 column — full width):
   (empty — user adds text/image blocks as needed)
 ```
-
+ 
 ### Designer UX
-
+ 
 Accessed via Settings → Templates. Layout:
-
+ 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Templates  [+ New]                    Theme: [●] [Font ▾]  │
@@ -1017,28 +995,27 @@ Accessed via Settings → Templates. Layout:
 │              │  ▼ HEADER  [+col][-col]  │  (click a block    │
 │  System      │  ┌────────┬───────────┐  │   to open its      │
 │  ─────────   │  │company │doc-meta   │  │   config panel)    │
-│  company-    │  │-header │           │  │                    │
-│  header      │  └────────┴───────────┘  │                    │
-│  document-   │                          │                    │
-│  meta        │  ▼ BODY                  │                    │
-│  customer-   │  ┌───────────────────┐   │                    │
-│  block       │  │ customer-block    │⠿  │                    │
-│  line-items  │  │ line-items-table  │⠿  │                    │
-│  totals      │  │ totals-block      │⠿  │                    │
-│  notes       │  │ notes             │⠿  │                    │
-│  paid-stamp  │  └───────────────────┘   │                    │
-│  issued-by   │                          │                    │
-│              │  ▼ FOOTER [+col][-col]   │                    │
-│  Custom      │  ┌───────────────────┐   │                    │
-│  ─────────   │  │ (drop blocks here)│   │                    │
-│  text        │  └───────────────────┘   │                    │
-│  image       │                          │                    │
+│  header      │  │-header │           │  │                    │
+│  document-   │  └────────┴───────────┘  │                    │
+│  meta        │                          │                    │
+│  customer-   │  ▼ BODY                  │                    │
+│  block       │  ┌───────────────────┐   │                    │
+│  line-items  │  │ customer-block    │⠿  │                    │
+│  totals      │  │ line-items-table  │⠿  │                    │
+│  notes       │  │ totals-block      │⠿  │                    │
+│  paid-stamp  │  │ notes             │⠿  │                    │
+│  issued-by   │  └───────────────────┘   │                    │
+│              │                          │                    │
+│  Custom      │  ▼ FOOTER [+col][-col]   │                    │
+│  ─────────   │  ┌───────────────────┐   │                    │
+│  text        │  │ (drop blocks here)│   │                    │
+│  image       │  └───────────────────┘   │                    │
 │  divider     │                          │                    │
 │  spacer      │                          │                    │
 └──────────────┴──────────────────────────┴────────────────────┘
           [Preview PDF]       [Save]   [Set as Default]
 ```
-
+ 
 Interaction rules:
 - Drag from palette → drop into a zone (or a column within header/footer)
 - Reorder blocks within a zone/column by dragging the `⠿` handle
@@ -1049,11 +1026,10 @@ Interaction rules:
 - **Preview PDF** calls `GET /api/templates/[id]/preview` — renders with the most recent real quotation or invoice, or a fully synthetic document if none exists yet — and opens the PDF in a new tab
 - **Set as Default** calls `POST /api/templates/[id]/default`; updates the `settings` key for the template's document type; the previously-default template is demoted
 - Theme color and font are global controls in the toolbar; changes are live in the canvas preview
-
 ### API Routes
-
+ 
 All under `src/routes/api/templates/`. Superuser-only for create/edit/delete; any user with `quotations.view` or `invoices.view` can hit the preview and export endpoints.
-
+ 
 | Endpoint | Methods | Notes |
 |---|---|---|
 | `/api/templates` | GET, POST | List all templates; create new (seeds default layout JSON) |
@@ -1062,13 +1038,13 @@ All under `src/routes/api/templates/`. Superuser-only for create/edit/delete; an
 | `/api/templates/[id]/assets/[filename]` | DELETE | Removes asset file from disk |
 | `/api/templates/[id]/preview` | GET | Renders PDF using this template + synthetic (or most-recent real) document data; returns `application/pdf` |
 | `/api/templates/[id]/default` | POST | Sets `is_default = 1` for this template, clears `is_default` on any other template with overlapping `document_type`; updates the `settings` key |
-
+ 
 Existing `/api/quotations/[id]/pdf` and `/api/invoices/[id]/pdf` endpoints are updated to resolve the active template via the `settings` key and pass `layout_json` to the renderer.
-
+ 
 ### PDF Renderer
-
+ 
 The existing simple PDF template (Phase 7) is replaced by a layout-driven renderer:
-
+ 
 ```
 src/lib/server/pdf/
   renderer.ts          ← entry point: resolveTemplate() → renderLayout() → PDF bytes
@@ -1087,23 +1063,23 @@ src/lib/server/pdf/
     divider.ts
     spacer.ts
 ```
-
+ 
 Each block module exports a single `render(doc, blockDef, data, theme)` function. The layout engine calls them in order, passing the computed bounding box. Theme (color, font) is resolved once at the top and threaded through. Use the `pdf` skill for the underlying PDF generation.
-
+ 
 ### Files to Create / Modify
-
+ 
 **`src/lib/server/enums.ts`** — append `TemplateDocumentType`, `TemplateFont` and their label maps.
-
+ 
 **`src/lib/server/db/schema.ts`** — add `documentTemplates` table.
-
+ 
 **`src/lib/server/pdf/`** — new directory replacing the single Phase 7 PDF template file; renderer + layout engine + per-block modules as above.
-
+ 
 **`src/lib/server/queries/templates.ts`** — Drizzle builders: list, get, create (with default layout seed), update, delete (+ asset folder cleanup), set-default (clears prior default for same document_type, updates settings keys).
-
+ 
 **`src/routes/api/templates/**`** — route handlers above.
-
+ 
 **`src/routes/(app)/settings/`** — new "Templates" tab (alongside General, Intelligence, Categories, Advanced); renders the designer canvas.
-
+ 
 **`src/lib/components/template-designer/`** — client-side designer components:
 - `TemplateDesigner.svelte` — root; manages layout state, drag state, selected block
 - `ZoneCanvas.svelte` — renders one zone (header/body/footer); handles column add/remove
@@ -1112,30 +1088,288 @@ Each block module exports a single `render(doc, blockDef, data, theme)` function
 - `BlockConfigPanel.svelte` — right panel; dynamic form keyed off selected block's `type`
 - `BlockPreview.svelte` — visual representation of each block in the canvas (not the real PDF render — a lightweight HTML approximation for design-time feedback)
 - `ThemeControls.svelte` — color picker + font selector in the toolbar
-
 ### Deferred
-
+ 
 - Per-document template override (a `template_id` FK on `quotations`/`invoices` and a picker on the document form)
 - Email sending with PDF attachment
 - Custom page size / orientation (A4 portrait assumed throughout)
 - Header/footer repeat on multi-page documents (first-page-only layout for now)
 - Rich text in `text` blocks (bold, bullets) — plain text with `\n` is sufficient for bank details and T&C
-
 ---
-
+ 
+## Phase 7.6 — Categories & Classifications (P&L Foundation)
+ 
+### Concept
+ 
+Lays the groundwork for a future Profit & Loss report (flagged P0 in the accounting expert review) without disturbing how the user actually enters transactions day to day.
+ 
+Two things that look similar but serve different jobs stay cleanly separated — and, per the design decided for this phase, **both are first-class tables with their own IDs**, not one free-text field plus one hardcoded enum:
+ 
+- **`categories`** — the user-facing label the user has always picked ("Software Subscriptions", "Client Lunch", "Rent"). Already user-editable via Settings today (as a KV string list); this phase just gives each one a stable `id` instead of being identified by its name string.
+- **`classifications`** — the small P&L rollup bucket ("Cost of Sales", "Operating Expense", "Payroll", "Tax", "Other" / "Revenue", "Other Income") that a P&L report `GROUP BY`s on. This is the same two-layer split every real accounting tool uses (QuickBooks' "Account Type" vs. "Account/Detail Type", Bukku's chart of accounts) — except here it's **also a user-editable table**, not a fixed enum baked into `enums.ts`. Renaming or adding a bucket later (e.g. splitting out "Marketing") never needs a code change.
+Only `type` (`Expense | Income`) stays a true `enums.ts` closed-set code — it's a genuine two-value, structural distinction that both `categories` and `classifications` share, not something a user should ever need to add a third option to.
+ 
+**Transactions FK into both tables**, not free text — `expenses.category_id` / `expenses.classification_id`, and the same pair on `incomes`. This is what makes "delete → choose a replacement" possible at all: a merge/reassign operation only makes sense against a real relational reference, the same reason `mergeContacts()` works and a string field couldn't support it.
+ 
+Key decision carried over from earlier — **classification is seeded onto the transaction at creation time, not derived live via join.** `categories.default_classification_id` pre-fills `expenses.classification_id` / `incomes.classification_id` when a transaction is created; the field stays editable per-transaction. This means:
+- The common case is invisible — pick a category, classification pre-fills, done.
+- The odd case (same category genuinely spans two P&L buckets — e.g. "Contractor Fees" sometimes billable COGS, sometimes an internal Opex cost) is a one-click dropdown edit on that single transaction, not a forced duplicate category.
+- Changing a category's default later never rewrites history — already-recorded transactions keep whatever classification they were given at creation time, so a past P&L never silently changes.
+### Enum Storage
+ 
+Append-only addition to `src/lib/server/enums.ts` — the *only* enum this phase needs:
+ 
+```ts
+// --- categories / classifications ---
+export const CategoryType = { Expense: 1, Income: 2 } as const;
+```
+ 
+`categories.type` and `classifications.type` both use this code. Everything else that used to be a hardcoded enum (`ExpenseClassification`, `IncomeClassification`) is now just rows in the `classifications` table, seeded on first boot rather than declared in code.
+ 
+### Schema (added in Phase 1's `schema.ts`, alongside the rest)
+ 
+```
+classifications
+  id           INTEGER PK
+  name         TEXT NOT NULL          ← "Cost of Sales", "Operating Expense", "Payroll", "Tax",
+                                          "Other", "Revenue", "Other Income", or anything added later
+  type         INTEGER NOT NULL       ← CategoryType code; see enums.ts
+  is_system    BOOLEAN DEFAULT false  ← true only for the seeded per-type fallback ("Other" /
+                                          "Other Income"); protected from deletion, same as the
+                                          Administrators group being un-deletable
+  created_at   TIMESTAMP
+  updated_at   TIMESTAMP
+  UNIQUE (name, type)
+ 
+categories
+  id                      INTEGER PK
+  name                    TEXT NOT NULL
+  type                    INTEGER NOT NULL     ← CategoryType code; see enums.ts
+  default_classification_id  INTEGER FK → classifications (SET NULL)   ← nullable
+  created_at              TIMESTAMP
+  updated_at              TIMESTAMP
+  UNIQUE (name, type)
+```
+ 
+`expenses` and `incomes` each gain two FK columns, replacing the old free-text `category` (reflected in the Phase 1 schema above):
+ 
+```
+expenses.category_id        INTEGER NOT NULL FK → categories        (RESTRICT — see Delete below)
+expenses.classification_id  INTEGER NOT NULL FK → classifications   (RESTRICT — see Delete below)
+incomes.category_id         INTEGER NOT NULL FK → categories        (RESTRICT)
+incomes.classification_id   INTEGER NOT NULL FK → classifications   (RESTRICT)
+```
+ 
+`RESTRICT` (not `SET NULL`/`CASCADE`) on both: a category or classification that's in use can only be removed through the reassign-then-delete flow below, never silently, and never by cascading into financial rows.
+ 
+### Seed Data
+ 
+On first migration, seed one `is_system = true` row per `type` so there is always a safe landing spot and the table can never be emptied to zero options:
+ 
+| name | type | is_system |
+|---|---|---|
+| Other | Expense | true |
+| Other Income | Income | true |
+ 
+No other classifications are pre-seeded — beyond the two system fallbacks, the bucket list (Cost of Sales, Operating Expense, Payroll, Tax, Revenue, etc.) is left for the user to create via Settings → Classifications, same "grows as you need it" spirit as categories always have.
+ 
+### Delete-with-Replacement (categories and classifications)
+ 
+Both tables use the same reassign-then-delete mechanic — a lightweight, single-target version of the Contacts merge pattern (Phase 2.6), scoped down since these are small curated lists rather than a large messy directory that needs fuzzy duplicate detection.
+ 
+```
+DELETE /api/categories/[id]
+  body: { replacementId? }
+ 
+  1. If no replacementId:
+     - count referencing rows across expenses.category_id + incomes.category_id
+       (same type only)
+     - count = 0 → delete immediately
+     - count > 0 → 409 { referencedCount, requiresReplacement: true }
+  2. If replacementId given:
+     - validate: replacementId exists, same `type`, ≠ id
+     - BEGIN
+       a. UPDATE expenses SET category_id = replacement WHERE category_id = id
+       b. UPDATE incomes  SET category_id = replacement WHERE category_id = id
+       c. DELETE FROM categories WHERE id = id
+     - COMMIT
+```
+ 
+```
+DELETE /api/classifications/[id]
+  body: { replacementId? }
+ 
+  - blocked outright (403) if is_system — the seeded "Other" / "Other Income" fallback is never
+    deletable, matching the Administrators-group-can't-be-deleted pattern
+  - otherwise identical reassign-then-delete, but reassigns THREE reference points, not one —
+    a category's default pointer is just another reference to clean up, same mechanism, no
+    special case:
+    1. If no replacementId:
+       - count referencing rows across expenses.classification_id + incomes.classification_id
+         + categories.default_classification_id (same type only)
+       - count = 0 → delete immediately
+       - count > 0 → 409 { referencedCount, requiresReplacement: true }
+    2. If replacementId given:
+       - validate: replacementId exists, same `type`, ≠ id, not the row being deleted
+       - BEGIN
+         a. UPDATE expenses    SET classification_id = replacement WHERE classification_id = id
+         b. UPDATE incomes     SET classification_id = replacement WHERE classification_id = id
+         c. UPDATE categories  SET default_classification_id = replacement WHERE default_classification_id = id
+         d. DELETE FROM classifications WHERE id = id
+       - COMMIT
+```
+ 
+### UI
+ 
+No standalone "merge" screen (that exists for Contacts because of fuzzy-duplicate detection across a large, messy list — not needed here). Reassignment is folded into the delete action itself:
+ 
+- **Settings → Categories / Settings → Classifications** — plain list with inline rename and a delete button per row.
+- Clicking delete on a row with zero references → simple confirm dialog, deletes immediately.
+- Clicking delete on a referenced row → modal: *"Used by N transactions — choose a replacement"* with a same-type dropdown of the other rows; confirm reassigns and deletes in one transaction.
+- Attempting to delete an `is_system` classification → delete button disabled with a tooltip explaining why, no modal needed.
+### Files to Create / Modify
+ 
+**`src/lib/server/enums.ts`** — append `CategoryType` only.
+ 
+**`src/lib/server/db/schema.ts`** — add `categories` and `classifications` tables; replace the free-text `category` column on `expenses`/`incomes` with `category_id` + `classification_id` FKs.
+ 
+**`src/lib/server/queries/categories.ts`** *(new)* — `listCategories(type)`, `createCategory(name, type, defaultClassificationId?)`, `updateCategory(id, { name?, defaultClassificationId? })`, `deleteCategory(id, replacementId?)` (implements the count-then-reassign-then-delete flow above), `resolveDefaultClassification(categoryId)`.
+ 
+**`src/lib/server/queries/classifications.ts`** *(new)* — `listClassifications(type)`, `createClassification(name, type)`, `updateClassification(id, { name? })`, `deleteClassification(id, replacementId?)` (implements the three-reference reassign flow above, with the `is_system` guard).
+ 
+**`src/lib/server/settings.ts`** — category read/write no longer goes through the KV `getSetting`/`setSetting` path; both category and classification listing now backed by their respective query modules. Other settings keys unchanged.
+ 
+**Expense/Income forms (Phase 4)** — category field becomes a picker over `categories` rows (still type-to-search, feels identical to today); selecting a category auto-fills a **Classification** dropdown from `default_classification_id`; the dropdown stays editable so the odd cross-classification case is a one-click fix, not a new category.
+ 
+**Settings → Categories tab** — existing list gains a **Default Classification** dropdown per row, editable inline; delete action wired to the reassign-modal flow above.
+ 
+**Settings → Classifications tab** *(new)* — flat list per type (Expense / Income), create/rename, delete with the same reassign-modal flow; `is_system` rows show a disabled delete button.
+ 
+**Programmatic create contract (Phase 3)** — `POST /api/expenses` / `POST /api/income` accept `categoryId` (required) and optional `classificationId`; when `classificationId` is omitted, the backend resolves it from the category's `default_classification_id` (falling back to the `is_system` row if the category has none set), so scripted clients get sensible P&L buckets without needing to know about classification at all. Category creation by name (as scripted clients may still only have a string) resolves-or-creates against `categories` the same way supplier/customer name resolution already works against `contacts` (Phase 3's existing `supplier`-string contract).
+ 
+**Auto Import confirm (Phase 5)** — the review row's category field becomes a combobox over `categories` (mirroring the existing contact-resolution combobox exactly — pre-select on exact match, suggest near matches, allow typing a new name created on confirm); classification resolves from the chosen category's default and is shown alongside it, editable before confirm.
+ 
+### Migration (one-time, alongside the schema change)
+ 
+```
+1. Create `classifications` table; seed the two is_system fallback rows (Other / Other Income).
+2. Create `categories` table.
+3. Backfill categories from the existing settings KV lists:
+   - Each distinct name in `expense.categories` → INSERT INTO categories (name, type=Expense, default_classification_id=NULL)
+   - Each distinct name in `income.categories`  → INSERT INTO categories (name, type=Income,  default_classification_id=NULL)
+4. Add `category_id` + `classification_id` FK columns to `expenses`/`incomes`.
+5. Backfill existing rows:
+   - category_id      → matched by normalized old category string → new categories.id
+   - classification_id → categories.default_classification_id is NULL for every category at this
+     point (nothing has been tagged yet), so every existing row resolves to the is_system fallback
+     (Other / Other Income). Correct and honest, not a placeholder — the user tags real defaults
+     at their own pace via Settings → Categories, and only transactions created AFTER a category
+     is tagged inherit that default automatically.
+6. Drop the old free-text `category` column on `expenses`/`incomes`.
+7. Retire `expense.categories` / `income.categories` settings keys once the categories table is
+   confirmed as the source of truth for the category dropdown/autocomplete.
+```
+ 
+### Deferred
+ 
+- The P&L report itself (date-range selector, income/expense-by-classification breakdown, net profit line, PDF export) — this phase only lays the data foundation; the report UI/API is a separate future phase.
+- Line-level tax classification tie-in (once SST fields land, a `Tax` classification bucket and actual tax amounts are two different things — this phase does not conflate them).
+- Bulk re-tagging tools (e.g. "retag all historical 'Contractor Fees' rows created before I set a default") — deliberately manual for now via the per-transaction classification edit; historical bulk changes are rare enough not to need dedicated tooling yet.
+- Fuzzy duplicate-detection for categories/classifications (the Contacts-style `/duplicates` clustering view) — not needed while both lists stay small and curated; revisit only if the category list grows messy the way free-text supplier names once did.
+---
+ 
+## Phase 8 — Reconciliation
+ 
+### Concept
+ 
+A safety net that checks whether Akaun's numbers actually match the bank, without disturbing the cash-basis single-entry core. Triggered by a real-world case: a starting bank balance minus recorded transactions did not tie out to the actual account. The conclusion reached (see `RECONCILIATION_NOTES.md` for the full discussion) is that this is a **missing-or-mis-recorded-transaction problem, not an accounting-model problem** — switching to double-entry would not by itself have caught or fixed it, and would blow up the simplicity moat the accounting expert review told us to protect. Bank reconciliation is a layer that sits on top of either accounting model; it is neutral on the single- vs double-entry question.
+ 
+Design principle carried over from the rest of the app: **hard to retrofit now vs. easy to add later.** Persisting imported statement lines (rather than treating them as throwaway matching state) is the one "hard to retrofit" decision locked in this phase — see **Statement Line Persistence** below.
+ 
+### Prerequisite — Payment Method Field
+ 
+Reconciliation needs to know which transactions actually touched the bank account. Akaun has no formal "account" entity today, so the pragmatic route (also recommended independently by the accounting expert review) is a **payment-method flag** on `expenses` and `incomes` — `Bank` vs `Personal` (enum, extensible later) — rather than introducing a formal account entity now. Reconciliation filters to bank-paid items only. This is a prerequisite for this phase, not part of it if not already scheduled — call out as a small preceding addition to `expenses`/`incomes` schema.
+ 
+### The Flow — Two-Step Escalation
+ 
+**Step 1 — Balance reconciliation (cheap check).** User enters a starting balance (at a known date) and the bank statement's ending balance for the period. Akaun computes `starting balance + bank-paid income − bank-paid expenses` and compares it to the statement ending balance.
+- Match → done, session closed, nothing else to do.
+- Mismatch → escalate to Step 2.
+**Step 2 — Line-by-line reconciliation (clearing).** Only entered when Step 1 fails. The user ticks off each imported bank statement line against the matching item in Akaun. Leftovers are the diagnosis: an Akaun item with no match was recorded but never cleared the bank; a statement line with nothing against it is a transaction missing from Akaun entirely.
+ 
+### Matching Granularity — What Actually Clears
+ 
+Matching is **not** uniform across all expenses. Only three kinds of things clear against the bank statement:
+ 
+1. A **standalone (direct) expense** — paid straight from the current account, appears as its own statement line.
+2. A **whole claim** — a reimbursement bundles several expenses into ONE lump payment; the statement shows only that single payment, not the individual expenses inside it.
+3. An **income** — money landing in the bank.
+Consequently:
+- **Claimed expenses never clear on their own.** They ride inside their parent claim. The claim total already sums the bundled expenses, so it should match the lump reimbursement line directly.
+- The `cleared` flag lives on the things that hit the bank — expenses (direct only), claims, and income — **not** uniformly on every expense row.
+### UI Treatment — Two Views of the Same Truth
+ 
+- **Direct expense** (expense list/detail) → shows its own cleared/uncleared checkbox state.
+- **Claimed expense** (expense list/detail) → shows **no** own checkbox. Instead a "cleared via claim" badge, linking to the parent claim, whose tickbox is the real one.
+- **Claim** (claim list/detail) → the actual tickbox lives here for claimed expenses' clearing status.
+This keeps the state honest regardless of which module the user is looking from — no double-counting, no ambiguity about where the source of truth lives.
+ 
+### Bank Statement Ingestion — Separate Importer, Inside This Module
+ 
+The bank statement is imported by a **dedicated importer that lives entirely inside the Reconciliation module** — explicitly NOT the Phase 5 auto-import pipeline.
+ 
+Rationale: Phase 5 auto-import's entire purpose is to CREATE expense/income records in the ledger. A bank statement does not become ledger records — it is only a reference list of bank lines to tick transactions off against. Different purpose → different machinery. Routing it through auto-import would pollute that pipeline with rows that must never be inserted as transactions.
+ 
+What this importer **does** reuse from Phase 5 (as a library, not the pipeline):
+- **PDF extraction tech** — text PDFs via `unpdf`, scanned PDFs/images via Tesseract — the same building block, imported as a shared utility.
+- **An LLM step** that parses the statement into individual transaction lines (date, amount, description).
+What it does **not** reuse: the `import_queue` table, the worker state machine, or the confirm-to-ledger insert path. The output lands in reconciliation-owned storage — a list of statement lines tied to a reconciliation session — never in `import_queue` and never in `expenses`/`incomes`.
+ 
+Note the structural difference from a receipt: a bank statement is a **multi-line document** (many transactions in one file), unlike a receipt (one file = one record). The reconciliation importer must emit MANY statement lines from a single uploaded PDF for the matching screen, not one record per file.
+ 
+### Statement Line Persistence (locked in this phase)
+ 
+Imported statement lines are **persisted** in their own table (not discarded once a session closes or a match is made), tagged with their match status and the session they came from. This is the one "hard to retrofit" call for this phase — deferring it would mean re-uploading historical statements later if any future feature wants to use this data. Concretely this means a `bank_statement_lines` table (session_id, date, amount, description, matched_type, matched_id, cleared) rather than in-memory-only matching state.
+ 
+This deliberately does **not** ship any consumer of that persisted history yet — see Deferred below. It only ensures the data exists so those features are additive later (new queries against an existing table) rather requiring a schema change plus a request for the user to re-supply old statements.
+ 
+### Structure — Where It Lives
+ 
+- A **new Reconciliation module** — its own nav item, route, and page. It reads across income + expenses + claims, so it sits above them, similar to how the dashboard does.
+- A **new permission resource** (`reconciliation`) added to the Phase 2.5 group grid (`view / add` at minimum; reconciliation sessions are typically not edited/deleted after the fact, so `change`/`delete` may be superuser-only or omitted — decide at implementation time).
+- A **reconciliation-session table** — one row per reconciliation attempt: statement date/period, starting balance, statement ending balance entered, resolution (matched at Step 1, or escalated to Step 2 with final cleared/uncleared counts).
+- A **`bank_statement_lines` table** (see Persistence above) — the imported, persisted statement lines for a session.
+- A **`cleared` flag** added to the existing `expenses` (direct only), `claims`, and `incomes` tables — one nullable field each. This is the thing being ticked off in Step 2.
+So the module is a mix: new tables for the reconciliation-specific workflow, plus small additive fields on existing tables.
+ 
+### Deferred
+ 
+- **Create-expense-from-unmatched-line** — an unmatched statement line already carries date/amount/description; a "create expense from this line" action could pre-fill the expense form directly from it. Deferred because it's a thin UI convenience layered on top of persisted lines — easy to add once the persistence table exists, not a blocker for the first version.
+- **Recurring-transaction detection from statement history** — using persisted lines across multiple reconciliation sessions to spot "same amount/description every month" and suggest a recurring expense. Needs real historical data to be useful; premature before months of reconciliation sessions have accumulated.
+- **Formal account entity (multi-account support)** — the payment-method flag (`Bank`/`Personal`) is the pragmatic stand-in for now. If a formal `accounts` table is introduced later, the persisted `bank_statement_lines` table (with its session/date/amount/description already captured) can be backfilled with an `account_id` column rather than requiring users to re-import historical statements — this is exactly why persistence was locked in now rather than left ephemeral.
+- **Bank CSV import** — superseded by the PDF-via-dedicated-importer approach above; CSV path only revisited if PDF extraction proves unreliable for statements in practice.
+### Verification Checklist Additions (for Phase 8)
+ 
+- Enter a starting balance + matching statement ending balance with no missing transactions → Step 1 passes, session closes, no Step 2 prompt.
+- Enter a mismatched ending balance → escalates to Step 2; ticking off all matching lines leaves exactly the missing/mis-recorded items as leftovers on both sides.
+- A claim with 3 bundled expenses, reimbursed as one lump sum → the claim's cleared tickbox matches the single statement line; each of the 3 expenses shows a "cleared via claim" badge, no individual checkbox, and clicking it navigates to the claim.
+- A direct expense and an income are both marked `Personal` payment method → excluded from the bank-paid computation in Step 1 and never appear as candidates in Step 2.
+- Upload a bank statement PDF → produces multiple persisted `bank_statement_lines` rows from the one file (not one row per file); rows survive after the session is closed (available for a future session/history view); nothing is written to `import_queue`, `expenses`, or `incomes`.
+- A user with only `reconciliation.view` cannot start a new session or tick off lines (403); a user without `reconciliation.view` gets 404 on the reconciliation route.
+---
+ 
 ## SQLite → PostgreSQL Migration Path
-
+ 
 Only 3 files need to change:
 1. `schema.ts` — `sqliteTable` → `pgTable`, `TEXT` date → `timestamp`, `REAL` amount → `NUMERIC(10,2)`, integer PKs → `serial`. INT-coded enum columns (`status`, `state`, `entity_type`, `role`, etc.) carry over unchanged — `INTEGER` → `integer`, no value remapping, which is a side benefit of coding enums as INT rather than TEXT.
 2. `client.ts` — swap `better-sqlite3` driver for `node-postgres`
 3. `drizzle.config.ts` — change dialect + connection string
-
 All query code in `src/lib/server/queries/*.ts` is unchanged — Drizzle's query builder is dialect-agnostic. Run `drizzle-kit generate` to produce the PostgreSQL migration SQL. Estimated effort: 1–2 days.
-
+ 
 ---
-
+ 
 ## Verification Checklist (per phase)
-
+ 
 1. **Auth**: visit app URL without login → redirected to `/login`; wrong password → stays on login; correct → access granted; programmatic POST with a user's Bearer token bypasses cookie check
 2. **Running numbers**: create 2 expenses on same day → `EX20260610-001` and `EX20260610-002`; next day → resets to `EX20260611-001`
 3. **Claim workflow**: create claim with 2 unpaid expenses → both status=pending; total = sum of their amounts; "Mark as Claimed" → both paid; delete claim → both revert to unpaid; claim list/detail shows only minimal expense fields (item, amount, date) even for a user without `expenses.view`
@@ -1151,3 +1385,5 @@ All query code in `src/lib/server/queries/*.ts` is unchanged — Drizzle's query
 13. **Derived statuses**: an invoice past `due_date` and not `Paid` → list/detail report `Overdue` without any stored status change; a quotation past `expiry_date` in `Draft`/`Sent` → reports `Expired`; neither writes to the `status` column.
 14. **Quotation/invoice permissions & merge**: a user with only `quotations.view` can list/PDF but POST/PATCH/convert → 403; `invoices` resource enforced the same way. Merge two customer contacts each linked to invoices → survivor holds all invoices and quotations, losers gone; a contact referenced by any invoice/quotation → hard delete returns 409.
 15. **PDF template builder**: on first boot with no templates → default template seeded (company-header + document-meta in header, customer-block + line-items + totals + notes in body, empty footer); create a second template → both appear in Settings → Templates list; set new template as default → `settings` key updated, old template demoted; add an `image` block, upload an asset → file appears in `templates/{uuid}/assets/`; delete template → asset folder removed from disk, blocked if it is the only template; `GET /api/quotations/[id]/pdf` uses the active default template; `GET /api/templates/[id]/preview` returns a valid PDF without an existing document. Non-superuser cannot POST/PATCH/DELETE templates → 403.
+16. **Categories & classifications**: migration creates one `categories` row per distinct existing category name and seeds the two `is_system` classification fallbacks (Other / Other Income); existing expenses/incomes land on `category_id`/`classification_id` pointing at the matched category and the `is_system` fallback respectively. Create a new classification "Cost of Sales", set it as a category's default in Settings → Categories, create a new expense with that category → classification pre-fills "Cost of Sales" automatically and is editable inline before save. Re-open an earlier expense whose category's default changed afterward → its stored `classification_id` is unchanged (no silent history rewrite). Attempt to delete a category with 0 referencing transactions → deletes immediately; with N referencing transactions and no `replacementId` → `409 { referencedCount, requiresReplacement: true }`; retry with a valid `replacementId` → all referencing expenses/incomes repoint to the replacement and the original category row is gone. Same reassign-then-delete behavior for classifications, additionally repointing any `categories.default_classification_id` that pointed at the deleted row. Attempt to delete an `is_system` classification → blocked outright regardless of references. `POST /api/expenses` with `categoryId` only → resolves `classificationId` from the category's default (or the `is_system` fallback); with both fields → uses them as-is. Auto-import review row's category field behaves as a combobox (pre-select/suggest/create-new, mirroring contact resolution) with classification resolved alongside it, editable before confirm.
+17. **Reconciliation**: see Phase 8 "Verification Checklist Additions" above for the phase-specific checks (balance-match short-circuit, escalation to line-by-line, claim-vs-direct-expense clearing granularity, payment-method exclusion, statement-line persistence, permission gating).
