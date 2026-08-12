@@ -1907,6 +1907,25 @@
       display: none;
     }
   }
+  @media (min-width: 1001px) {
+    .reconciliation-screen {
+      height: 100%;
+      min-height: 0;
+      contain: size layout paint;
+    }
+    .reconciliation-screen > :global(.work),
+    .recon-work,
+    .split-workspace,
+    .record-pane {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .record-pane .table-card {
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+  }
   @media (max-width: 767px) {
     .recon-stats {
       display: none;
