@@ -1,13 +1,11 @@
 import { and, eq, gte, lte, sql, getTableColumns } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { alias } from "drizzle-orm/sqlite-core";
 import * as schema from "../db/schema.js";
 import {
   incomes,
   incomeAttachments,
   incomeSearchText,
   contacts,
-  reconciliationItemState,
 } from "../db/schema.js";
 import { nextNumber } from "../running-number.js";
 import {
@@ -113,26 +111,16 @@ export function setExtractedText(
 }
 
 // `mainAmount` = amount × exchangeRate (converted main-currency value). See expenses.ts.
-const incomeReconciliationState = alias(
-  reconciliationItemState,
-  "income_reconciliation_state",
-);
-
 const incomeWithContact = {
   ...getTableColumns(incomes),
   contactName: contacts.legalName,
   mainAmount: sql<number>`${incomes.amount} * ${incomes.exchangeRate}`,
   cleared:
-    sql<boolean>`${incomeReconciliationState.clearedSessionId} is not null`.mapWith(
+    sql<boolean>`coalesce((select sum(amount) from reconciliation_allocations where item_type=${ReconItemType.Income} and item_id=${incomes.id}),0) >= round(${incomes.amount}*${incomes.exchangeRate},2)`.mapWith(
       Boolean,
     ),
-  clearedSessionId: incomeReconciliationState.clearedSessionId,
+  clearedSessionId: sql<number | null>`null`,
 };
-
-const incomeReconciliationJoin = and(
-  eq(incomeReconciliationState.itemType, ReconItemType.Income),
-  eq(incomeReconciliationState.itemId, incomes.id),
-);
 
 export function listIncomes(db: Db, filters: IncomeFilters = {}) {
   const {
@@ -169,7 +157,6 @@ export function listIncomes(db: Db, filters: IncomeFilters = {}) {
     .select(incomeWithContact)
     .from(incomes)
     .leftJoin(contacts, eq(contacts.id, incomes.contactId))
-    .leftJoin(incomeReconciliationState, incomeReconciliationJoin)
     .where(conditions.length ? and(...conditions) : undefined)
     .limit(limit)
     .offset(offset)
@@ -181,7 +168,6 @@ export function getIncome(db: Db, id: number) {
     .select(incomeWithContact)
     .from(incomes)
     .leftJoin(contacts, eq(contacts.id, incomes.contactId))
-    .leftJoin(incomeReconciliationState, incomeReconciliationJoin)
     .where(eq(incomes.id, id))
     .get();
 

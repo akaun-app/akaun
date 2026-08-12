@@ -17,14 +17,14 @@ export const ClaimStatus = { Pending: 1, Done: 2 } as const;
 
 // --- import_queue ---
 export const ImportState = {
-	Queued: 1,
-	Extracting: 2,
-	Processing: 3,
-	PendingReview: 4,
-	Confirmed: 5,
-	Imported: 6,
-	Skipped: 7,
-	Failed: 8
+  Queued: 1,
+  Extracting: 2,
+  Processing: 3,
+  PendingReview: 4,
+  Confirmed: 5,
+  Imported: 6,
+  Skipped: 7,
+  Failed: 8,
 } as const;
 // DocumentType is also used for import_queue.result_type
 export const DocumentType = { Expense: 1, Income: 2 } as const;
@@ -39,74 +39,75 @@ export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
 
 export type EntityTypeCode = (typeof EntityType)[keyof typeof EntityType];
 export type RoleCode = (typeof Role)[keyof typeof Role];
-export type ExpenseStatusCode = (typeof ExpenseStatus)[keyof typeof ExpenseStatus];
+export type ExpenseStatusCode =
+  (typeof ExpenseStatus)[keyof typeof ExpenseStatus];
 export type ClaimStatusCode = (typeof ClaimStatus)[keyof typeof ClaimStatus];
 export type ImportStateCode = (typeof ImportState)[keyof typeof ImportState];
 export type DocumentTypeCode = (typeof DocumentType)[keyof typeof DocumentType];
 export type ResetScopeCode = (typeof ResetScope)[keyof typeof ResetScope];
 
 export const EntityTypeLabels: Record<number, string> = {
-	[EntityType.Individual]: 'Individual',
-	[EntityType.Business]: 'Business'
+  [EntityType.Individual]: "Individual",
+  [EntityType.Business]: "Business",
 };
 
 export const RoleLabels: Record<number, string> = {
-	[Role.Customer]: 'Customer',
-	[Role.Supplier]: 'Supplier',
-	[Role.Employee]: 'Employee'
+  [Role.Customer]: "Customer",
+  [Role.Supplier]: "Supplier",
+  [Role.Employee]: "Employee",
 };
 
 export const ExpenseStatusLabels: Record<number, string> = {
-	[ExpenseStatus.Unpaid]: 'unpaid',
-	[ExpenseStatus.Pending]: 'pending',
-	[ExpenseStatus.Paid]: 'paid'
+  [ExpenseStatus.Unpaid]: "unpaid",
+  [ExpenseStatus.Pending]: "pending",
+  [ExpenseStatus.Paid]: "paid",
 };
 
 export const ClaimStatusLabels: Record<number, string> = {
-	[ClaimStatus.Pending]: 'pending',
-	[ClaimStatus.Done]: 'done'
+  [ClaimStatus.Pending]: "pending",
+  [ClaimStatus.Done]: "done",
 };
 
 export const ImportStateLabels: Record<number, string> = {
-	[ImportState.Queued]: 'queued',
-	[ImportState.Extracting]: 'extracting',
-	[ImportState.Processing]: 'processing',
-	[ImportState.PendingReview]: 'pending_review',
-	[ImportState.Confirmed]: 'confirmed',
-	[ImportState.Imported]: 'imported',
-	[ImportState.Skipped]: 'skipped',
-	[ImportState.Failed]: 'failed'
+  [ImportState.Queued]: "queued",
+  [ImportState.Extracting]: "extracting",
+  [ImportState.Processing]: "processing",
+  [ImportState.PendingReview]: "pending_review",
+  [ImportState.Confirmed]: "confirmed",
+  [ImportState.Imported]: "imported",
+  [ImportState.Skipped]: "skipped",
+  [ImportState.Failed]: "failed",
 };
 
 export const DocumentTypeLabels: Record<number, string> = {
-	[DocumentType.Expense]: 'expense',
-	[DocumentType.Income]: 'income'
+  [DocumentType.Expense]: "expense",
+  [DocumentType.Income]: "income",
 };
 
 export const ResetScopeLabels: Record<number, string> = {
-	[ResetScope.Settings]: 'settings',
-	[ResetScope.Data]: 'data',
-	[ResetScope.Everything]: 'everything'
+  [ResetScope.Settings]: "settings",
+  [ResetScope.Data]: "data",
+  [ResetScope.Everything]: "everything",
 };
 
 function invert(labels: Record<number, string>): Record<string, number> {
-	const out: Record<string, number> = {};
-	for (const [code, label] of Object.entries(labels)) out[label] = Number(code);
-	return out;
+  const out: Record<string, number> = {};
+  for (const [code, label] of Object.entries(labels)) out[label] = Number(code);
+  return out;
 }
 
 function makeEnum(labels: Record<number, string>) {
-	const byLabel = invert(labels);
-	return {
-		toLabel(code: number | null | undefined): string | null {
-			if (code == null) return null;
-			return labels[code] ?? null;
-		},
-		fromLabel(label: string | null | undefined): number | null {
-			if (label == null) return null;
-			return byLabel[label] ?? null;
-		}
-	};
+  const byLabel = invert(labels);
+  return {
+    toLabel(code: number | null | undefined): string | null {
+      if (code == null) return null;
+      return labels[code] ?? null;
+    },
+    fromLabel(label: string | null | undefined): number | null {
+      if (label == null) return null;
+      return byLabel[label] ?? null;
+    },
+  };
 }
 
 export const entityTypeEnum = makeEnum(EntityTypeLabels);
@@ -118,39 +119,57 @@ export const documentTypeEnum = makeEnum(DocumentTypeLabels);
 export const resetScopeEnum = makeEnum(ResetScopeLabels);
 
 // --- quotations ---
-export const QuotationStatus = { Draft: 1, Sent: 2, Accepted: 3, Declined: 4, Converted: 5 } as const;
+export const QuotationStatus = {
+  Draft: 1,
+  Sent: 2,
+  Accepted: 3,
+  Declined: 4,
+  Converted: 5,
+} as const;
 // reserved (DERIVED, never stored): Expired — expiry_date < today && status ∈ {Draft, Sent}
-export type QuotationStatusCode = (typeof QuotationStatus)[keyof typeof QuotationStatus];
+export type QuotationStatusCode =
+  (typeof QuotationStatus)[keyof typeof QuotationStatus];
 export const QuotationStatusLabels: Record<number, string> = {
-	[QuotationStatus.Draft]: 'draft',
-	[QuotationStatus.Sent]: 'sent',
-	[QuotationStatus.Accepted]: 'accepted',
-	[QuotationStatus.Declined]: 'declined',
-	[QuotationStatus.Converted]: 'converted'
+  [QuotationStatus.Draft]: "draft",
+  [QuotationStatus.Sent]: "sent",
+  [QuotationStatus.Accepted]: "accepted",
+  [QuotationStatus.Declined]: "declined",
+  [QuotationStatus.Converted]: "converted",
 };
 export const quotationStatusEnum = makeEnum(QuotationStatusLabels);
 
 // --- invoices ---
-export const InvoiceStatus = { Draft: 1, Sent: 2, Paid: 3, Cancelled: 4 } as const;
+export const InvoiceStatus = {
+  Draft: 1,
+  Sent: 2,
+  Paid: 3,
+  Cancelled: 4,
+} as const;
 // reserved (DERIVED, never stored): Overdue — due_date < today && status !== Paid
 // reserved (FUTURE): PartiallyPaid = 5
-export type InvoiceStatusCode = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+export type InvoiceStatusCode =
+  (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
 export const InvoiceStatusLabels: Record<number, string> = {
-	[InvoiceStatus.Draft]: 'draft',
-	[InvoiceStatus.Sent]: 'sent',
-	[InvoiceStatus.Paid]: 'paid',
-	[InvoiceStatus.Cancelled]: 'cancelled'
+  [InvoiceStatus.Draft]: "draft",
+  [InvoiceStatus.Sent]: "sent",
+  [InvoiceStatus.Paid]: "paid",
+  [InvoiceStatus.Cancelled]: "cancelled",
 };
 export const invoiceStatusEnum = makeEnum(InvoiceStatusLabels);
 
 // --- document templates ---
-export const TemplateDocumentType = { Quotation: 1, Invoice: 2, Both: 3 } as const;
+export const TemplateDocumentType = {
+  Quotation: 1,
+  Invoice: 2,
+  Both: 3,
+} as const;
 // reserved: per-document override (future — no stored status change)
-export type TemplateDocumentTypeCode = (typeof TemplateDocumentType)[keyof typeof TemplateDocumentType];
+export type TemplateDocumentTypeCode =
+  (typeof TemplateDocumentType)[keyof typeof TemplateDocumentType];
 export const TemplateDocumentTypeLabels: Record<number, string> = {
-	[TemplateDocumentType.Quotation]: 'quotation',
-	[TemplateDocumentType.Invoice]: 'invoice',
-	[TemplateDocumentType.Both]: 'both'
+  [TemplateDocumentType.Quotation]: "quotation",
+  [TemplateDocumentType.Invoice]: "invoice",
+  [TemplateDocumentType.Both]: "both",
 };
 export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
 
@@ -158,65 +177,62 @@ export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
 // Which ledger table a polymorphic reconciliation reference points at. `Expense`
 // is only ever a DIRECT (unclaimed) expense — a claimed one rides inside its claim.
 export const ReconItemType = { Expense: 1, Claim: 2, Income: 3 } as const;
-// ClosedMatched = tied out at Step 1; ClosedWithLeftovers = escalated to the
-// line-by-line workspace and closed with leftovers on one or both sides.
-export const ReconSessionStatus = { Open: 1, ClosedMatched: 2, ClosedWithLeftovers: 3 } as const;
+// ClosedMatched = every statement line was matched; ClosedWithLeftovers = the
+// session closed with unresolved records or statement lines.
 // Statement amounts are stored positive; the sign lives here.
 export const StatementDirection = { In: 1, Out: 2 } as const;
 // NotYetCleared = a timing difference, the item stays in scope. WillNotClear =
-// never a bank transaction, excluded from the computation and from leftovers.
-export const LeftoverAnnotation = { NotYetCleared: 1, WillNotClear: 2 } as const;
+// never a bank transaction, excluded from candidates and from leftovers.
 // Progress of the most recent statement upload into a session.
-export const StatementExtractionState = { Idle: 1, Extracting: 2, Ready: 3, Failed: 4 } as const;
+export const StatementExtractionState = {
+  Idle: 1,
+  Extracting: 2,
+  Ready: 3,
+  Failed: 4,
+} as const;
 
-export type ReconItemTypeCode = (typeof ReconItemType)[keyof typeof ReconItemType];
-export type ReconSessionStatusCode = (typeof ReconSessionStatus)[keyof typeof ReconSessionStatus];
-export type StatementDirectionCode = (typeof StatementDirection)[keyof typeof StatementDirection];
-export type LeftoverAnnotationCode = (typeof LeftoverAnnotation)[keyof typeof LeftoverAnnotation];
+export type ReconItemTypeCode =
+  (typeof ReconItemType)[keyof typeof ReconItemType];
+export type StatementDirectionCode =
+  (typeof StatementDirection)[keyof typeof StatementDirection];
 export type StatementExtractionStateCode =
-	(typeof StatementExtractionState)[keyof typeof StatementExtractionState];
+  (typeof StatementExtractionState)[keyof typeof StatementExtractionState];
 
 export const ReconItemTypeLabels: Record<number, string> = {
-	[ReconItemType.Expense]: 'expense',
-	[ReconItemType.Claim]: 'claim',
-	[ReconItemType.Income]: 'income'
-};
-
-export const ReconSessionStatusLabels: Record<number, string> = {
-	[ReconSessionStatus.Open]: 'open',
-	[ReconSessionStatus.ClosedMatched]: 'matched',
-	[ReconSessionStatus.ClosedWithLeftovers]: 'leftovers'
+  [ReconItemType.Expense]: "expense",
+  [ReconItemType.Claim]: "claim",
+  [ReconItemType.Income]: "income",
 };
 
 export const StatementDirectionLabels: Record<number, string> = {
-	[StatementDirection.In]: 'in',
-	[StatementDirection.Out]: 'out'
-};
-
-export const LeftoverAnnotationLabels: Record<number, string> = {
-	[LeftoverAnnotation.NotYetCleared]: 'not_yet_cleared',
-	[LeftoverAnnotation.WillNotClear]: 'will_not_clear'
+  [StatementDirection.In]: "in",
+  [StatementDirection.Out]: "out",
 };
 
 export const StatementExtractionStateLabels: Record<number, string> = {
-	[StatementExtractionState.Idle]: 'idle',
-	[StatementExtractionState.Extracting]: 'extracting',
-	[StatementExtractionState.Ready]: 'ready',
-	[StatementExtractionState.Failed]: 'failed'
+  [StatementExtractionState.Idle]: "idle",
+  [StatementExtractionState.Extracting]: "extracting",
+  [StatementExtractionState.Ready]: "ready",
+  [StatementExtractionState.Failed]: "failed",
 };
 
 export const reconItemTypeEnum = makeEnum(ReconItemTypeLabels);
-export const reconSessionStatusEnum = makeEnum(ReconSessionStatusLabels);
 export const statementDirectionEnum = makeEnum(StatementDirectionLabels);
-export const leftoverAnnotationEnum = makeEnum(LeftoverAnnotationLabels);
-export const statementExtractionStateEnum = makeEnum(StatementExtractionStateLabels);
+export const statementExtractionStateEnum = makeEnum(
+  StatementExtractionStateLabels,
+);
 
-export const TemplateFont = { Inter: 1, Roboto: 2, Lato: 3, Merriweather: 4 } as const;
+export const TemplateFont = {
+  Inter: 1,
+  Roboto: 2,
+  Lato: 3,
+  Merriweather: 4,
+} as const;
 export type TemplateFontCode = (typeof TemplateFont)[keyof typeof TemplateFont];
 export const TemplateFontLabels: Record<number, string> = {
-	[TemplateFont.Inter]: 'Inter',
-	[TemplateFont.Roboto]: 'Roboto',
-	[TemplateFont.Lato]: 'Lato',
-	[TemplateFont.Merriweather]: 'Merriweather'
+  [TemplateFont.Inter]: "Inter",
+  [TemplateFont.Roboto]: "Roboto",
+  [TemplateFont.Lato]: "Lato",
+  [TemplateFont.Merriweather]: "Merriweather",
 };
 export const templateFontEnum = makeEnum(TemplateFontLabels);

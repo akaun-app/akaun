@@ -156,7 +156,7 @@ export function findDuplicateLines(lines: StatementLineRow[]): Set<number> {
     ) {
       const right = lines[rightIndex];
       if (
-        left.sessionId === right.sessionId &&
+        left.statementId === right.statementId &&
         left.date === right.date &&
         Math.abs(left.amount - right.amount) < EPSILON &&
         normaliseDuplicateDescription(left.description) ===

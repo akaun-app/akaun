@@ -61,7 +61,7 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	const expense = getExpense(db, id);
 	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
 
-	if (!canEditAmount(expense)) {
+	if (expense.claimId !== null) {
 		return Response.json(
 			{
 				error: `Expense "${expense.expenseNumber}" is linked to claim ${expense.claimNumber} and cannot be deleted until it's removed from the claim.`

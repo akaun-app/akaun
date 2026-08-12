@@ -1,10 +1,10 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from "node:events";
 
 // Bank reconciliation live-update bus: every mutating function in
 // services/reconciliation.ts emits on this after its DB write, and the
 // /api/reconciliation/stream SSE endpoint is the only consumer. Event types
-// (see specs/001-bank-reconciliation/contracts/events.md): `session-update`,
-// `session-deleted`, `line-update`, `line-deleted`, `lines-added`,
+// (see specs/001-bank-reconciliation/contracts/events.md): `statement-update`,
+// `statement-deleted`, `line-update`, `line-deleted`, `lines-added`,
 // `item-state-update`.
 export const reconciliationEvents = new EventEmitter();
 // Each open SSE connection registers one listener per event type above (6) and

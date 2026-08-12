@@ -5,6 +5,7 @@ import { patchClaim, removeClaim } from '$lib/server/services/claims.js';
 import { hasPermission } from '$lib/server/permissions.js';
 import { isValidDate } from '$lib/server/date.js';
 import { canEditClaimData } from '$lib/server/locking.js';
+import { ClaimStatus } from '$lib/enums.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'claims', 'view')) return new Response('Forbidden', { status: 403 });
@@ -26,7 +27,13 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json();
 	const patch: { status?: number; date?: string; expenseIds?: number[] } = {};
-	if (body.status !== undefined) patch.status = Number(body.status);
+	if (body.status !== undefined) {
+		const status = Number(body.status);
+		if (status !== ClaimStatus.Pending && status !== ClaimStatus.Done) {
+			return Response.json({ error: 'Invalid claim status' }, { status: 400 });
+		}
+		patch.status = status;
+	}
 	if (body.date !== undefined) {
 		if (!isValidDate(body.date)) {
 			return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });

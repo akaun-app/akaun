@@ -1,9 +1,12 @@
 import { QuotationStatus, InvoiceStatus, ClaimStatus } from '$lib/enums.js';
 
-// Amount and status are settled accounting data — locked permanently once the expense is
-// linked to a claim. No override.
-export function canEditAmount(expense: { claimId: number | null }): boolean {
-	return expense.claimId === null;
+// A linked expense is editable while its claim is Pending. Marking the claim Done settles
+// the accounting data; reopening the claim returns it to Pending and unlocks corrections.
+export function canEditAmount(expense: {
+	claimId: number | null;
+	claimStatus?: number | null;
+}): boolean {
+	return expense.claimId === null || expense.claimStatus !== ClaimStatus.Done;
 }
 
 // Attachments are supporting documents, not accounting data, but once their claim is

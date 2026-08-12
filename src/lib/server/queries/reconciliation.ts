@@ -1,583 +1,249 @@
-import { and, desc, eq, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { alias } from "drizzle-orm/sqlite-core";
-import {
-  LeftoverAnnotation,
-  ReconItemType,
-  ReconSessionStatus,
-} from "$lib/enums.js";
-import type { LeftoverAnnotationCode } from "$lib/enums.js";
+import { ReconItemType } from "$lib/enums.js";
 import type { ReconItemTypeCode } from "$lib/enums.js";
 import * as schema from "../db/schema.js";
 import {
+  bankStatements,
+  bankStatementLines,
   claims,
   contacts,
-  bankStatementLines,
   expenses,
   incomes,
-  reconciliationItemState,
-  reconciliationSessions,
+  reconciliationAllocations,
 } from "../db/schema.js";
 import type {
   BankFacingItem,
-  ItemStateRow,
-  SessionRow,
+  BankStatementRow,
+  ReconciliationAllocation,
   StatementLineRow,
 } from "../reconciliation/types.js";
+import { mainAmount, round2 } from "../reconciliation/types.js";
 
 export type ReconciliationDb = BunSQLiteDatabase<typeof schema>;
 
-export type SessionCreate = Pick<
-  SessionRow,
-  | "startingBalance"
-  | "startingDate"
-  | "periodEndDate"
-  | "statementEndingBalance"
-> & { createdBy: number };
-
-export type SessionPatch = Partial<
-  Pick<
-    SessionRow,
-    | "startingBalance"
-    | "startingDate"
-    | "periodEndDate"
-    | "statementEndingBalance"
-    | "computedBalance"
-    | "status"
-    | "clearedCount"
-    | "unclearedCount"
-    | "unmatchedLineCount"
-    | "statementState"
-    | "statementError"
-    | "closedAt"
-  >
-> & { updatedBy: number };
-
-function asSessionRow(
-  row: typeof reconciliationSessions.$inferSelect,
-): SessionRow {
-  return row as SessionRow;
-}
-
-export function listSessions(db: ReconciliationDb): SessionRow[] {
-  return db
+export const listAllocations = (db: ReconciliationDb) =>
+  db
     .select()
-    .from(reconciliationSessions)
-    .orderBy(desc(reconciliationSessions.id))
-    .all()
-    .map(asSessionRow);
-}
-
-export function getSession(
-  db: ReconciliationDb,
-  id: number,
-): SessionRow | null {
-  const row = db
+    .from(reconciliationAllocations)
+    .all() as ReconciliationAllocation[];
+export const listLineAllocations = (db: ReconciliationDb, lineId: number) =>
+  db
     .select()
-    .from(reconciliationSessions)
-    .where(eq(reconciliationSessions.id, id))
-    .get();
-  return row ? asSessionRow(row) : null;
-}
-
-export function getOpenSession(db: ReconciliationDb): SessionRow | null {
-  const row = db
+    .from(reconciliationAllocations)
+    .where(eq(reconciliationAllocations.lineId, lineId))
+    .all() as ReconciliationAllocation[];
+export const listItemAllocations = (
+  db: ReconciliationDb,
+  itemType: number,
+  itemId: number,
+) =>
+  db
     .select()
-    .from(reconciliationSessions)
-    .where(eq(reconciliationSessions.status, ReconSessionStatus.Open))
-    .orderBy(desc(reconciliationSessions.id))
-    .get();
-  return row ? asSessionRow(row) : null;
-}
+    .from(reconciliationAllocations)
+    .where(
+      and(
+        eq(reconciliationAllocations.itemType, itemType),
+        eq(reconciliationAllocations.itemId, itemId),
+      ),
+    )
+    .all() as ReconciliationAllocation[];
 
-export function insertSession(
+export function replaceItemAllocations(
   db: ReconciliationDb,
-  data: SessionCreate,
-): SessionRow {
-  return asSessionRow(
-    db.insert(reconciliationSessions).values(data).returning().get()!,
-  );
-}
-
-export function updateSession(
-  db: ReconciliationDb,
-  id: number,
-  patch: SessionPatch,
-): SessionRow | null {
-  const row = db
-    .update(reconciliationSessions)
-    .set(patch)
-    .where(eq(reconciliationSessions.id, id))
-    .returning()
-    .get();
-  return row ? asSessionRow(row) : null;
-}
-
-export function getCloseCounts(
-  db: ReconciliationDb,
-  sessionId: number,
-  unclearedCount: number,
-): {
-  clearedCount: number;
-  unclearedCount: number;
-  unmatchedLineCount: number;
-} {
-  const clearedCount =
-    db
-      .select({ count: sql<number>`count(*)` })
-      .from(reconciliationItemState)
-      .where(eq(reconciliationItemState.clearedSessionId, sessionId))
-      .get()?.count ?? 0;
-  const unmatchedLineCount =
-    db
-      .select({ count: sql<number>`count(*)` })
-      .from(bankStatementLines)
+  itemType: ReconItemTypeCode,
+  itemId: number,
+  snapshot: number,
+  values: { lineId: number; amount: number }[],
+  createdBy: number,
+) {
+  return db.transaction(() => {
+    db.delete(reconciliationAllocations)
       .where(
         and(
-          eq(bankStatementLines.sessionId, sessionId),
-          isNull(bankStatementLines.matchedItemType),
+          eq(reconciliationAllocations.itemType, itemType),
+          eq(reconciliationAllocations.itemId, itemId),
         ),
       )
-      .get()?.count ?? 0;
-  return { clearedCount, unclearedCount, unmatchedLineCount };
-}
-
-export function listLines(
-  db: ReconciliationDb,
-  sessionId: number,
-): StatementLineRow[] {
-  return db
-    .select()
-    .from(bankStatementLines)
-    .where(eq(bankStatementLines.sessionId, sessionId))
-    .orderBy(bankStatementLines.date, bankStatementLines.id)
-    .all() as StatementLineRow[];
-}
-
-export type LineCreate = Pick<
-  StatementLineRow,
-  "sessionId" | "date" | "description" | "amount" | "direction"
-> &
-  Partial<Pick<StatementLineRow, "note" | "sourceFile">>;
-
-export type LinePatch = Partial<
-  Pick<
-    StatementLineRow,
-    | "date"
-    | "description"
-    | "amount"
-    | "direction"
-    | "note"
-    | "matchedItemType"
-    | "matchedItemId"
-  >
->;
-
-export function insertLines(
-  db: ReconciliationDb,
-  rows: LineCreate[],
-): StatementLineRow[] {
-  if (rows.length === 0) return [];
-  return db.insert(bankStatementLines).values(rows).returning().all() as StatementLineRow[];
-}
-
-export function insertLine(
-  db: ReconciliationDb,
-  row: LineCreate,
-): StatementLineRow {
-  return db.insert(bankStatementLines).values(row).returning().get() as StatementLineRow;
-}
-
-export function getLine(
-  db: ReconciliationDb,
-  sessionId: number,
-  lineId: number,
-): StatementLineRow | null {
-  return (
-    (db
-      .select()
-      .from(bankStatementLines)
-      .where(
-        and(
-          eq(bankStatementLines.id, lineId),
-          eq(bankStatementLines.sessionId, sessionId),
-        ),
-      )
-      .get() as StatementLineRow | undefined) ?? null
-  );
-}
-
-export function updateLine(
-  db: ReconciliationDb,
-  sessionId: number,
-  lineId: number,
-  patch: LinePatch,
-): StatementLineRow | null {
-  return (
-    (db
-      .update(bankStatementLines)
-      .set(patch)
-      .where(
-        and(
-          eq(bankStatementLines.id, lineId),
-          eq(bankStatementLines.sessionId, sessionId),
-        ),
+      .run();
+    if (!values.length) return [];
+    return db
+      .insert(reconciliationAllocations)
+      .values(
+        values.map((v) => ({
+          ...v,
+          itemType,
+          itemId,
+          itemAmountSnapshot: snapshot,
+          createdBy,
+        })),
       )
       .returning()
-      .get() as StatementLineRow | undefined) ?? null
-  );
-}
-
-export function deleteLine(
-  db: ReconciliationDb,
-  sessionId: number,
-  lineId: number,
-): StatementLineRow | null {
-  return db.transaction(() => {
-    const line = getLine(db, sessionId, lineId);
-    if (!line) return null;
-    if (line.matchedItemType !== null && line.matchedItemId !== null) {
-      const state = db
-        .select()
-        .from(reconciliationItemState)
-        .where(
-          and(
-            eq(reconciliationItemState.itemType, line.matchedItemType),
-            eq(reconciliationItemState.itemId, line.matchedItemId),
-            eq(reconciliationItemState.clearedLineId, lineId),
-          ),
-        )
-        .get();
-      if (state && state.annotation == null) {
-        db.delete(reconciliationItemState)
-          .where(eq(reconciliationItemState.id, state.id))
-          .run();
-      } else if (state) {
-        db.update(reconciliationItemState)
-          .set({
-            clearedSessionId: null,
-            clearedLineId: null,
-            clearedAmount: null,
-            clearedAt: null,
-          })
-          .where(eq(reconciliationItemState.id, state.id))
-          .run();
-      }
-    }
-    db.delete(bankStatementLines).where(eq(bankStatementLines.id, lineId)).run();
-    return line;
+      .all() as ReconciliationAllocation[];
   });
 }
 
-const expenseState = alias(
-  reconciliationItemState,
-  "reconciliation_scope_expense_state",
-);
-const incomeState = alias(
-  reconciliationItemState,
-  "reconciliation_scope_income_state",
-);
-const claimState = alias(
-  reconciliationItemState,
-  "reconciliation_scope_claim_state",
-);
-
-/**
- * Returns every uncleared bank-facing item dated on or before the session end.
- * There is deliberately no lower date bound: old uncleared records remain in scope.
- */
-export function getInScopeItems(
+export const listStatements = (db: ReconciliationDb) =>
+  db
+    .select()
+    .from(bankStatements)
+    .orderBy(desc(bankStatements.id))
+    .all() as BankStatementRow[];
+export const getStatement = (db: ReconciliationDb, id: number) =>
+  db.select().from(bankStatements).where(eq(bankStatements.id, id)).get() as
+    | BankStatementRow
+    | undefined;
+export const insertStatement = (
   db: ReconciliationDb,
-  periodEndDate: string,
-  includeClearedSessionId?: number,
-): {
-  incomes: BankFacingItem[];
-  directExpenses: BankFacingItem[];
-  claims: BankFacingItem[];
-} {
-  const directExpenses = db
-    .select({
-      itemId: expenses.id,
-      label: sql<string>`${expenses.expenseNumber} || ' · ' || ${expenses.itemName}`,
-      date: expenses.date,
-      amount: expenses.amount,
-      exchangeRate: expenses.exchangeRate,
-      contactName: contacts.legalName,
-      annotation: expenseState.annotation,
-      clearedSessionId: expenseState.clearedSessionId,
-      clearedLineId: expenseState.clearedLineId,
-    })
-    .from(expenses)
-    .leftJoin(contacts, eq(contacts.id, expenses.contactId))
-    .leftJoin(
-      expenseState,
-      and(
-        eq(expenseState.itemType, ReconItemType.Expense),
-        eq(expenseState.itemId, expenses.id),
-      ),
-    )
-    .where(
-      and(
-        isNull(expenses.claimId),
-        lte(expenses.date, periodEndDate),
-        includeClearedSessionId === undefined
-          ? isNull(expenseState.clearedSessionId)
-          : or(
-              isNull(expenseState.clearedSessionId),
-              eq(expenseState.clearedSessionId, includeClearedSessionId),
-            ),
-        or(
-          isNull(expenseState.annotation),
-          ne(expenseState.annotation, LeftoverAnnotation.WillNotClear),
-        ),
-      ),
-    )
-    .all()
-    .map(
-      (row): BankFacingItem => ({
-        ...row,
-        annotation: row.annotation as LeftoverAnnotationCode | null,
-        itemType: ReconItemType.Expense,
-        claimId: null,
-        cleared: row.clearedSessionId !== null,
-      }),
-    );
+  data: typeof bankStatements.$inferInsert,
+) =>
+  db.insert(bankStatements).values(data).returning().get() as BankStatementRow;
+export const updateStatement = (
+  db: ReconciliationDb,
+  id: number,
+  data: Partial<typeof bankStatements.$inferInsert>,
+) =>
+  db
+    .update(bankStatements)
+    .set({ ...data, updatedAt: sql`datetime('now')` })
+    .where(eq(bankStatements.id, id))
+    .returning()
+    .get() as BankStatementRow | undefined;
+export const deleteStatement = (db: ReconciliationDb, id: number) =>
+  db
+    .delete(bankStatements)
+    .where(eq(bankStatements.id, id))
+    .returning()
+    .get() as BankStatementRow | undefined;
+export const listLines = (db: ReconciliationDb, statementId?: number) => {
+  const q = db.select().from(bankStatementLines);
+  return (
+    statementId == null
+      ? q
+          .orderBy(asc(bankStatementLines.date), asc(bankStatementLines.id))
+          .all()
+      : q
+          .where(eq(bankStatementLines.statementId, statementId))
+          .orderBy(asc(bankStatementLines.date), asc(bankStatementLines.id))
+          .all()
+  ) as StatementLineRow[];
+};
+export const getLine = (db: ReconciliationDb, id: number) =>
+  db
+    .select()
+    .from(bankStatementLines)
+    .where(eq(bankStatementLines.id, id))
+    .get() as StatementLineRow | undefined;
+export const insertLines = (
+  db: ReconciliationDb,
+  values: (typeof bankStatementLines.$inferInsert)[],
+) =>
+  values.length
+    ? (db
+        .insert(bankStatementLines)
+        .values(values)
+        .returning()
+        .all() as StatementLineRow[])
+    : [];
+export const updateLine = (
+  db: ReconciliationDb,
+  id: number,
+  data: Partial<
+    Pick<
+      StatementLineRow,
+      "date" | "description" | "amount" | "direction" | "note"
+    >
+  >,
+) =>
+  db
+    .update(bankStatementLines)
+    .set(data)
+    .where(eq(bankStatementLines.id, id))
+    .returning()
+    .get() as StatementLineRow | undefined;
+export const deleteLine = (db: ReconciliationDb, id: number) =>
+  db
+    .delete(bankStatementLines)
+    .where(eq(bankStatementLines.id, id))
+    .returning()
+    .get() as StatementLineRow | undefined;
 
-  const scopedIncomes = db
+export function listBankFacingItems(
+  db: ReconciliationDb,
+  from?: string | null,
+  to?: string | null,
+): BankFacingItem[] {
+  const dateWhere = <T>(column: T) =>
+    and(
+      from ? gte(column as never, from) : undefined,
+      to ? lte(column as never, to) : undefined,
+    );
+  const incomeRows = db
     .select({
-      itemId: incomes.id,
-      label: sql<string>`${incomes.incomeNumber} || case when ${incomes.descriptionText} = '' then '' else ' · ' || ${incomes.descriptionText} end`,
+      id: incomes.id,
+      label: incomes.incomeNumber,
       date: incomes.date,
       amount: incomes.amount,
       exchangeRate: incomes.exchangeRate,
       contactName: contacts.legalName,
-      annotation: incomeState.annotation,
-      clearedSessionId: incomeState.clearedSessionId,
-      clearedLineId: incomeState.clearedLineId,
     })
     .from(incomes)
-    .leftJoin(contacts, eq(contacts.id, incomes.contactId))
-    .leftJoin(
-      incomeState,
-      and(
-        eq(incomeState.itemType, ReconItemType.Income),
-        eq(incomeState.itemId, incomes.id),
-      ),
-    )
-    .where(
-      and(
-        lte(incomes.date, periodEndDate),
-        includeClearedSessionId === undefined
-          ? isNull(incomeState.clearedSessionId)
-          : or(
-              isNull(incomeState.clearedSessionId),
-              eq(incomeState.clearedSessionId, includeClearedSessionId),
-            ),
-        or(
-          isNull(incomeState.annotation),
-          ne(incomeState.annotation, LeftoverAnnotation.WillNotClear),
-        ),
-      ),
-    )
+    .leftJoin(contacts, eq(incomes.contactId, contacts.id))
+    .where(dateWhere(incomes.date))
     .all()
-    .map(
-      (row): BankFacingItem => ({
-        ...row,
-        annotation: row.annotation as LeftoverAnnotationCode | null,
-        itemType: ReconItemType.Income,
-        cleared: row.clearedSessionId !== null,
-      }),
-    );
-
-  const scopedClaims = db
+    .map((r) => ({ ...r, itemType: ReconItemType.Income, itemId: r.id }));
+  const expenseRows = db
     .select({
-      itemId: claims.id,
+      id: expenses.id,
+      label: expenses.expenseNumber,
+      date: expenses.date,
+      amount: expenses.amount,
+      exchangeRate: expenses.exchangeRate,
+      contactName: contacts.legalName,
+    })
+    .from(expenses)
+    .leftJoin(contacts, eq(expenses.contactId, contacts.id))
+    .where(and(isNull(expenses.claimId), dateWhere(expenses.date)))
+    .all()
+    .map((r) => ({ ...r, itemType: ReconItemType.Expense, itemId: r.id }));
+  const claimRows = db
+    .select({
+      id: claims.id,
       label: claims.claimNumber,
       date: claims.date,
       amount: sql<number>`coalesce(sum(round(${expenses.amount} * ${expenses.exchangeRate}, 2)), 0)`,
-      annotation: claimState.annotation,
-      clearedSessionId: claimState.clearedSessionId,
-      clearedLineId: claimState.clearedLineId,
     })
     .from(claims)
     .leftJoin(expenses, eq(expenses.claimId, claims.id))
-    .leftJoin(
-      claimState,
-      and(
-        eq(claimState.itemType, ReconItemType.Claim),
-        eq(claimState.itemId, claims.id),
-      ),
-    )
-    .where(
-      and(
-        lte(claims.date, periodEndDate),
-        includeClearedSessionId === undefined
-          ? isNull(claimState.clearedSessionId)
-          : or(
-              isNull(claimState.clearedSessionId),
-              eq(claimState.clearedSessionId, includeClearedSessionId),
-            ),
-        or(
-          isNull(claimState.annotation),
-          ne(claimState.annotation, LeftoverAnnotation.WillNotClear),
-        ),
-      ),
-    )
+    .where(dateWhere(claims.date))
     .groupBy(claims.id)
     .all()
-    .map(
-      (row): BankFacingItem => ({
-        ...row,
-        annotation: row.annotation as LeftoverAnnotationCode | null,
-        itemType: ReconItemType.Claim,
-        exchangeRate: 1,
-        cleared: row.clearedSessionId !== null,
-      }),
-    );
-
-  return { incomes: scopedIncomes, directExpenses, claims: scopedClaims };
-}
-
-export function getCandidates(
-  db: ReconciliationDb,
-  sessionId: number,
-): BankFacingItem[] {
-  const session = getSession(db, sessionId);
-  if (!session) return [];
-  const scoped = getInScopeItems(db, session.periodEndDate, sessionId);
-  return [...scoped.incomes, ...scoped.directExpenses, ...scoped.claims];
-}
-
-export function getItemState(
-  db: ReconciliationDb,
-  itemType: number,
-  itemId: number,
-): ItemStateRow | null {
-  return (
-    (db
-      .select()
-      .from(reconciliationItemState)
-      .where(
-        and(
-          eq(reconciliationItemState.itemType, itemType),
-          eq(reconciliationItemState.itemId, itemId),
-        ),
-      )
-      .get() as ItemStateRow | undefined) ?? null
-  );
-}
-
-export function upsertItemState(
-  db: ReconciliationDb,
-  values: Omit<ItemStateRow, "id" | "updatedAt">,
-): ItemStateRow {
-  return db
-    .insert(reconciliationItemState)
-    .values(values)
-    .onConflictDoUpdate({
-      target: [reconciliationItemState.itemType, reconciliationItemState.itemId],
-      set: values,
-    })
-    .returning()
-    .get() as ItemStateRow;
-}
-
-export function removeEmptyItemState(
-  db: ReconciliationDb,
-  itemType: number,
-  itemId: number,
-): ItemStateRow | null {
-  const state = getItemState(db, itemType, itemId);
-  if (!state) return null;
-  if (state.clearedSessionId === null && state.annotation === null) {
-    db.delete(reconciliationItemState)
-      .where(eq(reconciliationItemState.id, state.id))
-      .run();
-    return null;
+    .map((r) => ({
+      ...r,
+      itemType: ReconItemType.Claim,
+      itemId: r.id,
+      exchangeRate: 1,
+      contactName: null,
+    }));
+  const coverage = new Map<string, { amount: number; count: number }>();
+  for (const a of listAllocations(db)) {
+    const k = `${a.itemType}:${a.itemId}`,
+      v = coverage.get(k) ?? { amount: 0, count: 0 };
+    v.amount = round2(v.amount + a.amount);
+    v.count++;
+    coverage.set(k, v);
   }
-  return state;
-}
-
-export function setLineMatch(
-  db: ReconciliationDb,
-  sessionId: number,
-  lineId: number,
-  match: { itemType: ReconItemTypeCode; itemId: number } | null,
-): StatementLineRow | null {
-  return updateLine(db, sessionId, lineId, {
-    matchedItemType: match?.itemType ?? null,
-    matchedItemId: match?.itemId ?? null,
-  });
-}
-
-export function isClaimedExpense(
-  db: ReconciliationDb,
-  itemId: number,
-): boolean {
-  return (
-    db
-      .select({ claimId: expenses.claimId })
-      .from(expenses)
-      .where(eq(expenses.id, itemId))
-      .get()?.claimId != null
-  );
-}
-
-export function getStatesClearedBySession(
-  db: ReconciliationDb,
-  sessionId: number,
-): ItemStateRow[] {
-  return db
-    .select()
-    .from(reconciliationItemState)
-    .where(eq(reconciliationItemState.clearedSessionId, sessionId))
-    .all() as ItemStateRow[];
-}
-
-export function deleteSessionData(
-  db: ReconciliationDb,
-  sessionId: number,
-): { before: ItemStateRow; after: ItemStateRow | null }[] {
-  return db.transaction(() => {
-    const states = db
-      .select()
-      .from(reconciliationItemState)
-      .where(
-        or(
-          eq(reconciliationItemState.clearedSessionId, sessionId),
-          eq(reconciliationItemState.annotationSessionId, sessionId),
-        ),
-      )
-      .all() as ItemStateRow[];
-    const changes = states.map((before) => {
-      const clearMatch = before.clearedSessionId === sessionId;
-      const clearAnnotation = before.annotationSessionId === sessionId;
-      const values = {
-        clearedSessionId: clearMatch ? null : before.clearedSessionId,
-        clearedLineId: clearMatch ? null : before.clearedLineId,
-        clearedAmount: clearMatch ? null : before.clearedAmount,
-        clearedAt: clearMatch ? null : before.clearedAt,
-        annotation: clearAnnotation ? null : before.annotation,
-        annotationSessionId: clearAnnotation ? null : before.annotationSessionId,
-        annotationNote: clearAnnotation ? "" : before.annotationNote,
-      };
-      if (values.clearedSessionId === null && values.annotation === null) {
-        db.delete(reconciliationItemState)
-          .where(eq(reconciliationItemState.id, before.id))
-          .run();
-        return { before, after: null };
-      }
-      const after = db
-        .update(reconciliationItemState)
-        .set(values)
-        .where(eq(reconciliationItemState.id, before.id))
-        .returning()
-        .get() as ItemStateRow;
-      return { before, after };
-    });
-    db.delete(reconciliationSessions)
-      .where(eq(reconciliationSessions.id, sessionId))
-      .run();
-    return changes;
+  return [...incomeRows, ...expenseRows, ...claimRows].map((r) => {
+    const c = coverage.get(`${r.itemType}:${r.itemId}`) ?? {
+      amount: 0,
+      count: 0,
+    };
+    const total = mainAmount(r);
+    return {
+      ...r,
+      allocatedAmount: c.amount,
+      remainingAmount: round2(total - c.amount),
+      allocationCount: c.count,
+    };
   });
 }

@@ -71,6 +71,34 @@
       "when": 1786371711086,
       "tag": "0009_natural_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786456233173,
+      "tag": "0010_black_slayback",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786456984624,
+      "tag": "0011_milky_tombstone",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786550400000,
+      "tag": "0012_reconciliation_allocations",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786636800000,
+      "tag": "0013_old_peter_quill",
+      "breakpoints": true
     }
   ]
 }

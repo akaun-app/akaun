@@ -1,8 +1,15 @@
-import { mkdirSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
-import { dirname, basename, extname, join, resolve, sep } from 'path';
-import { existsSync } from 'fs';
-import { randomUUID } from 'crypto';
-import { STORAGE_PATH } from './env.js';
+import {
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import { dirname, basename, extname, join, resolve, sep } from "path";
+import { existsSync } from "fs";
+import { randomUUID } from "crypto";
+import { STORAGE_PATH } from "./env.js";
 
 /** Largest accepted upload, in bytes. */
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
@@ -14,91 +21,105 @@ export const MAX_LOGO_BYTES = 5 * 1024 * 1024; // 5 MB
  * Verify the buffer's leading "magic bytes" identify an allowed type (PDF/JPEG/PNG).
  * This is content-based and cannot be spoofed by the client-supplied MIME or extension.
  */
-export function sniffAllowedType(buffer: Buffer): 'pdf' | 'jpeg' | 'png' | null {
-	if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === '%PDF') return 'pdf';
-	if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-		return 'jpeg';
-	}
-	if (
-		buffer.length >= 8 &&
-		buffer[0] === 0x89 &&
-		buffer[1] === 0x50 &&
-		buffer[2] === 0x4e &&
-		buffer[3] === 0x47 &&
-		buffer[4] === 0x0d &&
-		buffer[5] === 0x0a &&
-		buffer[6] === 0x1a &&
-		buffer[7] === 0x0a
-	) {
-		return 'png';
-	}
-	return null;
+export function sniffAllowedType(
+  buffer: Buffer,
+): "pdf" | "jpeg" | "png" | null {
+  if (buffer.length >= 4 && buffer.toString("ascii", 0, 4) === "%PDF")
+    return "pdf";
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return "jpeg";
+  }
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "png";
+  }
+  return null;
 }
 
 export function saveToTemp(buffer: Buffer, originalFilename: string): string {
-	const uuid = randomUUID();
-	const rel = `import/temp/${uuid}_${originalFilename}`;
-	const abs = join(STORAGE_PATH, rel);
-	mkdirSync(dirname(abs), { recursive: true });
-	writeFileSync(abs, buffer);
-	return rel;
+  const uuid = randomUUID();
+  const rel = `import/temp/${uuid}_${originalFilename}`;
+  const abs = join(STORAGE_PATH, rel);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, buffer);
+  return rel;
 }
 
 export function saveReconciliationStatement(
-	buffer: Buffer,
-	sessionId: number,
-	originalFilename: string
+  buffer: Buffer,
+  statementKey: number | string,
+  originalFilename: string,
 ): string {
-	if (!Number.isInteger(sessionId) || sessionId <= 0) throw new Error('Invalid reconciliation session');
-	const safeName = basename(originalFilename).replace(/[^a-zA-Z0-9._-]/g, '_');
-	const rel = join('reconciliation', String(sessionId), `${randomUUID()}_${safeName}`);
-	const abs = resolve(STORAGE_PATH, rel);
-	const root = resolve(STORAGE_PATH);
-	if (!abs.startsWith(root + sep)) throw new Error('Resolved destination escapes storage root');
-	mkdirSync(dirname(abs), { recursive: true });
-	writeFileSync(abs, buffer);
-	return rel;
+  if (!/^[a-zA-Z0-9-]+$/.test(String(statementKey)))
+    throw new Error("Invalid bank statement key");
+  const safeName = basename(originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const rel = join(
+    "reconciliation",
+    String(statementKey),
+    `${randomUUID()}_${safeName}`,
+  );
+  const abs = resolve(STORAGE_PATH, rel);
+  const root = resolve(STORAGE_PATH);
+  if (!abs.startsWith(root + sep))
+    throw new Error("Resolved destination escapes storage root");
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, buffer);
+  return rel;
 }
 
 export function moveToFinal(
-	tempRelPath: string,
-	type: 'expenses' | 'income' | 'claims',
-	documentDate: string
+  tempRelPath: string,
+  type: "expenses" | "income" | "claims",
+  documentDate: string,
 ): string {
-	const [year, month] = documentDate.split('-');
-	// Defence-in-depth: callers validate the date, but never trust it for path building.
-	if (!/^\d{4}$/.test(year) || !/^\d{2}$/.test(month)) {
-		throw new Error(`Invalid document date for file path: ${documentDate}`);
-	}
-	const filename = basename(tempRelPath);
-	const rel = `${type}/${year}/${month}/${filename}`;
-	const src = join(STORAGE_PATH, tempRelPath);
-	const dest = join(STORAGE_PATH, rel);
-	const storageRoot = resolve(STORAGE_PATH);
-	if (!resolve(dest).startsWith(storageRoot + sep)) {
-		throw new Error('Resolved destination escapes storage root');
-	}
-	mkdirSync(dirname(dest), { recursive: true });
-	renameSync(src, dest);
-	return rel;
+  const [year, month] = documentDate.split("-");
+  // Defence-in-depth: callers validate the date, but never trust it for path building.
+  if (!/^\d{4}$/.test(year) || !/^\d{2}$/.test(month)) {
+    throw new Error(`Invalid document date for file path: ${documentDate}`);
+  }
+  const filename = basename(tempRelPath);
+  const rel = `${type}/${year}/${month}/${filename}`;
+  const src = join(STORAGE_PATH, tempRelPath);
+  const dest = join(STORAGE_PATH, rel);
+  const storageRoot = resolve(STORAGE_PATH);
+  if (!resolve(dest).startsWith(storageRoot + sep)) {
+    throw new Error("Resolved destination escapes storage root");
+  }
+  mkdirSync(dirname(dest), { recursive: true });
+  renameSync(src, dest);
+  return rel;
 }
 
 export function urlForFile(relativePath: string): string {
-	return join(STORAGE_PATH, relativePath);
+  return join(STORAGE_PATH, relativePath);
 }
 
 export function displayName(relativePath: string): string {
-	const filename = basename(relativePath);
-	const match = filename.match(/^[0-9a-f-]{36}_(.+)$/i);
-	return match ? match[1] : filename;
+  const filename = basename(relativePath);
+  const match = filename.match(/^[0-9a-f-]{36}_(.+)$/i);
+  return match ? match[1] : filename;
 }
 
 export function deleteFile(relativePath: string): void {
-	try {
-		unlinkSync(join(STORAGE_PATH, relativePath));
-	} catch {
-		// ignore missing files
-	}
+  try {
+    unlinkSync(join(STORAGE_PATH, relativePath));
+  } catch {
+    // ignore missing files
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,43 +134,43 @@ export const MAX_TEMPLATE_ASSETS = 5;
  * Caller must validate file type (jpeg/png only) before calling.
  */
 export function saveTemplateAsset(
-	buffer: Buffer,
-	templateUuid: string,
-	originalFilename: string
+  buffer: Buffer,
+  templateUuid: string,
+  originalFilename: string,
 ): string {
-	const assetUuid = randomUUID();
-	const ext = extname(originalFilename).toLowerCase();
-	const filename = `${assetUuid}${ext}`;
-	const dir = join(STORAGE_PATH, 'templates', templateUuid);
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, filename), buffer);
-	return join('templates', templateUuid, filename);
+  const assetUuid = randomUUID();
+  const ext = extname(originalFilename).toLowerCase();
+  const filename = `${assetUuid}${ext}`;
+  const dir = join(STORAGE_PATH, "templates", templateUuid);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, filename), buffer);
+  return join("templates", templateUuid, filename);
 }
 
 /** Delete a single template asset by its relative path. */
 export function deleteTemplateAsset(relativePath: string): void {
-	deleteFile(relativePath);
+  deleteFile(relativePath);
 }
 
 /** List all asset relative paths for a template. Returns [] if the folder doesn't exist. */
 export function listTemplateAssets(templateUuid: string): string[] {
-	const dir = join(STORAGE_PATH, 'templates', templateUuid);
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir).map((f) => join('templates', templateUuid, f));
+  const dir = join(STORAGE_PATH, "templates", templateUuid);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).map((f) => join("templates", templateUuid, f));
 }
 
 /** Delete the entire asset folder for a template (called on template DELETE). */
 export function deleteTemplateAssetFolder(templateUuid: string): void {
-	const dir = join(STORAGE_PATH, 'templates', templateUuid);
-	if (existsSync(dir)) rmSync(dir, { recursive: true });
+  const dir = join(STORAGE_PATH, "templates", templateUuid);
+  if (existsSync(dir)) rmSync(dir, { recursive: true });
 }
 
-export function deleteReconciliationFolder(sessionId: number): void {
-	if (!Number.isInteger(sessionId) || sessionId <= 0) return;
-	const dir = resolve(STORAGE_PATH, 'reconciliation', String(sessionId));
-	const root = resolve(STORAGE_PATH, 'reconciliation');
-	if (!dir.startsWith(root + sep)) return;
-	if (existsSync(dir)) rmSync(dir, { recursive: true });
+export function deleteReconciliationFolder(statementId: number): void {
+  if (!Number.isInteger(statementId) || statementId <= 0) return;
+  const dir = resolve(STORAGE_PATH, "reconciliation", String(statementId));
+  const root = resolve(STORAGE_PATH, "reconciliation");
+  if (!dir.startsWith(root + sep)) return;
+  if (existsSync(dir)) rmSync(dir, { recursive: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -160,12 +181,15 @@ export function deleteReconciliationFolder(sessionId: number): void {
  * Save the company logo image. Returns the relative path within STORAGE_PATH.
  * Caller must validate file type (jpeg/png only) before calling.
  */
-export function saveCompanyLogo(buffer: Buffer, originalFilename: string): string {
-	const uuid = randomUUID();
-	const ext = extname(originalFilename).toLowerCase();
-	const filename = `${uuid}${ext}`;
-	const dir = join(STORAGE_PATH, 'company');
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, filename), buffer);
-	return join('company', filename);
+export function saveCompanyLogo(
+  buffer: Buffer,
+  originalFilename: string,
+): string {
+  const uuid = randomUUID();
+  const ext = extname(originalFilename).toLowerCase();
+  const filename = `${uuid}${ext}`;
+  const dir = join(STORAGE_PATH, "company");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, filename), buffer);
+  return join("company", filename);
 }

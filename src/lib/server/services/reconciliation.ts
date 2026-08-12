@@ -1,696 +1,312 @@
 import {
-  LeftoverAnnotation,
   ReconItemType,
-  ReconSessionStatus,
+  StatementDirection,
   StatementExtractionState,
 } from "$lib/enums.js";
-import type {
-  LeftoverAnnotationCode,
-  ReconItemTypeCode,
-} from "$lib/enums.js";
+import type { ReconItemTypeCode } from "$lib/enums.js";
 import { diffRecords, recordAudit } from "$lib/server/audit.js";
-import { hasPermission, type ActionName } from "$lib/server/permissions.js";
-import {
-  getCloseCounts,
-  getInScopeItems,
-  getLine,
-  getCandidates,
-  getItemState,
-  getStatesClearedBySession,
-  getOpenSession,
-  getSession,
-  insertSession,
-  insertLine,
-  isClaimedExpense,
-  listSessions,
-  listLines,
-  removeEmptyItemState,
-  setLineMatch,
-  upsertItemState,
-  deleteLine as deleteLineQuery,
-  deleteSessionData,
-  updateLine as updateLineQuery,
-  updateSession,
-  type ReconciliationDb,
-  type LineCreate,
-  type LinePatch,
-  type SessionCreate,
-} from "$lib/server/queries/reconciliation.js";
-import {
-  compareBalances,
-  computeExpectedBalance,
-} from "$lib/server/reconciliation/balance.js";
+import { deleteFile } from "$lib/server/file-storage.js";
+import { hasPermission } from "$lib/server/permissions.js";
 import { reconciliationEvents } from "$lib/server/reconciliation/events.js";
 import {
-  canMutateSession,
-  canStartSession,
-} from "$lib/server/reconciliation/session-rules.js";
-import type {
-  SessionRow,
-  SessionSummary,
-  Step1Result,
+  EPSILON,
+  mainAmount,
+  round2,
 } from "$lib/server/reconciliation/types.js";
-import { processStatementImport } from "$lib/server/reconciliation/statement-import.js";
-import { mainAmount } from "$lib/server/reconciliation/types.js";
-import { claimEvents, expenseEvents, incomeEvents } from "$lib/server/finance/events.js";
-import { getClaim } from "$lib/server/queries/claims.js";
-import { getExpense } from "$lib/server/queries/expenses.js";
-import { getIncome } from "$lib/server/queries/income.js";
-import { detectDrift } from "$lib/server/reconciliation/drift.js";
-import { deleteReconciliationFolder } from "$lib/server/file-storage.js";
+import {
+  deleteLine as deleteLineQuery,
+  deleteStatement as deleteStatementQuery,
+  getLine,
+  getStatement,
+  insertStatement,
+  listAllocations,
+  listBankFacingItems,
+  listItemAllocations,
+  listLines,
+  listStatements,
+  replaceItemAllocations,
+  updateLine as updateLineQuery,
+  updateStatement,
+} from "$lib/server/queries/reconciliation.js";
+import type { ReconciliationDb } from "$lib/server/queries/reconciliation.js";
 
 export class ReconciliationError extends Error {
   constructor(
     message: string,
-    readonly status: 403 | 404 | 409,
-    readonly details?: Record<string, unknown>,
+    public status = 400,
+    public details: Record<string, unknown> = {},
   ) {
     super(message);
   }
 }
-
-function authorize(locals: App.Locals, action: ActionName): number {
-  if (!hasPermission(locals, "reconciliation", action)) {
+function authorize(
+  locals: App.Locals,
+  action: "view" | "add" | "change" | "delete",
+) {
+  if (!locals.user) throw new ReconciliationError("Unauthorized", 401);
+  if (!hasPermission(locals, "reconciliation", action))
     throw new ReconciliationError("Forbidden", 403);
-  }
-  if (!locals.user) throw new ReconciliationError("Unauthorized", 403);
   return locals.user.id;
 }
 
-function summarize(
+function lineRemainders(db: ReconciliationDb) {
+  const allocations = listAllocations(db);
+  return listLines(db).map((line) => {
+    const allocated = allocations
+      .filter((a) => a.lineId === line.id)
+      .reduce((s, a) => s + a.amount, 0);
+    return {
+      ...line,
+      allocatedAmount: round2(allocated),
+      remainingAmount: round2(line.amount - allocated),
+    };
+  });
+}
+function statementSummary(
   db: ReconciliationDb,
-  session: SessionRow,
-  newestId: number,
-): SessionSummary {
-  const closed = session.status !== ReconSessionStatus.Open;
-  const drift = closed
-    ? detectDrift(
-        getStatesClearedBySession(db, session.id),
-        getCandidates(db, session.id),
-      )
-    : { changed: [], deleted: [] };
+  statement: NonNullable<ReturnType<typeof getStatement>>,
+) {
+  const lines = lineRemainders(db).filter(
+    (l) => l.statementId === statement.id,
+  );
+  const remaining = lines.filter((l) => l.remainingAmount >= EPSILON);
   return {
-    ...session,
-    difference:
-      session.computedBalance == null
-        ? null
-        : compareBalances(
-            session.computedBalance,
-            session.statementEndingBalance,
-          ).difference,
-    hasDrift: drift.changed.length > 0 || drift.deleted.length > 0,
-    canReopen: closed && canMutateSession(session, newestId),
-    canDelete: canMutateSession(session, newestId),
+    ...statement,
+    dateFrom: lines[0]?.date ?? null,
+    dateTo: lines.at(-1)?.date ?? null,
+    totalLines: lines.length,
+    matchedCount: lines.length - remaining.length,
+    remainingCount: remaining.length,
+    remainingAmount: round2(
+      remaining.reduce((s, l) => s + l.remainingAmount, 0),
+    ),
+    completed:
+      statement.extractionState === StatementExtractionState.Ready &&
+      remaining.length === 0,
   };
 }
-
-function computeStep1(db: ReconciliationDb, session: SessionRow): Step1Result {
-  return computeExpectedBalance({
-    startingBalance: session.startingBalance,
-    ...getInScopeItems(db, session.periodEndDate),
-  });
-}
-
-function emitSession(db: ReconciliationDb, id: number): void {
-  const session = getSession(db, id);
-  if (!session) return;
-  const newestId = listSessions(db)[0]?.id ?? session.id;
-  reconciliationEvents.emit("session-update", {
-    session: summarize(db, session, newestId),
-  });
-}
-
-export function listSessionSummaries(db: ReconciliationDb, locals: App.Locals) {
-  authorize(locals, "view");
-  const sessions = listSessions(db);
-  const newestId = sessions[0]?.id ?? 0;
-  const summaries = sessions.map((session) => summarize(db, session, newestId));
-  return {
-    openSession:
-      summaries.find((session) => session.status === ReconSessionStatus.Open) ??
-      null,
-    sessions: summaries,
-  };
-}
-
-export function createSession(
+export function listStatementSummaries(
   db: ReconciliationDb,
   locals: App.Locals,
-  data: Omit<SessionCreate, "createdBy">,
+) {
+  authorize(locals, "view");
+  return listStatements(db).map((s) => statementSummary(db, s));
+}
+export function getStatementDetail(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  id: number,
+) {
+  authorize(locals, "view");
+  const s = getStatement(db, id);
+  if (!s) throw new ReconciliationError("Bank statement not found", 404);
+  return {
+    statement: statementSummary(db, s),
+    lines: lineRemainders(db).filter((l) => l.statementId === id),
+  };
+}
+export function createStatement(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  input: { originalFilename: string; storedFilePath: string },
 ) {
   const userId = authorize(locals, "add");
-  const sessions = listSessions(db);
-  if (!canStartSession(sessions)) {
-    const openSessionId = getOpenSession(db)?.id;
-    throw new ReconciliationError(
-      "A reconciliation session is already open",
-      409,
-      {
-        openSessionId,
-      },
-    );
-  }
-
-  const session = insertSession(db, { ...data, createdBy: userId });
+  const s = insertStatement(db, {
+    ...input,
+    extractionState: StatementExtractionState.Extracting,
+    uploadedBy: userId,
+  });
   recordAudit(db, {
     recordType: "reconciliation",
-    recordId: session.id,
+    recordId: s.id,
     userId,
     action: "create",
   });
-  emitSession(db, session.id);
-  return getSessionDetail(db, locals, session.id);
+  reconciliationEvents.emit("statement-update", {
+    statement: statementSummary(db, s),
+  });
+  return s;
 }
-
-export function getSessionDetail(
+export function setStatementExtraction(
+  db: ReconciliationDb,
+  id: number,
+  state: number,
+  error: string | null = null,
+) {
+  const before = getStatement(db, id);
+  const s = updateStatement(db, id, {
+    extractionState: state,
+    extractionError: error,
+  });
+  if (s) {
+    recordAudit(db, {
+      recordType: "reconciliation",
+      recordId: id,
+      userId: s.uploadedBy,
+      action: "update",
+      changes: diffRecords(before, s),
+    });
+    reconciliationEvents.emit("statement-update", {
+      statement: statementSummary(db, s),
+    });
+  }
+  return s;
+}
+export function editLine(
   db: ReconciliationDb,
   locals: App.Locals,
   id: number,
+  patch: Parameters<typeof updateLineQuery>[2],
 ) {
-  authorize(locals, "view");
-  const session = getSession(db, id);
-  if (!session)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  const newestId = listSessions(db)[0]?.id ?? session.id;
-
-  if (session.status === ReconSessionStatus.Open) {
-    const result = computeStep1(db, session);
-    const comparison = compareBalances(
-      result.expected,
-      session.statementEndingBalance,
-    );
-    return {
-      session: summarize(db, session, newestId),
-      step1: {
-        ...result,
-        entered: session.statementEndingBalance,
-        ...comparison,
-      },
-      drift: { changed: [], deleted: [] },
-    };
-  }
-
-  const expected = session.computedBalance ?? session.startingBalance;
-  const comparison = compareBalances(expected, session.statementEndingBalance);
-  return {
-    session: summarize(db, session, newestId),
-    step1: {
-      expected,
-      entered: session.statementEndingBalance,
-      ...comparison,
-      incomeTotal: 0,
-      expenseTotal: 0,
-      claimTotal: 0,
-      inScopeCounts: {
-        incomes: 0,
-        directExpenses: session.unclearedCount,
-        claims: 0,
-      },
-    },
-    drift: { changed: [], deleted: [] },
-  };
-}
-
-export type EditableSessionFields = Partial<
-  Pick<
-    SessionRow,
-    | "startingBalance"
-    | "startingDate"
-    | "periodEndDate"
-    | "statementEndingBalance"
-  >
->;
-
-export function updateSessionFields(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  id: number,
-  patch: EditableSessionFields,
-) {
-  const userId = authorize(locals, "change");
-  const before = getSession(db, id);
-  if (!before)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  if (before.status !== ReconSessionStatus.Open) {
-    throw new ReconciliationError(
-      "Closed reconciliation sessions cannot be edited",
-      409,
-    );
-  }
-
-  const after = updateSession(db, id, { ...patch, updatedBy: userId })!;
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: id,
-    userId,
-    action: "update",
-    changes: diffRecords(before, after),
-  });
-  emitSession(db, id);
-  return getSessionDetail(db, locals, id);
-}
-
-export function closeSession(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  id: number,
-) {
-  const userId = authorize(locals, "change");
-  const before = getSession(db, id);
-  if (!before)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  if (before.status !== ReconSessionStatus.Open) {
-    throw new ReconciliationError(
-      "Reconciliation session is already closed",
-      409,
-    );
-  }
-
-  const step1 = computeStep1(db, before);
-  const comparison = compareBalances(
-    step1.expected,
-    before.statementEndingBalance,
-  );
-  const inScopeCount =
-    step1.inScopeCounts.incomes +
-    step1.inScopeCounts.directExpenses +
-    step1.inScopeCounts.claims;
-  const counts = getCloseCounts(db, id, inScopeCount);
-  const after = updateSession(db, id, {
-    computedBalance: step1.expected,
-    status: comparison.matched
-      ? ReconSessionStatus.ClosedMatched
-      : ReconSessionStatus.ClosedWithLeftovers,
-    ...counts,
-    closedAt: new Date().toISOString(),
-    updatedBy: userId,
-  })!;
-
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: id,
-    userId,
-    action: "update",
-    changes: diffRecords(before, after),
-  });
-  emitSession(db, id);
-  return getSessionDetail(db, locals, id);
-}
-
-function requireOpenSession(
-  db: ReconciliationDb,
-  id: number,
-): SessionRow {
-  const session = getSession(db, id);
-  if (!session)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  if (session.status !== ReconSessionStatus.Open) {
-    throw new ReconciliationError("Reconciliation session is closed", 409);
-  }
-  return session;
-}
-
-export function uploadStatement(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  file: { relativePath: string; originalFilename: string },
-) {
-  const userId = authorize(locals, "add");
-  const before = requireOpenSession(db, sessionId);
-  const after = updateSession(db, sessionId, {
-    statementState: StatementExtractionState.Extracting,
-    statementError: null,
-    updatedBy: userId,
-  })!;
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: sessionId,
-    userId,
-    action: "update",
-    changes: diffRecords(before, after),
-  });
-  emitSession(db, sessionId);
-  void processStatementImport(db, {
-    sessionId,
-    periodEndDate: after.periodEndDate,
-    relativePath: file.relativePath,
-    originalFilename: file.originalFilename,
-    userId,
-  });
-  return { statementState: StatementExtractionState.Extracting };
-}
-
-export function getSessionLines(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-) {
-  authorize(locals, "view");
-  if (!getSession(db, sessionId)) {
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  }
-  return listLines(db, sessionId);
-}
-
-export function addLineManually(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  data: Omit<LineCreate, "sessionId" | "sourceFile">,
-) {
-  const userId = authorize(locals, "change");
-  requireOpenSession(db, sessionId);
-  const line = insertLine(db, { ...data, sessionId, sourceFile: null });
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: sessionId,
-    userId,
-    action: "update",
-    changes: [{ field: "statementLine", before: null, after: line.id }],
-  });
-  reconciliationEvents.emit("line-update", { line });
-  return line;
-}
-
-export function updateLine(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  lineId: number,
-  patch: LinePatch,
-) {
-  const userId = authorize(locals, "change");
-  requireOpenSession(db, sessionId);
-  const before = getLine(db, sessionId, lineId);
+  const userId = authorize(locals, "change"),
+    before = getLine(db, id);
   if (!before) throw new ReconciliationError("Statement line not found", 404);
-  const line = updateLineQuery(db, sessionId, lineId, patch)!;
+  const after = updateLineQuery(db, id, patch)!;
   recordAudit(db, {
     recordType: "reconciliation",
-    recordId: sessionId,
-    userId,
-    action: "update",
-    changes: diffRecords(before, line),
-  });
-  reconciliationEvents.emit("line-update", { line });
-  return line;
-}
-
-export function deleteLine(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  lineId: number,
-) {
-  const userId = authorize(locals, "delete");
-  requireOpenSession(db, sessionId);
-  const line = deleteLineQuery(db, sessionId, lineId);
-  if (!line) throw new ReconciliationError("Statement line not found", 404);
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: sessionId,
-    userId,
-    action: "update",
-    changes: [{ field: "statementLine", before: line.id, after: null }],
-  });
-  reconciliationEvents.emit("line-deleted", { id: lineId, sessionId });
-}
-
-function ledgerRecordType(itemType: ReconItemTypeCode) {
-  if (itemType === ReconItemType.Expense) return "expense" as const;
-  if (itemType === ReconItemType.Claim) return "claim" as const;
-  return "income" as const;
-}
-
-function emitLedgerItem(
-  db: ReconciliationDb,
-  itemType: ReconItemTypeCode,
-  itemId: number,
-) {
-  if (itemType === ReconItemType.Expense) {
-    expenseEvents.emit("expense-update", { item: getExpense(db, itemId) });
-  } else if (itemType === ReconItemType.Claim) {
-    claimEvents.emit("claim-update", { item: getClaim(db, itemId) });
-  } else {
-    incomeEvents.emit("income-update", { item: getIncome(db, itemId) });
-  }
-}
-
-export function acceptMatch(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  lineId: number,
-  itemType: ReconItemTypeCode,
-  itemId: number,
-) {
-  const userId = authorize(locals, "change");
-  requireOpenSession(db, sessionId);
-  const line = getLine(db, sessionId, lineId);
-  if (!line) throw new ReconciliationError("Statement line not found", 404);
-  if (itemType === ReconItemType.Expense && isClaimedExpense(db, itemId)) {
-    throw new ReconciliationError("A claimed expense must be matched through its claim", 409);
-  }
-  const state = getItemState(db, itemType, itemId);
-  if (state?.clearedSessionId != null && state.clearedSessionId !== sessionId) {
-    throw new ReconciliationError("This item was cleared in an earlier session", 409);
-  }
-  if (state?.annotation === LeftoverAnnotation.WillNotClear) {
-    throw new ReconciliationError("This item is marked as never clearing", 409);
-  }
-  if (state?.clearedLineId != null && state.clearedLineId !== lineId) {
-    throw new ReconciliationError("This item is already matched to another statement line", 409);
-  }
-  const item = getCandidates(db, sessionId).find(
-    (candidate) => candidate.itemType === itemType && candidate.itemId === itemId,
-  );
-  if (!item) throw new ReconciliationError("Reconciliation item not found", 404);
-
-  const clearedAmount = mainAmount(item);
-  const now = new Date().toISOString();
-  const updatedLine = db.transaction(() => {
-    upsertItemState(db, {
-      itemType,
-      itemId,
-      clearedSessionId: sessionId,
-      clearedLineId: lineId,
-      clearedAmount,
-      clearedAt: now,
-      annotation: state?.annotation ?? null,
-      annotationSessionId: state?.annotationSessionId ?? null,
-      annotationNote: state?.annotationNote ?? "",
-      updatedBy: userId,
-    });
-    return setLineMatch(db, sessionId, lineId, { itemType, itemId })!;
-  });
-
-  recordAudit(db, {
-    recordType: "reconciliation",
-    recordId: sessionId,
-    userId,
-    action: "update",
-    changes: [{ field: "matchedLine", before: null, after: lineId }],
-  });
-  recordAudit(db, {
-    recordType: ledgerRecordType(itemType),
-    recordId: itemId,
-    userId,
-    action: "update",
-    changes: [{ field: "cleared", before: false, after: true }],
-  });
-  reconciliationEvents.emit("line-update", { line: updatedLine });
-  reconciliationEvents.emit("item-state-update", {
-    itemType,
-    itemId,
-    cleared: true,
-    clearedSessionId: sessionId,
-    clearedLineId: lineId,
-    annotation: state?.annotation ?? null,
-  });
-  emitLedgerItem(db, itemType, itemId);
-  return { line: updatedLine, item: { ...item, cleared: true, clearedLineId: lineId } };
-}
-
-export function undoMatch(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  lineId: number,
-) {
-  const userId = authorize(locals, "change");
-  requireOpenSession(db, sessionId);
-  const line = getLine(db, sessionId, lineId);
-  if (!line) throw new ReconciliationError("Statement line not found", 404);
-  if (line.matchedItemType === null || line.matchedItemId === null) return;
-  const itemType = line.matchedItemType;
-  const itemId = line.matchedItemId;
-  const state = getItemState(db, itemType, itemId);
-  const updatedLine = db.transaction(() => {
-    setLineMatch(db, sessionId, lineId, null);
-    if (state) {
-      upsertItemState(db, {
-        itemType,
-        itemId,
-        clearedSessionId: null,
-        clearedLineId: null,
-        clearedAmount: null,
-        clearedAt: null,
-        annotation: state.annotation,
-        annotationSessionId: state.annotationSessionId,
-        annotationNote: state.annotationNote,
-        updatedBy: userId,
-      });
-      removeEmptyItemState(db, itemType, itemId);
-    }
-    return getLine(db, sessionId, lineId)!;
-  });
-  recordAudit(db, {
-    recordType: ledgerRecordType(itemType),
-    recordId: itemId,
-    userId,
-    action: "update",
-    changes: [{ field: "cleared", before: true, after: false }],
-  });
-  reconciliationEvents.emit("line-update", { line: updatedLine });
-  reconciliationEvents.emit("item-state-update", {
-    itemType,
-    itemId,
-    cleared: false,
-    clearedSessionId: null,
-    clearedLineId: null,
-    annotation: state?.annotation ?? null,
-  });
-  emitLedgerItem(db, itemType, itemId);
-}
-
-export function setAnnotation(
-  db: ReconciliationDb,
-  locals: App.Locals,
-  sessionId: number,
-  itemType: ReconItemTypeCode,
-  itemId: number,
-  annotation: LeftoverAnnotationCode | null,
-  note = "",
-) {
-  const userId = authorize(locals, "change");
-  requireOpenSession(db, sessionId);
-  const before = getItemState(db, itemType, itemId);
-  if (before?.clearedSessionId != null) {
-    throw new ReconciliationError("A cleared item cannot be annotated", 409);
-  }
-  const state = upsertItemState(db, {
-    itemType,
-    itemId,
-    clearedSessionId: null,
-    clearedLineId: null,
-    clearedAmount: null,
-    clearedAt: null,
-    annotation,
-    annotationSessionId: annotation === null ? null : sessionId,
-    annotationNote: annotation === null ? "" : note,
-    updatedBy: userId,
-  });
-  const after = removeEmptyItemState(db, itemType, itemId);
-  recordAudit(db, {
-    recordType: ledgerRecordType(itemType),
-    recordId: itemId,
+    recordId: before.statementId,
     userId,
     action: "update",
     changes: diffRecords(before, after),
   });
-  reconciliationEvents.emit("item-state-update", {
-    itemType,
-    itemId,
-    cleared: false,
-    clearedSessionId: null,
-    clearedLineId: null,
-    annotation,
+  reconciliationEvents.emit("line-update", {
+    line: after,
+    statementId: before.statementId,
   });
-  emitLedgerItem(db, itemType, itemId);
-  return annotation === null ? null : state;
+  return after;
 }
-
-export function reopenSession(
+export function removeLine(
   db: ReconciliationDb,
   locals: App.Locals,
   id: number,
 ) {
-  const userId = authorize(locals, "change");
-  const before = getSession(db, id);
-  if (!before)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  const sessions = listSessions(db);
-  const newestId = sessions[0]?.id ?? 0;
-  if (!canMutateSession(before, newestId)) {
-    throw new ReconciliationError("Only the newest reconciliation can be reopened", 409);
-  }
-  const open = getOpenSession(db);
-  if (open && open.id !== id) {
-    throw new ReconciliationError("Another reconciliation session is already open", 409, {
-      openSessionId: open.id,
-    });
-  }
-  const after = updateSession(db, id, {
-    status: ReconSessionStatus.Open,
-    computedBalance: null,
-    clearedCount: 0,
-    unclearedCount: 0,
-    unmatchedLineCount: 0,
-    closedAt: null,
-    updatedBy: userId,
-  })!;
+  const userId = authorize(locals, "delete"),
+    before = getLine(db, id);
+  if (!before) throw new ReconciliationError("Statement line not found", 404);
+  deleteLineQuery(db, id);
   recordAudit(db, {
     recordType: "reconciliation",
-    recordId: id,
+    recordId: before.statementId,
     userId,
     action: "update",
-    changes: diffRecords(before, after),
+    changes: [{ field: "line", before, after: null }],
   });
-  emitSession(db, id);
-  return getSessionDetail(db, locals, id);
+  reconciliationEvents.emit("line-deleted", {
+    id,
+    statementId: before.statementId,
+  });
 }
-
-export function deleteSession(
+export function removeStatement(
   db: ReconciliationDb,
   locals: App.Locals,
   id: number,
 ) {
-  const userId = authorize(locals, "delete");
-  const session = getSession(db, id);
-  if (!session)
-    throw new ReconciliationError("Reconciliation session not found", 404);
-  const newestId = listSessions(db)[0]?.id ?? 0;
-  if (!canMutateSession(session, newestId)) {
-    throw new ReconciliationError("Only the newest reconciliation can be deleted", 409);
-  }
+  const userId = authorize(locals, "delete"),
+    before = getStatement(db, id);
+  if (!before) throw new ReconciliationError("Bank statement not found", 404);
+  deleteStatementQuery(db, id);
+  deleteFile(before.storedFilePath);
   recordAudit(db, {
     recordType: "reconciliation",
     recordId: id,
     userId,
     action: "delete",
-    changes: diffRecords(session, null),
   });
-  const changes = deleteSessionData(db, id);
-  deleteReconciliationFolder(id);
-  for (const { before, after } of changes) {
-    if (before.clearedSessionId === id) {
-      recordAudit(db, {
-        recordType: ledgerRecordType(before.itemType),
-        recordId: before.itemId,
-        userId,
-        action: "update",
-        changes: [{ field: "cleared", before: true, after: false }],
-      });
-      emitLedgerItem(db, before.itemType, before.itemId);
-    }
-    reconciliationEvents.emit("item-state-update", {
-      itemType: before.itemType,
-      itemId: before.itemId,
-      cleared: after?.clearedSessionId != null,
-      clearedSessionId: after?.clearedSessionId ?? null,
-      clearedLineId: after?.clearedLineId ?? null,
-      annotation: after?.annotation ?? null,
-    });
+  reconciliationEvents.emit("statement-deleted", { id });
+}
+export function workspace(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  from?: string | null,
+  to?: string | null,
+) {
+  authorize(locals, "view");
+  const records = listBankFacingItems(db, from, to);
+  const lines = lineRemainders(db);
+  const statements = listStatements(db).map((s) => statementSummary(db, s));
+  return { records, lines, statements, allocations: listAllocations(db) };
+}
+export function replaceRecordAllocations(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  itemType: ReconItemTypeCode,
+  itemId: number,
+  inputs: { lineId: number; amount: number }[],
+) {
+  const userId = authorize(locals, "change");
+  const item = listBankFacingItems(db).find(
+    (i) => i.itemType === itemType && i.itemId === itemId,
+  );
+  if (!item)
+    throw new ReconciliationError("Reconciliation record not found", 404);
+  const seen = new Set<number>();
+  const all = listAllocations(db);
+  for (const input of inputs) {
+    if (seen.has(input.lineId))
+      throw new ReconciliationError(
+        "A statement line can only appear once",
+        409,
+      );
+    seen.add(input.lineId);
+    if (!Number.isFinite(input.amount) || input.amount <= 0)
+      throw new ReconciliationError("Allocation amounts must be positive", 409);
+    const line = getLine(db, input.lineId);
+    if (!line) throw new ReconciliationError("Statement line not found", 404);
+    const direction =
+      itemType === ReconItemType.Income
+        ? StatementDirection.In
+        : StatementDirection.Out;
+    if (line.direction !== direction)
+      throw new ReconciliationError(
+        "This statement line has the wrong money direction",
+        409,
+      );
+    const occupied = all
+      .filter(
+        (a) =>
+          a.lineId === line.id &&
+          !(a.itemType === itemType && a.itemId === itemId),
+      )
+      .reduce((s, a) => s + a.amount, 0);
+    if (input.amount - (line.amount - occupied) > EPSILON)
+      throw new ReconciliationError(
+        "An allocation exceeds the statement line's remaining balance",
+        409,
+      );
   }
-  reconciliationEvents.emit("session-deleted", { id });
+  const total = inputs.reduce((s, a) => s + a.amount, 0);
+  if (total - mainAmount(item) > EPSILON)
+    throw new ReconciliationError(
+      "Allocations cannot exceed the Akaun record's amount",
+      409,
+    );
+  const before = listItemAllocations(db, itemType, itemId);
+  const saved = replaceItemAllocations(
+    db,
+    itemType,
+    itemId,
+    mainAmount(item),
+    inputs.map((i) => ({ ...i, amount: round2(i.amount) })),
+    userId,
+  );
+  recordAudit(db, {
+    recordType: "reconciliation",
+    recordId: itemId,
+    userId,
+    action: "update",
+    changes: [
+      { field: `allocations:${itemType}:${itemId}`, before, after: saved },
+    ],
+  });
+  reconciliationEvents.emit("allocation-update", {
+    itemType,
+    itemId,
+    lineIds: [...new Set([...before, ...saved].map((a) => a.lineId))],
+  });
+  return {
+    record: listBankFacingItems(db).find(
+      (i) => i.itemType === itemType && i.itemId === itemId,
+    ),
+    allocations: saved,
+  };
 }

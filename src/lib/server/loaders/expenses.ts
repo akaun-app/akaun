@@ -4,7 +4,6 @@ import { listExpenses, getExpense } from '$lib/server/queries/expenses.js';
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { createExpense, patchExpense, removeExpense } from '$lib/server/services/expenses.js';
 import { createClaim } from '$lib/server/services/claims.js';
-import { canEditAmount } from '$lib/server/locking.js';
 import { getUserPreference, setUserPreference, USER_PREF_KEYS } from '$lib/server/userPreferences.js';
 import { getCategories } from '$lib/server/queries/categories.js';
 import { resolveRecordCurrency, mainCurrencyCode } from '$lib/server/currency/form.js';
@@ -116,7 +115,7 @@ export const expensesActions: Actions = {
 		const expense = getExpense(db, id);
 		if (!expense) return fail(404, { error: 'Expense not found' });
 
-		if (!canEditAmount(expense)) {
+		if (expense.claimId !== null) {
 			return fail(409, {
 				error: `Expense "${expense.expenseNumber}" is linked to claim ${expense.claimNumber} and cannot be deleted until it's removed from the claim.`
 			});

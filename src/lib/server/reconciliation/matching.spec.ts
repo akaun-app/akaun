@@ -6,15 +6,12 @@ import type { BankFacingItem, StatementLineRow } from "./types.js";
 function line(overrides: Partial<StatementLineRow> = {}): StatementLineRow {
   return {
     id: 1,
-    sessionId: 10,
+    statementId: 10,
     date: "2026-07-15",
     description: "Grab ride",
     amount: 100,
     direction: StatementDirection.Out,
-    matchedItemType: null,
-    matchedItemId: null,
     note: "",
-    sourceFile: null,
     createdAt: "2026-07-15T00:00:00Z",
     ...overrides,
   };
@@ -100,7 +97,7 @@ describe("findDuplicateLines", () => {
     const duplicates = findDuplicateLines([
       line({ id: 11, description: "  Grab   RIDE ", amount: 25 }),
       line({ id: 12, description: "grab ride", amount: 25.004 }),
-      line({ id: 13, sessionId: 11, description: "grab ride", amount: 25 }),
+      line({ id: 13, statementId: 11, description: "grab ride", amount: 25 }),
       line({ id: 14, description: "grab food", amount: 25 }),
       line({ id: 15, description: "grab ride", amount: 25.01 }),
       line({

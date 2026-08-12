@@ -9,7 +9,6 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { alias } from "drizzle-orm/sqlite-core";
 import * as schema from "../db/schema.js";
 import {
   expenses,
@@ -17,7 +16,7 @@ import {
   expenseSearchText,
   contacts,
   claims,
-  reconciliationItemState,
+  reconciliationAllocations,
 } from "../db/schema.js";
 import { nextNumber } from "../running-number.js";
 import { ExpenseStatus, ReconItemType } from "$lib/enums.js";
@@ -125,15 +124,6 @@ export function setExtractedText(
 
 type ExpenseRow = typeof expenses.$inferSelect;
 
-const expenseReconciliationState = alias(
-  reconciliationItemState,
-  "expense_reconciliation_state",
-);
-const claimReconciliationState = alias(
-  reconciliationItemState,
-  "claim_reconciliation_state",
-);
-
 // `mainAmount` is the converted main-currency value (amount × exchangeRate). All
 // display and aggregation use it; `amount`/`currency` are kept for the "original" line.
 const expenseWithContact = {
@@ -141,24 +131,14 @@ const expenseWithContact = {
   contactName: contacts.legalName,
   mainAmount: sql<number>`${expenses.amount} * ${expenses.exchangeRate}`,
   cleared:
-    sql<boolean>`${expenseReconciliationState.clearedSessionId} is not null`.mapWith(
+    sql<boolean>`coalesce((select sum(amount) from reconciliation_allocations where item_type=${ReconItemType.Expense} and item_id=${expenses.id}),0) >= round(${expenses.amount}*${expenses.exchangeRate},2)`.mapWith(
       Boolean,
     ),
-  clearedSessionId: expenseReconciliationState.clearedSessionId,
+  clearedSessionId: sql<number | null>`null`,
   clearedViaClaimId: sql<
     number | null
-  >`case when ${claimReconciliationState.clearedSessionId} is not null then ${expenses.claimId} else null end`,
+  >`case when ${expenses.claimId} is not null and coalesce((select sum(amount) from reconciliation_allocations where item_type=${ReconItemType.Claim} and item_id=${expenses.claimId}),0) > 0 then ${expenses.claimId} else null end`,
 };
-
-const expenseReconciliationJoin = and(
-  eq(expenseReconciliationState.itemType, ReconItemType.Expense),
-  eq(expenseReconciliationState.itemId, expenses.id),
-);
-
-const claimReconciliationJoin = and(
-  eq(claimReconciliationState.itemType, ReconItemType.Claim),
-  eq(claimReconciliationState.itemId, expenses.claimId),
-);
 
 /** Shared WHERE-clause builder for expense list + count queries. */
 function expenseConditions(filters: ExpenseFilters): SQL[] {
@@ -194,8 +174,6 @@ export function listExpenses(db: Db, filters: ExpenseFilters = {}) {
     .select(expenseWithContact)
     .from(expenses)
     .leftJoin(contacts, eq(contacts.id, expenses.contactId))
-    .leftJoin(expenseReconciliationState, expenseReconciliationJoin)
-    .leftJoin(claimReconciliationState, claimReconciliationJoin)
     .where(conditions.length ? and(...conditions) : undefined)
     .limit(limit)
     .offset(offset)
@@ -224,8 +202,6 @@ export function getExpense(db: Db, id: number) {
     .from(expenses)
     .leftJoin(contacts, eq(contacts.id, expenses.contactId))
     .leftJoin(claims, eq(claims.id, expenses.claimId))
-    .leftJoin(expenseReconciliationState, expenseReconciliationJoin)
-    .leftJoin(claimReconciliationState, claimReconciliationJoin)
     .where(eq(expenses.id, id))
     .get();
 

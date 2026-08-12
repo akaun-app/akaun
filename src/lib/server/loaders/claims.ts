@@ -17,11 +17,22 @@ export function loadClaimsPage(locals: App.Locals, openClaimId: number | null) {
 		throw redirect(302, '/claims');
 	}
 
-	return { claims: allClaims, unpaidExpenses, openClaimId };
+	return {
+		claims: allClaims,
+		unpaidExpenses,
+		openClaimId,
+		permissions: locals.permissions?.claims ?? {
+			view: false,
+			add: false,
+			change: false,
+			delete: false
+		}
+	};
 }
 
 export const claimsActions: Actions = {
 	markDone: async ({ locals, request }) => {
+		if (!hasPermission(locals, 'claims', 'change')) return fail(403, { error: 'Forbidden' });
 		const userId = locals.user!.id;
 		const data = await request.formData();
 		const id = parseInt(String(data.get('id') ?? '0'));

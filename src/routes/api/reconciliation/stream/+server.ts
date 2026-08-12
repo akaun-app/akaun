@@ -1,9 +1,8 @@
 import type { RequestHandler } from "./$types.js";
 import { db } from "$lib/server/db/client.js";
 import { hasPermission } from "$lib/server/permissions.js";
-import { listLines } from "$lib/server/queries/reconciliation.js";
 import { reconciliationEvents } from "$lib/server/reconciliation/events.js";
-import { listSessionSummaries } from "$lib/server/services/reconciliation.js";
+import { workspace } from "$lib/server/services/reconciliation.js";
 
 export const GET: RequestHandler = ({ locals }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
@@ -19,17 +18,17 @@ export const GET: RequestHandler = ({ locals }) => {
 
   const stream = new ReadableStream({
     start(controller) {
-      const { openSession } = listSessionSummaries(db, locals);
-      const lines = openSession ? listLines(db, openSession.id) : [];
-      controller.enqueue(encodeEvent({ type: "snapshot", openSession, lines }));
+      controller.enqueue(
+        encodeEvent({ type: "snapshot", ...workspace(db, locals) }),
+      );
 
       const eventNames = [
-        "session-update",
-        "session-deleted",
+        "statement-update",
+        "statement-deleted",
         "line-update",
         "line-deleted",
         "lines-added",
-        "item-state-update",
+        "allocation-update",
       ] as const;
       const handlers = eventNames.map((eventName) => {
         const handler = (payload: object) => {
