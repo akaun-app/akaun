@@ -52,6 +52,8 @@
   type Tab = "records" | "statements";
   type RecordStatus = "review" | "matched";
   type StatementStatus = "active" | "completed";
+  /** Must not exceed the `records` array cap in /api/reconciliation/auto-match. */
+  const BULK_MATCH_CHUNK = 500;
 
   let { data }: { data: Data } = $props();
   const screen = useIsMobile();
@@ -93,6 +95,9 @@
   let savedDrafts = $state<Draft[]>([]);
   let initialDrafts = $state<Draft[]>([]);
   let saving = $state(false);
+  let bulkOpen = $state(false);
+  let bulkSaving = $state(false);
+  let retrying = $state(false);
   let uploadInput = $state<HTMLInputElement | null>(null);
   let deleteStatementOpen = $state(false);
   let deleteLineOpen = $state(false);
@@ -193,6 +198,9 @@
         statement.originalFilename.toLocaleLowerCase().includes(normalized),
     );
   });
+  const bulkMatchable = $derived(
+    visibleRecords.filter((record) => matchStatus(record) === "exact-match"),
+  );
   const savedAllocations = $derived.by(() => {
     const record = selectedRecord;
     return record
@@ -218,21 +226,11 @@
         (line.remainingAmount >= 0.005 || savedIds.has(line.id)),
     );
   });
-  const availableLines = $derived.by(() => {
-    if (!selectedRecord) return [];
-    const savedIds = new Set(
-      savedAllocations.map((allocation) => allocation.lineId),
-    );
-    const compatibleIds = new Set(compatibleLines.map((line) => line.id));
-    return data.lines
-      .filter((line) => line.remainingAmount >= 0.005 || savedIds.has(line.id))
-      .toSorted((left, right) => {
-        const directionRank =
-          Number(compatibleIds.has(right.id)) -
-          Number(compatibleIds.has(left.id));
-        return directionRank || right.date.localeCompare(left.date);
-      });
-  });
+  const availableLines = $derived(
+    compatibleLines.toSorted((left, right) =>
+      right.date.localeCompare(left.date),
+    ),
+  );
   const draftTotal = $derived(
     Math.round(
       drafts.reduce((sum, draft) => sum + Number(draft.amount || 0), 0) * 100,
@@ -266,12 +264,32 @@
       ),
   );
 
+  // Which record's allocations `drafts` currently holds. Deliberately a plain
+  // `let`, not `$state`: the effect below writes it, and making it reactive
+  // would feed that write straight back in as a dependency.
+  let hydratedKey = "";
+
+  // Two jobs, and the difference matters:
+  //   1. `?record=…` in the URL (refresh, pasted link) opens a record without
+  //      going through `loadRecord`, so its saved allocations have to be
+  //      staged here — otherwise Save would replace them with whatever the
+  //      empty composer holds.
+  //   2. After an invalidation, re-point `selectedRecord` at the fresh loader
+  //      object so the composer shows current amounts. This must NOT re-stage
+  //      drafts: an SSE event from another tab would wipe edits in progress.
   $effect(() => {
     const records = data.records;
     const key = selectedKey;
-    if (!key) return;
+    if (!key) {
+      hydratedKey = "";
+      return;
+    }
     const refreshed = records.find((record) => recordKey(record) === key);
-    if (refreshed) selectedRecord = refreshed;
+    if (!refreshed) return;
+    selectedRecord = refreshed;
+    if (hydratedKey === key) return;
+    hydratedKey = key;
+    stageSavedAllocations(refreshed);
   });
 
   createResourceStream<{ type: string }>(
@@ -357,9 +375,12 @@
     deferredAction = null;
     action?.();
   }
-  function loadRecord(record: RecordRow) {
-    selectedKey = recordKey(record);
-    selectedRecord = record;
+  /**
+   * Fill the composer for `record`: its saved allocations if it has any, the
+   * suggested set otherwise. Shared by the in-app row click and the
+   * URL-restore effect so both open a record in the same state.
+   */
+  function stageSavedAllocations(record: RecordRow) {
     const saved = data.allocations
       .filter(
         (allocation) =>
@@ -373,20 +394,21 @@
     drafts = saved.length ? saved : buildSuggestionDrafts(record);
     savedDrafts = [...saved];
     initialDrafts = [...drafts];
+  }
+  function loadRecord(record: RecordRow) {
+    selectedKey = recordKey(record);
+    // Staged here and now, so the effect above treats this record as hydrated
+    // and leaves the drafts alone on the next invalidation.
+    hydratedKey = selectedKey;
+    selectedRecord = record;
+    stageSavedAllocations(record);
     updateUrl();
   }
   function chooseRecord(record: RecordRow) {
     guard(() => loadRecord(record));
   }
   function closeRecord() {
-    guard(() => {
-      selectedKey = "";
-      selectedRecord = null;
-      drafts = [];
-      savedDrafts = [];
-      initialDrafts = [];
-      updateUrl();
-    });
+    guard(clearSelection);
   }
   function chooseStatement(statement: Statement) {
     selectedStatementId = statement.id;
@@ -510,12 +532,71 @@
       loadRecord(nextRecord);
       return;
     }
+    clearSelection();
+  }
+  function clearSelection() {
     selectedKey = "";
     selectedRecord = null;
     drafts = [];
     savedDrafts = [];
     initialDrafts = [];
     updateUrl();
+  }
+  async function runAutoMatch() {
+    bulkOpen = false;
+    if (bulkSaving || saving) return;
+    // Hand edits on the open record outrank its suggestion, so persist them
+    // first — that also takes the record out of the batch, since the server
+    // skips anything already allocated.
+    if (selectedRecord && manuallyEdited && !(await saveAllocations())) return;
+    const targets = bulkMatchable.map(({ itemType, itemId }) => ({
+      itemType,
+      itemId,
+    }));
+    if (!targets.length) return;
+    bulkSaving = true;
+    let matched = 0;
+    let skipped = 0;
+    // The endpoint caps a batch at BULK_MATCH_CHUNK records; each request
+    // re-reads the live line balances, so chunking stays consistent.
+    for (let start = 0; start < targets.length; start += BULK_MATCH_CHUNK) {
+      const response = await fetch("/api/reconciliation/auto-match", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          records: targets.slice(start, start + BULK_MATCH_CHUNK),
+        }),
+      }).catch(() => null);
+      const result = await response?.json().catch(() => null);
+      if (!response?.ok) {
+        bulkSaving = false;
+        toast.error(
+          result?.error ??
+            "Exact matches could not be saved. Check the available amounts and try again.",
+        );
+        // Earlier chunks are already saved; reload so the list reflects them.
+        await invalidateAll();
+        return;
+      }
+      matched += Number(result?.matched ?? 0);
+      skipped += Number(result?.skipped ?? 0);
+    }
+    bulkSaving = false;
+    toast.success(
+      `${matched} record${matched === 1 ? "" : "s"} matched${
+        skipped ? ` · ${skipped} skipped` : ""
+      }`,
+    );
+    await invalidateAll();
+    const next = visibleRecords.find((record) => {
+      const status = matchStatus(record);
+      return status === "partial-match" || status === "no-match";
+    });
+    if (next) {
+      loadRecord(next);
+      return;
+    }
+    clearSelection();
   }
   async function upload(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
@@ -555,6 +636,24 @@
       return;
     }
     toast.success("Statement line updated");
+    await invalidateAll();
+  }
+  async function retryExtraction() {
+    if (!selectedStatementId || retrying) return;
+    retrying = true;
+    const response = await fetch(
+      `/api/reconciliation/statements/${selectedStatementId}/retry`,
+      { method: "POST" },
+    ).catch(() => null);
+    retrying = false;
+    if (!response?.ok) {
+      const result = await response?.json().catch(() => null);
+      toast.error(
+        result?.error ?? "Extraction could not be restarted. Try again.",
+      );
+      return;
+    }
+    toast.success("Statement extraction restarted");
     await invalidateAll();
   }
   async function deleteStatement() {
@@ -674,9 +773,10 @@
               class="clear-filters"
               type="button"
               onclick={clearFilters}><X size={13} aria-hidden="true" /> Clear</button
-            >{/if}
+            >{/if}{@render BulkMatchButton()}
         </div>
         <div class="toolbar-filters">
+          {@render BulkMatchButton()}
           {#if activeFilterCount > 0}<button
               class="clear-filters"
               type="button"
@@ -976,6 +1076,22 @@
   </div>
 </div>
 
+{#snippet BulkMatchButton()}
+  {#if tab === "records" && data.permissions.change && bulkMatchable.length > 0}
+    <button
+      class="bulk-match-btn"
+      type="button"
+      disabled={bulkSaving || saving}
+      onclick={() => (bulkOpen = true)}
+      ><Check size={13} aria-hidden="true" />{bulkSaving
+        ? "Saving…"
+        : `Save ${bulkMatchable.length} exact match${
+            bulkMatchable.length === 1 ? "" : "es"
+          }`}</button
+    >
+  {/if}
+{/snippet}
+
 {#snippet AllocationComposer()}
   {#if selectedRecord}<section
       class="composer"
@@ -1045,19 +1161,12 @@
             )}{@const savedHere =
               savedAllocations.find(
                 (allocation) => allocation.lineId === line.id,
-              )?.amount ?? 0}{@const compatible = compatibleLines.some(
-              (candidate) => candidate.id === line.id,
-            )}
-            <div
-              class="allocation-line"
-              class:selected={!!draft}
-              class:incompatible={!compatible}
-            >
+              )?.amount ?? 0}
+            <div class="allocation-line" class:selected={!!draft}>
               <label class="line-select"
                 ><input
                   type="checkbox"
                   checked={!!draft}
-                  disabled={!compatible}
                   onchange={() => toggleLine(line)}
                 /><span class="fake-check"
                   >{#if draft}<Check size={12} />{/if}</span
@@ -1068,9 +1177,7 @@
                     ><span title={line.statementFilename}
                       >{line.statementFilename}</span
                     >
-                    · {formatDate(line.date)}{#if !compatible}
-                      · Wrong money direction
-                    {/if}</small
+                    · {formatDate(line.date)}</small
                   ></span
                 ></label
               >
@@ -1078,10 +1185,9 @@
                 <small
                   >{formatMoney(line.remainingAmount + savedHere)} available</small
                 >{#if draft}<label
-                    ><span class="sr-only"
-                      >Allocation amount for {line.description}</span
                     ><span>{mainCurrencySymbol()}</span><input
                       name={`allocation-${line.id}`}
+                      aria-label={`Allocation amount for ${line.description || "statement transaction"}`}
                       type="number"
                       inputmode="decimal"
                       min="0.01"
@@ -1094,8 +1200,8 @@
                   >{:else}<strong>{formatMoney(line.amount)}</strong>{/if}
               </div>
             </div>{/each}{#if availableLines.length === 0}<EmptyState
-              title="No statement transactions"
-              sub="Upload a statement containing transactions with an available balance."
+              title="No compatible transactions"
+              sub={`Upload a statement containing ${selectedRecord.itemType === ReconItemType.Income ? "money in" : "money out"} transactions with an available balance.`}
               >{#snippet icon()}<Banknote size={20} />{/snippet}</EmptyState
             >{/if}
         </div>
@@ -1349,8 +1455,10 @@
             role="alert"
           >
             <strong>Extraction Failed</strong><span
-              >{selectedStatement.extractionError} Delete this statement and upload
-              a clearer PDF or image.</span
+              >{selectedStatement.extractionError}
+              {data.permissions.add
+                ? "Retry extraction below, or delete this statement and upload a clearer PDF or image."
+                : "Delete this statement and upload a clearer PDF or image."}</span
             >
           </div>{/if}
         <div class="detail-section-label">
@@ -1455,7 +1563,10 @@
               sub={selectedStatement.extractionState ===
               StatementExtractionState.Extracting
                 ? "This view updates automatically when extraction completes."
-                : "Delete this statement and upload a clearer file."}
+                : selectedStatement.extractionState ===
+                    StatementExtractionState.Failed
+                  ? "Retry extraction, or delete this statement and upload a clearer file."
+                  : "Delete this statement and upload a clearer file."}
               >{#snippet icon()}<FileText size={20} />{/snippet}</EmptyState
             >{/if}
         </div>
@@ -1471,7 +1582,16 @@
               type="button"
               onclick={() => (deleteStatementOpen = true)}
               ><Trash2 size={14} />Delete</button
-            >{/if}<Sheet.Close class="sheet-btn">Close</Sheet.Close>
+            >{/if}<Sheet.Close class="sheet-btn">Close</Sheet.Close>{#if data
+            .permissions.add &&
+            selectedStatement.extractionState ===
+              StatementExtractionState.Failed}<button
+              class="sheet-btn-primary"
+              type="button"
+              disabled={retrying}
+              onclick={retryExtraction}
+              >{retrying ? "Retrying…" : "Retry Extraction"}</button
+            >{/if}
         </div>
       </div>{/if}</Sheet.Content
   ></Sheet.Root
@@ -1501,10 +1621,41 @@
   danger
   onConfirm={deleteLine}
 />
+<ConfirmDialog
+  bind:open={bulkOpen}
+  title="Save Exact Matches?"
+  description={`Allocate the suggested statement transactions for ${bulkMatchable.length} record${bulkMatchable.length === 1 ? "" : "s"}. Records that still need review are left untouched.`}
+  confirmLabel="Save Matches"
+  onConfirm={runAutoMatch}
+/>
 
 <style>
   .reconciliation-screen {
     min-width: 0;
+  }
+  .bulk-match-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .bulk-match-btn:hover:not(:disabled) {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .bulk-match-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
   .recon-search {
     position: relative;
@@ -1814,6 +1965,14 @@
   }
   .composer-body,
   .statement-body {
+    /* A scroll container should also be the containing block for its own
+       subtree. Nothing here is absolutely positioned today, but without this
+       a future one would resolve against some ancestor outside the
+       scrollport — and the outer shells (`.screen`, `.work`, `.work-main`)
+       are `overflow: hidden`, which still scrolls programmatically while
+       showing no scrollbar. A stray absolute box up there turns a
+       scroll-into-view into a silently unrecoverable blank page. */
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1903,16 +2062,6 @@
   .allocation-line.selected {
     background: var(--primary-soft);
   }
-  .allocation-line.incompatible {
-    background: var(--muted);
-  }
-  .allocation-line.incompatible .line-select {
-    cursor: not-allowed;
-  }
-  .allocation-line.incompatible .line-copy,
-  .allocation-line.incompatible .line-money {
-    opacity: 0.65;
-  }
   .line-select {
     min-width: 0;
     flex: 1;
@@ -1921,8 +2070,21 @@
     gap: 9px;
     cursor: pointer;
   }
+  /* Visually hidden but still focusable and label-activatable. Deliberately
+     kept IN FLOW at zero size rather than `position: absolute`: an
+     out-of-flow box resolves against its nearest positioned ancestor, and
+     with none in this tree it escaped `.composer-body`'s scrollport
+     entirely. Focusing a row near the bottom of a long list then made the
+     browser scroll an outer shell by thousands of px to "reveal" it, taking
+     the whole page out of view. In flow, the input sits inside the
+     scrollport, so focus scrolls the list — which is what we want.
+     The focus ring is drawn on `.fake-check` via `:focus-within`, so the
+     input itself needs no size of its own. */
   .line-select > input {
-    position: absolute;
+    width: 0;
+    height: 0;
+    margin: 0;
+    appearance: none;
     opacity: 0;
     pointer-events: none;
   }

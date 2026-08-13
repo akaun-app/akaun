@@ -115,4 +115,14 @@ Every record detail (expenses, income, contacts, claims) is reachable at a real 
 
 ## Gotchas
 
+**`bun run check` wedges any dev-server client that's already open.** `check` runs `svelte-kit sync`, which regenerates `.svelte-kit/generated/client/nodes/*.js`, `root.js` and `matchers.js`. Vite hot-reloads those modules, but a browser tab loaded before the regen keeps the old route→node mapping, so a route index can resolve to a *different* page component than the one the server rendered. The symptoms are misleading and look nothing like a tooling problem:
+
+- The page goes **blank** with the correct URL but the wrong (or root-layout) `<title>`.
+- The console throws from a component you never navigated to — e.g. `ClaimsPage.svelte:203 Cannot read properties of undefined (reading 'length')`, because `ClaimsPage` got mounted with another route's `data`, so `data.claims` is undefined.
+- It's preceded by `Failed to hydrate: HierarchyRequestError: Failed to execute 'appendChild' on 'Node'`, since the SSR HTML is for the route you actually requested.
+
+This is reproducible on demand: open a page, run `bunx svelte-kit sync`, watch it break. **A plain reload does not fix it** — the browser keeps modules keyed to the old optimizer hash. Recovery is: stop the dev server, `rm -rf node_modules/.vite`, restart, reload. Nothing is wrong with the app code, so don't go bug-hunting in the component the stack trace names.
+
+Practical rule: run `bun run check` when no dev client is open, or treat the page as needing a full restart afterwards.
+
 **`$lib/server` can't be imported client-side.** SvelteKit strips/blocks `$lib/server/*` imports from `.svelte` files at build time. Record-locking rules live server-side in `src/lib/server/locking.ts` (e.g. `canEditAmount`, `canEditClaimData`), but detail-sheet components need the same check to disable fields in the UI. The established workaround is to hand-duplicate the specific function client-side with a `// Mirrors src/lib/server/locking.ts's <fnName> — ...` comment explaining the rule (see `ExpensesPage.svelte`, `ClaimsPage.svelte`). Keep both copies in sync manually when the rule changes — there's no shared import to enforce it.

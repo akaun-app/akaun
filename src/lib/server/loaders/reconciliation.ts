@@ -2,8 +2,7 @@ import { redirect } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { workspace } from "$lib/server/services/reconciliation.js";
-import { suggestExactAllocationSet } from "$lib/server/reconciliation/allocation.js";
-import { ReconItemType, StatementDirection } from "$lib/enums.js";
+import { suggestLinesForRecord } from "$lib/server/reconciliation/suggestions.js";
 export function loadReconciliationPage(
   locals: App.Locals,
   from?: string | null,
@@ -21,10 +20,6 @@ export function loadReconciliationPage(
       statementById.get(line.statementId)?.originalFilename ?? "Bank statement",
   }));
   const records = result.records.map((record) => {
-    const direction =
-      record.itemType === ReconItemType.Income
-        ? StatementDirection.In
-        : StatementDirection.Out;
     const savedLineIds = new Set(
       result.allocations
         .filter(
@@ -34,25 +29,10 @@ export function loadReconciliationPage(
         )
         .map((allocation) => allocation.lineId),
     );
-    const compatible = lines.filter(
-      (line) =>
-        line.direction === direction &&
-        (line.remainingAmount >= 0.005 || savedLineIds.has(line.id)),
-    );
-    const suggestedLineIds = suggestExactAllocationSet(
-      record.remainingAmount ?? 0,
-      compatible.map((line) => ({
-        id: line.id,
-        amount: line.remainingAmount,
-        score: Math.max(
-          0,
-          30 -
-            Math.abs(Date.parse(record.date) - Date.parse(line.date)) /
-              86_400_000,
-        ),
-      })),
-    );
-    return { ...record, suggestedLineIds };
+    return {
+      ...record,
+      suggestedLineIds: suggestLinesForRecord(record, lines, savedLineIds),
+    };
   });
   return {
     ...result,

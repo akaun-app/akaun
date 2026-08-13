@@ -29,6 +29,7 @@ export const GET: RequestHandler = ({ locals }) => {
         "line-deleted",
         "lines-added",
         "allocation-update",
+        "allocations-bulk-update",
       ] as const;
       const handlers = eventNames.map((eventName) => {
         const handler = (payload: object) => {
