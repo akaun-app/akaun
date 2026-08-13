@@ -12,6 +12,7 @@
     ArrowDownLeft,
     ArrowUpRight,
     Banknote,
+    Calendar,
     Check,
     ChevronRight,
     CircleDollarSign,
@@ -27,8 +28,9 @@
   import { toast } from "svelte-sonner";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
   import ConfirmDialog from "$lib/components/ui/ConfirmDialog.svelte";
+  import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
-  import StatCard from "$lib/components/ui/StatCard.svelte";
+  import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
   import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
   import {
     ReconItemType,
@@ -48,8 +50,8 @@
   type StatementLine = Data["lines"][number];
   type Draft = { lineId: number; amount: number };
   type Tab = "records" | "statements";
-  type RecordFilter = "review" | "matched";
-  type StatementFilter = "active" | "completed";
+  type RecordStatus = "review" | "matched";
+  type StatementStatus = "active" | "completed";
 
   let { data }: { data: Data } = $props();
   const screen = useIsMobile();
@@ -62,17 +64,26 @@
       ? "statements"
       : "records",
   );
-  let recordFilter = $state<RecordFilter>(
-    page.url.searchParams.get("filter") === "matched" ? "matched" : "review",
+  let recordStatuses = $state<RecordStatus[]>(
+    page.url.searchParams.has("filter")
+      ? (page.url.searchParams
+          .get("filter")!
+          .split(",")
+          .filter(Boolean) as RecordStatus[])
+      : ["review"],
   );
-  let statementFilter = $state<StatementFilter>(
-    page.url.searchParams.get("status") === "completed"
-      ? "completed"
-      : "active",
+  let statementStatuses = $state<StatementStatus[]>(
+    page.url.searchParams.has("status")
+      ? (page.url.searchParams
+          .get("status")!
+          .split(",")
+          .filter(Boolean) as StatementStatus[])
+      : ["active"],
   );
   let query = $state(page.url.searchParams.get("q") ?? "");
   let from = $state(page.url.searchParams.get("from") ?? "");
   let to = $state(page.url.searchParams.get("to") ?? "");
+  let mobileFilterOpen = $state(false);
   let selectedKey = $state(page.url.searchParams.get("record") ?? "");
   let selectedRecord = $state<RecordRow | null>(null);
   let selectedStatementId = $state(
@@ -80,6 +91,7 @@
   );
   let drafts = $state<Draft[]>([]);
   let savedDrafts = $state<Draft[]>([]);
+  let initialDrafts = $state<Draft[]>([]);
   let saving = $state(false);
   let uploadInput = $state<HTMLInputElement | null>(null);
   let deleteStatementOpen = $state(false);
@@ -106,12 +118,11 @@
       (record) => Math.abs(record.remainingAmount ?? 0) < 0.005,
     ),
   );
-  const partialCount = $derived(
-    reviewRecords.filter((record) => (record.allocatedAmount ?? 0) >= 0.005)
-      .length,
-  );
   const activeStatements = $derived(
     data.statements.filter((statement) => !statement.completed),
+  );
+  const completedStatements = $derived(
+    data.statements.filter((statement) => statement.completed),
   );
   const bankRemaining = $derived(
     data.lines.reduce(
@@ -119,22 +130,62 @@
       0,
     ),
   );
+  const includeReview = $derived(
+    recordStatuses.length === 0 || recordStatuses.includes("review"),
+  );
+  const includeMatched = $derived(
+    recordStatuses.length === 0 || recordStatuses.includes("matched"),
+  );
+  const recordStatusTotal = $derived(
+    (includeReview ? reviewRecords.length : 0) +
+      (includeMatched ? matchedRecords.length : 0),
+  );
+  const singleRecordStatus = $derived(
+    recordStatuses.length === 1 ? recordStatuses[0] : null,
+  );
+  const includeActiveStatements = $derived(
+    statementStatuses.length === 0 || statementStatuses.includes("active"),
+  );
+  const includeCompletedStatements = $derived(
+    statementStatuses.length === 0 || statementStatuses.includes("completed"),
+  );
+  const singleStatementStatus = $derived(
+    statementStatuses.length === 1 ? statementStatuses[0] : null,
+  );
+  const recordStatusActive = $derived(
+    !(recordStatuses.length === 1 && recordStatuses[0] === "review"),
+  );
+  const statementStatusActive = $derived(
+    !(statementStatuses.length === 1 && statementStatuses[0] === "active"),
+  );
+  const dateRangeActive = $derived(!!(from || to));
+  const activeFilterCount = $derived(
+    tab === "records"
+      ? (recordStatusActive ? 1 : 0) + (dateRangeActive ? 1 : 0)
+      : statementStatusActive
+        ? 1
+        : 0,
+  );
   const visibleRecords = $derived.by(() => {
-    const source = recordFilter === "matched" ? matchedRecords : reviewRecords;
+    let source: RecordRow[] = [];
+    if (includeReview) source = source.concat(reviewRecords);
+    if (includeMatched) source = source.concat(matchedRecords);
     const normalized = query.trim().toLocaleLowerCase();
-    return source.filter(
-      (record) =>
-        !normalized ||
-        `${record.label} ${record.contactName ?? ""} ${typeLabel(record.itemType)}`
-          .toLocaleLowerCase()
-          .includes(normalized),
-    );
+    return source
+      .filter(
+        (record) =>
+          !normalized ||
+          `${record.label} ${record.contactName ?? ""} ${typeLabel(record.itemType)}`
+            .toLocaleLowerCase()
+            .includes(normalized),
+      )
+      .toSorted((left, right) => matchRank(left) - matchRank(right));
   });
   const visibleStatements = $derived.by(() => {
-    const source =
-      statementFilter === "completed"
-        ? data.statements.filter((statement) => statement.completed)
-        : activeStatements;
+    let source: Statement[] = [];
+    if (includeActiveStatements) source = source.concat(activeStatements);
+    if (includeCompletedStatements)
+      source = source.concat(completedStatements);
     const normalized = query.trim().toLocaleLowerCase();
     return source.filter(
       (statement) =>
@@ -200,8 +251,19 @@
     JSON.stringify(normalizeDrafts(drafts)) !==
       JSON.stringify(normalizeDrafts(savedDrafts)),
   );
+  const manuallyEdited = $derived(
+    JSON.stringify(normalizeDrafts(drafts)) !==
+      JSON.stringify(normalizeDrafts(initialDrafts)),
+  );
   const hasSuggestion = $derived(
     !!selectedRecord?.suggestedLineIds.length && savedAllocations.length === 0,
+  );
+  const suggestionApplied = $derived(
+    !!selectedRecord &&
+      drafts.length === selectedRecord.suggestedLineIds.length &&
+      selectedRecord.suggestedLineIds.every((id) =>
+        drafts.some((draft) => draft.lineId === id),
+      ),
   );
 
   $effect(() => {
@@ -226,6 +288,36 @@
     const value = ReconItemTypeLabels[type] ?? "record";
     return value[0].toUpperCase() + value.slice(1);
   }
+  function matchStatus(
+    record: RecordRow,
+  ): "matched" | "exact-match" | "partial-match" | "no-match" {
+    if (Math.abs(record.remainingAmount ?? 0) < 0.005) return "matched";
+    if ((record.allocatedAmount ?? 0) >= 0.005) return "partial-match";
+    return record.suggestedLineIds.length ? "exact-match" : "no-match";
+  }
+  function matchRank(record: RecordRow) {
+    const status = matchStatus(record);
+    return status === "exact-match"
+      ? 0
+      : status === "partial-match"
+        ? 1
+        : status === "no-match"
+          ? 2
+          : 3;
+  }
+  function buildSuggestionDrafts(record: RecordRow): Draft[] {
+    if (!record.suggestedLineIds.length) return [];
+    let remaining = Math.round(record.amount * record.exchangeRate * 100) / 100;
+    const result: Draft[] = [];
+    for (const lineId of record.suggestedLineIds) {
+      const line = data.lines.find((candidate) => candidate.id === lineId);
+      if (!line) continue;
+      const amount = Math.min(line.remainingAmount, remaining);
+      remaining = Math.round((remaining - amount) * 100) / 100;
+      result.push({ lineId, amount });
+    }
+    return result;
+  }
   function normalizeDrafts(value: Draft[]) {
     return value
       .map((draft) => ({ lineId: draft.lineId, amount: Number(draft.amount) }))
@@ -241,8 +333,8 @@
   function updateUrl() {
     const params = new SvelteURLSearchParams({
       tab,
-      filter: recordFilter,
-      status: statementFilter,
+      filter: recordStatuses.join(","),
+      status: statementStatuses.join(","),
     });
     if (query) params.set("q", query);
     if (from) params.set("from", from);
@@ -254,12 +346,12 @@
     replaceState(`${resolve("/reconciliation")}?${params}`, page.state);
   }
   function guard(action: () => void) {
-    if (!dirty) return action();
+    if (!manuallyEdited) return action();
     deferredAction = action;
     discardOpen = true;
   }
   function confirmDiscard() {
-    drafts = [...savedDrafts];
+    drafts = [...initialDrafts];
     discardOpen = false;
     const action = deferredAction;
     deferredAction = null;
@@ -278,8 +370,9 @@
         lineId: allocation.lineId,
         amount: allocation.amount,
       }));
-    drafts = saved;
+    drafts = saved.length ? saved : buildSuggestionDrafts(record);
     savedDrafts = [...saved];
+    initialDrafts = [...drafts];
     updateUrl();
   }
   function chooseRecord(record: RecordRow) {
@@ -291,6 +384,7 @@
       selectedRecord = null;
       drafts = [];
       savedDrafts = [];
+      initialDrafts = [];
       updateUrl();
     });
   }
@@ -312,9 +406,33 @@
       selectedRecord = null;
       drafts = [];
       savedDrafts = [];
+      initialDrafts = [];
       selectedStatementId = null;
       updateUrl();
     });
+  }
+  function toggleRecordStatus(status: RecordStatus) {
+    recordStatuses = recordStatuses.includes(status)
+      ? recordStatuses.filter((value) => value !== status)
+      : [...recordStatuses, status];
+    updateUrl();
+  }
+  function toggleStatementStatus(status: StatementStatus) {
+    statementStatuses = statementStatuses.includes(status)
+      ? statementStatuses.filter((value) => value !== status)
+      : [...statementStatuses, status];
+    updateUrl();
+  }
+  function clearFilters() {
+    if (tab === "records") {
+      recordStatuses = ["review"];
+      from = "";
+      to = "";
+    } else {
+      statementStatuses = ["active"];
+    }
+    updateUrl();
+    void invalidateAll();
   }
   function toggleLine(line: StatementLine) {
     const existing = drafts.find((draft) => draft.lineId === line.id);
@@ -339,18 +457,10 @@
   }
   function applySuggestion() {
     if (!selectedRecord) return;
-    let remaining = recordTotal;
-    drafts = selectedRecord.suggestedLineIds.map((lineId) => {
-      const line = compatibleLines.find(
-        (candidate) => candidate.id === lineId,
-      )!;
-      const amount = Math.min(line.remainingAmount, remaining);
-      remaining = Math.round((remaining - amount) * 100) / 100;
-      return { lineId, amount };
-    });
+    drafts = buildSuggestionDrafts(selectedRecord);
   }
-  async function saveAllocations() {
-    if (!selectedRecord || saving || draftRemaining < -0.005) return;
+  async function saveAllocations(): Promise<boolean> {
+    if (!selectedRecord || saving || draftRemaining < -0.005) return false;
     saving = true;
     const response = await fetch(
       `/api/reconciliation/records/${selectedRecord.itemType}/${selectedRecord.itemId}/allocations`,
@@ -367,11 +477,45 @@
         result?.error ??
           "Allocations could not be saved. Check the available amounts and try again.",
       );
-      return;
+      return false;
     }
     savedDrafts = [...drafts];
     toast.success("Allocations saved");
     await invalidateAll();
+    return true;
+  }
+  async function saveAndAdvance() {
+    if (!selectedRecord) return;
+    const queue = visibleRecords;
+    const index = queue.findIndex(
+      (record) => recordKey(record) === selectedKey,
+    );
+    const nextKey =
+      index >= 0 && index + 1 < queue.length
+        ? recordKey(queue[index + 1])
+        : null;
+    const ok = await saveAllocations();
+    if (!ok) return;
+    const nextRecord =
+      (nextKey &&
+        data.records.find(
+          (record) =>
+            recordKey(record) === nextKey &&
+            Math.abs(record.remainingAmount ?? 0) >= 0.005,
+        )) ||
+      visibleRecords.find(
+        (record) => Math.abs(record.remainingAmount ?? 0) >= 0.005,
+      );
+    if (nextRecord) {
+      loadRecord(nextRecord);
+      return;
+    }
+    selectedKey = "";
+    selectedRecord = null;
+    drafts = [];
+    savedDrafts = [];
+    initialDrafts = [];
+    updateUrl();
   }
   async function upload(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
@@ -394,7 +538,7 @@
     }
     toast.success("Statement extraction started");
     tab = "statements";
-    statementFilter = "active";
+    statementStatuses = ["active"];
     updateUrl();
     await invalidateAll();
   }
@@ -501,112 +645,153 @@
     </div>
   </header>
 
-  <div class="stat-strip recon-stats">
-    <StatCard
-      tone="amber"
-      label="Needs Review"
-      value={String(reviewRecords.length)}
-      sub="Unmatched or partial"
-    />
-    <StatCard
-      label="Partially Matched"
-      value={String(partialCount)}
-      sub="Allocation started"
-    />
-    <StatCard
-      tone="green"
-      label="Active Statements"
-      value={String(activeStatements.length)}
-      sub="With remaining lines"
-    />
-    <StatCard
-      label="Unallocated Bank"
-      cur={mainCurrencySymbol()}
-      value={formatMoney(bankRemaining)}
-      sub={`${data.lines.filter((line) => line.remainingAmount >= 0.005).length} statement lines`}
-    />
-  </div>
-
-  <div class="module-tabs" role="tablist" aria-label="Reconciliation areas">
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === "records"}
-      class:active={tab === "records"}
-      onclick={() => setTab("records")}
-      ><CircleDollarSign size={15} aria-hidden="true" />Akaun Records</button
-    ><button
-      type="button"
-      role="tab"
-      aria-selected={tab === "statements"}
-      class:active={tab === "statements"}
-      onclick={() => setTab("statements")}
-      ><FileText size={15} aria-hidden="true" />Bank Statements</button
-    >
-  </div>
-
   <div class="work">
     <div class="work-main recon-work">
-      {#if tab === "records"}
-        <div class="toolbar">
-          <div class="status-tabs">
-            <button
-              class="status-tab"
-              class:active={recordFilter === "review"}
-              type="button"
-              onclick={() => {
-                recordFilter = "review";
-                updateUrl();
-              }}
-              >Needs Review <span class="tab-count">{reviewRecords.length}</span
-              ></button
-            ><button
-              class="status-tab"
-              class:active={recordFilter === "matched"}
-              type="button"
-              onclick={() => {
-                recordFilter = "matched";
-                updateUrl();
-              }}
-              >Matched <span class="tab-count">{matchedRecords.length}</span
-              ></button
-            >
-          </div>
-          <div class="date-filters">
-            <SlidersHorizontal size={14} aria-hidden="true" /><label
-              >From <input
-                name="reconciliation-from"
-                type="date"
-                autocomplete="off"
-                bind:value={from}
-                onchange={() => {
-                  updateUrl();
-                  void invalidateAll();
-                }}
-              /></label
-            ><label
-              >To <input
-                name="reconciliation-to"
-                type="date"
-                autocomplete="off"
-                bind:value={to}
-                onchange={() => {
-                  updateUrl();
-                  void invalidateAll();
-                }}
-              /></label
-            >{#if from || to}<button
-                class="clear-filter"
-                type="button"
-                onclick={() => {
-                  from = "";
-                  to = "";
-                  updateUrl();
-                  void invalidateAll();
-                }}><X size={13} aria-hidden="true" />Clear</button
-              >{/if}
-          </div>
+      <div class="toolbar">
+        <div class="status-tabs">
+          <button
+            class="status-tab"
+            class:active={tab === "records"}
+            type="button"
+            onclick={() => setTab("records")}>Akaun Records</button
+          ><button
+            class="status-tab"
+            class:active={tab === "statements"}
+            type="button"
+            onclick={() => setTab("statements")}>Statements</button
+          >
         </div>
+        <div class="mobile-filter-row">
+          <button
+            class="btn-outline btn-sm"
+            style="display:inline-flex; align-items:center; gap:6px;"
+            type="button"
+            onclick={() => (mobileFilterOpen = true)}
+            ><SlidersHorizontal size={13} aria-hidden="true" /> Filters{#if activeFilterCount > 0}<span
+                class="filter-count">{activeFilterCount}</span
+              >{/if}</button
+          >{#if activeFilterCount > 0}<button
+              class="clear-filters"
+              type="button"
+              onclick={clearFilters}><X size={13} aria-hidden="true" /> Clear</button
+            >{/if}
+        </div>
+        <div class="toolbar-filters">
+          {#if activeFilterCount > 0}<button
+              class="clear-filters"
+              type="button"
+              onclick={clearFilters}
+              ><X size={13} aria-hidden="true" />Clear</button
+            >{/if}
+          {#if tab === "records"}
+            <FilterDropdown label="Status" active={recordStatusActive}>
+              {#snippet icon()}<SlidersHorizontal
+                  size={14}
+                  aria-hidden="true"
+                />{/snippet}
+              <div class="filter-checklist">
+                <button
+                  type="button"
+                  class="filter-check"
+                  class:checked={recordStatuses.includes("review")}
+                  onclick={() => toggleRecordStatus("review")}
+                  ><span class="filter-checkbox"
+                    >{#if recordStatuses.includes("review")}<Check
+                        size={11}
+                      />{/if}</span
+                  >Needs Review <span class="tab-count"
+                    >{reviewRecords.length}</span
+                  ></button
+                ><button
+                  type="button"
+                  class="filter-check"
+                  class:checked={recordStatuses.includes("matched")}
+                  onclick={() => toggleRecordStatus("matched")}
+                  ><span class="filter-checkbox"
+                    >{#if recordStatuses.includes("matched")}<Check
+                        size={11}
+                      />{/if}</span
+                  >Matched <span class="tab-count"
+                    >{matchedRecords.length}</span
+                  ></button
+                >
+              </div>
+            </FilterDropdown>
+            <FilterDropdown label="Date" active={dateRangeActive} align="right">
+              {#snippet icon()}<Calendar size={14} aria-hidden="true" />{/snippet}
+              <div class="filter-daterange">
+                <div class="filter-daterange-head">
+                  <span>Date range</span>
+                  {#if from || to}<button
+                      type="button"
+                      onclick={() => {
+                        from = "";
+                        to = "";
+                        updateUrl();
+                        void invalidateAll();
+                      }}>Clear</button
+                    >{/if}
+                </div>
+                <span class="mini-label">From</span>
+                <DatePicker
+                  value={from}
+                  placeholder="From date"
+                  onchange={(value) => {
+                    from = value;
+                    updateUrl();
+                    void invalidateAll();
+                  }}
+                />
+                <span class="mini-label">To</span>
+                <DatePicker
+                  value={to}
+                  placeholder="To date"
+                  onchange={(value) => {
+                    to = value;
+                    updateUrl();
+                    void invalidateAll();
+                  }}
+                />
+              </div>
+            </FilterDropdown>
+          {:else}
+            <FilterDropdown label="Status" active={statementStatusActive}>
+              {#snippet icon()}<SlidersHorizontal
+                  size={14}
+                  aria-hidden="true"
+                />{/snippet}
+              <div class="filter-checklist">
+                <button
+                  type="button"
+                  class="filter-check"
+                  class:checked={statementStatuses.includes("active")}
+                  onclick={() => toggleStatementStatus("active")}
+                  ><span class="filter-checkbox"
+                    >{#if statementStatuses.includes("active")}<Check
+                        size={11}
+                      />{/if}</span
+                  >Active <span class="tab-count"
+                    >{activeStatements.length}</span
+                  ></button
+                ><button
+                  type="button"
+                  class="filter-check"
+                  class:checked={statementStatuses.includes("completed")}
+                  onclick={() => toggleStatementStatus("completed")}
+                  ><span class="filter-checkbox"
+                    >{#if statementStatuses.includes("completed")}<Check
+                        size={11}
+                      />{/if}</span
+                  >Completed <span class="tab-count"
+                    >{completedStatements.length}</span
+                  ></button
+                >
+              </div>
+            </FilterDropdown>
+          {/if}
+        </div>
+      </div>
+      {#if tab === "records"}
         <div class="split-workspace">
           <div class="record-pane">
             <div class="table-card">
@@ -615,7 +800,8 @@
                   ><tr
                     ><th>Record</th><th>Type</th><th>Date</th><th
                       class="ta-right">Total</th
-                    ><th class="ta-right">Remaining</th><th aria-label="Open"
+                    ><th>Match</th><th class="ta-right">Remaining</th><th
+                      aria-label="Open"
                     ></th></tr
                   ></thead
                 ><tbody
@@ -649,6 +835,8 @@
                             record.amount * record.exchangeRate,
                           )}</span
                         ></td
+                      ><td data-label="Match"
+                        ><StatusBadge status={matchStatus(record)} /></td
                       ><td class="td-amount remaining" data-label="Remaining"
                         ><span class="amount-num"
                           >{formatMoney(record.remainingAmount ?? 0)}</span
@@ -658,19 +846,19 @@
                       ><td class="row-break"></td></tr
                     >{/each}{#if visibleRecords.length === 0}<tr
                       class="empty-row"
-                      ><td colspan="6"
+                      ><td colspan="7"
                         ><EmptyState
-                          title={recordFilter === "review"
-                            ? "All records are matched"
-                            : "No matched records yet"}
-                          sub={recordFilter === "review"
-                            ? "Every eligible Akaun record in this date range is fully allocated."
-                            : "Fully allocated records will appear here for audit and correction."}
-                          >{#snippet icon()}{#if recordFilter === "review"}<Check
+                          title={singleRecordStatus === "matched"
+                            ? "No matched records yet"
+                            : "All records are matched"}
+                          sub={singleRecordStatus === "matched"
+                            ? "Fully allocated records will appear here for audit and correction."
+                            : singleRecordStatus === "review"
+                              ? "Every eligible Akaun record in this date range is fully allocated."
+                              : "Try adjusting the status or date filters."}
+                          >{#snippet icon()}{#if singleRecordStatus === "matched"}<Banknote
                                 size={20}
-                              />{:else}<Banknote
-                                size={20}
-                              />{/if}{/snippet}</EmptyState
+                              />{:else}<Check size={20} />{/if}{/snippet}</EmptyState
                         ></td
                       ></tr
                     >{/if}</tbody
@@ -679,15 +867,16 @@
             </div>
             <div class="table-foot">
               <span
-                >Showing <b>{visibleRecords.length}</b> of {recordFilter ===
-                "review"
-                  ? reviewRecords.length
-                  : matchedRecords.length}</span
+                >Showing <b>{visibleRecords.length}</b> of {recordStatusTotal}</span
               >
             </div>
           </div>
           <div class="desktop-composer">
-            {#if selectedRecord}{@render AllocationComposer()}{:else}<EmptyState
+            {#if selectedRecord}{@render AllocationComposer()}{:else if reviewRecords.length === 0}<EmptyState
+                title="You're all caught up"
+                sub="Every eligible Akaun record in this date range is fully allocated."
+                >{#snippet icon()}<Check size={20} />{/snippet}</EmptyState
+              >{:else}<EmptyState
                 title="Select an Akaun record"
                 sub="Choose a record to review compatible bank transactions and stage allocations."
                 >{#snippet icon()}<CircleDollarSign
@@ -697,33 +886,8 @@
           </div>
         </div>
       {:else}
-        <div class="toolbar">
-          <div class="status-tabs">
-            <button
-              class="status-tab"
-              class:active={statementFilter === "active"}
-              type="button"
-              onclick={() => {
-                statementFilter = "active";
-                updateUrl();
-              }}
-              >Active <span class="tab-count">{activeStatements.length}</span
-              ></button
-            ><button
-              class="status-tab"
-              class:active={statementFilter === "completed"}
-              type="button"
-              onclick={() => {
-                statementFilter = "completed";
-                updateUrl();
-              }}
-              >Completed <span class="tab-count"
-                >{data.statements.length - activeStatements.length}</span
-              ></button
-            >
-          </div>
-        </div>
-        <div class="table-card">
+        <div class="statement-pane">
+          <div class="table-card">
           <table class="exp-table">
             <thead
               ><tr
@@ -776,15 +940,17 @@
                   class="empty-row"
                   ><td colspan="6"
                     ><EmptyState
-                      title={statementFilter === "active"
-                        ? "No active statements"
-                        : "No completed statements"}
-                      sub={statementFilter === "active"
-                        ? "Upload a bank statement to extract transactions and start matching."
-                        : "Statements move here automatically when every line is fully allocated."}
+                      title={singleStatementStatus === "completed"
+                        ? "No completed statements"
+                        : "No active statements"}
+                      sub={singleStatementStatus === "completed"
+                        ? "Statements move here automatically when every line is fully allocated."
+                        : singleStatementStatus === "active"
+                          ? "Upload a bank statement to extract transactions and start matching."
+                          : "Try adjusting the status filter."}
                       >{#snippet icon()}<FileText
                           size={20}
-                        />{/snippet}{#snippet action()}{#if statementFilter === "active" && data.permissions.add}<button
+                        />{/snippet}{#snippet action()}{#if singleStatementStatus !== "completed" && data.permissions.add}<button
                             class="sheet-btn-primary compact"
                             type="button"
                             onclick={() => uploadInput?.click()}
@@ -795,13 +961,15 @@
                 >{/if}</tbody
             >
           </table>
-        </div>
-        <div class="table-foot">
-          <span
-            >{visibleStatements.length} statement{visibleStatements.length === 1
-              ? ""
-              : "s"}</span
-          >
+          </div>
+          <div class="table-foot">
+            <span
+              >{visibleStatements.length} statement{visibleStatements.length ===
+              1
+                ? ""
+                : "s"}</span
+            >
+          </div>
         </div>
       {/if}
     </div>
@@ -847,16 +1015,18 @@
       <div class="composer-body">
         {#if hasSuggestion}<div class="suggestion">
             <div>
-              <strong>Exact Match Found</strong><span
+              <strong
+                >{suggestionApplied ? "Auto-matched" : "Exact Match Found"}</strong
+              ><span
                 >{selectedRecord.suggestedLineIds.length} transaction{selectedRecord
                   .suggestedLineIds.length === 1
                   ? ""
                   : "s"} total exactly {formatMoney(recordTotal)}.</span
               >
             </div>
-            <button type="button" onclick={applySuggestion}
-              >Apply Suggestion</button
-            >
+            {#if !suggestionApplied}<button type="button" onclick={applySuggestion}
+                >Use Suggested Match</button
+              >{/if}
           </div>{/if}
         <div class="section-heading">
           <div>
@@ -943,8 +1113,8 @@
           <button
             class="sheet-btn"
             type="button"
-            disabled={!dirty || saving}
-            onclick={() => (drafts = [...savedDrafts])}>Reset</button
+            disabled={!manuallyEdited || saving}
+            onclick={() => (drafts = [...initialDrafts])}>Reset</button
           ><button
             class="sheet-btn-primary"
             type="button"
@@ -952,13 +1122,149 @@
               saving ||
               !dirty ||
               draftRemaining < -0.005}
-            onclick={saveAllocations}
-            >{saving ? "Saving…" : "Save Allocations"}</button
+            onclick={saveAndAdvance}
+            >{saving
+              ? "Saving…"
+              : visibleRecords.some(
+                    (record) =>
+                      recordKey(record) !== selectedKey &&
+                      Math.abs(record.remainingAmount ?? 0) >= 0.005,
+                  )
+                ? "Save & Next"
+                : "Save"}</button
           >
         </div>
       </footer>
     </section>{/if}
 {/snippet}
+
+<Sheet.Root bind:open={mobileFilterOpen}
+  ><Sheet.Content
+    side="bottom"
+    style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + var(--safe-bottom));"
+  >
+    <div
+      style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;"
+    >
+      <div style="font-size:15px; font-weight:600;">Filters</div>
+      <Sheet.Close class="sheet-close" aria-label="Close filters"
+        ><X size={16} /></Sheet.Close
+      >
+    </div>
+    <div style="margin-bottom:16px;">
+      <div class="filter-mobile-head">
+        <span>Status</span>
+        {#if (tab === "records" ? recordStatusActive : statementStatusActive)}<button
+            type="button"
+            class="filter-mobile-clear"
+            onclick={() => {
+              if (tab === "records") recordStatuses = ["review"];
+              else statementStatuses = ["active"];
+              updateUrl();
+            }}>Clear</button
+          >{/if}
+      </div>
+      {#if tab === "records"}
+        <div class="filter-checklist">
+          <button
+            type="button"
+            class="filter-check"
+            class:checked={recordStatuses.includes("review")}
+            onclick={() => toggleRecordStatus("review")}
+            ><span class="filter-checkbox"
+              >{#if recordStatuses.includes("review")}<Check
+                  size={11}
+                />{/if}</span
+            >Needs Review <span class="tab-count"
+              >{reviewRecords.length}</span
+            ></button
+          ><button
+            type="button"
+            class="filter-check"
+            class:checked={recordStatuses.includes("matched")}
+            onclick={() => toggleRecordStatus("matched")}
+            ><span class="filter-checkbox"
+              >{#if recordStatuses.includes("matched")}<Check
+                  size={11}
+                />{/if}</span
+            >Matched <span class="tab-count">{matchedRecords.length}</span
+            ></button
+          >
+        </div>
+      {:else}
+        <div class="filter-checklist">
+          <button
+            type="button"
+            class="filter-check"
+            class:checked={statementStatuses.includes("active")}
+            onclick={() => toggleStatementStatus("active")}
+            ><span class="filter-checkbox"
+              >{#if statementStatuses.includes("active")}<Check
+                  size={11}
+                />{/if}</span
+            >Active <span class="tab-count">{activeStatements.length}</span
+            ></button
+          ><button
+            type="button"
+            class="filter-check"
+            class:checked={statementStatuses.includes("completed")}
+            onclick={() => toggleStatementStatus("completed")}
+            ><span class="filter-checkbox"
+              >{#if statementStatuses.includes("completed")}<Check
+                  size={11}
+                />{/if}</span
+            >Completed <span class="tab-count"
+              >{completedStatements.length}</span
+            ></button
+          >
+        </div>
+      {/if}
+    </div>
+    {#if tab === "records"}<div style="margin-bottom:20px;">
+        <div class="filter-mobile-head">
+          <span>Date range</span>
+          {#if from || to}<button
+              type="button"
+              class="filter-mobile-clear"
+              onclick={() => {
+                from = "";
+                to = "";
+                updateUrl();
+                void invalidateAll();
+              }}>Clear</button
+            >{/if}
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span class="mini-label">From</span>
+          <DatePicker
+            value={from}
+            placeholder="From date"
+            onchange={(value) => {
+              from = value;
+              updateUrl();
+              void invalidateAll();
+            }}
+          />
+          <span class="mini-label">To</span>
+          <DatePicker
+            value={to}
+            placeholder="To date"
+            onchange={(value) => {
+              to = value;
+              updateUrl();
+              void invalidateAll();
+            }}
+          />
+        </div>
+      </div>{/if}
+    <button
+      class="sheet-btn-primary"
+      style="width:100%; justify-content:center;"
+      type="button"
+      onclick={() => (mobileFilterOpen = false)}>Show results</button
+    ></Sheet.Content
+  ></Sheet.Root
+>
 
 <Sheet.Root
   open={compactWorkspace && !!selectedRecord}
@@ -1249,69 +1555,94 @@
   .sheet-btn-primary:hover {
     filter: brightness(0.96);
   }
-  .module-tabs {
-    display: flex;
-    gap: 4px;
-    padding: 16px 28px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .module-tabs button {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 12px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--muted-foreground);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .module-tabs button:hover {
-    color: var(--foreground);
-  }
-  .module-tabs button.active {
-    color: var(--primary);
-    border-bottom-color: var(--primary);
-  }
   .recon-work {
     padding-top: 12px;
   }
-  .date-filters {
+  .filter-checklist {
+    padding: 5px;
+    min-width: 190px;
+  }
+  .filter-check {
     display: flex;
     align-items: center;
-    gap: 8px;
-    color: var(--muted-foreground);
-    font-size: 12px;
-  }
-  .date-filters label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .date-filters input {
-    height: 30px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--card);
-    color: var(--foreground);
-    font: inherit;
-    font-size: 12px;
-    color-scheme: light dark;
-  }
-  .clear-filter {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    gap: 9px;
+    width: 100%;
     border: 0;
-    background: transparent;
-    color: var(--primary);
+    background: none;
     font: inherit;
-    font-size: 12px;
+    font-size: 13px;
+    color: var(--foreground);
+    padding: 7px 8px;
+    border-radius: 7px;
     cursor: pointer;
+    text-align: left;
+  }
+  .filter-check:hover {
+    background: var(--accent);
+  }
+  .filter-check .tab-count {
+    margin-left: auto;
+  }
+  .filter-checkbox {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 4px;
+    border: 1.5px solid var(--border-strong);
+    background: var(--card);
+    color: var(--primary-foreground);
+  }
+  .filter-check.checked .filter-checkbox {
+    border-color: var(--primary);
+    background: var(--primary);
+  }
+  .filter-daterange {
+    padding: 12px 14px;
+    min-width: 200px;
+  }
+  .filter-daterange-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .filter-daterange-head > span:first-child {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+  }
+  .filter-daterange-head button,
+  .filter-mobile-clear {
+    border: 0;
+    background: none;
+    color: var(--primary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0;
+  }
+  .filter-daterange .mini-label {
+    display: block;
+    margin: 8px 0 4px;
+  }
+  .filter-daterange .mini-label:first-of-type {
+    margin-top: 0;
+  }
+  .filter-mobile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+    margin-bottom: 10px;
   }
   .split-workspace {
     min-height: 0;
@@ -1325,6 +1656,9 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+  .statement-pane {
+    display: contents;
   }
   .desktop-composer {
     min-width: 0;
@@ -1916,34 +2250,49 @@
     .reconciliation-screen > :global(.work),
     .recon-work,
     .split-workspace,
-    .record-pane {
+    .record-pane,
+    .statement-pane {
       min-height: 0;
       overflow: hidden;
     }
-    .record-pane .table-card {
+    .recon-work {
+      padding-bottom: 20px;
+    }
+    .record-pane,
+    .statement-pane {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow-sm);
+    }
+    .statement-pane {
+      flex: 1;
+    }
+    .record-pane .table-card,
+    .statement-pane .table-card {
+      flex: 1;
       min-height: 0;
       overflow: auto;
       overscroll-behavior: contain;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      background: transparent;
+    }
+    .record-pane .table-foot,
+    .statement-pane .table-foot {
+      flex: none;
+      margin: 0;
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+      background: var(--card);
     }
   }
   @media (max-width: 767px) {
-    .recon-stats {
-      display: none;
-    }
-    .module-tabs {
-      padding: 8px 16px 0;
-      overflow-x: auto;
-    }
     .recon-work {
       padding-top: 10px;
-    }
-    .date-filters {
-      width: 100%;
-      overflow-x: auto;
-      padding-bottom: 2px;
-    }
-    .date-filters > :global(svg) {
-      display: none;
     }
     .topbar-right .primary-action span {
       display: none;

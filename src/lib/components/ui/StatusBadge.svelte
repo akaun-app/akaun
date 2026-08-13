@@ -36,6 +36,9 @@
     failed: { label: "Failed", tone: "red" },
     matched: { label: "Matched", tone: "green" },
     leftovers: { label: "Leftovers", tone: "amber" },
+    "exact-match": { label: "Exact match", tone: "green" },
+    "partial-match": { label: "Partial", tone: "amber" },
+    "no-match": { label: "No match", tone: "gray" },
   };
 
   const m = $derived(
