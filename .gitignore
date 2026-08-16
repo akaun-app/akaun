@@ -30,8 +30,10 @@ node_modules/
 .idea/
 .vscode
 
-# Data directory (DB + file storage)
+# Data directory (DB + file storage), and archives taken of it. Both hold real
+# books and receipts copied from the live system — never track either.
 /data/
+akaun_data.zip
 .vercel
 .superpowers/
 __MACOSX
