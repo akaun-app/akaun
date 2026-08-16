@@ -1,0 +1,580 @@
+/**
+ * The ledger's shared vocabulary: every row shape, every DTO, and the argument
+ * and result types that fix the signature of each function in
+ * `src/lib/server/ledger/**` and `src/lib/server/queries/{ledger,accounts,
+ * settlements,reports}.ts`.
+ *
+ * This file is the interface freeze. It exists so a rule module, a query, a
+ * service and a page component can be written at the same time without
+ * inventing each other's shapes. It holds no logic and no bodies — changing a
+ * type here is a change every one of those callers sees, so it is a broadcast
+ * rather than a quiet edit.
+ *
+ * Money: a `Minor` is whole cents of the MAIN currency, signed. A movement's
+ * amount is positive when value goes INTO that account and negative when it
+ * leaves, and a record's movements always add up to zero. The decimal `amount`
+ * on a record is the figure as the user typed it, in the record's own
+ * `currency` — it is for display and audit and is never summed for a report.
+ *
+ * See specs/002-double-entry-ledger/data-model.md.
+ */
+
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import type {
+  AccountRoleCode,
+  AccountTypeCode,
+  LedgerRecordKindCode,
+} from "$lib/enums.js";
+import type * as schema from "../db/schema.js";
+
+export type LedgerDb = BunSQLiteDatabase<typeof schema>;
+
+/** Whole cents of the main currency, signed. Positive = value in. */
+export type Minor = number;
+
+/** Which old table a migrated record came from — the upgrade's idempotency key. */
+export type LegacyKind = "expense" | "income" | "claim";
+
+/**
+ * The shape every rule that can refuse returns. `reason` is the plain sentence
+ * shown to the user and sent as the `409` body's `reason` (contracts/api.md).
+ */
+export type Refusable<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: string };
+
+/** The same, for a rule that answers "may I?" and produces no value. */
+export type Allowed = { ok: true } | { ok: false; reason: string };
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+export type AccountRow = {
+  id: number;
+  role: AccountRoleCode;
+  name: string;
+  contactId: number | null;
+  isSystem: boolean;
+  rank: string;
+  archivedAt: string | null;
+};
+
+/** What `GET /api/accounts` returns for one account. `type` is derived, never stored. */
+export type AccountView = AccountRow & {
+  type: AccountTypeCode;
+  balanceMinor: Minor;
+  movementCount: number;
+  canDelete: boolean;
+  /** Why the delete button is disabled, or null when it is not. */
+  cannotDeleteReason: string | null;
+};
+
+/** The minimum an `entry-builder` rule needs to know about an account. */
+export type AccountRef = { id: number; role: AccountRoleCode };
+
+export type AccountCreate = {
+  role: AccountRoleCode;
+  name: string;
+  rank?: string;
+};
+export type AccountPatch = { name?: string; rank?: string; archived?: boolean };
+
+/** The system accounts the upgrade seeds, resolved once per request. */
+export type SystemAccountIds = {
+  defaultAccountId: number;
+  receivableAccountId: number;
+  payableAccountId: number;
+  openingBalancesAccountId: number;
+  uncategorisedAccountId: number;
+};
+
+// ---------------------------------------------------------------------------
+// Records and movements
+// ---------------------------------------------------------------------------
+
+export type LedgerRecordRow = {
+  id: number;
+  kind: LedgerRecordKindCode;
+  date: string;
+  recordNumber: string | null;
+  description: string;
+  contactId: number | null;
+  reference: string;
+  remark: string;
+  currency: string;
+  exchangeRate: number;
+  amount: number;
+  extractedText: string | null;
+  legacyKind: LegacyKind | null;
+  legacyId: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MovementRow = {
+  id: number;
+  recordId: number;
+  accountId: number;
+  amountMinor: Minor;
+  sortOrder: number;
+};
+
+/** One side of a record before it has an id — what `entry-builder.ts` produces. */
+export type MovementDraft = {
+  accountId: number;
+  amountMinor: Minor;
+  sortOrder: number;
+};
+
+/** One side of a record as a screen shows it. */
+export type MovementView = {
+  id: number;
+  accountId: number;
+  accountName: string;
+  accountRole: AccountRoleCode;
+  amountMinor: Minor;
+};
+
+/** What `GET /api/records` returns for one record. */
+export type RecordView = LedgerRecordRow & {
+  contactName: string | null;
+  /** The record's own figure in cents: round(amount × exchangeRate × 100). */
+  amountMinor: Minor;
+  movements: MovementView[];
+  /** Derived from settlements — never stored (FR-012). */
+  paid: boolean;
+  outstandingMinor: Minor;
+  /** Derived from settlements and reconciliation allocations (FR-017a). */
+  locked: boolean;
+  lockedReason: string | null;
+  /**
+   * Whether a bank line has been matched to this record.
+   *
+   * Separate from `locked`, which collapses "settled" and "reconciled" into one
+   * answer and only speaks up once the record is locked. A screen needs to say
+   * "cleared" or "not cleared yet" about a record that is neither, which is what
+   * the expenses list showed before the one store existed.
+   */
+  reconciled: boolean;
+  attachmentCount: number;
+};
+
+export type RecordAttachmentRow = {
+  id: number;
+  recordId: number;
+  filename: string;
+  displayName: string;
+  addedDate: string;
+  legacyFilename: string | null;
+};
+
+/**
+ * The everyday-terms body `POST /api/records` accepts. The API never asks a
+ * caller to construct movements except for a journal entry (FR-020).
+ */
+export type RecordCreate = {
+  date: string;
+  description: string;
+  amount: number;
+  currency: string;
+  exchangeRate: number;
+  reference?: string;
+  remark?: string;
+  contactId?: number | null;
+  extractedText?: string | null;
+  /** Set only by the upgrade and only for a converted row. */
+  recordNumber?: string | null;
+} & RecordCreateSides;
+
+export type RecordCreateSides =
+  | {
+      kind: "expense";
+      categoryAccountId: number;
+      /** Null means someone else paid, so it is owed to `contactId` (FR-008). */
+      paidFromAccountId: number | null;
+    }
+  | { kind: "income"; categoryAccountId: number; receivedIntoAccountId: number }
+  | { kind: "transfer"; fromAccountId: number; toAccountId: number }
+  | {
+      kind: "payment";
+      paidFromAccountId: number;
+      /** we-pay settles Money we owe; we-receive settles Money owed to us. */
+      direction: PaymentDirection;
+      settlements?: AllocationRequest[];
+    }
+  | { kind: "opening-balance"; accountId: number }
+  | { kind: "invoice-issue"; incomeAccountId: number }
+  | { kind: "journal"; movements: { accountId: number; amountMinor: Minor }[] };
+
+export type PaymentDirection = "we-pay" | "we-receive";
+
+/** Only the fields a `PATCH /api/records/[id]` may carry. */
+export type RecordPatch = {
+  date?: string;
+  description?: string;
+  amount?: number;
+  currency?: string;
+  exchangeRate?: number;
+  reference?: string;
+  remark?: string;
+  contactId?: number | null;
+  categoryAccountId?: number;
+  paidFromAccountId?: number | null;
+  receivedIntoAccountId?: number;
+  fromAccountId?: number;
+  toAccountId?: number;
+};
+
+/** Every filter `GET /api/records` accepts. */
+export type RecordListFilters = {
+  kind?: LedgerRecordKindCode | LedgerRecordKindCode[];
+  accountId?: number;
+  contactId?: number;
+  categoryAccountId?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  amountMin?: number;
+  amountMax?: number;
+  paid?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type RecordListResult = { records: RecordView[]; total: number };
+
+// ---------------------------------------------------------------------------
+// ledger/money.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * `toMinor(amount, exchangeRate)` — the record's entered figure at its own
+ * stored rate, in whole cents of the main currency. Half-up at the cent.
+ * `fromMinor(minor)` — cents back to a decimal, for display only.
+ * `allocateMinor(total, weights)` — splits `total` in proportion to `weights`
+ * so the parts sum to exactly `total`, with the rounding remainder handed to
+ * the largest weights first.
+ */
+export type AllocateMinor = (total: Minor, weights: Minor[]) => Minor[];
+
+// ---------------------------------------------------------------------------
+// ledger/account-type.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * `accountTypeFor(role)` — the one map from role to type; the type is never
+ * stored, so the two can never disagree (D-05).
+ * `displaySign(role)` — what a report multiplies a balance by so the reader
+ * sees a positive figure where they expect one (D-03).
+ */
+export type AccountTypeFor = (role: AccountRoleCode) => AccountTypeCode;
+
+// ---------------------------------------------------------------------------
+// ledger/entry-builder.ts — the single place movements are constructed
+// ---------------------------------------------------------------------------
+
+/** Everything a builder needs beyond the record itself, gathered once. */
+export type BuildContext = {
+  /** Every account the input names, so a role can be checked without a query. */
+  accounts: ReadonlyMap<number, AccountRef>;
+  receivableAccountId: number;
+  payableAccountId: number;
+  openingBalancesAccountId: number;
+};
+
+export type BuildInput = {
+  amountMinor: Minor;
+  contactId: number | null;
+} & RecordCreateSides;
+
+/** `buildMovements(input, ctx)` — refuses rather than throws (FR-002, FR-007, FR-008). */
+export type BuildMovements = (
+  input: BuildInput,
+  ctx: BuildContext,
+) => Refusable<MovementDraft[]>;
+
+// ---------------------------------------------------------------------------
+// ledger/settlement-rules.ts
+// ---------------------------------------------------------------------------
+
+/** One side of a settlement: a movement on a shared owed account. */
+export type SettlementSide = {
+  movementId: number;
+  /** The movement's own signed amount. */
+  amountMinor: Minor;
+  /** How much of it settlements already cover. Always ≥ 0. */
+  settledMinor: Minor;
+};
+
+export type AllocationRequest = { owedMovementId: number; amountMinor: Minor };
+
+/** What one outstanding item looks like on a payment screen and in US6's ageing. */
+export type OutstandingItem = {
+  movementId: number;
+  recordId: number;
+  recordNumber: string | null;
+  date: string;
+  dueDate: string | null;
+  description: string;
+  contactId: number | null;
+  contactName: string | null;
+  amountMinor: Minor;
+  settledMinor: Minor;
+  outstandingMinor: Minor;
+  daysOverdue: number;
+};
+
+export type OutstandingDirection = "owed-to-us" | "we-owe";
+
+export type OutstandingResult = {
+  items: OutstandingItem[];
+  totalOutstandingMinor: Minor;
+};
+
+/** A record's paid state, computed from its shared-owed movements (FR-012). */
+export type RecordSettlementState = { paid: boolean; outstandingMinor: Minor };
+
+// ---------------------------------------------------------------------------
+// ledger/locking.ts
+// ---------------------------------------------------------------------------
+
+/** Why a record might be locked. Both can be true at once (FR-017a). */
+export type LockState = { settled: boolean; reconciled: boolean };
+
+export type LockResult = {
+  locked: boolean;
+  /** The fields refused while locked — amount, date and any account field. */
+  lockedFields: readonly string[];
+  /** The plain sentence naming what to undo first, or null when not locked. */
+  reason: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// ledger/integrity.ts
+// ---------------------------------------------------------------------------
+
+/** One record reduced to the figures the balance rules need. */
+export type RecordBalanceInput = {
+  recordId: number;
+  kind: LedgerRecordKindCode;
+  movementCount: number;
+  /** SUM(amount_minor) over the record's movements — must be 0 (invariant 1). */
+  movementSumMinor: Minor;
+  /** SUM of the positive movements — must equal `expectedMinor` (invariant 6). */
+  positiveSumMinor: Minor;
+  /** round(amount × exchange_rate × 100) from the record's own figure. */
+  expectedMinor: Minor;
+  /** True when any of the record's movements is zero (invariant 3). */
+  hasZeroMovement: boolean;
+  /** True when a shared owed account is touched with no contact (invariant 4). */
+  missingContact: boolean;
+};
+
+export type UnbalancedRecord = {
+  recordId: number;
+  differenceMinor: Minor;
+  /** Which invariant failed, in plain words. */
+  problem: string;
+};
+
+export type IntegrityReport = {
+  ok: boolean;
+  recordsChecked: number;
+  unbalancedRecords: UnbalancedRecord[];
+  totalDifferenceMinor: Minor;
+  /** Invariant 5 — SUM(amount_minor) across the whole table. */
+  booksBalance: boolean;
+  wholeBooksDifferenceMinor: Minor;
+};
+
+// ---------------------------------------------------------------------------
+// ledger/reports/*
+// ---------------------------------------------------------------------------
+
+export type ReportLine = {
+  accountId: number;
+  accountName: string;
+  amountMinor: Minor;
+};
+
+export type ProfitLossReport = {
+  dateFrom: string;
+  dateTo: string;
+  income: ReportLine[];
+  totalIncomeMinor: Minor;
+  expenses: ReportLine[];
+  totalExpensesMinor: Minor;
+  /** Income less expenses over the period. */
+  resultMinor: Minor;
+  notes: string[];
+};
+
+export type BalanceSheetSection = {
+  lines: ReportLine[];
+  totalMinor: Minor;
+};
+
+export type BalanceSheetReport = {
+  asAt: string;
+  /** What the business owns. */
+  owned: BalanceSheetSection;
+  /** What the business owes. */
+  owed: BalanceSheetSection;
+  /** What the owners have in it, including the accumulated result. */
+  ownersStake: BalanceSheetSection;
+  accumulatedResultMinor: Minor;
+  /** False only if the books do not balance; `differenceMinor` says by how much. */
+  balances: boolean;
+  differenceMinor: Minor;
+  notes: string[];
+};
+
+export type PartnerStatementBlock = {
+  contactId: number;
+  contactName: string;
+  contributionsMinor: Minor;
+  shareOfResultMinor: Minor;
+  drawingsMinor: Minor;
+  netMinor: Minor;
+};
+
+export type PartnerStatementReport = {
+  dateFrom: string;
+  dateTo: string;
+  partners: PartnerStatementBlock[];
+  notes: string[];
+};
+
+export type AccountHistoryEntry = {
+  movementId: number;
+  recordId: number;
+  recordNumber: string | null;
+  date: string;
+  kind: LedgerRecordKindCode;
+  description: string;
+  contactName: string | null;
+  amountMinor: Minor;
+  runningBalanceMinor: Minor;
+};
+
+export type AccountHistoryReport = {
+  account: AccountView;
+  entries: AccountHistoryEntry[];
+  openingBalanceMinor: Minor;
+  closingBalanceMinor: Minor;
+  total: number;
+  notes: string[];
+};
+
+/** What `ledger/reports/csv.ts` turns into a CSV document (FR-029). */
+export type CsvTable = {
+  columns: string[];
+  rows: (string | number | null)[][];
+  /** Rendered under the table, one per line, as a single quoted cell (FR-030). */
+  notes?: string[];
+};
+
+// ---------------------------------------------------------------------------
+// queries/reports.ts — the aggregates the three report modules consume
+// ---------------------------------------------------------------------------
+
+/** One account's total over a date range, or up to a date. */
+export type AccountTotal = {
+  accountId: number;
+  accountName: string;
+  role: AccountRoleCode;
+  contactId: number | null;
+  amountMinor: Minor;
+};
+
+// ---------------------------------------------------------------------------
+// The upgrade (src/lib/server/ledger/upgrade/**)
+// ---------------------------------------------------------------------------
+
+/** Which of FR-036b's ordered steps decided a migrated reimbursement's payer. */
+export type PayerStep =
+  | "email-match"
+  | "name-match"
+  | "sole-user-email-match"
+  | "sole-user-name-match"
+  | "created-contact"
+  | "named-contact"
+  | "bank-fallback";
+
+export type PayerDecision = {
+  step: PayerStep;
+  contactId: number | null;
+  /** Set only when `step` is "created-contact" — the name to create it under. */
+  createName: string | null;
+};
+
+export type UpgradePhase =
+  | "not-started"
+  | "backed-up"
+  | "accounts-seeded"
+  | "records-converted"
+  | "attachments-moved"
+  | "reconciliation-backfilled"
+  | "verified"
+  | "done";
+
+/** What the before/after comparison measures (SC-001, SC-013, SC-014). */
+export type UpgradeSnapshot = {
+  expenseTotalMinor: Minor;
+  incomeTotalMinor: Minor;
+  claimTotalMinor: Minor;
+  expenseCount: number;
+  incomeCount: number;
+  claimCount: number;
+  /** Every reference number, character for character. */
+  referenceNumbers: string[];
+  attachmentCount: number;
+  /** SHA-256 by the attachment's path relative to STORAGE_PATH. */
+  attachmentHashes: Record<string, string>;
+  categoryTotalsMinor: Record<string, Minor>;
+};
+
+export type VerifyFinding = { what: string; before: string; after: string };
+
+export type VerifyResult = {
+  ok: boolean;
+  findings: VerifyFinding[];
+};
+
+export type UpgradeReport = {
+  /** Records that landed on Uncategorised because no category could be read. */
+  uncategorisedRecordIds: number[];
+  /** Attachments whose file could not be found; each still points where it was. */
+  missingAttachments: string[];
+  /** Where converting to cents lost a fraction, with the record it happened on. */
+  roundingDifferences: { recordId: number; differenceMinor: Minor }[];
+  /** Every payer attribution with the step that chose it (FR-036b). */
+  payerAttributions: {
+    legacyKind: LegacyKind;
+    legacyId: number;
+    step: PayerStep;
+    contactId: number | null;
+    contactName: string | null;
+  }[];
+  /** Unpaid, unclaimed expenses naming nobody, sent to the bank (FR-036c). */
+  bankFallbackRecordIds: number[];
+  /** Allocations the backfill could not repoint at a movement (FR-034). */
+  unrepointedAllocationIds: number[];
+};
+
+export type UpgradeState = {
+  phase: UpgradePhase;
+  backupPath: string | null;
+  before: UpgradeSnapshot | null;
+  verify: VerifyResult | null;
+  report: UpgradeReport;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+/** The `settings` key holding `UpgradeState` as JSON (D-15). */
+export const UPGRADE_STATE_KEY = "ledger_upgrade_state";
+
+/** The `settings` key naming the account new records default to (FR-011). */
+export const DEFAULT_ACCOUNT_KEY = "ledger_default_account_id";

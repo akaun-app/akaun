@@ -1,68 +1,74 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
-  import { useIsMobile } from "$lib/hooks/useIsMobile.svelte.js";
-  import { createResourceStream, mergeById } from "$lib/sse.js";
+  import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import {
-    Search,
-    Plus,
-    Tag,
     Calendar,
-    SlidersHorizontal,
     ChevronDown,
-    ChevronUp,
-    ChevronsUpDown,
-    X,
-    Paperclip,
-    Lock,
-    FileText,
-    Wallet,
-    Upload,
-    Trash2,
-    Receipt,
     ChevronRight,
+    Lock,
+    Plus,
+    Search,
+    SlidersHorizontal,
+    Tag,
+    Trash2,
+    Wallet,
+    X,
   } from "@lucide/svelte";
   import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
-  import AttachmentManager from "$lib/components/ui/AttachmentManager.svelte";
-  import AuditTrail from "$lib/components/ui/AuditTrail.svelte";
   import ConfirmDialog from "$lib/components/ui/ConfirmDialog.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import StatCard from "$lib/components/ui/StatCard.svelte";
   import BulkActionBar from "$lib/components/ui/BulkActionBar.svelte";
   import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
-  import ContactSelect from "$lib/components/ui/ContactSelect.svelte";
   import AmountInput from "$lib/components/ui/AmountInput.svelte";
+  import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import { Textarea } from "$lib/components/ui/textarea/index.js";
-  import * as Select from "$lib/components/ui/select/index.js";
+  import RecordSheet from "$lib/components/ledger/RecordSheet.svelte";
+  import PaymentSheet from "$lib/components/ledger/PaymentSheet.svelte";
+  import { statusLabelFor } from "$lib/components/ledger/record-status.js";
   import {
-    formatMoney,
-    formatMoneyRM,
-    formatDate,
     formatDateShort,
+    formatMinor,
+    formatMinorAmount,
   } from "$lib/format.js";
   import {
     mainCurrency,
     mainCurrencySymbol,
   } from "$lib/currency-state.svelte.js";
-  import {
-    CURRENCIES,
-    currencySymbol,
-    currencyDecimals,
-    formatCurrencyAmount,
-  } from "$lib/currency.js";
-  import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
-  import { ExpenseStatus, ClaimStatus, Role, EntityType } from "$lib/enums.js";
+  import { formatCurrencyAmount } from "$lib/currency.js";
+  import { createResourceStream, mergeById } from "$lib/sse.js";
+  import { SvelteSet } from "svelte/reactivity";
+  import { AccountRole, LedgerRecordKind } from "$lib/enums.js";
   import { goto, pushState } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { onMount } from "svelte";
-  import type { loadExpensesPage } from "$lib/server/loaders/expenses.js";
+  import type {
+    OutstandingItem,
+    RecordView,
+  } from "$lib/server/ledger/types.js";
+  import type { loadLedgerPage } from "$lib/server/loaders/ledger.js";
 
-  type PageData = ReturnType<typeof loadExpensesPage>;
-  type ActionData = { error?: string; success?: boolean; id?: number } | null;
+  /**
+   * Money going out.
+   *
+   * Every row is a record in the one store, and everything the screen says
+   * about payment — paid, part paid, still owed — is read off what the server
+   * derived from settlements rather than from a status column, so this list and
+   * the record's own drawer can never disagree (FR-012).
+   *
+   * Nothing here uses an accounting word (Principle VII): the question is "what
+   * was it for?" and "who paid for it?", never a debit or a credit.
+   */
+  type PageData = ReturnType<typeof loadLedgerPage>;
+  type ActionData = {
+    error?: string;
+    success?: boolean;
+    deleted?: number;
+    refusedReason?: string | null;
+  } | null;
 
   let {
     data,
@@ -70,239 +76,60 @@
     openId,
   }: { data: PageData; form: ActionData; openId: number | null } = $props();
 
-  // Status tab id → ExpenseStatus INT code.
-  const STATUS_CODE: Record<string, number> = {
-    unpaid: ExpenseStatus.Unpaid,
-    pending: ExpenseStatus.Pending,
-    paid: ExpenseStatus.Paid,
-  };
+  // The list the screen draws: what the server sent, until the stream says
+  // otherwise. Writable, so an SSE event edits it in place; derived, so a real
+  // navigation or a form action re-syncs it back to the server's answer.
+  let records = $derived(data.records);
 
-  // New-expense contact picker state (submitted via hidden inputs).
-  let newContactId = $state<number | null>(null);
-  let newContactName = $state<string | null>(null);
-  let newExpenseCategory = $state<string>("");
+  // --- Reading one record -----------------------------------------------
+  // The two accounts an expense names: what it was for, and where the money
+  // came from. A record that someone else paid has "money we owe" on the paying
+  // side instead of an account (FR-008), which is what makes it read as owed.
+  const CATEGORY_ROLES: number[] = [
+    AccountRole.ExpenseCategory,
+    AccountRole.Equipment,
+  ];
 
-  // Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
-  // svelte-ignore state_referenced_locally
-  let expenses = $state(data.expenses);
-  $effect(() => {
-    expenses = data.expenses;
-  });
+  function categoryOf(record: RecordView) {
+    return (
+      record.movements.find((m) => CATEGORY_ROLES.includes(m.accountRole)) ??
+      record.movements.find((m) => m.amountMinor > 0) ??
+      null
+    );
+  }
 
-  // --- State ---
+  function categoryName(record: RecordView): string {
+    return categoryOf(record)?.accountName ?? "";
+  }
+
+  // `locked` and `lockedReason` are computed server-side and travel with the
+  // record, so the rule in src/lib/server/ledger/locking.ts is read here rather
+  // than hand-duplicated — there is nothing for the two copies to disagree on.
+
+  // --- Filter and sort state ---------------------------------------------
   let searchRaw = $state("");
   let search = $state("");
   let statusTab = $state("all");
-  let selectedCats = $state<string[]>([]);
+  let selectedCats = $state<number[]>([]);
   let amountMin = $state("");
   let amountMax = $state("");
   let dateFrom = $state("");
   let dateTo = $state("");
   let sort = $state({ key: "date", dir: "desc" as "asc" | "desc" });
-  let selected = $state(new Set<number>());
-  type Attachment = {
-    id: number;
-    filename: string;
-    displayName: string;
-    addedDate: string;
-  };
-  type FullExpense = (typeof data.expenses)[0] & {
-    attachments: Attachment[];
-    claimNumber?: string | null;
-    claimStatus?: number | null;
-    claimDate?: string | null;
-  };
-  let detailExpense = $state<FullExpense | null>(null);
-  let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
-  let deleteDialogOpen = $state(false);
-  let deleteFormEl = $state<HTMLFormElement | null>(null);
+  let selected = new SvelteSet<number>();
+
   let showNew = $state(false);
   let mobileFilterOpen = $state(false);
   let mobileSearchOpen = $state(false);
   let mobileSearchEl = $state<HTMLInputElement | null>(null);
+  let deleteDialogOpen = $state(false);
+  let deleteFormEl = $state<HTMLFormElement | null>(null);
+  // Shown until it is dismissed or the next action replaces it.
+  let actionError = $derived(form?.error ?? form?.refusedReason ?? "");
+
   $effect(() => {
     if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus();
   });
-
-  // --- Edit mode (detail sheet) ---
-  // Mirrors src/lib/server/locking.ts's canEditAmount — linked expense values stay editable
-  // while the claim is Pending and lock when the claim is Done.
-  function canEditAmount(e: {
-    claimId: number | null;
-    claimStatus?: number | null;
-  }): boolean {
-    return e.claimId === null || e.claimStatus !== ClaimStatus.Done;
-  }
-  const amountLocked = $derived(
-    detailExpense ? !canEditAmount(detailExpense) : false,
-  );
-
-  let isEditing = $state(false);
-  let saving = $state(false);
-  let saveError = $state("");
-  let editItemName = $state("");
-  let editDate = $state("");
-  let editAmount = $state("");
-  let editCurrency = $state(mainCurrency());
-  let editExchangeRate = $state("1");
-  let editContactId = $state<number | null>(null);
-  let editContactName = $state<string | null>(null);
-  let editCategory = $state("");
-  let editReference = $state("");
-  let editRemark = $state("");
-  let editStatus = $state<string>(String(ExpenseStatus.Unpaid));
-
-  // Switching the edit-currency select back to the main currency hides the rate field but
-  // left editExchangeRate holding the stale foreign rate, so a later amount edit was still
-  // converted (mainAmount = amount × exchangeRate) using that stale rate. Keep it pinned to 1
-  // whenever the selected currency is the main currency.
-  $effect(() => {
-    if (editCurrency === mainCurrency()) editExchangeRate = "1";
-  });
-
-  function startEdit() {
-    if (!detailExpense) return;
-    editItemName = detailExpense.itemName;
-    editDate = detailExpense.date;
-    editAmount = String(detailExpense.amount);
-    editCurrency = detailExpense.currency;
-    editExchangeRate = String(detailExpense.exchangeRate);
-    editContactId = detailExpense.contactId;
-    editContactName = null;
-    editCategory = detailExpense.category;
-    editReference = detailExpense.reference ?? "";
-    editRemark = detailExpense.remark ?? "";
-    editStatus = String(detailExpense.status);
-    saveError = "";
-    isEditing = true;
-  }
-
-  async function saveEdit() {
-    if (!detailExpense) return;
-    saving = true;
-    saveError = "";
-    try {
-      const body: Record<string, unknown> = {};
-      let resolvedContactId = editContactId;
-      if (!resolvedContactId && editContactName) {
-        const cr = await fetch("/api/contacts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            entityType: EntityType.Business,
-            legalName: editContactName,
-            roles: [Role.Supplier],
-          }),
-        });
-        if (!cr.ok) {
-          saveError = "Failed to create contact — try again";
-          saving = false;
-          return;
-        }
-        resolvedContactId = (await cr.json()).id;
-      }
-      body.itemName = editItemName;
-      body.date = editDate;
-      body.contactId = resolvedContactId;
-      body.category = editCategory;
-      body.reference = editReference;
-      body.remark = editRemark;
-      if (!amountLocked) {
-        body.amount = parseFloat(editAmount) || 0;
-        body.currency = editCurrency;
-        body.exchangeRate = parseFloat(editExchangeRate) || 1;
-        body.status = Number(editStatus);
-      }
-      const res = await fetch(`/api/expenses/${detailExpense.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        saveError = err.error ?? "Save failed";
-      } else {
-        const refreshed = await fetch(`/api/expenses/${detailExpense.id}`);
-        if (refreshed.ok) detailExpense = await refreshed.json();
-        isEditing = false;
-        auditTrailRef?.refresh();
-      }
-    } catch {
-      saveError = "Network error — try again";
-    } finally {
-      saving = false;
-    }
-  }
-  let newExpenseFiles = $state<File[]>([]);
-  let newExpenseDrag = $state(false);
-  let newExpenseFileInput = $state<HTMLInputElement | null>(null);
-
-  // --- Foreign-currency entry (hidden by default) ---
-  const todayISO = () => new Date().toISOString().slice(0, 10);
-  let showForeign = $state(false);
-  // svelte-ignore state_referenced_locally
-  let newCurrency = $state(data.lastForeignCurrency ?? mainCurrency());
-  let newAmount = $state<string>("");
-  let newForeignAmount = $state<string>("");
-  let newRate = $state<string>("");
-  let newDate = $state<string>(todayISO());
-  let rateFetching = $state(false);
-  let rateError = $state("");
-
-  // Auto-fetch the rate when a foreign currency / date is chosen. Editable afterwards;
-  // left blank with a hint when no API key or lookup fails (manual entry).
-  $effect(() => {
-    if (!showForeign) return;
-    const cur = newCurrency;
-    const d = newDate;
-    if (cur === mainCurrency() || !d) {
-      rateError = "";
-      return;
-    }
-    rateFetching = true;
-    rateError = "";
-    const t = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`,
-        );
-        const json = await res.json();
-        if (json.rate != null) newRate = String(json.rate);
-        else {
-          newRate = "";
-          rateError = "No rate found — enter it manually";
-        }
-      } catch {
-        newRate = "";
-        rateError = "Could not fetch rate — enter it manually";
-      } finally {
-        rateFetching = false;
-      }
-    }, 400);
-    return () => clearTimeout(t);
-  });
-
-  const isForeign = $derived(showForeign && newCurrency !== mainCurrency());
-  // Main-currency value derived from the foreign amount × rate (shown read-only in the
-  // main amount field while a foreign currency is active).
-  const convertedMain = $derived.by(() => {
-    const a = parseFloat(newForeignAmount);
-    const r = parseFloat(newRate);
-    if (!isForeign || isNaN(a) || isNaN(r) || r <= 0) return null;
-    return a * r;
-  });
-  const convertedDisplay = $derived(
-    convertedMain != null
-      ? convertedMain.toFixed(currencyDecimals(mainCurrency()))
-      : "",
-  );
-  // Foreign entry needs a positive rate before it can be submitted.
-  const foreignRateMissing = $derived(isForeign && !(parseFloat(newRate) > 0));
-
-  // Mobile panel detection — full-screen bottom sheet on mobile
-  const screen = useIsMobile();
-  const isMobile = $derived(screen.current);
-  const panelSide = $derived(isMobile ? "bottom" : "right");
 
   // Debounced search
   $effect(() => {
@@ -311,53 +138,58 @@
     return () => clearTimeout(t);
   });
 
-  // Close new sheet on successful create
-  $effect(() => {
-    if (form?.success) showNew = false;
-  });
-  $effect(() => {
-    if (!showNew) {
-      newExpenseFiles = [];
-      newContactId = null;
-      newContactName = null;
-      newExpenseCategory = "";
-      showForeign = false;
-      newCurrency = data.lastForeignCurrency ?? mainCurrency();
-      newAmount = "";
-      newForeignAmount = "";
-      newRate = "";
-      rateError = "";
-      newDate = todayISO();
-    }
+  // --- Derived ------------------------------------------------------------
+  const STATUS_TABS = [
+    ["all", "All"],
+    ["owed", "Owed"],
+    ["part-paid", "Part paid"],
+    ["paid", "Paid"],
+  ] as const;
+
+  const counts = $derived.by(() => {
+    const out: Record<string, number> = {
+      all: records.length,
+      owed: 0,
+      "part-paid": 0,
+      paid: 0,
+    };
+    for (const r of records) out[statusLabelFor(r)]++;
+    return out;
   });
 
-  // --- Derived ---
   const filtered = $derived.by(() => {
-    let rows = expenses.slice();
-    if (statusTab !== "all")
-      rows = rows.filter((e) => e.status === STATUS_CODE[statusTab]);
-    if (selectedCats.length)
-      rows = rows.filter((e) => selectedCats.includes(e.category));
-    const mn = amountMin !== "" ? parseFloat(amountMin) : null;
-    const mx = amountMax !== "" ? parseFloat(amountMax) : null;
-    if (mn != null) rows = rows.filter((e) => e.mainAmount >= mn);
-    if (mx != null) rows = rows.filter((e) => e.mainAmount <= mx);
-    if (dateFrom) rows = rows.filter((e) => e.date >= dateFrom);
-    if (dateTo) rows = rows.filter((e) => e.date <= dateTo);
+    let rows = records.slice();
+    if (statusTab !== "all") {
+      rows = rows.filter((r) => statusLabelFor(r) === statusTab);
+    }
+    if (selectedCats.length) {
+      rows = rows.filter((r) => {
+        const category = categoryOf(r);
+        return category !== null && selectedCats.includes(category.accountId);
+      });
+    }
+    const mn = amountMin !== "" ? parseFloat(amountMin) * 100 : null;
+    const mx = amountMax !== "" ? parseFloat(amountMax) * 100 : null;
+    if (mn != null) rows = rows.filter((r) => r.amountMinor >= mn);
+    if (mx != null) rows = rows.filter((r) => r.amountMinor <= mx);
+    if (dateFrom) rows = rows.filter((r) => r.date >= dateFrom);
+    if (dateTo) rows = rows.filter((r) => r.date <= dateTo);
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter(
-        (e) =>
-          e.itemName.toLowerCase().includes(q) ||
-          (e.contactName ?? "").toLowerCase().includes(q) ||
-          e.expenseNumber.toLowerCase().includes(q) ||
-          (e.reference ?? "").toLowerCase().includes(q) ||
-          e.category.toLowerCase().includes(q),
+        (r) =>
+          r.description.toLowerCase().includes(q) ||
+          (r.contactName ?? "").toLowerCase().includes(q) ||
+          (r.recordNumber ?? "").toLowerCase().includes(q) ||
+          r.reference.toLowerCase().includes(q) ||
+          categoryName(r).toLowerCase().includes(q),
       );
     }
+
+    const key = sort.key;
     rows.sort((a, b) => {
-      const av = a[sort.key as keyof typeof a] as string | number;
-      const bv = b[sort.key as keyof typeof b] as string | number;
+      const av = sortValue(a, key);
+      const bv = sortValue(b, key);
       let cmp = av < bv ? -1 : av > bv ? 1 : 0;
       if (cmp === 0) cmp = a.id - b.id;
       return sort.dir === "asc" ? cmp : -cmp;
@@ -365,8 +197,25 @@
     return rows;
   });
 
+  function sortValue(record: RecordView, key: string): string | number {
+    switch (key) {
+      case "description":
+        return record.description.toLowerCase();
+      case "contactName":
+        return (record.contactName ?? "").toLowerCase();
+      case "category":
+        return categoryName(record).toLowerCase();
+      case "status":
+        return statusLabelFor(record);
+      case "amount":
+        return record.amountMinor;
+      default:
+        return record.date;
+    }
+  }
+
   const filteredTotal = $derived(
-    filtered.reduce((s, e) => s + e.mainAmount, 0),
+    filtered.reduce((sum, r) => sum + r.amountMinor, 0),
   );
   const activeFilterCount = $derived(
     selectedCats.length +
@@ -375,59 +224,49 @@
       (search.trim() ? 1 : 0),
   );
   const allSelected = $derived(
-    filtered.length > 0 && filtered.every((e) => selected.has(e.id)),
+    filtered.length > 0 && filtered.every((r) => selected.has(r.id)),
   );
   const someSelected = $derived(
-    filtered.some((e) => selected.has(e.id)) && !allSelected,
+    filtered.some((r) => selected.has(r.id)) && !allSelected,
   );
-  const selectedList = $derived(filtered.filter((e) => selected.has(e.id)));
-  const selTotal = $derived(selectedList.reduce((s, e) => s + e.mainAmount, 0));
-  const claimable = $derived(
-    selectedList.length > 0 &&
-      selectedList.every((e) => e.status === ExpenseStatus.Unpaid),
+  const selectedList = $derived(filtered.filter((r) => selected.has(r.id)));
+  const selTotal = $derived(
+    selectedList.reduce((sum, r) => sum + r.amountMinor, 0),
   );
+  // A record a settlement or a bank line still points at refuses deletion, so
+  // the bar says so up front rather than after the fact.
+  const lockedSelected = $derived(selectedList.filter((r) => r.locked).length);
 
-  const counts = $derived.by(() => ({
-    all: expenses.length,
-    unpaid: expenses.filter((e) => e.status === ExpenseStatus.Unpaid).length,
-    pending: expenses.filter((e) => e.status === ExpenseStatus.Pending).length,
-    paid: expenses.filter((e) => e.status === ExpenseStatus.Paid).length,
-  }));
-
-  // Stats — derived from local state so they update in real-time
   const stats = $derived.by(() => {
-    const unpaid = expenses.filter((e) => e.status === ExpenseStatus.Unpaid);
-    const pending = expenses.filter((e) => e.status === ExpenseStatus.Pending);
     const now = new Date();
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const thisMonth = expenses.filter((e) => e.date.startsWith(monthKey));
+    const thisMonth = records.filter((r) => r.date.startsWith(monthKey));
+    const unpaid = records.filter((r) => !r.paid);
+    const paid = records.filter((r) => r.paid);
     return {
-      outstanding: unpaid.reduce((s, e) => s + e.mainAmount, 0),
-      outstandingCount: unpaid.length,
-      pendingTotal: pending.reduce((s, e) => s + e.mainAmount, 0),
-      monthTotal: thisMonth.reduce((s, e) => s + e.mainAmount, 0),
+      owedTotal: unpaid.reduce((sum, r) => sum + r.outstandingMinor, 0),
+      owedCount: unpaid.length,
+      paidTotal: paid.reduce((sum, r) => sum + r.amountMinor, 0),
+      paidCount: paid.length,
+      monthTotal: thisMonth.reduce((sum, r) => sum + r.amountMinor, 0),
       monthCount: thisMonth.length,
-      allTotal: expenses.reduce((s, e) => s + e.mainAmount, 0),
+      allTotal: records.reduce((sum, r) => sum + r.amountMinor, 0),
     };
   });
 
+  // --- Selection ----------------------------------------------------------
   function toggleAll() {
-    if (allSelected) {
-      filtered.forEach((e) => selected.delete(e.id));
-    } else {
-      filtered.forEach((e) => selected.add(e.id));
-    }
-    selected = new Set(selected);
+    if (allSelected) filtered.forEach((r) => selected.delete(r.id));
+    else filtered.forEach((r) => selected.add(r.id));
   }
 
   function toggleOne(id: number) {
     if (selected.has(id)) selected.delete(id);
     else selected.add(id);
-    selected = new Set(selected);
   }
 
   function clearSel() {
-    selected = new Set();
+    selected.clear();
   }
 
   function onSort(key: string) {
@@ -448,45 +287,33 @@
     statusTab = "all";
   }
 
-  function toggleCat(c: string) {
-    if (selectedCats.includes(c)) {
-      selectedCats = selectedCats.filter((x) => x !== c);
-    } else {
-      selectedCats = [...selectedCats, c];
-    }
+  function toggleCat(id: number) {
+    selectedCats = selectedCats.includes(id)
+      ? selectedCats.filter((x) => x !== id)
+      : [...selectedCats, id];
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  // --- Detail drawer ------------------------------------------------------
+  // The open record is looked up by id rather than copied, so a change arriving
+  // over the stream reaches the open drawer without a second fetch.
+  let openRecordId = $state<number | null>(null);
+  const detailRecord = $derived(
+    openRecordId === null
+      ? null
+      : (records.find((r) => r.id === openRecordId) ?? null),
+  );
 
-  // SSE — real-time updates from server
-  type ExpenseStreamMsg =
-    | { type: "expense-update"; item: (typeof data.expenses)[0] }
-    | { type: "expense-delete"; id: number };
-  createResourceStream<ExpenseStreamMsg>("/api/expenses/stream", (msg) => {
-    if (msg.type === "expense-update")
-      expenses = mergeById(expenses, [msg.item]);
-    else if (msg.type === "expense-delete")
-      expenses = expenses.filter((e) => e.id !== msg.id);
-  });
-
-  async function openExpense(
-    e: (typeof data.expenses)[0],
-    { push = true } = {},
-  ) {
-    detailExpense = { ...e, attachments: [] };
-    isEditing = false;
+  function openRecord(record: RecordView, { push = true } = {}) {
+    openRecordId = record.id;
     if (push) {
-      pushState(resolve("/(app)/expenses/[id]", { id: String(e.id) }), {
+      pushState(resolve("/(app)/expenses/[id]", { id: String(record.id) }), {
         viaPush: true,
       });
     }
-    const res = await fetch(`/api/expenses/${e.id}`);
-    if (res.ok) detailExpense = await res.json();
   }
 
   function closeDetail() {
-    detailExpense = null;
-    isEditing = false;
+    openRecordId = null;
     if (page.state.viaPush) {
       history.back();
     } else {
@@ -494,10 +321,90 @@
     }
   }
 
+  // --- Who is owed, and how much is left ----------------------------------
+  // An expense somebody else paid for is money this business owes them until a
+  // payment covers it. The figures come from `GET /api/settlements` rather than
+  // being added up here, so this panel, a record's own drawer and the reports
+  // are all reading one answer to one question (FR-014).
+  type OwedGroup = {
+    contactId: number;
+    contactName: string;
+    totalMinor: number;
+    items: OutstandingItem[];
+  };
+
+  let owedItems = $state<OutstandingItem[]>([]);
+  let owedOpen = $state(true);
+  let payContactId = $state<number | null>(null);
+  let showPayment = $state(false);
+
+  async function loadOwed() {
+    const res = await fetch("/api/settlements?direction=we-owe");
+    if (!res.ok) return;
+    const body = await res.json();
+    owedItems = body?.items ?? [];
+  }
+
+  const owedGroups = $derived.by(() => {
+    const byContact: Record<number, OwedGroup> = {};
+    for (const item of owedItems) {
+      // A record on a shared owed account always names who it is owed to, so an
+      // item without one is a broken row rather than an "unknown" group.
+      if (item.contactId === null) continue;
+      const group = (byContact[item.contactId] ??= {
+        contactId: item.contactId,
+        contactName: item.contactName ?? "",
+        totalMinor: 0,
+        items: [],
+      });
+      group.totalMinor += item.outstandingMinor;
+      group.items.push(item);
+    }
+    return Object.values(byContact).sort((a, b) => b.totalMinor - a.totalMinor);
+  });
+
+  const owedTotal = $derived(
+    owedGroups.reduce((sum, g) => sum + g.totalMinor, 0),
+  );
+
+  function openOwedItem(item: OutstandingItem) {
+    const found = records.find((r) => r.id === item.recordId);
+    if (found) openRecord(found);
+    else goto(resolve("/(app)/expenses/[id]", { id: String(item.recordId) }));
+  }
+
+  function startPayment(group: OwedGroup) {
+    payContactId = group.contactId;
+    showPayment = true;
+  }
+
+  // --- Live updates -------------------------------------------------------
+  type LedgerStreamMsg =
+    | { type: "record-update"; record: RecordView }
+    | { type: "record-deleted"; id: number }
+    | { type: "settlement-changed"; recordIds: number[] };
+
+  createResourceStream<LedgerStreamMsg>("/api/expenses/stream", (msg) => {
+    if (msg.type === "record-update") {
+      // The stream is already filtered to this screen's kind; the check keeps a
+      // future change to that filter from quietly pulling other records in.
+      if (msg.record.kind !== LedgerRecordKind.Expense) return;
+      records = mergeById(records, [msg.record]);
+    } else if (msg.type === "record-deleted") {
+      records = records.filter((r) => r.id !== msg.id);
+      if (openRecordId === msg.id) closeDetail();
+    }
+    // The record list is patched in place from the event, but what is still
+    // owed is derived across records — including payments this screen does not
+    // hold — so it is asked for again rather than guessed at.
+    void loadOwed();
+  });
+
   onMount(() => {
+    void loadOwed();
     if (openId) {
-      const found = expenses.find((e) => e.id === openId);
-      if (found) openExpense(found, { push: false });
+      const found = data.records.find((r) => r.id === openId);
+      if (found) openRecord(found, { push: false });
     }
   });
 </script>
@@ -509,7 +416,7 @@
       <h1 class="page-title">Expenses</h1>
       <p class="page-sub">
         {counts.all} records ·
-        <span class="num">{formatMoneyRM(stats.allTotal)}</span> total
+        <span class="num">{formatMinor(stats.allTotal)}</span> total
       </p>
     </div>
     <div class="topbar-right">
@@ -553,12 +460,14 @@
       >
         {#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
       </button>
-      <button
-        onclick={() => (showNew = true)}
-        style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
-      >
-        <Plus size={15} /> <span class="btn-text">New expense</span>
-      </button>
+      {#if data.perms.add}
+        <button
+          onclick={() => (showNew = true)}
+          style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
+        >
+          <Plus size={15} /> <span class="btn-text">New expense</span>
+        </button>
+      {/if}
     </div>
   </header>
 
@@ -566,46 +475,132 @@
   <div class="stat-strip">
     <StatCard
       tone="red"
-      label="Outstanding"
+      label="Still owed"
       cur={mainCurrencySymbol()}
-      value={formatMoney(stats.outstanding)}
-      sub="{stats.outstandingCount} unpaid"
+      value={formatMinorAmount(stats.owedTotal)}
+      sub="{stats.owedCount} not fully paid"
     />
     <StatCard
-      tone="amber"
-      label="Pending claims"
+      tone="green"
+      label="Paid"
       cur={mainCurrencySymbol()}
-      value={formatMoney(stats.pendingTotal)}
-      sub="Awaiting reimbursement"
+      value={formatMinorAmount(stats.paidTotal)}
+      sub="{stats.paidCount} records"
     />
     <StatCard
       label="This month"
       cur={mainCurrencySymbol()}
-      value={formatMoney(stats.monthTotal)}
+      value={formatMinorAmount(stats.monthTotal)}
       sub="{stats.monthCount} records"
     />
     <StatCard
       label="All recorded"
       cur={mainCurrencySymbol()}
-      value={formatMoney(stats.allTotal)}
+      value={formatMinorAmount(stats.allTotal)}
       sub="{counts.all} expenses"
     />
   </div>
 
   <div class="work">
     <div class="work-main layout-standard" style="padding-top:12px;">
+      {#if actionError}
+        <div class="page-error">
+          {actionError}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onclick={() => (actionError = "")}><X size={13} /></button
+          >
+        </div>
+      {/if}
+
+      <!-- Who is owed, and how much is left -->
+      {#if owedGroups.length > 0}
+        <section class="owed-panel">
+          <button
+            type="button"
+            class="owed-head"
+            aria-expanded={owedOpen}
+            onclick={() => (owedOpen = !owedOpen)}
+          >
+            <span class="owed-head-main">
+              <span class="owed-head-title">Still owed to people</span>
+              <span class="owed-head-sub">
+                {owedGroups.length}
+                {owedGroups.length === 1 ? "person" : "people"} · paid for things
+                on your behalf
+              </span>
+            </span>
+            <span class="owed-head-total num">{formatMinor(owedTotal)}</span>
+            {#if owedOpen}<ChevronDown
+                size={15}
+                color="var(--muted-foreground)"
+              />{:else}<ChevronRight
+                size={15}
+                color="var(--muted-foreground)"
+              />{/if}
+          </button>
+
+          {#if owedOpen}
+            <div class="owed-body">
+              {#each owedGroups as group (group.contactId)}
+                <div class="owed-group">
+                  <div class="owed-group-head">
+                    <span class="owed-group-name">{group.contactName}</span>
+                    <span class="owed-group-total num"
+                      >{formatMinor(group.totalMinor)}</span
+                    >
+                    {#if data.perms.add}
+                      <button
+                        type="button"
+                        class="owed-pay-btn"
+                        onclick={() => startPayment(group)}
+                      >
+                        Record a payment
+                      </button>
+                    {/if}
+                  </div>
+                  {#each group.items as item (item.movementId)}
+                    <button
+                      type="button"
+                      class="owed-row related-link"
+                      onclick={() => openOwedItem(item)}
+                    >
+                      <span class="owed-row-main">
+                        <span class="owed-row-name"
+                          >{item.description || "Expense"}</span
+                        >
+                        <span class="owed-row-sub">
+                          {formatDateShort(item.date)}{item.recordNumber
+                            ? ` · ${item.recordNumber}`
+                            : ""}{item.daysOverdue > 0
+                            ? ` · ${item.daysOverdue} days`
+                            : ""}
+                        </span>
+                      </span>
+                      <span class="owed-row-amt num"
+                        >{formatMinor(item.outstandingMinor)}</span
+                      >
+                      <ChevronRight size={13} color="var(--muted-foreground)" />
+                    </button>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      {/if}
+
       <!-- Toolbar -->
       <div class="toolbar">
         <div class="status-tabs">
-          {#each [["all", "All"], ["unpaid", "Unpaid"], ["pending", "Pending"], ["paid", "Paid"]] as [id, label]}
+          {#each STATUS_TABS as [id, label] (id)}
             <button
               class="status-tab"
               class:active={statusTab === id}
               onclick={() => (statusTab = id)}
             >
-              {label}<span class="tab-count"
-                >{counts[id as keyof typeof counts]}</span
-              >
+              {label}<span class="tab-count">{counts[id]}</span>
             </button>
           {/each}
         </div>
@@ -645,39 +640,14 @@
                     >Clear</button
                   >{/if}
               </div>
-              {#each data.categories as cat}
+              {#each data.categories as cat (cat.id)}
                 <button
-                  onclick={() => toggleCat(cat)}
-                  style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
-                  onmouseover={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "var(--accent)";
-                  }}
-                  onmouseout={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "";
-                  }}
-                  onfocus={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "var(--accent)";
-                  }}
-                  onblur={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "";
-                  }}
+                  onclick={() => toggleCat(cat.id)}
+                  class="cat-option"
+                  class:on={selectedCats.includes(cat.id)}
                 >
-                  <span
-                    style="width:16px; height:16px; border-radius:4px; border:1.5px solid {selectedCats.includes(
-                      cat,
-                    )
-                      ? 'var(--primary)'
-                      : 'var(--border-strong)'}; background:{selectedCats.includes(
-                      cat,
-                    )
-                      ? 'var(--primary)'
-                      : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;"
-                  >
-                    {#if selectedCats.includes(cat)}<svg
+                  <span class="cat-box" aria-hidden="true">
+                    {#if selectedCats.includes(cat.id)}<svg
                         width="10"
                         height="10"
                         viewBox="0 0 24 24"
@@ -689,7 +659,7 @@
                         ><path d="M20 6 9 17l-5-5" /></svg
                       >{/if}
                   </span>
-                  {cat}
+                  {cat.name}
                 </button>
               {/each}
             </div>
@@ -777,7 +747,7 @@
         <div class="result-meta">
           <span>Showing <b>{filtered.length}</b> of {counts.all}</span>
           <span class="result-total"
-            >Filtered total <b class="num">{formatMoneyRM(filteredTotal)}</b
+            >Filtered total <b class="num">{formatMinor(filteredTotal)}</b
             ></span
           >
         </div>
@@ -813,12 +783,12 @@
                 </button>
               </th>
               <th
-                class={`sortable ${sort.key === "itemName" ? "sorted" : ""}`}
-                onclick={() => onSort("itemName")}
+                class={`sortable ${sort.key === "description" ? "sorted" : ""}`}
+                onclick={() => onSort("description")}
                 style="cursor:pointer; user-select:none;"
               >
                 <span class="th-inner"
-                  >Item {sort.key === "itemName"
+                  >Item {sort.key === "description"
                     ? sort.dir === "asc"
                       ? "↑"
                       : "↓"
@@ -827,7 +797,7 @@
               </th>
               <th
                 class="sortable"
-                onclick={() => onSort("supplier")}
+                onclick={() => onSort("contactName")}
                 style="cursor:pointer; user-select:none;"
               >
                 <span class="th-inner">Supplier</span>
@@ -863,11 +833,11 @@
             </tr>
           </thead>
           <tbody>
-            {#each filtered as e}
+            {#each filtered as e (e.id)}
               <tr
                 class="exp-row"
                 class:selected={selected.has(e.id)}
-                onclick={() => openExpense(e)}
+                onclick={() => openRecord(e)}
               >
                 <td
                   class="td-check"
@@ -885,7 +855,7 @@
                       : 'var(--border-strong)'}; background:{selected.has(e.id)
                       ? 'var(--primary)'
                       : 'var(--card)'}; display:grid; place-items:center; cursor:pointer; color:var(--primary-foreground); padding:0; flex-shrink:0;"
-                    aria-label="Select {e.expenseNumber}"
+                    aria-label="Select {e.recordNumber ?? e.description}"
                   >
                     {#if selected.has(e.id)}<svg
                         width="10"
@@ -899,21 +869,28 @@
                 </td>
                 <td class="td-primary">
                   <div class="cell-item">
-                    <span class="cell-itemname">{e.itemName}</span>
-                    <span class="cell-itemnum">{e.expenseNumber}</span>
+                    <span class="cell-itemname">
+                      {e.description}
+                      {#if e.locked}<span class="row-lock" title={e.lockedReason}
+                          ><Lock size={11} /></span
+                        >{/if}
+                    </span>
+                    <span class="cell-itemnum">{e.recordNumber ?? ""}</span>
                   </div>
                 </td>
                 <td class="td-supplier" data-label="Supplier"
-                  >{e.contactName || ""}</td
+                  >{e.contactName ?? ""}</td
                 >
                 <td data-label="Category">
                   <span
                     style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;"
                   >
-                    {e.category}
+                    {categoryName(e)}
                   </span>
                 </td>
-                <td class="td-status"><StatusBadge status={e.status} /></td>
+                <td class="td-status"
+                  ><StatusBadge status={statusLabelFor(e)} /></td
+                >
                 <td class="td-date" data-label="Date">
                   {formatDateShort(e.date)}<span class="td-year"
                     >{e.date.slice(0, 4)}</span
@@ -921,7 +898,8 @@
                 </td>
                 <td class="td-amount" data-label="Amount">
                   <span class="amount-num"
-                    >{mainCurrencySymbol()} {formatMoney(e.mainAmount)}</span
+                    >{mainCurrencySymbol()}
+                    {formatMinorAmount(e.amountMinor)}</span
                   >
                   {#if e.currency !== mainCurrency()}
                     <span class="amount-orig"
@@ -965,7 +943,13 @@
       </div>
       <div class="table-foot">
         <span>{filtered.length} of {counts.all} expenses</span>
-        <span class="muted">Updated just now</span>
+        {#if data.total > records.length}
+          <span class="muted"
+            >Showing the {records.length} most recent of {data.total}</span
+          >
+        {:else}
+          <span class="muted">Updated just now</span>
+        {/if}
       </div>
     </div>
   </div>
@@ -974,48 +958,52 @@
   <BulkActionBar
     show={selected.size > 0}
     count={selected.size}
-    total={`${mainCurrencySymbol()} ${formatMoney(selTotal)}`}
+    total={`${mainCurrencySymbol()} ${formatMinorAmount(selTotal)}`}
     onclear={clearSel}
   >
     {#snippet actions()}
-      <form
-        method="POST"
-        action="?/markPaid"
-        use:enhance={() => () => {
-          clearSel();
-        }}
-      >
-        <input type="hidden" name="ids" value={[...selected].join(",")} />
+      <!-- Recording one payment against several of these arrives with the
+           payment screen (User Story 3); until then the only action that spans
+           a selection is removing it. -->
+      {#if data.perms.delete}
         <button
-          type="submit"
+          type="button"
           class="bulk-actions-ghost"
-          style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;"
+          style="display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;"
+          onclick={() => (deleteDialogOpen = true)}
         >
-          Mark paid
+          <Trash2 size={14} /> Delete
         </button>
-      </form>
-      <form
-        method="POST"
-        action="?/createClaim"
-        use:enhance={() => () => {
-          clearSel();
-        }}
-      >
-        <input type="hidden" name="ids" value={[...selected].join(",")} />
-        <button
-          type="submit"
-          disabled={!claimable}
-          title={claimable ? "" : "Only unpaid expenses can be claimed"}
-          style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{claimable
-            ? 1
-            : 0.5};"
-        >
-          <FileText size={14} /> Create claim
-        </button>
-      </form>
+      {/if}
     {/snippet}
   </BulkActionBar>
 </div>
+
+<ConfirmDialog
+  bind:open={deleteDialogOpen}
+  title={selected.size === 1 ? "Delete this expense?" : "Delete these expenses?"}
+  description={lockedSelected > 0
+    ? `${lockedSelected} of the ${selected.size} selected can't be deleted while a payment or a bank line still points at them — the rest will be removed. This can't be undone.`
+    : `This removes ${selected.size} ${selected.size === 1 ? "expense" : "expenses"} and both sides of each. It can't be undone.`}
+  confirmLabel="Delete"
+  danger
+  onConfirm={() => deleteFormEl?.requestSubmit()}
+/>
+
+<form
+  method="POST"
+  action="?/delete"
+  bind:this={deleteFormEl}
+  use:enhance={() =>
+    async ({ update }) => {
+      deleteDialogOpen = false;
+      clearSel();
+      await update();
+    }}
+  style="display:none"
+>
+  <input type="hidden" name="ids" value={[...selected].join(",")} />
+</form>
 
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
@@ -1043,17 +1031,17 @@
             >{/if}
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:7px;">
-          {#each data.categories as cat}
+          {#each data.categories as cat (cat.id)}
             <button
-              onclick={() => toggleCat(cat)}
-              style="border:1px solid {selectedCats.includes(cat)
+              onclick={() => toggleCat(cat.id)}
+              style="border:1px solid {selectedCats.includes(cat.id)
                 ? 'var(--primary)'
-                : 'var(--border)'}; background:{selectedCats.includes(cat)
+                : 'var(--border)'}; background:{selectedCats.includes(cat.id)
                 ? 'var(--primary-soft)'
-                : 'var(--card)'}; color:{selectedCats.includes(cat)
+                : 'var(--card)'}; color:{selectedCats.includes(cat.id)
                 ? 'var(--primary)'
                 : 'var(--foreground)'}; font-family:inherit; font-size:13px; padding:5px 12px; border-radius:999px; cursor:pointer;"
-              >{cat}</button
+              >{cat.name}</button
             >
           {/each}
         </div>
@@ -1120,788 +1108,228 @@
   </Sheet.Portal>
 </Sheet.Root>
 
-<!-- Detail sheet -->
-<Sheet.Root
-  open={!!detailExpense}
-  onOpenChange={(o) => {
-    if (!o) closeDetail();
-  }}
->
-  <Sheet.Portal>
-    <Sheet.Overlay />
-    <Sheet.Content
-      side={panelSide}
-      style={isMobile
-        ? "height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;"
-        : "width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;"}
-    >
-      {#if detailExpense}
-        <div
-          style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-        >
-          <div>
-            <div class="sheet-eyebrow">{detailExpense.expenseNumber}</div>
-            <div class="sheet-title-text">{detailExpense.itemName}</div>
-          </div>
-          <Sheet.Close class="sheet-close">
-            <X size={16} />
-          </Sheet.Close>
-        </div>
-        {#if isEditing}
-          <!-- Edit mode -->
-          <div
-            style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-          >
-            {#if saveError}
-              <div
-                style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-              >
-                {saveError}
-              </div>
-            {/if}
-            {#if amountLocked}
-              <div
-                style="display:flex; align-items:center; gap:7px; background:var(--accent); color:var(--muted-foreground); border-radius:8px; padding:10px 14px; font-size:12.5px; margin-bottom:16px;"
-              >
-                <Lock size={13} />
-                Completed claim — reopen the claim to edit amount or status.
-              </div>
-            {/if}
+<!-- Record detail -->
+<RecordSheet
+  open={detailRecord !== null}
+  record={detailRecord}
+  kind="expense"
+  accounts={data.accounts}
+  categories={data.categories}
+  contacts={data.contacts}
+  defaultAccountId={data.defaultAccountId}
+  lastForeignCurrency={data.lastForeignCurrency}
+  canChange={data.perms.change}
+  canDelete={data.perms.delete}
+  onclose={closeDetail}
+/>
 
-            <div class="field">
-              <label class="field-label" for="edit-itemName">Item name</label>
-              <Input id="edit-itemName" type="text" bind:value={editItemName} />
-            </div>
+<!-- Paying somebody back -->
+<PaymentSheet
+  open={showPayment}
+  direction="we-pay"
+  accounts={data.accounts}
+  contacts={data.contacts}
+  defaultAccountId={data.defaultAccountId}
+  contactId={payContactId}
+  onclose={() => (showPayment = false)}
+  onsaved={() => loadOwed()}
+/>
 
-            <div class="field-grid field">
-              <div>
-                <label class="field-label" for="edit-date">Date</label>
-                <DatePicker name="editDate" bind:value={editDate} />
-              </div>
-              <div>
-                <label class="field-label" for="edit-amount"
-                  >Amount{editCurrency !== mainCurrency()
-                    ? ` (${editCurrency})`
-                    : ""}</label
-                >
-                <AmountInput
-                  id="edit-amount"
-                  placeholder="0.00"
-                  bind:value={editAmount}
-                  prefix={currencySymbol(editCurrency)}
-                  disabled={amountLocked}
-                />
-              </div>
-            </div>
-
-            <div class="field-grid field">
-              <div>
-                <label class="field-label" for="editCurrency">Currency</label>
-                <Select.Root
-                  type="single"
-                  bind:value={editCurrency}
-                  disabled={amountLocked}
-                >
-                  <Select.Trigger id="editCurrency" class="w-full"
-                    >{editCurrency}</Select.Trigger
-                  >
-                  <Select.Content>
-                    {#each CURRENCIES as c (c.code)}
-                      <Select.Item
-                        value={c.code}
-                        label={`${c.code} — ${c.name}`}
-                      />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              </div>
-              {#if editCurrency !== mainCurrency()}
-                <div>
-                  <label class="field-label" for="editRate"
-                    >Rate (1 {editCurrency} = ? {mainCurrency()})</label
-                  >
-                  <Input
-                    id="editRate"
-                    type="text"
-                    inputmode="decimal"
-                    placeholder="1.0"
-                    bind:value={editExchangeRate}
-                    disabled={amountLocked}
-                  />
-                </div>
-              {/if}
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editStatus">Status</label>
-              <Select.Root
-                type="single"
-                bind:value={editStatus}
-                disabled={amountLocked}
-              >
-                <Select.Trigger id="editStatus" class="w-full">
-                  {editStatus === String(ExpenseStatus.Paid)
-                    ? "Paid"
-                    : editStatus === String(ExpenseStatus.Pending)
-                      ? "Pending"
-                      : "Unpaid"}
-                </Select.Trigger>
-                <Select.Content>
-                  <Select.Item
-                    value={String(ExpenseStatus.Unpaid)}
-                    label="Unpaid"
-                  />
-                  <Select.Item
-                    value={String(ExpenseStatus.Pending)}
-                    label="Pending"
-                  />
-                  <Select.Item
-                    value={String(ExpenseStatus.Paid)}
-                    label="Paid"
-                  />
-                </Select.Content>
-              </Select.Root>
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="edit-supplier">Supplier</label>
-              <ContactSelect
-                role={Role.Supplier}
-                bind:value={editContactId}
-                bind:newName={editContactName}
-                placeholder="Search or add a supplier…"
-                initialLabel={detailExpense.contactName}
-              />
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editCategory">Category</label>
-              <Select.Root type="single" bind:value={editCategory}>
-                <Select.Trigger id="editCategory" class="w-full">
-                  {editCategory || "Select category"}
-                </Select.Trigger>
-                <Select.Content>
-                  {#each data.categories as cat}
-                    <Select.Item value={cat} label={cat} />
-                  {/each}
-                </Select.Content>
-              </Select.Root>
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editReference">Reference</label>
-              <Input
-                id="editReference"
-                type="text"
-                bind:value={editReference}
-              />
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editRemark">Remark</label>
-              <Textarea
-                id="editRemark"
-                placeholder="Optional notes…"
-                class="leading-relaxed"
-                bind:value={editRemark}
-              />
-            </div>
-          </div>
-
-          <div class="sheet-foot">
-            <div class="sheet-foot-actions">
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-delete"
-                disabled={!!detailExpense.claimId}
-                title={detailExpense.claimId
-                  ? `Linked to claim ${detailExpense.claimNumber}`
-                  : undefined}
-                onclick={() => (deleteDialogOpen = true)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="sheet-btn"
-                style="margin-left:auto;"
-                onclick={() => (isEditing = false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-primary"
-                onclick={saveEdit}
-                disabled={saving}
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </div>
-        {:else}
-          <!-- View mode -->
-          <div style="flex:1; overflow-y:auto; padding:20px 22px;">
-            <div class="detail-amount">
-              <span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-              <span class="detail-amount-val"
-                >{formatMoney(detailExpense.mainAmount)}</span
-              >
-              {#if detailExpense.claimId}
-                <span
-                  class="detail-amount-lock"
-                  title="Amount locked (linked to a claim)"
-                  ><Lock size={15} /></span
-                >
-              {/if}
-            </div>
-            {#if detailExpense.currency !== mainCurrency()}
-              <div class="detail-orig">
-                Original: {detailExpense.currency}
-                {formatCurrencyAmount(
-                  detailExpense.amount,
-                  detailExpense.currency,
-                )}
-                · rate {detailExpense.exchangeRate}
-              </div>
-            {/if}
-            <div class="detail-statusrow">
-              <StatusBadge status={detailExpense.status} />
-            </div>
-            <div class="detail-list">
-              {#if detailExpense.contactName}
-                <div class="detail-row">
-                  <div class="detail-key">Supplier</div>
-                  <div class="detail-val">{detailExpense.contactName}</div>
-                </div>
-              {/if}
-              <div class="detail-row">
-                <div class="detail-key">Category</div>
-                <div class="detail-val">{detailExpense.category}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-key">Date</div>
-                <div class="detail-val num">
-                  {formatDate(detailExpense.date)}
-                </div>
-              </div>
-              {#if detailExpense.reference}
-                <div class="detail-row">
-                  <div class="detail-key">Reference</div>
-                  <div class="detail-val num">{detailExpense.reference}</div>
-                </div>
-              {/if}
-              {#if detailExpense.remark}
-                <div class="detail-row">
-                  <div class="detail-key">Remark</div>
-                  <div class="detail-val">{detailExpense.remark}</div>
-                </div>
-              {/if}
-            </div>
-            {#if detailExpense.claimId}
-              <div class="detail-section-label">Cleared via claim</div>
-              <button
-                type="button"
-                class="linked-claim-card related-link"
-                onclick={() =>
-                  goto(
-                    resolve("/(app)/claims/[id]", {
-                      id: String(detailExpense?.claimId),
-                    }),
-                  )}
-              >
-                <div class="linked-claim-icon"><Receipt size={16} /></div>
-                <div class="linked-claim-meta">
-                  <div class="linked-claim-title">
-                    Claim {detailExpense.claimNumber}
-                    <StatusBadge
-                      status={detailExpense.claimStatus === ClaimStatus.Done
-                        ? "claimed"
-                        : "pending"}
-                    />
-                  </div>
-                  <div class="linked-claim-sub">
-                    {detailExpense.clearedViaClaimId
-                      ? "Cleared at the reimbursement level"
-                      : "Clearing is managed by this claim"}
-                    {#if detailExpense.claimDate}
-                      · {formatDate(detailExpense.claimDate)}{/if}
-                  </div>
-                </div>
-                <ChevronRight size={14} class="linked-claim-chevron" />
-              </button>
-            {:else}
-              <div class="detail-section-label">Bank reconciliation</div>
-              <button
-                type="button"
-                class="linked-claim-card cleared-control related-link"
-                onclick={() => goto(resolve("/reconciliation"))}
-              >
-                <span
-                  class="cleared-checkbox"
-                  class:checked={detailExpense.cleared}
-                  aria-hidden="true"
-                >
-                  {detailExpense.cleared ? "✓" : ""}
-                </span>
-                <div class="linked-claim-meta">
-                  <div class="linked-claim-title">Cleared</div>
-                  <div class="linked-claim-sub">
-                    {detailExpense.cleared
-                      ? "Fully allocated in reconciliation"
-                      : "Not cleared · Reconcile this expense"}
-                  </div>
-                </div>
-                <ChevronRight size={14} class="linked-claim-chevron" />
-              </button>
-            {/if}
-            <AttachmentManager
-              apiBase={`/api/expenses/${detailExpense.id}`}
-              bind:attachments={detailExpense.attachments}
-            />
-            <AuditTrail
-              bind:this={auditTrailRef}
-              recordType="expense"
-              recordId={detailExpense.id}
-            />
-          </div>
-          <div class="sheet-foot">
-            {#if detailExpense.claimId}
-              <div class="sheet-foot-note">
-                Linked to claim {detailExpense.claimNumber} — remove it from the claim
-                to delete.
-              </div>
-            {/if}
-            <div class="sheet-foot-actions">
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-delete"
-                disabled={!!detailExpense.claimId}
-                title={detailExpense.claimId
-                  ? `Linked to claim ${detailExpense.claimNumber}`
-                  : undefined}
-                onclick={() => (deleteDialogOpen = true)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-primary"
-                onclick={startEdit}
-              >
-                Edit
-              </button>
-            </div>
-          </div>
-        {/if}
-      {/if}
-    </Sheet.Content>
-  </Sheet.Portal>
-</Sheet.Root>
-
-{#if detailExpense}
-  <ConfirmDialog
-    bind:open={deleteDialogOpen}
-    title="Delete expense?"
-    description={`This will permanently delete ${detailExpense.expenseNumber} and its ${detailExpense.attachments.length} attachment(s). This can't be undone.`}
-    confirmLabel="Delete"
-    danger
-    onConfirm={() => deleteFormEl?.requestSubmit()}
-  />
-  <form
-    method="POST"
-    action="?/delete"
-    bind:this={deleteFormEl}
-    use:enhance={() =>
-      async ({ result, update }) => {
-        if (result.type === "success") {
-          deleteDialogOpen = false;
-          closeDetail();
-        }
-        await update();
-      }}
-    style="display:none"
-  >
-    <input type="hidden" name="id" value={detailExpense.id} />
-  </form>
-{/if}
-
-<!-- New expense sheet -->
-<Sheet.Root bind:open={showNew}>
-  <Sheet.Portal>
-    <Sheet.Overlay />
-    <Sheet.Content
-      side={panelSide}
-      style={isMobile
-        ? "height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;"
-        : "width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;"}
-    >
-      <div
-        style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-      >
-        <div>
-          <div class="sheet-eyebrow">New</div>
-          <div class="sheet-title-text">Add expense</div>
-        </div>
-        <Sheet.Close class="sheet-close">
-          <X size={16} />
-        </Sheet.Close>
-      </div>
-      <form
-        method="POST"
-        action="?/create"
-        use:enhance={() =>
-          async ({ result, update }) => {
-            if (result.type === "success" && newExpenseFiles.length > 0) {
-              const id = (result.data as Record<string, unknown>)?.id as
-                | number
-                | undefined;
-              if (id) {
-                for (const file of newExpenseFiles) {
-                  const fd = new FormData();
-                  fd.append("file", file);
-                  await fetch(`/api/expenses/${id}/attachments`, {
-                    method: "POST",
-                    body: fd,
-                  });
-                }
-              }
-              newExpenseFiles = [];
-            }
-            await update();
-          }}
-        style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-      >
-        {#if form?.error}
-          <div
-            style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-          >
-            {form.error}
-          </div>
-        {/if}
-
-        <div class="field">
-          <label class="field-label" for="itemName">Item name *</label>
-          <Input
-            id="itemName"
-            name="itemName"
-            type="text"
-            required
-            placeholder="e.g. Office chair"
-          />
-        </div>
-
-        <div class="field-grid field">
-          <div>
-            <label class="field-label" for="date">Date *</label>
-            <DatePicker name="date" bind:value={newDate} />
-          </div>
-          <div>
-            <label class="field-label" for="amount"
-              >Amount{isForeign ? ` (${mainCurrency()})` : ""} *</label
-            >
-            {#if isForeign}
-              <AmountInput
-                id="amount"
-                placeholder="0.00"
-                readonly
-                value={convertedDisplay}
-              />
-            {:else}
-              <AmountInput
-                id="amount"
-                placeholder="0.00"
-                required
-                bind:value={newAmount}
-              />
-            {/if}
-          </div>
-        </div>
-
-        <!-- Foreign currency (advanced, hidden by default) -->
-        <input
-          type="hidden"
-          name="amount"
-          value={isForeign ? newForeignAmount : newAmount}
-        />
-        <input
-          type="hidden"
-          name="currency"
-          value={isForeign ? newCurrency : mainCurrency()}
-        />
-        <input
-          type="hidden"
-          name="exchangeRate"
-          value={isForeign ? newRate : "1"}
-        />
-        <div class="field">
-          {#if !showForeign}
-            <button
-              type="button"
-              class="foreign-toggle"
-              onclick={() => (showForeign = true)}
-            >
-              <Plus size={13} /> Foreign currency
-            </button>
-          {:else}
-            <div class="foreign-box">
-              <div class="foreign-head">
-                <span class="field-label" style="margin:0;"
-                  >Foreign currency</span
-                >
-                <button
-                  type="button"
-                  class="foreign-close"
-                  onclick={() => {
-                    showForeign = false;
-                    newCurrency = mainCurrency();
-                    newForeignAmount = "";
-                    newRate = "";
-                    rateError = "";
-                  }}
-                  aria-label="Remove foreign currency"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label class="field-label" for="fx-cur">Currency</label>
-                <Select.Root type="single" bind:value={newCurrency}>
-                  <Select.Trigger id="fx-cur" class="w-full"
-                    >{newCurrency}</Select.Trigger
-                  >
-                  <Select.Content>
-                    {#each CURRENCIES as c (c.code)}
-                      <Select.Item
-                        value={c.code}
-                        label={`${c.code} — ${c.name}`}
-                      />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              </div>
-              <div class="field-grid">
-                <div>
-                  <label class="field-label" for="fx-amount"
-                    >Amount{isForeign ? ` (${newCurrency})` : ""}</label
-                  >
-                  <AmountInput
-                    id="fx-amount"
-                    placeholder="0.00"
-                    required={isForeign}
-                    bind:value={newForeignAmount}
-                    prefix={currencySymbol(newCurrency)}
-                    disabled={!isForeign}
-                  />
-                </div>
-                <div>
-                  <label class="field-label" for="fx-rate"
-                    >Rate (1 {newCurrency} = ? {mainCurrency()})</label
-                  >
-                  <Input
-                    id="fx-rate"
-                    type="text"
-                    inputmode="decimal"
-                    placeholder="0.0000"
-                    bind:value={newRate}
-                    disabled={!isForeign}
-                  />
-                </div>
-              </div>
-              {#if isForeign}
-                <div class="foreign-note">
-                  {#if rateFetching}
-                    Fetching rate…
-                  {:else if rateError}
-                    {rateError}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="supplier">Supplier *</label>
-          <ContactSelect
-            role={Role.Supplier}
-            bind:value={newContactId}
-            bind:newName={newContactName}
-            placeholder="Search or add a supplier…"
-          />
-          <input type="hidden" name="contactId" value={newContactId ?? ""} />
-          <input
-            type="hidden"
-            name="newContactName"
-            value={newContactName ?? ""}
-          />
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="category">Category *</label>
-          <Select.Root
-            type="single"
-            name="category"
-            bind:value={newExpenseCategory}
-          >
-            <Select.Trigger id="category" class="w-full">
-              {newExpenseCategory || "Select category"}
-            </Select.Trigger>
-            <Select.Content>
-              {#each data.categories as cat}
-                <Select.Item value={cat} label={cat} />
-              {/each}
-            </Select.Content>
-          </Select.Root>
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="reference">Reference *</label>
-          <Input
-            id="reference"
-            name="reference"
-            type="text"
-            required
-            placeholder="e.g. INV-001"
-          />
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="remark">Remark</label>
-          <Textarea
-            id="remark"
-            name="remark"
-            placeholder="Optional notes…"
-            class="leading-relaxed"
-          />
-        </div>
-
-        <div class="field">
-          <span class="field-label"
-            >Attachments <span
-              style="font-weight:400; color:var(--muted-foreground);"
-              >optional</span
-            ></span
-          >
-          {#if newExpenseFiles.length > 0}
-            <div class="attach-list" style="margin-bottom:8px;">
-              {#each newExpenseFiles as file, i}
-                <div class="attach-item">
-                  <div class="attach-thumb"><Paperclip size={14} /></div>
-                  <div class="attach-meta">
-                    <div class="attach-name">{file.name}</div>
-                    <div class="attach-sub">
-                      {(file.size / 1024).toFixed(0)} KB
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    class="attach-del"
-                    onclick={() =>
-                      (newExpenseFiles = newExpenseFiles.filter(
-                        (_, j) => j !== i,
-                      ))}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-          <div
-            class="attach-drop-area"
-            class:drag={newExpenseDrag}
-            role="button"
-            tabindex="0"
-            aria-label="Attach files"
-            ondragover={(e) => {
-              e.preventDefault();
-              newExpenseDrag = true;
-            }}
-            ondragleave={() => (newExpenseDrag = false)}
-            ondrop={(e) => {
-              e.preventDefault();
-              newExpenseDrag = false;
-              if (e.dataTransfer?.files)
-                newExpenseFiles = [
-                  ...newExpenseFiles,
-                  ...Array.from(e.dataTransfer.files),
-                ];
-            }}
-            onclick={() => newExpenseFileInput?.click()}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                newExpenseFileInput?.click();
-              }
-            }}
-          >
-            <div
-              class="attach-empty attach-empty-drop"
-              style="pointer-events:none;"
-            >
-              <Upload size={14} /> Drop files here or click to browse
-            </div>
-          </div>
-          <input
-            bind:this={newExpenseFileInput}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
-            multiple
-            style="display:none"
-            onchange={(e) => {
-              const f = (e.target as HTMLInputElement).files;
-              if (f) newExpenseFiles = [...newExpenseFiles, ...Array.from(f)];
-              (e.target as HTMLInputElement).value = "";
-            }}
-          />
-        </div>
-
-        <div
-          style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:auto;"
-        >
-          <button
-            type="button"
-            onclick={() => (showNew = false)}
-            style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={foreignRateMissing}
-            title={foreignRateMissing
-              ? "Enter an exchange rate first"
-              : undefined}
-            style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{foreignRateMissing
-              ? 0.5
-              : 1};"
-          >
-            Add expense
-          </button>
-        </div>
-      </form>
-    </Sheet.Content>
-  </Sheet.Portal>
-</Sheet.Root>
+<!-- New expense -->
+<RecordSheet
+  open={showNew}
+  record={null}
+  kind="expense"
+  accounts={data.accounts}
+  categories={data.categories}
+  contacts={data.contacts}
+  defaultAccountId={data.defaultAccountId}
+  lastForeignCurrency={data.lastForeignCurrency}
+  canChange={data.perms.change}
+  onclose={() => (showNew = false)}
+/>
 
 <style>
-  .cleared-checkbox {
-    display: grid;
-    width: 18px;
-    height: 18px;
-    place-items: center;
-    flex-shrink: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--primary-foreground);
-    font-size: 12px;
-    font-weight: 700;
+  .page-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--red-soft);
+    color: var(--red);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .page-error button {
+    display: flex;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
   }
 
-  .cleared-checkbox.checked {
+  .cat-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--foreground);
+    padding: 7px 8px;
+    border-radius: 7px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .cat-option:hover,
+  .cat-option:focus-visible {
+    background: var(--accent);
+  }
+  .cat-box {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border-strong);
+    background: var(--card);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .cat-option.on .cat-box {
     border-color: var(--primary);
     background: var(--primary);
+  }
+
+  .row-lock {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-left: 5px;
+    color: var(--muted-foreground);
+  }
+
+  /* Who is owed, and how much is left */
+  .owed-panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .owed-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: none;
+    background: none;
+    font-family: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .owed-head-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .owed-head-title {
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  .owed-head-sub {
+    font-size: 11.5px;
+    color: var(--muted-foreground);
+  }
+  .owed-head-total {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .owed-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 14px 14px;
+  }
+  .owed-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .owed-group-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .owed-group-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+  }
+  .owed-group-total {
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .owed-pay-btn {
+    border: 1px solid var(--border);
+    background: var(--card);
+    border-radius: 7px;
+    padding: 3px 9px;
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--foreground);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .owed-pay-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .owed-row {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 8px 12px;
+    background: var(--card);
+    font-family: inherit;
+    color: inherit;
+    text-align: left;
+  }
+  .owed-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .owed-row-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .owed-row-sub {
+    font-size: 11.5px;
+    color: var(--muted-foreground);
+  }
+  .owed-row-amt {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   @media (max-width: 767px) {

@@ -1,66 +1,85 @@
-import type { RequestHandler } from '@sveltejs/kit';
-import { db } from '$lib/server/db/client.js';
-import { listIncomes } from '$lib/server/queries/income.js';
-import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
-import { createIncome } from '$lib/server/services/income.js';
-import { hasPermission } from '$lib/server/permissions.js';
-import { isValidDate, today } from '$lib/server/date.js';
-import { Role } from '$lib/enums.js';
+import { z } from "zod";
+import type { RequestHandler } from "./$types.js";
+import { db } from "$lib/server/db/client.js";
+import { hasPermission } from "$lib/server/permissions.js";
+import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
+import { listRecords } from "$lib/server/queries/ledger.js";
+import { createRecord } from "$lib/server/services/ledger.js";
+import { isValidDate } from "$lib/server/date.js";
+import { LedgerRecordKind } from "$lib/enums.js";
+
+/**
+ * Money coming in, over HTTP.
+ *
+ * There is one record store behind every screen now, so this is `/api/records`
+ * with `kind` already answered. The URL is kept because callers outside the app
+ * use it (contracts/api.md); everything it does happens in the records service,
+ * which is where the permission-independent rules, the audit entry and the one
+ * event live.
+ */
+
+const accountId = z.number().int().positive();
+
+const createSchema = z
+  .object({
+    date: z.string().refine(isValidDate, {
+      message: "The date must be in YYYY-MM-DD form.",
+    }),
+    description: z.string().trim().max(500).default(""),
+    amount: z.number().finite(),
+    currency: z.string().trim().length(3).toUpperCase(),
+    exchangeRate: z.number().positive().default(1),
+    reference: z.string().trim().max(200).optional(),
+    remark: z.string().trim().max(2000).optional(),
+    contactId: accountId.nullable().optional(),
+    categoryAccountId: accountId,
+    /** Which account the money landed in. */
+    receivedIntoAccountId: accountId,
+  })
+  .strict();
 
 export const GET: RequestHandler = async ({ locals, url }) => {
-	if (!hasPermission(locals, 'income', 'view')) return new Response('Forbidden', { status: 403 });
-	const p = url.searchParams;
+  if (!hasPermission(locals, "income", "view")) return forbidden();
+  const p = url.searchParams;
 
-	const amountMinRaw = p.get('amountMin');
-	const amountMaxRaw = p.get('amountMax');
-	const limitRaw = p.get('limit');
-	const offsetRaw = p.get('offset');
+  const num = (key: string): number | undefined => {
+    const raw = p.get(key);
+    if (raw === null) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  };
 
-	const results = listIncomes(db, {
-		category: p.get('category') ?? undefined,
-		dateFrom: p.get('dateFrom') ?? undefined,
-		dateTo: p.get('dateTo') ?? undefined,
-		amountMin: amountMinRaw ? parseFloat(amountMinRaw) : undefined,
-		amountMax: amountMaxRaw ? parseFloat(amountMaxRaw) : undefined,
-		search: p.get('search') ?? undefined,
-		limit: limitRaw ? parseInt(limitRaw) : undefined,
-		offset: offsetRaw ? parseInt(offsetRaw) : undefined
-	});
+  const paidRaw = p.get("paid");
 
-	return Response.json(results);
+  return Response.json(
+    listRecords(db, {
+      kind: LedgerRecordKind.Income,
+      accountId: num("accountId"),
+      contactId: num("contactId"),
+      categoryAccountId: num("categoryAccountId"),
+      dateFrom: p.get("dateFrom") ?? undefined,
+      dateTo: p.get("dateTo") ?? undefined,
+      amountMin: num("amountMin"),
+      amountMax: num("amountMax"),
+      paid: paidRaw === null ? undefined : paidRaw === "true",
+      search: p.get("search") ?? undefined,
+      limit: num("limit"),
+      offset: num("offset"),
+    }),
+  );
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-	if (!hasPermission(locals, 'income', 'add')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
-	const body = await request.json();
+  if (!hasPermission(locals, "income", "add")) return forbidden();
 
-	if (body.amount == null) {
-		return Response.json({ error: 'amount is required' }, { status: 400 });
-	}
+  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return badRequest(parsed.error);
 
-	if (body.date !== undefined && !isValidDate(body.date)) {
-		return Response.json({ error: 'date must be in YYYY-MM-DD format' }, { status: 400 });
-	}
+  const result = createRecord(db, locals.user!.id, {
+    ...parsed.data,
+    kind: "income",
+  });
+  if (!result.ok) return refused(result.reason);
 
-	// Resolve the customer party: numeric contactId bypasses; raw `source` name
-	// is matched-then-created among Role.Customer contacts.
-	let contactId: number | null = null;
-	if (typeof body.contactId === 'number') {
-		contactId = body.contactId;
-	} else if (typeof body.source === 'string' && body.source.trim()) {
-		contactId = resolveOrCreateContact(db, body.source, Role.Customer, user.id);
-	}
-
-	const income = createIncome(db, user.id, {
-		contactId,
-		descriptionText: body.descriptionText,
-		reference: body.reference,
-		remark: body.remark,
-		category: body.category,
-		date: body.date ?? today(),
-		amount: body.amount
-	});
-
-	return Response.json(income, { status: 201 });
+  return Response.json(result.value, { status: 201 });
 };

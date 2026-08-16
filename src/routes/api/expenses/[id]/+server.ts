@@ -1,75 +1,85 @@
-import type { RequestHandler } from '@sveltejs/kit';
-import { db } from '$lib/server/db/client.js';
-import { getExpense } from '$lib/server/queries/expenses.js';
-import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
-import { canEditAmount } from '$lib/server/locking.js';
-import { patchExpense, removeExpense } from '$lib/server/services/expenses.js';
-import { hasPermission } from '$lib/server/permissions.js';
-import { Role } from '$lib/enums.js';
+import { z } from "zod";
+import type { RequestHandler } from "./$types.js";
+import { db } from "$lib/server/db/client.js";
+import { hasPermission } from "$lib/server/permissions.js";
+import {
+  badRequest,
+  forbidden,
+  notFound,
+  refused,
+} from "$lib/server/api-response.js";
+import { getRecord } from "$lib/server/queries/ledger.js";
+import { patchRecord, removeRecord } from "$lib/server/services/ledger.js";
+import { isValidDate } from "$lib/server/date.js";
+import { LedgerRecordKind } from "$lib/enums.js";
+
+/**
+ * One expense. A thin wrapper over the records service, kept at its old URL.
+ *
+ * Nothing here knows what locks a record: a record a payment has settled or a
+ * bank line has been matched to refuses its amount, its date and its accounts
+ * inside the service, with the sentence naming what to undo first (FR-017a).
+ */
+
+const accountId = z.number().int().positive();
+
+const patchSchema = z
+  .object({
+    date: z
+      .string()
+      .refine(isValidDate, { message: "The date must be in YYYY-MM-DD form." })
+      .optional(),
+    description: z.string().trim().max(500).optional(),
+    amount: z.number().finite().optional(),
+    currency: z.string().trim().length(3).toUpperCase().optional(),
+    exchangeRate: z.number().positive().optional(),
+    reference: z.string().trim().max(200).optional(),
+    remark: z.string().trim().max(2000).optional(),
+    contactId: accountId.nullable().optional(),
+    categoryAccountId: accountId.optional(),
+    paidFromAccountId: accountId.nullable().optional(),
+  })
+  .strict();
+
+const MISSING = "That expense no longer exists.";
+
+/** The record at this id, but only when it really is an expense. */
+function expenseAt(params: Partial<Record<string, string>>) {
+  const id = Number(params.id);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const record = getRecord(db, id);
+  return record?.kind === LedgerRecordKind.Expense ? record : null;
+}
 
 export const GET: RequestHandler = async ({ locals, params }) => {
-	if (!hasPermission(locals, 'expenses', 'view')) return new Response('Forbidden', { status: 403 });
-	const id = parseInt(params.id!);
+  if (!hasPermission(locals, "expenses", "view")) return forbidden();
 
-	const expense = getExpense(db, id);
-	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
-
-	return Response.json(expense);
+  const record = expenseAt(params);
+  if (!record) return notFound(MISSING);
+  return Response.json(record);
 };
 
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
-	if (!hasPermission(locals, 'expenses', 'change')) return new Response('Forbidden', { status: 403 });
-	const user = locals.user!;
-	const id = parseInt(params.id!);
+  if (!hasPermission(locals, "expenses", "change")) return forbidden();
 
-	const expense = getExpense(db, id);
-	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
+  const record = expenseAt(params);
+  if (!record) return notFound(MISSING);
 
-	const body = await request.json();
+  const parsed = patchSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return badRequest(parsed.error);
 
-	const editsLockedFields =
-		body.amount !== undefined ||
-		body.status !== undefined ||
-		body.currency !== undefined ||
-		body.exchangeRate !== undefined;
-	if (editsLockedFields && !canEditAmount(expense)) {
-		return Response.json(
-			{ error: 'Amount and status cannot be edited on a claimed expense' },
-			{ status: 403 }
-		);
-	}
-
-	const descriptiveFields = ['itemName', 'contactId', 'reference', 'remark', 'category', 'date'];
-	const patch: Record<string, unknown> = {};
-	for (const field of [...descriptiveFields, 'amount', 'status', 'currency', 'exchangeRate']) {
-		if (body[field] !== undefined) patch[field] = body[field];
-	}
-	// Allow a raw supplier name on PATCH too (resolve to a contact).
-	if (patch.contactId === undefined && typeof body.supplier === 'string' && body.supplier.trim()) {
-		patch.contactId = resolveOrCreateContact(db, body.supplier, Role.Supplier, user.id);
-	}
-
-	const updated = patchExpense(db, id, user.id, patch);
-
-	return Response.json(updated);
+  const result = patchRecord(db, record.id, locals.user!.id, parsed.data);
+  if (!result.ok) return refused(result.reason);
+  return Response.json(result.value);
 };
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
-	if (!hasPermission(locals, 'expenses', 'delete')) return new Response('Forbidden', { status: 403 });
-	const id = parseInt(params.id!);
+  if (!hasPermission(locals, "expenses", "delete")) return forbidden();
 
-	const expense = getExpense(db, id);
-	if (!expense) return Response.json({ error: 'Not found' }, { status: 404 });
+  const record = expenseAt(params);
+  if (!record) return notFound(MISSING);
 
-	if (expense.claimId !== null) {
-		return Response.json(
-			{
-				error: `Expense "${expense.expenseNumber}" is linked to claim ${expense.claimNumber} and cannot be deleted until it's removed from the claim.`
-			},
-			{ status: 409 }
-		);
-	}
-
-	removeExpense(db, id, locals.user!.id);
-	return new Response(null, { status: 204 });
+  const result = removeRecord(db, record.id, locals.user!.id);
+  if (!result.ok) return refused(result.reason);
+  return new Response(null, { status: 204 });
 };

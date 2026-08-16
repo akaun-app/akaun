@@ -13,6 +13,7 @@
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import AccountSelect from '$lib/components/ledger/AccountSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
@@ -54,12 +55,16 @@
 		reference: string | null;
 		category: string | null;
 		remark: string | null;
+		// Which account paid for this / received it, as the worker pre-filled it.
+		accountId: number | null;
 		duplicateOf: number | null;
 		duplicateConfidence: number | null;
 		duplicateReasons: string[];
 		error: string | null;
 		// client-side tracking
 		_edits?: Record<string, string | number>;
+		// Set from the confirm reply when no category could be read off the document.
+		_uncategorised?: boolean;
 	};
 
 	// Convert a raw DB queue row (INT enum codes) into a display Job (string labels).
@@ -93,6 +98,7 @@
 			reference: j.reference,
 			category: j.category,
 			remark: j.remark,
+			accountId: j.accountId ?? null,
 			duplicateOf: j.duplicateOf,
 			duplicateConfidence: j.duplicateConfidence ?? null,
 			duplicateReasons: reasons,
@@ -105,8 +111,21 @@
 	// svelte-ignore state_referenced_locally
 	let jobs = $state<Job[]>(data.jobs.map(normalizeJob));
 
+	// Which account paid for / received each job, keyed by job id. Seeded from what
+	// the worker pre-filled; AccountSelect falls back to the default account, so a
+	// user with one account is never asked (FR-011).
+	// svelte-ignore state_referenced_locally
+	let accountByJob = $state<Record<string, number | null>>(
+		Object.fromEntries(
+			data.jobs.filter((j) => j.accountId != null).map((j) => [j.id, j.accountId as number])
+		)
+	);
+
 	// Store original file references for retry
 	const fileStore = new Map<string, File>();
+
+	// Why a job's import was refused, keyed by job id. Cleared when it goes through.
+	let confirmErrors = $state<Record<string, string>>({});
 
 	// Raw in-progress text for an amount field being typed into, keyed by job id.
 	// Formatting (2 decimals) is only applied on blur — see amountDisplay()/onAmountBlur()
@@ -159,7 +178,9 @@
 	const history = $derived(
 		jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state))
 	);
-	const confirmable = $derived(review.filter((j) => !j.duplicateOf).length);
+	const confirmable = $derived(
+		review.filter((j) => !j.duplicateOf && !jobAccountMissing(j)).length
+	);
 	let _es: EventSource | null = null;
 
 	// onMount/onDestroy guarantee exactly one connection per page visit — no reactive re-runs
@@ -192,13 +213,18 @@
 		jobs = jobs.map((local) => {
 			const server = byId.get(local.id);
 			if (!server) return local;
-			return { ...server, _edits: local._edits ?? {} };
+			return { ...server, _edits: local._edits ?? {}, _uncategorised: local._uncategorised };
 		});
 
 		// Prepend jobs added in another tab that we don't know about yet
 		const brandNew = incoming.filter((j) => !existingIds.has(j.id));
 		if (brandNew.length > 0) {
 			jobs = [...brandNew, ...jobs];
+		}
+
+		// Never overwrite an account the reviewer has already picked here.
+		for (const j of incoming) {
+			if (!(j.id in accountByJob) && j.accountId != null) accountByJob[j.id] = j.accountId;
 		}
 	}
 
@@ -255,25 +281,38 @@
 		if (!job) return;
 		// A foreign-currency job can't be imported without a rate to convert it.
 		if (jobRateMissing(job)) return;
+		// A record has to say which account paid for it or received it.
+		if (jobAccountMissing(job)) return;
 
-		const overrides = job._edits && Object.keys(job._edits).length > 0 ? job._edits : undefined;
+		const body = { ...(job._edits ?? {}), accountId: accountByJob[jobId] };
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
 			method: 'POST',
-			headers: overrides ? { 'Content-Type': 'application/json' } : {},
-			body: overrides ? JSON.stringify(overrides) : undefined,
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
 			credentials: 'include'
 		});
-		if (res.ok) {
-			jobs = jobs.map((j) => (j.id === jobId ? { ...j, state: 'confirmed' as JobState } : j));
-			// Transition to imported after a moment (the server does it async)
-			setTimeout(() => {
-				jobs = jobs.map((j) => (j.id === jobId ? { ...j, state: 'imported' as JobState } : j));
-			}, 800);
+		if (!res.ok) {
+			// A rule refused it and nothing was written — say why, on the card.
+			const err = await res.json().catch(() => ({}));
+			confirmErrors[jobId] = err.error ?? "That couldn't be imported. Try again.";
+			return;
 		}
+		delete confirmErrors[jobId];
+
+		const result = await res.json().catch(() => ({ uncategorised: false }));
+		jobs = jobs.map((j) =>
+			j.id === jobId
+				? { ...j, state: 'confirmed' as JobState, _uncategorised: !!result.uncategorised }
+				: j
+		);
+		// Transition to imported after a moment (the server does it async)
+		setTimeout(() => {
+			jobs = jobs.map((j) => (j.id === jobId ? { ...j, state: 'imported' as JobState } : j));
+		}, 800);
 	}
 
 	async function confirmAll() {
-		const toConfirm = review.filter((j) => !j.duplicateOf);
+		const toConfirm = review.filter((j) => !j.duplicateOf && !jobAccountMissing(j));
 		await Promise.all(toConfirm.map((j) => confirmJob(j.id)));
 	}
 
@@ -345,6 +384,9 @@
 	}
 	function jobRateMissing(job: Job): boolean {
 		return jobIsForeign(job) && !(parseFloat(jobRateStr(job)) > 0);
+	}
+	function jobAccountMissing(job: Job): boolean {
+		return accountByJob[job.id] == null;
 	}
 	function jobConverted(job: Job): number | null {
 		const a = parseFloat(String(editedValue(job, 'amount')));
@@ -755,6 +797,15 @@
 									</Select.Root>
 								</div>
 
+								<!-- Which account paid for this / received it -->
+								<AccountSelect
+									accounts={data.accounts}
+									bind:value={accountByJob[job.id]}
+									name="account-{job.id}"
+									label={isIncome ? 'Received into' : 'Paid from'}
+									defaultAccountId={data.defaultAccountId}
+								/>
+
 								<!-- Date -->
 								<div class="rfield">
 									<span class="rfield-label">
@@ -788,7 +839,11 @@
 
 							<div class="review-actions">
 								<span class="merge-note">
-									{#if numEdits > 0}
+									{#if confirmErrors[job.id]}
+										{confirmErrors[job.id]}
+									{:else if jobAccountMissing(job)}
+										Say which account {isIncome ? 'received this' : 'paid for this'} before importing it.
+									{:else if numEdits > 0}
 										{numEdits} field{numEdits > 1 ? 's' : ''} edited — only these override the AI values
 									{:else}
 										Importing AI values as-is
@@ -796,7 +851,11 @@
 								</span>
 								<div class="review-actions-btns">
 									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
-									<Button size="sm" disabled={jobRateMissing(job)} onclick={() => confirmJob(job.id)}>
+									<Button
+										size="sm"
+										disabled={jobRateMissing(job) || jobAccountMissing(job)}
+										onclick={() => confirmJob(job.id)}
+									>
 										<Check size={15} /> {dup ? 'Import anyway' : 'Confirm & import'}
 									</Button>
 								</div>
@@ -838,7 +897,11 @@
 										{job.documentType === 'income' ? 'Income' : 'Expense'}
 									</span>
 								</div>
-								<span class="bucket-path">{importing ? 'Importing…' : '→ ' + bucketPath(job)}</span>
+								<span class="bucket-path">{importing
+											? 'Importing…'
+											: job._uncategorised
+												? `→ ${bucketPath(job)} · filed as Uncategorised`
+												: '→ ' + bucketPath(job)}</span>
 								<span class="imported-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
 							</div>
 						{/if}
@@ -873,6 +936,24 @@
 {/if}
 
 <style>
+	/* AccountSelect brings its own .field markup — line it up with the review grid's
+	   own fields so the account reads as one more field, not a transplant. */
+	.review-grid :global(.field) {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		margin-bottom: 0;
+	}
+	.review-grid :global(.field-label) {
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+		font-weight: 500;
+		margin-bottom: 0;
+	}
+	.review-grid :global(.account-select) {
+		height: 34px;
+	}
+
 	.scan-fab {
 		position: fixed;
 		right: 16px;

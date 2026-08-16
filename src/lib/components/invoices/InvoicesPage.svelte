@@ -13,7 +13,7 @@
 		Trash2,
 		Printer,
 		ChevronRight,
-		CreditCard
+		Send
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
@@ -23,16 +23,17 @@
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import LineItemEditor from '$lib/components/ui/LineItemEditor.svelte';
+	import SettlementList from '$lib/components/ledger/SettlementList.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import { formatMoney, formatMoneyRM, formatDate, formatDateShort } from '$lib/format.js';
+	import { formatMoney, formatMoneyRM, formatMinor, formatDate, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
-	import { InvoiceStatus, InvoiceStatusLabels, Role, EntityType } from '$lib/enums.js';
+	import { InvoiceStatus, Role, EntityType } from '$lib/enums.js';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -47,14 +48,6 @@
 		form,
 		openId
 	}: { data: PageData; form: ActionData; openId: number | null } = $props();
-
-	// Status tab id → InvoiceStatus INT code
-	const STATUS_CODE: Record<string, number> = {
-		draft: InvoiceStatus.Draft,
-		sent: InvoiceStatus.Sent,
-		paid: InvoiceStatus.Paid,
-		cancelled: InvoiceStatus.Cancelled
-	};
 
 	// Local reactive list — updated by SSE events and re-synced on SvelteKit data reload
 	// svelte-ignore state_referenced_locally
@@ -88,7 +81,21 @@
 		lineTotal: number;
 		sortOrder: number;
 	};
-	type FullInvoice = (typeof data.invoices)[0] & { lines: InvoiceLine[] };
+	// What has been paid against this invoice — one row per payment (FR-018a).
+	type SettlementLink = {
+		settlementId: number;
+		amountMinor: number;
+		createdAt: string;
+		otherRecordId: number;
+		otherRecordNumber: string | null;
+		otherDate: string;
+		otherDescription: string;
+		otherKind: number;
+	};
+	type FullInvoice = (typeof data.invoices)[0] & {
+		lines: InvoiceLine[];
+		settlements: SettlementLink[];
+	};
 
 	let detailInvoice = $state<FullInvoice | null>(null);
 	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
@@ -97,8 +104,9 @@
 	let deleteFormEl = $state<HTMLFormElement | null>(null);
 	let saving = $state(false);
 	let saveError = $state('');
-	let markingPaid = $state(false);
-	let payConfirmOpen = $state(false);
+	let issuing = $state(false);
+	let issueConfirmOpen = $state(false);
+	let issueError = $state('');
 
 	// Edit form state
 	type LineInput = { description: string; quantity: number; unitPrice: number };
@@ -192,32 +200,59 @@
 
 	// SSE — real-time updates from server
 	type InvoiceStreamMsg =
-		| { type: 'invoice-update'; item: (typeof data.invoices)[0] }
+		| { type: 'invoice-update'; item: Invoice }
 		| { type: 'invoice-delete'; id: number };
+
+	// Which tab an invoice belongs under. "Paid" is worked out from what has
+	// actually been paid against it, never from a stored status (D-10): a draft is
+	// a draft, a cancelled invoice is cancelled, and everything else is either
+	// paid or still waiting.
+	type Invoice = (typeof data.invoices)[0];
+	function isDraft(inv: Invoice): boolean {
+		return inv.status === InvoiceStatus.Draft;
+	}
+	function isCancelled(inv: Invoice): boolean {
+		return inv.status === InvoiceStatus.Cancelled;
+	}
+	function isAwaitingPayment(inv: Invoice): boolean {
+		return !isDraft(inv) && !isCancelled(inv) && !inv.paid;
+	}
+	function isPaid(inv: Invoice): boolean {
+		return !isDraft(inv) && !isCancelled(inv) && inv.paid;
+	}
+
+	const IN_TAB: Record<string, (inv: Invoice) => boolean> = {
+		draft: isDraft,
+		sent: isAwaitingPayment,
+		paid: isPaid,
+		cancelled: isCancelled
+	};
 
 	// Derived counts (from local state for real-time accuracy)
 	const counts = $derived.by(() => ({
 		all: invoices.length,
-		draft: invoices.filter((inv) => inv.status === InvoiceStatus.Draft).length,
-		sent: invoices.filter((inv) => inv.status === InvoiceStatus.Sent).length,
-		paid: invoices.filter((inv) => inv.status === InvoiceStatus.Paid).length,
-		cancelled: invoices.filter((inv) => inv.status === InvoiceStatus.Cancelled).length
+		draft: invoices.filter(isDraft).length,
+		sent: invoices.filter(isAwaitingPayment).length,
+		paid: invoices.filter(isPaid).length,
+		cancelled: invoices.filter(isCancelled).length
 	}));
 
 	// Stats
 	const stats = $derived.by(() => {
-		const sent = invoices.filter((inv) => inv.status === InvoiceStatus.Sent);
-		const paid = invoices.filter((inv) => inv.status === InvoiceStatus.Paid);
+		const sent = invoices.filter(isAwaitingPayment);
+		const paid = invoices.filter(isPaid);
 		const overdue = invoices.filter((inv) => inv.isOverdue);
 		const now = new Date();
 		const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 		const thisMonth = invoices.filter((inv) => inv.issueDate.startsWith(monthKey));
 		return {
-			sentTotal: sent.reduce((s, inv) => s + inv.mainAmount, 0),
+			// What is still owed on them, not what they were written for — a part-paid
+			// invoice should not keep counting its whole amount as money to come in.
+			sentTotal: sent.reduce((s, inv) => s + inv.outstandingMinor, 0) / 100,
 			sentCount: sent.length,
-			paidTotal: paid.reduce((s, inv) => s + inv.mainAmount, 0),
+			paidTotal: paid.reduce((s, inv) => s + inv.paidMinor, 0) / 100,
 			paidCount: paid.length,
-			overdueTotal: overdue.reduce((s, inv) => s + inv.mainAmount, 0),
+			overdueTotal: overdue.reduce((s, inv) => s + inv.outstandingMinor, 0) / 100,
 			overdueCount: overdue.length,
 			monthTotal: thisMonth.reduce((s, inv) => s + inv.mainAmount, 0),
 			monthCount: thisMonth.length,
@@ -231,7 +266,7 @@
 		if (overdueOnly) {
 			rows = rows.filter((inv) => inv.isOverdue);
 		} else if (statusTab !== 'all') {
-			rows = rows.filter((inv) => inv.status === STATUS_CODE[statusTab]);
+			rows = rows.filter(IN_TAB[statusTab]);
 		}
 		if (dateFrom) rows = rows.filter((inv) => inv.issueDate >= dateFrom);
 		if (dateTo) rows = rows.filter((inv) => inv.issueDate <= dateTo);
@@ -276,26 +311,41 @@
 		overdueOnly = false;
 	}
 
-	// Derive the display status label — 'overdue' overrides stored status for Draft/Sent
-	function getStatusLabel(inv: { status: number; isOverdue: boolean }): string {
-		if (
-			inv.isOverdue &&
-			(inv.status === InvoiceStatus.Draft || inv.status === InvoiceStatus.Sent)
-		) {
-			return 'overdue';
-		}
-		return InvoiceStatusLabels[inv.status] ?? 'draft';
+	// What the badge says. The document's own status only ever says draft, sent or
+	// cancelled; whether it is paid comes from what has been paid against it (D-10).
+	function getStatusLabel(inv: Invoice): string {
+		if (isCancelled(inv)) return 'cancelled';
+		if (isDraft(inv)) return 'draft';
+		if (inv.paid) return 'paid';
+		if (inv.isOverdue) return 'overdue';
+		if (inv.paidMinor > 0) return 'part-paid';
+		return 'sent';
 	}
 
-	// Editing is allowed unless paid or cancelled
-	function canEdit(inv: { status: number }): boolean {
-		return inv.status !== InvoiceStatus.Paid && inv.status !== InvoiceStatus.Cancelled;
+	// Mirrors the rule in src/routes/api/invoices/[id]/+server.ts: once an invoice
+	// has been sent its amount is in the books and the customer has a copy, so the
+	// money side is fixed. A cancelled invoice is finished with entirely.
+	function canEdit(inv: { status: number; ledgerRecordId: number | null }): boolean {
+		return inv.status !== InvoiceStatus.Cancelled && inv.ledgerRecordId === null;
+	}
+
+	/** Only a draft can be sent, and only once — sending it twice would owe it twice. */
+	function canIssue(inv: Invoice): boolean {
+		return isDraft(inv) && inv.ledgerRecordId === null;
+	}
+
+	/** A sent invoice is cancelled, never deleted — its amount is already in the books. */
+	function deleteBlockedReason(inv: { ledgerRecordId: number | null }): string | null {
+		return inv.ledgerRecordId === null
+			? null
+			: 'This invoice has been sent, so it cannot be deleted. Cancel it instead.';
 	}
 
 	// Deep-link: open an invoice detail sheet
-	async function openInvoice(inv: (typeof data.invoices)[0], { push = true } = {}) {
-		detailInvoice = { ...inv, lines: [] };
+	async function openInvoice(inv: Invoice, { push = true } = {}) {
+		detailInvoice = { ...inv, lines: [], settlements: [] };
 		isEditing = false;
+		issueError = '';
 		if (push) {
 			pushState(resolve('/(app)/invoices/[id]', { id: String(inv.id) }), { viaPush: true });
 		}
@@ -431,18 +481,25 @@
 		}
 	}
 
-	// Mark invoice as paid via JSON API
-	async function markPaid(id: number) {
-		markingPaid = true;
+	// Send the invoice: from here on the customer owes this amount, and any payment
+	// they make settles it like any other debt (FR-018a).
+	async function issue(id: number) {
+		issuing = true;
+		issueError = '';
 		try {
-			const res = await fetch(`/api/invoices/${id}/pay`, { method: 'POST' });
-			if (res.ok) {
-				// SSE will update the invoice row; also re-fetch lines for the detail
-				const updated = await fetch(`/api/invoices/${id}`).then((r) => r.json());
-				if (updated) detailInvoice = updated;
+			const res = await fetch(`/api/invoices/${id}/issue`, { method: 'POST' });
+			if (!res.ok) {
+				issueError = (await res.json().catch(() => ({}))).error ?? 'Could not send the invoice.';
+				return;
 			}
+			// SSE updates the row; the detail needs the lines and payments back too.
+			const updated = await fetch(`/api/invoices/${id}`).then((r) => r.json());
+			if (updated) detailInvoice = updated;
+			auditTrailRef?.refresh();
+		} catch {
+			issueError = 'Network error — try again';
 		} finally {
-			markingPaid = false;
+			issuing = false;
 		}
 	}
 
@@ -737,6 +794,9 @@
 											>{inv.currency} {formatCurrencyAmount(inv.total, inv.currency)}</span
 										>
 									{/if}
+									{#if inv.paidMinor > 0 && !inv.paid}
+										<span class="amount-orig">{formatMinor(inv.outstandingMinor)} still owed</span>
+									{/if}
 								</td>
 							</tr>
 						{/each}
@@ -951,10 +1011,8 @@
 							<button
 								type="button"
 								class="sheet-btn sheet-btn-delete"
-								disabled={!canEdit(detailInvoice)}
-								title={!canEdit(detailInvoice)
-									? 'Paid or cancelled invoices cannot be deleted'
-									: undefined}
+								disabled={!!deleteBlockedReason(detailInvoice)}
+								title={deleteBlockedReason(detailInvoice) ?? undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
 								<Trash2 size={14} /> Delete
@@ -995,6 +1053,41 @@
 						<div class="detail-statusrow">
 							<StatusBadge status={getStatusLabel(detailInvoice)} />
 						</div>
+
+						{#if issueError || form?.error}
+							<!--
+								`form.error` is the delete action's refusal. Deleting is the one
+								thing here that still goes through a form action, and the server
+								refuses it for a sent invoice — its amount is already in the
+								books, so it is cancelled rather than deleted. Without this the
+								refusal was posted and silently dropped, and the button just
+								appeared to do nothing.
+							-->
+							<div
+								style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin:12px 0 0;"
+							>
+								{issueError || form?.error}
+							</div>
+						{/if}
+
+						<!-- How much has come in, once the invoice has been sent (D-10) -->
+						{#if detailInvoice.ledgerRecordId !== null}
+							<div class="detail-list" style="margin-top:12px;">
+								<div class="detail-row">
+									<div class="detail-key">Paid so far</div>
+									<div class="detail-val num">{formatMinor(detailInvoice.paidMinor)}</div>
+								</div>
+								<div class="detail-row">
+									<div class="detail-key">Still owed</div>
+									<div
+										class="detail-val num"
+										style={detailInvoice.outstandingMinor > 0 ? 'font-weight:600;' : ''}
+									>
+										{formatMinor(detailInvoice.outstandingMinor)}
+									</div>
+								</div>
+							</div>
+						{/if}
 
 						<div class="detail-list">
 							{#if detailInvoice.contactName}
@@ -1052,21 +1145,10 @@
 							</div>
 						{/if}
 
-						<!-- Linked income record -->
-						{#if detailInvoice.resultIncomeId}
-							<div style="margin-top:8px;">
-								<button
-									type="button"
-									class="linked-claim-card related-link"
-									onclick={() => goto(resolve('/(app)/income/[id]', { id: String(detailInvoice!.resultIncomeId) }))}
-								>
-									<span class="rel-card-icon"><CreditCard size={16} /></span>
-									<span class="rel-card-body">
-										<span class="rel-card-title">Income Record</span>
-									</span>
-									<ChevronRight size={13} color="var(--muted-foreground)" />
-								</button>
-							</div>
+						<!-- The payments that settled it (FR-018a) -->
+						{#if detailInvoice.settlements.length > 0}
+							<div class="detail-section-label">Payments</div>
+							<SettlementList links={detailInvoice.settlements} />
 						{/if}
 
 						<!-- Line items (read-only) -->
@@ -1122,10 +1204,8 @@
 							<button
 								type="button"
 								class="sheet-btn sheet-btn-delete"
-								disabled={!canEdit(detailInvoice)}
-								title={!canEdit(detailInvoice)
-									? 'Paid or cancelled invoices cannot be deleted'
-									: undefined}
+								disabled={!!deleteBlockedReason(detailInvoice)}
+								title={deleteBlockedReason(detailInvoice) ?? undefined}
 								onclick={() => (deleteDialogOpen = true)}
 							>
 								<Trash2 size={14} /> Delete
@@ -1138,14 +1218,14 @@
 							>
 								<Printer size={14} /> Print
 							</a>
-							{#if detailInvoice.status === InvoiceStatus.Sent}
+							{#if canIssue(detailInvoice)}
 								<button
 									type="button"
 									class="sheet-btn"
-									onclick={() => (payConfirmOpen = true)}
-									disabled={markingPaid}
+									onclick={() => (issueConfirmOpen = true)}
+									disabled={issuing}
 								>
-									<CreditCard size={14} /> {markingPaid ? 'Marking…' : 'Record Payment'}
+									<Send size={14} /> {issuing ? 'Sending…' : 'Send'}
 								</button>
 							{/if}
 							{#if canEdit(detailInvoice)}
@@ -1183,11 +1263,11 @@
 		onConfirm={() => deleteFormEl?.requestSubmit()}
 	/>
 	<ConfirmDialog
-		bind:open={payConfirmOpen}
-		title="Record payment?"
-		description={`Mark ${detailInvoice.invoiceNumber} as paid? This will create a linked income record and cannot be undone.`}
-		confirmLabel="Record Payment"
-		onConfirm={() => markPaid(detailInvoice!.id)}
+		bind:open={issueConfirmOpen}
+		title="Send this invoice?"
+		description={`${detailInvoice.invoiceNumber} will be recorded as money ${detailInvoice.contactName ?? 'the customer'} owes you. After that its amount, date and customer can no longer be changed.`}
+		confirmLabel="Send"
+		onConfirm={() => issue(detailInvoice!.id)}
 	/>
 	<form
 		method="POST"

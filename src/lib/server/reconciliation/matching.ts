@@ -1,9 +1,8 @@
-import { ReconItemType, StatementDirection } from "$lib/enums.js";
+import { StatementDirection } from "$lib/enums.js";
+import { toMinor } from "$lib/server/ledger/money.js";
 import {
-  EPSILON,
   MATCH_DATE_WINDOW_DAYS,
-  mainAmount,
-  type BankFacingItem,
+  type MovementCandidate,
   type RankedCandidate,
   type StatementLineRow,
 } from "./types.js";
@@ -12,7 +11,8 @@ import {
 // user settings: changing them changes what constitutes the best suggestion.
 const EXACT_AMOUNT_SCORE = 100;
 const NEAR_AMOUNT_SCORE = 55;
-const NEAR_AMOUNT_RELATIVE_TOLERANCE = 0.01;
+/** One percent, expressed so the comparison stays in whole cents. */
+const NEAR_AMOUNT_TOLERANCE_DIVISOR = 100;
 const DATE_PENALTY_PER_DAY = 2;
 const DESCRIPTION_TOKEN_BONUS = 8;
 const MILLISECONDS_PER_DAY = 86_400_000;
@@ -36,28 +36,38 @@ function parseDay(date: string): number | null {
   return timestamp / MILLISECONDS_PER_DAY;
 }
 
+/** A line's amount in whole cents. It is always positive; `direction` holds the sign. */
+function lineMinor(line: StatementLineRow): number {
+  return toMinor(line.amount, 1);
+}
+
+/**
+ * Money out of the bank is a negative movement on that account, money in is a
+ * positive one. That is the whole direction rule — there is no record type to
+ * consult and nothing to guess, because a movement already says which way the
+ * money went (D-11).
+ */
 function directionMatches(
   line: StatementLineRow,
-  item: BankFacingItem,
+  movement: MovementCandidate,
 ): boolean {
-  if (line.direction === StatementDirection.In) {
-    return item.itemType === ReconItemType.Income;
-  }
-  if (line.direction === StatementDirection.Out) {
-    return (
-      item.itemType === ReconItemType.Expense ||
-      item.itemType === ReconItemType.Claim
-    );
-  }
+  if (line.direction === StatementDirection.In) return movement.amountMinor > 0;
+  if (line.direction === StatementDirection.Out)
+    return movement.amountMinor < 0;
   return false;
 }
 
-function amountScore(lineAmount: number, itemAmount: number): number | null {
-  const difference = Math.abs(lineAmount - itemAmount);
-  if (difference < EPSILON) return EXACT_AMOUNT_SCORE;
+/**
+ * Both figures are whole cents, so "the same amount" is integer equality rather
+ * than a tolerance. The near-amount band is one percent of the line, compared
+ * without dividing so it stays integer arithmetic (D-02).
+ */
+function amountScore(lineCents: number, movementCents: number): number | null {
+  const difference = Math.abs(lineCents - Math.abs(movementCents));
+  if (difference === 0) return EXACT_AMOUNT_SCORE;
   if (
-    lineAmount > 0 &&
-    difference / lineAmount <= NEAR_AMOUNT_RELATIVE_TOLERANCE
+    lineCents > 0 &&
+    difference * NEAR_AMOUNT_TOLERANCE_DIVISOR <= lineCents
   ) {
     return NEAR_AMOUNT_SCORE;
   }
@@ -77,51 +87,59 @@ function tokens(value: string): Set<string> {
 
 function sharesDescriptionToken(
   description: string,
-  item: BankFacingItem,
+  movement: MovementCandidate,
 ): boolean {
   const descriptionTokens = tokens(description);
   if (descriptionTokens.size === 0) return false;
-  const itemTokens = tokens(`${item.label} ${item.contactName ?? ""}`);
-  return [...descriptionTokens].some((token) => itemTokens.has(token));
+  const movementTokens = tokens(
+    `${movement.label} ${movement.description} ${movement.contactName ?? ""}`,
+  );
+  return [...descriptionTokens].some((token) => movementTokens.has(token));
 }
 
-/** Return eligible suggestions in descending score order; this never clears. */
+/**
+ * Return eligible suggestions in descending score order; this never clears.
+ *
+ * `statementAccountId` is the account the statement belongs to (FR-021), and a
+ * movement on any other account is dropped before anything else is considered.
+ * That is the original bug fixed at the root: money sitting in a wallet has no
+ * movement on the bank account, so it can never be offered against a bank line.
+ */
 export function rankCandidates(
   line: StatementLineRow,
-  items: BankFacingItem[],
+  statementAccountId: number,
+  movements: readonly MovementCandidate[],
 ): RankedCandidate[] {
   const lineDay = parseDay(line.date);
   if (lineDay == null) return [];
+  const lineCents = lineMinor(line);
 
-  return items
-    .map((item, inputIndex) => {
-      if (!directionMatches(line, item)) return null;
-      if (item.itemType === ReconItemType.Expense && item.claimId != null) {
-        return null;
-      }
+  return movements
+    .map((movement, inputIndex) => {
+      if (movement.accountId !== statementAccountId) return null;
+      if (!directionMatches(line, movement)) return null;
 
-      const itemDay = parseDay(item.date);
-      if (itemDay == null) return null;
-      const daysApart = Math.abs(lineDay - itemDay);
+      const movementDay = parseDay(movement.date);
+      if (movementDay == null) return null;
+      const daysApart = Math.abs(lineDay - movementDay);
       if (daysApart > MATCH_DATE_WINDOW_DAYS) return null;
 
-      const amount = mainAmount(item);
-      const baseScore = amountScore(line.amount, amount);
+      const baseScore = amountScore(lineCents, movement.amountMinor);
       if (baseScore == null) return null;
 
       const score =
         baseScore -
         DATE_PENALTY_PER_DAY * daysApart +
-        (sharesDescriptionToken(line.description, item)
+        (sharesDescriptionToken(line.description, movement)
           ? DESCRIPTION_TOKEN_BONUS
           : 0);
       return {
         candidate: {
-          itemType: item.itemType,
-          itemId: item.itemId,
-          label: item.label,
-          date: item.date,
-          amount,
+          movementId: movement.movementId,
+          recordId: movement.recordId,
+          label: movement.label,
+          date: movement.date,
+          amountMinor: movement.amountMinor,
           score,
         },
         inputIndex,
@@ -158,7 +176,7 @@ export function findDuplicateLines(lines: StatementLineRow[]): Set<number> {
       if (
         left.statementId === right.statementId &&
         left.date === right.date &&
-        Math.abs(left.amount - right.amount) < EPSILON &&
+        lineMinor(left) === lineMinor(right) &&
         normaliseDuplicateDescription(left.description) ===
           normaliseDuplicateDescription(right.description)
       ) {

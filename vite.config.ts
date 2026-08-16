@@ -132,7 +132,19 @@ export default defineConfig({
 	},
 	// bun:sqlite is a Bun builtin; unpdf and tesseract.js skip Vite SSR transform
 	// so the first request isn't interrupted by dep optimization.
-	ssr: { external: ['bun:sqlite', 'unpdf', 'tesseract.js', 'pngjs'] },
+	//
+	// `noExternal: ['zod']` is there for the test runner. Vitest's `server`
+	// project runs under Bun (see the `test:unit` script — the upgrade-conversion
+	// spec needs `bun:sqlite` to test against a real temporary database, as the
+	// constitution requires). Left external, zod resolves through Bun's CJS
+	// interop to a namespace with no `z` on it, and every spec that imports a
+	// schema dies with "undefined is not an object (evaluating 'z.object')".
+	// Having Vite transform it instead fixes the interop and changes nothing
+	// about the production build.
+	ssr: {
+		external: ['bun:sqlite', 'unpdf', 'tesseract.js', 'pngjs'],
+		noExternal: ['zod']
+	},
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

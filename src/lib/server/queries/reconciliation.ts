@@ -1,70 +1,91 @@
-import { and, asc, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { ReconItemType } from "$lib/enums.js";
-import type { ReconItemTypeCode } from "$lib/enums.js";
+import { AccountRole } from "$lib/enums.js";
+import type { AccountRoleCode, LedgerRecordKindCode } from "$lib/enums.js";
 import * as schema from "../db/schema.js";
 import {
+  accounts,
   bankStatements,
   bankStatementLines,
-  claims,
   contacts,
-  expenses,
-  incomes,
+  ledgerMovements,
+  ledgerRecords,
   reconciliationAllocations,
 } from "../db/schema.js";
+import { fromMinor } from "../ledger/money.js";
 import type {
-  BankFacingItem,
-  BankStatementRow,
+  MovementCandidate,
   ReconciliationAllocation,
   StatementLineRow,
+  StatementWithAccount,
 } from "../reconciliation/types.js";
-import { mainAmount, round2 } from "../reconciliation/types.js";
+import { round2 } from "../reconciliation/types.js";
 
 export type ReconciliationDb = BunSQLiteDatabase<typeof schema>;
 
+/**
+ * The roles where money actually sits. A bank statement can only belong to one
+ * of these, and only these are offered as the other side of a transfer — a
+ * category or a "money we owe" account has no statement and no balance to move
+ * between (FR-021, FR-023).
+ */
+export const MONEY_HOLDING_ROLES: AccountRoleCode[] = [
+  AccountRole.Bank,
+  AccountRole.Wallet,
+  AccountRole.Cash,
+  AccountRole.Card,
+];
+
+// ---------------------------------------------------------------------------
+// Allocations — a bank line covering part or all of one movement
+// ---------------------------------------------------------------------------
+
+/**
+ * `item_type`/`item_id` are deliberately not selected: they are kept for one
+ * release so the upgrade's backfill stays inspectable, and reading them is what
+ * would let the two models drift apart again (D-17).
+ */
+const allocationColumns = {
+  id: reconciliationAllocations.id,
+  lineId: reconciliationAllocations.lineId,
+  movementId: reconciliationAllocations.movementId,
+  amount: reconciliationAllocations.amount,
+  itemAmountSnapshot: reconciliationAllocations.itemAmountSnapshot,
+  createdBy: reconciliationAllocations.createdBy,
+  createdAt: reconciliationAllocations.createdAt,
+};
+
 export const listAllocations = (db: ReconciliationDb) =>
   db
-    .select()
+    .select(allocationColumns)
     .from(reconciliationAllocations)
     .all() as ReconciliationAllocation[];
 export const listLineAllocations = (db: ReconciliationDb, lineId: number) =>
   db
-    .select()
+    .select(allocationColumns)
     .from(reconciliationAllocations)
     .where(eq(reconciliationAllocations.lineId, lineId))
     .all() as ReconciliationAllocation[];
-export const listItemAllocations = (
+export const listMovementAllocations = (
   db: ReconciliationDb,
-  itemType: number,
-  itemId: number,
+  movementId: number,
 ) =>
   db
-    .select()
+    .select(allocationColumns)
     .from(reconciliationAllocations)
-    .where(
-      and(
-        eq(reconciliationAllocations.itemType, itemType),
-        eq(reconciliationAllocations.itemId, itemId),
-      ),
-    )
+    .where(eq(reconciliationAllocations.movementId, movementId))
     .all() as ReconciliationAllocation[];
 
-export function replaceItemAllocations(
+export function replaceMovementAllocations(
   db: ReconciliationDb,
-  itemType: ReconItemTypeCode,
-  itemId: number,
+  movementId: number,
   snapshot: number,
   values: { lineId: number; amount: number }[],
   createdBy: number,
 ) {
   return db.transaction(() => {
     db.delete(reconciliationAllocations)
-      .where(
-        and(
-          eq(reconciliationAllocations.itemType, itemType),
-          eq(reconciliationAllocations.itemId, itemId),
-        ),
-      )
+      .where(eq(reconciliationAllocations.movementId, movementId))
       .run();
     if (!values.length) return [];
     return db
@@ -72,49 +93,90 @@ export function replaceItemAllocations(
       .values(
         values.map((v) => ({
           ...v,
-          itemType,
-          itemId,
+          movementId,
           itemAmountSnapshot: snapshot,
           createdBy,
         })),
       )
-      .returning()
+      .returning(allocationColumns)
       .all() as ReconciliationAllocation[];
   });
 }
 
+/** One allocation, written alongside the record it belongs to (FR-023). */
+export const insertAllocation = (
+  db: ReconciliationDb,
+  value: {
+    lineId: number;
+    movementId: number;
+    amount: number;
+    itemAmountSnapshot: number;
+    createdBy: number;
+  },
+) =>
+  db
+    .insert(reconciliationAllocations)
+    .values(value)
+    .returning(allocationColumns)
+    .get() as ReconciliationAllocation;
+
+// ---------------------------------------------------------------------------
+// Statements and their lines
+// ---------------------------------------------------------------------------
+
+const statementColumns = {
+  id: bankStatements.id,
+  originalFilename: bankStatements.originalFilename,
+  storedFilePath: bankStatements.storedFilePath,
+  extractionState: bankStatements.extractionState,
+  extractionError: bankStatements.extractionError,
+  uploadedBy: bankStatements.uploadedBy,
+  createdAt: bankStatements.createdAt,
+  updatedAt: bankStatements.updatedAt,
+  accountId: bankStatements.accountId,
+  accountName: accounts.name,
+};
+
 export const listStatements = (db: ReconciliationDb) =>
   db
-    .select()
+    .select(statementColumns)
     .from(bankStatements)
+    .leftJoin(accounts, eq(accounts.id, bankStatements.accountId))
     .orderBy(desc(bankStatements.id))
-    .all() as BankStatementRow[];
+    .all() as StatementWithAccount[];
 export const getStatement = (db: ReconciliationDb, id: number) =>
-  db.select().from(bankStatements).where(eq(bankStatements.id, id)).get() as
-    | BankStatementRow
-    | undefined;
-export const insertStatement = (
+  db
+    .select(statementColumns)
+    .from(bankStatements)
+    .leftJoin(accounts, eq(accounts.id, bankStatements.accountId))
+    .where(eq(bankStatements.id, id))
+    .get() as StatementWithAccount | undefined;
+export function insertStatement(
   db: ReconciliationDb,
   data: typeof bankStatements.$inferInsert,
-) =>
-  db.insert(bankStatements).values(data).returning().get() as BankStatementRow;
-export const updateStatement = (
+) {
+  const row = db.insert(bankStatements).values(data).returning().get();
+  return getStatement(db, row.id)!;
+}
+export function updateStatement(
   db: ReconciliationDb,
   id: number,
   data: Partial<typeof bankStatements.$inferInsert>,
-) =>
-  db
+) {
+  const row = db
     .update(bankStatements)
     .set({ ...data, updatedAt: sql`datetime('now')` })
     .where(eq(bankStatements.id, id))
-    .returning()
-    .get() as BankStatementRow | undefined;
-export const deleteStatement = (db: ReconciliationDb, id: number) =>
-  db
-    .delete(bankStatements)
-    .where(eq(bankStatements.id, id))
-    .returning()
-    .get() as BankStatementRow | undefined;
+    .returning({ id: bankStatements.id })
+    .get();
+  return row ? getStatement(db, row.id) : undefined;
+}
+export function deleteStatement(db: ReconciliationDb, id: number) {
+  const before = getStatement(db, id);
+  if (!before) return undefined;
+  db.delete(bankStatements).where(eq(bankStatements.id, id)).run();
+  return before;
+}
 export const listLines = (db: ReconciliationDb, statementId?: number) => {
   const q = db.select().from(bankStatementLines);
   return (
@@ -168,82 +230,172 @@ export const deleteLine = (db: ReconciliationDb, id: number) =>
     .returning()
     .get() as StatementLineRow | undefined;
 
-export function listBankFacingItems(
+// ---------------------------------------------------------------------------
+// Candidates — the sides of records that touched a statement's account
+// ---------------------------------------------------------------------------
+
+/** The accounts a statement can belong to, and the accounts a transfer can name. */
+export const listMoneyHoldingAccounts = (db: ReconciliationDb) =>
+  db
+    .select({ id: accounts.id, name: accounts.name, role: accounts.role })
+    .from(accounts)
+    .where(inArray(accounts.role, MONEY_HOLDING_ROLES))
+    .orderBy(asc(accounts.role), asc(accounts.rank))
+    .all() as { id: number; name: string; role: AccountRoleCode }[];
+
+const candidateColumns = {
+  movementId: ledgerMovements.id,
+  recordId: ledgerMovements.recordId,
+  accountId: ledgerMovements.accountId,
+  amountMinor: ledgerMovements.amountMinor,
+  accountName: accounts.name,
+  accountRole: accounts.role,
+  kind: ledgerRecords.kind,
+  date: ledgerRecords.date,
+  recordNumber: ledgerRecords.recordNumber,
+  description: ledgerRecords.description,
+  contactName: contacts.legalName,
+};
+
+type CandidateRow = {
+  movementId: number;
+  recordId: number;
+  accountId: number;
+  amountMinor: number;
+  accountName: string;
+  accountRole: number;
+  kind: number;
+  date: string;
+  recordNumber: string | null;
+  description: string;
+  contactName: string | null;
+};
+
+function toCandidate(row: CandidateRow): MovementCandidate {
+  return {
+    movementId: row.movementId,
+    recordId: row.recordId,
+    accountId: row.accountId,
+    amountMinor: row.amountMinor,
+    amount: fromMinor(Math.abs(row.amountMinor)),
+    // A transfer and an opening balance carry no reference number, so the
+    // description is what a person would call it on screen (D-13).
+    label: row.recordNumber ?? row.description ?? `Record ${row.recordId}`,
+    date: row.date,
+    description: row.description,
+    contactName: row.contactName,
+    kind: row.kind as LedgerRecordKindCode,
+    accountName: row.accountName,
+    accountRole: row.accountRole as AccountRoleCode,
+  };
+}
+
+/**
+ * Every movement on these accounts, with how much of it bank lines already
+ * cover.
+ *
+ * This is the whole of "which records could this bank line be" (D-11): a
+ * movement exists on an account only because money actually moved there, so a
+ * purchase paid from a wallet has nothing on the bank account and can never be
+ * offered against a bank statement. That is the bug this feature exists to fix.
+ */
+export function listMovementCandidates(
   db: ReconciliationDb,
+  accountIds: number[],
   from?: string | null,
   to?: string | null,
-): BankFacingItem[] {
-  const dateWhere = <T>(column: T) =>
-    and(
-      from ? gte(column as never, from) : undefined,
-      to ? lte(column as never, to) : undefined,
-    );
-  const incomeRows = db
+): MovementCandidate[] {
+  if (accountIds.length === 0) return [];
+
+  const rows = db
+    .select(candidateColumns)
+    .from(ledgerMovements)
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
+    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
+    .where(
+      and(
+        inArray(ledgerMovements.accountId, accountIds),
+        from ? gte(ledgerRecords.date, from) : undefined,
+        to ? lte(ledgerRecords.date, to) : undefined,
+      ),
+    )
+    .orderBy(desc(ledgerRecords.date), desc(ledgerRecords.id))
+    .all() as CandidateRow[];
+
+  const coverage = coverageByMovement(db);
+  return rows.map((row) => withCoverage(toCandidate(row), coverage));
+}
+
+/** One candidate, for a caller acting on a single movement. */
+export function getMovementCandidate(
+  db: ReconciliationDb,
+  movementId: number,
+): MovementCandidate | undefined {
+  const row = db
+    .select(candidateColumns)
+    .from(ledgerMovements)
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
+    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
+    .where(eq(ledgerMovements.id, movementId))
+    .get() as CandidateRow | undefined;
+  if (!row) return undefined;
+  return withCoverage(toCandidate(row), coverageByMovement(db));
+}
+
+/** The bank movement a record has on one account, or nothing if it has none. */
+export function findRecordMovementOnAccount(
+  db: ReconciliationDb,
+  recordId: number,
+  accountId: number,
+): { id: number; amountMinor: number } | undefined {
+  return db
     .select({
-      id: incomes.id,
-      label: incomes.incomeNumber,
-      date: incomes.date,
-      amount: incomes.amount,
-      exchangeRate: incomes.exchangeRate,
-      contactName: contacts.legalName,
+      id: ledgerMovements.id,
+      amountMinor: ledgerMovements.amountMinor,
     })
-    .from(incomes)
-    .leftJoin(contacts, eq(incomes.contactId, contacts.id))
-    .where(dateWhere(incomes.date))
-    .all()
-    .map((r) => ({ ...r, itemType: ReconItemType.Income, itemId: r.id }));
-  const expenseRows = db
-    .select({
-      id: expenses.id,
-      label: expenses.expenseNumber,
-      date: expenses.date,
-      amount: expenses.amount,
-      exchangeRate: expenses.exchangeRate,
-      contactName: contacts.legalName,
-    })
-    .from(expenses)
-    .leftJoin(contacts, eq(expenses.contactId, contacts.id))
-    .where(and(isNull(expenses.claimId), dateWhere(expenses.date)))
-    .all()
-    .map((r) => ({ ...r, itemType: ReconItemType.Expense, itemId: r.id }));
-  const claimRows = db
-    .select({
-      id: claims.id,
-      label: claims.claimNumber,
-      date: claims.date,
-      amount: sql<number>`coalesce(sum(round(${expenses.amount} * ${expenses.exchangeRate}, 2)), 0)`,
-    })
-    .from(claims)
-    .leftJoin(expenses, eq(expenses.claimId, claims.id))
-    .where(dateWhere(claims.date))
-    .groupBy(claims.id)
-    .all()
-    .map((r) => ({
-      ...r,
-      itemType: ReconItemType.Claim,
-      itemId: r.id,
-      exchangeRate: 1,
-      contactName: null,
-    }));
-  const coverage = new Map<string, { amount: number; count: number }>();
-  for (const a of listAllocations(db)) {
-    const k = `${a.itemType}:${a.itemId}`,
-      v = coverage.get(k) ?? { amount: 0, count: 0 };
-    v.amount = round2(v.amount + a.amount);
-    v.count++;
-    coverage.set(k, v);
-  }
-  return [...incomeRows, ...expenseRows, ...claimRows].map((r) => {
-    const c = coverage.get(`${r.itemType}:${r.itemId}`) ?? {
+    .from(ledgerMovements)
+    .where(
+      and(
+        eq(ledgerMovements.recordId, recordId),
+        eq(ledgerMovements.accountId, accountId),
+      ),
+    )
+    .get();
+}
+
+type Coverage = Map<number, { amount: number; count: number }>;
+
+/**
+ * How much of each movement bank lines already cover. An allocation the upgrade
+ * has not repointed yet carries a null `movement_id` and is skipped rather than
+ * counted against anything (FR-034).
+ */
+function coverageByMovement(db: ReconciliationDb): Coverage {
+  const coverage: Coverage = new Map();
+  for (const allocation of listAllocations(db)) {
+    if (allocation.movementId == null) continue;
+    const covered = coverage.get(allocation.movementId) ?? {
       amount: 0,
       count: 0,
     };
-    const total = mainAmount(r);
-    return {
-      ...r,
-      allocatedAmount: c.amount,
-      remainingAmount: round2(total - c.amount),
-      allocationCount: c.count,
-    };
-  });
+    covered.amount = round2(covered.amount + allocation.amount);
+    covered.count += 1;
+    coverage.set(allocation.movementId, covered);
+  }
+  return coverage;
+}
+
+function withCoverage(
+  candidate: MovementCandidate,
+  coverage: Coverage,
+): MovementCandidate {
+  const covered = coverage.get(candidate.movementId) ?? { amount: 0, count: 0 };
+  return {
+    ...candidate,
+    allocatedAmount: covered.amount,
+    remainingAmount: round2(candidate.amount - covered.amount),
+    allocationCount: covered.count,
+  };
 }

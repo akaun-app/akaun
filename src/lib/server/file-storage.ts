@@ -1,14 +1,17 @@
 import {
+  copyFileSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "fs";
 import { dirname, basename, extname, join, resolve, sep } from "path";
 import { existsSync } from "fs";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { STORAGE_PATH } from "./env.js";
 
 /** Largest accepted upload, in bytes. */
@@ -104,6 +107,181 @@ export function moveToFinal(
   return rel;
 }
 
+// ---------------------------------------------------------------------------
+// Ledger record attachments (specs/002-double-entry-ledger, D-16)
+//
+// One store of records means one place their files live: `records/YYYY/MM/`,
+// replacing the three per-kind folders. The upgrade moves existing files there
+// by copy → verify → deferred remove, never by rename: a rename that half-runs
+// leaves the file in neither place, and there is no second copy to recover it
+// from. Copying leaves the original untouched until every file has been
+// verified by size and hash, which is what makes the move rerunnable after an
+// interruption and safe to abandon (FR-032b, SC-014).
+// ---------------------------------------------------------------------------
+
+/** Guards a `YYYY-MM-DD` before any of it is used to build a path. */
+function yearMonthOf(documentDate: string): { year: string; month: string } {
+  const [year, month] = documentDate.split("-");
+  if (!/^\d{4}$/.test(year) || !/^\d{2}$/.test(month)) {
+    throw new Error(`Invalid document date for file path: ${documentDate}`);
+  }
+  return { year, month };
+}
+
+function assertInsideStorage(
+  absolutePath: string,
+  storageRoot = STORAGE_PATH,
+): void {
+  const root = resolve(storageRoot);
+  if (!resolve(absolutePath).startsWith(root + sep)) {
+    throw new Error("Resolved destination escapes storage root");
+  }
+}
+
+/** Where a record's attachment belongs, given the record's date. */
+export function recordAttachmentPath(
+  filename: string,
+  documentDate: string,
+): string {
+  const { year, month } = yearMonthOf(documentDate);
+  return `records/${year}/${month}/${basename(filename)}`;
+}
+
+/** Moves an uploaded temp file into `records/YYYY/MM/`. */
+export function moveToRecordStorage(
+  tempRelPath: string,
+  documentDate: string,
+): string {
+  const rel = recordAttachmentPath(tempRelPath, documentDate);
+  const dest = join(STORAGE_PATH, rel);
+  assertInsideStorage(dest);
+  mkdirSync(dirname(dest), { recursive: true });
+  renameSync(join(STORAGE_PATH, tempRelPath), dest);
+  return rel;
+}
+
+/**
+ * Every helper below takes the storage root it should work under, defaulting to
+ * the configured one.
+ *
+ * That parameter is not a convenience — it is the whole safety property. These
+ * are the functions the ledger upgrade uses to copy and then DELETE a business's
+ * receipts. Reading `STORAGE_PATH` from module scope meant that handing the
+ * upgrade a temporary database still pointed every file operation at the real
+ * `data/storage`, because the database and the files were configured
+ * independently. A caller that owns a sandbox must be able to say so once and
+ * have it hold for both.
+ */
+export function fileExists(relativePath: string, root = STORAGE_PATH): boolean {
+  return existsSync(join(root, relativePath));
+}
+
+export function fileSize(
+  relativePath: string,
+  root = STORAGE_PATH,
+): number | null {
+  try {
+    return statSync(join(root, relativePath)).size;
+  } catch {
+    return null;
+  }
+}
+
+/** SHA-256 of a stored file, or null when it is not there. */
+export function fileHash(
+  relativePath: string,
+  root = STORAGE_PATH,
+): string | null {
+  try {
+    return createHash("sha256")
+      .update(readFileSync(join(root, relativePath)))
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+export type CopyOutcome =
+  | { status: "copied"; hash: string }
+  | { status: "already-there"; hash: string }
+  | { status: "source-missing" }
+  | { status: "mismatch"; sourceHash: string; destinationHash: string };
+
+/**
+ * Copies a file to its new home and proves the copy is identical before anyone
+ * relies on it. Never removes the original — that is `removeVerifiedOriginals`,
+ * run only after the whole upgrade has verified (D-16).
+ *
+ * A rerun that finds the file already at its destination with a matching hash
+ * reports `already-there` and does nothing, which is what makes the move
+ * resumable after an interruption (FR-037).
+ */
+export function copyVerified(
+  from: string,
+  to: string,
+  root = STORAGE_PATH,
+): CopyOutcome {
+  const sourceHash = fileHash(from, root);
+  const destinationHash = fileHash(to, root);
+
+  if (sourceHash === null) {
+    // Already moved on a previous run and the original has since gone: the
+    // destination standing alone is a finished move, not a failure.
+    return destinationHash === null
+      ? { status: "source-missing" }
+      : { status: "already-there", hash: destinationHash };
+  }
+
+  if (destinationHash !== null) {
+    return destinationHash === sourceHash
+      ? { status: "already-there", hash: destinationHash }
+      : { status: "mismatch", sourceHash, destinationHash };
+  }
+
+  const dest = join(root, to);
+  assertInsideStorage(dest, root);
+  mkdirSync(dirname(dest), { recursive: true });
+  copyFileSync(join(root, from), dest);
+
+  const copiedHash = fileHash(to, root);
+  if (copiedHash !== sourceHash) {
+    return {
+      status: "mismatch",
+      sourceHash,
+      destinationHash: copiedHash ?? "",
+    };
+  }
+  if (fileSize(to, root) !== fileSize(from, root)) {
+    return { status: "mismatch", sourceHash, destinationHash: copiedHash };
+  }
+  return { status: "copied", hash: copiedHash };
+}
+
+/**
+ * Removes the originals of files already proven identical at their destination.
+ * Deferred to the very end of the upgrade, after verification passes, so an
+ * interrupted or failed run leaves every original where it was (FR-038).
+ */
+export function removeVerifiedOriginals(
+  pairs: { from: string; to: string }[],
+  root = STORAGE_PATH,
+): { removed: number; kept: string[] } {
+  let removed = 0;
+  const kept: string[] = [];
+  for (const { from, to } of pairs) {
+    if (from === to) continue;
+    const sourceHash = fileHash(from, root);
+    if (sourceHash === null) continue; // already gone
+    if (fileHash(to, root) !== sourceHash) {
+      kept.push(from);
+      continue;
+    }
+    deleteFile(from, root);
+    removed += 1;
+  }
+  return { removed, kept };
+}
+
 export function urlForFile(relativePath: string): string {
   return join(STORAGE_PATH, relativePath);
 }
@@ -114,9 +292,9 @@ export function displayName(relativePath: string): string {
   return match ? match[1] : filename;
 }
 
-export function deleteFile(relativePath: string): void {
+export function deleteFile(relativePath: string, root = STORAGE_PATH): void {
   try {
-    unlinkSync(join(STORAGE_PATH, relativePath));
+    unlinkSync(join(root, relativePath));
   } catch {
     // ignore missing files
   }

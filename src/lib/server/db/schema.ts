@@ -168,6 +168,12 @@ export const contactSearchText = sqliteTable("contact_search_text", {
   text: text("text").notNull(),
 });
 
+/**
+ * @deprecated Superseded by `ledger_records` (kind = Payment) plus `settlements`.
+ * Kept unread for one release so the pre-upgrade data stays recoverable until the
+ * ledger upgrade's verification passes (FR-038). Dropped in the release after the
+ * one that introduces the double-entry ledger.
+ */
 export const claims = sqliteTable("claims", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   claimNumber: text("claim_number").notNull(),
@@ -181,6 +187,10 @@ export const claims = sqliteTable("claims", {
     .default(sql`(datetime('now'))`),
 });
 
+/**
+ * @deprecated Superseded by `ledger_records` (kind = Expense) plus `ledger_movements`.
+ * Kept unread for one release — see the note on `claims`.
+ */
 export const expenses = sqliteTable("expenses", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   expenseNumber: text("expense_number").notNull().unique(),
@@ -220,6 +230,10 @@ export const expenses = sqliteTable("expenses", {
     .default(sql`(datetime('now'))`),
 });
 
+/**
+ * @deprecated Superseded by `ledger_records` (kind = Income) plus `ledger_movements`.
+ * Kept unread for one release — see the note on `claims`.
+ */
 export const incomes = sqliteTable("incomes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   incomeNumber: text("income_number").notNull(),
@@ -245,6 +259,10 @@ export const incomes = sqliteTable("incomes", {
     .default(sql`(datetime('now'))`),
 });
 
+/**
+ * @deprecated Superseded by `record_attachments`. Kept unread for one release —
+ * see the note on `claims`.
+ */
 export const expenseAttachments = sqliteTable("expense_attachments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   expenseId: integer("expense_id")
@@ -257,6 +275,10 @@ export const expenseAttachments = sqliteTable("expense_attachments", {
     .default(sql`(date('now'))`),
 });
 
+/**
+ * @deprecated Superseded by `record_attachments`. Kept unread for one release —
+ * see the note on `claims`.
+ */
 export const incomeAttachments = sqliteTable("income_attachments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   incomeId: integer("income_id")
@@ -269,6 +291,10 @@ export const incomeAttachments = sqliteTable("income_attachments", {
     .default(sql`(date('now'))`),
 });
 
+/**
+ * @deprecated Superseded by `record_attachments`. Kept unread for one release —
+ * see the note on `claims`.
+ */
 export const claimAttachments = sqliteTable("claim_attachments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   claimId: integer("claim_id")
@@ -287,7 +313,10 @@ export const claimAttachments = sqliteTable("claim_attachments", {
 export const SEQUENCE_DOCUMENT_TYPE = {
   expense: 0,
   income: 1,
-  claim: 2,
+  // Renamed from `claim`; the code stays 2 and the prefix stays 'CL' so every
+  // number already issued keeps counting from where it left off. See the note on
+  // SEQUENCE_PREFIXES in $lib/sequence-template.ts.
+  payment: 2,
   quotation: 3,
   invoice: 4,
 } as const;
@@ -315,6 +344,10 @@ export const appSequences = sqliteTable(
   ],
 );
 
+/**
+ * @deprecated Superseded by `record_search_text`. Kept unread for one release —
+ * see the note on `claims`.
+ */
 export const expenseSearchText = sqliteTable("expense_search_text", {
   expenseId: integer("expense_id")
     .primaryKey()
@@ -322,6 +355,10 @@ export const expenseSearchText = sqliteTable("expense_search_text", {
   text: text("text").notNull(),
 });
 
+/**
+ * @deprecated Superseded by `record_search_text`. Kept unread for one release —
+ * see the note on `claims`.
+ */
 export const incomeSearchText = sqliteTable("income_search_text", {
   incomeId: integer("income_id")
     .primaryKey()
@@ -339,6 +376,11 @@ export const settings = sqliteTable("settings", {
 export const CATEGORY_TYPE = { expense: 0, income: 1 } as const;
 export type CategoryType = (typeof CATEGORY_TYPE)[keyof typeof CATEGORY_TYPE];
 
+/**
+ * @deprecated A category is now an account with the ExpenseCategory or
+ * IncomeCategory role (FR-006a). Kept unread for one release — see the note on
+ * `claims`.
+ */
 export const categories = sqliteTable(
   "categories",
   {
@@ -433,6 +475,13 @@ export const importQueue = sqliteTable("import_queue", {
   duplicateConfidence: integer("duplicate_confidence"),
   // JSON array of contributing signal labels (e.g. ["reference","content"]), highest-weight first.
   duplicateReasons: text("duplicate_reasons"),
+  // Which account the imported record affected — "which account paid?" /
+  // "which account received it?" (FR-019, FR-011). Nullable because a queued
+  // document may reach review before the user has said; the review screen
+  // pre-selects the default account and confirm requires one.
+  accountId: integer("account_id").references(() => accounts.id, {
+    onDelete: "set null",
+  }),
   resultId: integer("result_id"),
   // DocumentType code, mirrors document_type post-confirm.
   resultType: integer("result_type"),
@@ -467,14 +516,27 @@ export const invoices = sqliteTable("invoices", {
   subtotal: real("subtotal").notNull(),
   taxAmount: real("tax_amount").notNull().default(0),
   total: real("total").notNull(),
+  /** @deprecated Stops being read — how much is paid is derived from settlements (D-10). */
   amountPaid: real("amount_paid").notNull().default(0),
   notes: text("notes"),
   terms: text("terms"),
   // Plain integer — no FK to avoid circular reference with quotations.
   sourceQuotationId: integer("source_quotation_id"),
+  /** @deprecated Stops being read — its job is now `ledger_record_id`. */
   resultIncomeId: integer("result_income_id").references(() => incomes.id, {
     onDelete: "set null",
   }),
+  // Which income category the invoice earns into, chosen on issue and defaulting
+  // to the seeded Sales income account (FR-018a).
+  incomeAccountId: integer("income_account_id").references(() => accounts.id, {
+    onDelete: "set null",
+  }),
+  // The record that issuing this invoice created: +total into Money owed to us,
+  // −total into `income_account_id` (FR-018a).
+  ledgerRecordId: integer("ledger_record_id").references(
+    () => ledgerRecords.id,
+    { onDelete: "set null" },
+  ),
   createdBy: integer("created_by").references(() => users.id),
   updatedBy: integer("updated_by").references(() => users.id),
   createdAt: text("created_at")
@@ -632,6 +694,27 @@ export const bankStatements = sqliteTable(
     updatedAt: text("updated_at")
       .notNull()
       .default(sql`(datetime('now'))`),
+    // Which account this statement belongs to (FR-021). Only movements on this
+    // account are ever offered as matches for its lines.
+    //
+    // Required in behaviour, nullable in the column, and it cannot be otherwise:
+    // a pre-upgrade statement predates the chart of accounts, which the ledger
+    // upgrade seeds *after* Drizzle has applied the migration. SQLite will not
+    // add a NOT NULL column without a default, and any non-null default here
+    // would name an account row that does not exist yet — a foreign-key
+    // violation during the migration itself. So the column arrives nullable, the
+    // upgrade's reconciliation phase assigns the default bank account to every
+    // existing statement (FR-034a), and `POST /api/reconciliation/statements`
+    // requires an accountId from then on (FR-021). Null means "not yet
+    // assigned", and only a row that predates the upgrade can be in that state.
+    //
+    // Declared LAST on purpose: Drizzle rewrites a SQLite table wholesale when a
+    // column is inserted mid-list, and rewriting this one would mean dropping a
+    // table `bank_statement_lines` still references. Migrations run inside a
+    // transaction, where `PRAGMA foreign_keys=OFF` is a no-op, so that drop
+    // fails on any database that holds real statement lines. Appending keeps the
+    // migration a plain ADD COLUMN.
+    accountId: integer("account_id").references(() => accounts.id),
   },
   (t) => [index("bank_statements_state_idx").on(t.extractionState)],
 );
@@ -670,8 +753,20 @@ export const reconciliationAllocations = sqliteTable(
     lineId: integer("line_id")
       .notNull()
       .references(() => bankStatementLines.id, { onDelete: "cascade" }),
-    itemType: integer("item_type").notNull(),
-    itemId: integer("item_id").notNull(),
+    /** @deprecated Replaced by `movement_id`. Kept nullable and unread for one
+     * release so the backfill that repointed every existing bank match stays
+     * inspectable against what it came from (FR-034, D-17). */
+    itemType: integer("item_type"),
+    /** @deprecated See `item_type`. */
+    itemId: integer("item_id"),
+    // The ledger movement this bank line covers. Nullable for exactly the reason
+    // `bank_statements.account_id` is — a pre-upgrade allocation predates every
+    // movement, and the upgrade's reconciliation phase repoints it at the bank
+    // movement of the record it named (FR-034). Every allocation written after
+    // the upgrade sets it, and the service layer requires it.
+    movementId: integer("movement_id").references(() => ledgerMovements.id, {
+      onDelete: "cascade",
+    }),
     amount: real("amount").notNull(),
     itemAmountSnapshot: real("item_amount_snapshot").notNull(),
     createdBy: integer("created_by").references(() => users.id, {
@@ -682,11 +777,211 @@ export const reconciliationAllocations = sqliteTable(
       .default(sql`(datetime('now'))`),
   },
   (t) => [
-    uniqueIndex("reconciliation_allocations_line_item_idx").on(
+    uniqueIndex("reconciliation_allocations_line_movement_idx").on(
       t.lineId,
-      t.itemType,
-      t.itemId,
+      t.movementId,
     ),
-    index("reconciliation_allocations_item_idx").on(t.itemType, t.itemId),
+    index("reconciliation_allocations_movement_idx").on(t.movementId),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Ledger — one record store with two sides (specs/002-double-entry-ledger).
+//
+// `ledger_records` is what happened; `ledger_movements` is each side of it,
+// against an account in `accounts`. A movement's amount is POSITIVE when value
+// goes into that account and NEGATIVE when it leaves, and every record's
+// movements add up to zero. Money is whole cents of the main currency in an
+// INTEGER column, which is what makes "the two sides cancel out exactly"
+// provable rather than approximate. `ledger/entry-builder.ts` is the only place
+// movements are constructed. See data-model.md.
+// ---------------------------------------------------------------------------
+
+// A named pot with a balance. Also what everyday screens call a category
+// (FR-006a). `AccountType` is NOT stored — it is looked up from `role` by a pure
+// map, because storing both is exactly the drift FR-006a forbids (D-05).
+export const accounts = sqliteTable(
+  "accounts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // AccountRole code. See $lib/enums.ts.
+    role: integer("role").notNull(),
+    name: text("name").notNull(),
+    // Only partner capital/drawings accounts set this (FR-008b). SET NULL so
+    // retiring a contact never destroys the account's history.
+    contactId: integer("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    // System accounts can never be deleted (FR-009).
+    isSystem: integer("is_system", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    // Lexorank ordering, carried over from categories.rank.
+    rank: text("rank").notNull(),
+    // Non-null = hidden from pickers for new records; history untouched.
+    archivedAt: text("archived_at"),
+    createdBy: integer("created_by").references(() => users.id),
+    updatedBy: integer("updated_by").references(() => users.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    // Every picker query is "accounts of this role, in order".
+    index("accounts_role_rank_idx").on(t.role, t.rank),
+    // The partner statement's lookup.
+    index("accounts_contact_idx").on(t.contactId),
+    // Replaces categories_type_name_idx: an expense category and an income
+    // category may share a name exactly as they do today.
+    uniqueIndex("accounts_role_name_idx").on(t.role, t.name),
+  ],
+);
+
+// One thing that happened, on one date, with its human context.
+export const ledgerRecords = sqliteTable(
+  "ledger_records",
+  {
+    // Migrated expenses keep their original id, so every pre-upgrade
+    // /expenses/[id] link still resolves (D-14).
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // LedgerRecordKind code. See $lib/enums.ts.
+    kind: integer("kind").notNull(),
+    date: text("date").notNull(),
+    // From the existing sequences; null for transfers, opening balances and
+    // journal entries (D-13). No reference number is ever regenerated.
+    recordNumber: text("record_number").unique(),
+    description: text("description").notNull().default(""),
+    // Required when any movement touches a shared owed account (FR-008).
+    contactId: integer("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    reference: text("reference").notNull().default(""),
+    remark: text("remark").notNull().default(""),
+    // The currency `amount` is denominated in.
+    currency: text("currency").notNull().default("USD"),
+    // Locked at creation so historical conversions never drift.
+    exchangeRate: real("exchange_rate").notNull().default(1),
+    // The figure as entered, in `currency`. Display and audit only — NEVER
+    // summed for a report. Every total reads ledger_movements.amount_minor
+    // (D-02). Invariant 6 ties the two together.
+    amount: real("amount").notNull(),
+    // Raw OCR/PDF text captured during auto-import.
+    extractedText: text("extracted_text"),
+    // Upgrade provenance and idempotency key: 'expense' | 'income' | 'claim'
+    // and the row's id in that old table (D-14).
+    legacyKind: text("legacy_kind"),
+    legacyId: integer("legacy_id"),
+    createdBy: integer("created_by").references(() => users.id),
+    updatedBy: integer("updated_by").references(() => users.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    // Every list screen.
+    index("ledger_records_kind_date_idx").on(t.kind, t.date),
+    index("ledger_records_contact_idx").on(t.contactId),
+    // Makes a rerun of the upgrade skip what it already converted (FR-037).
+    // Both columns are null for records created after the upgrade, and SQLite
+    // treats nulls as distinct in a unique index, so those never collide.
+    uniqueIndex("ledger_records_legacy_idx").on(t.legacyKind, t.legacyId),
+  ],
+);
+
+// One side of a record: an amount against one account.
+export const ledgerMovements = sqliteTable(
+  "ledger_movements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // Deleting a record deletes its sides.
+    recordId: integer("record_id")
+      .notNull()
+      .references(() => ledgerRecords.id, { onDelete: "cascade" }),
+    // No cascade — an account holding movements cannot be deleted (FR-009).
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    // Whole cents of the main currency, signed. Positive = value in.
+    amountMinor: integer("amount_minor").notNull(),
+    // Stable display order of the sides on the journal screen.
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (t) => [
+    // The balance check and every record read.
+    index("ledger_movements_record_idx").on(t.recordId),
+    // Account balance and account history.
+    index("ledger_movements_account_date_idx").on(t.accountId, t.id),
+  ],
+);
+
+// A note that a payment paid off a particular outstanding item, for a particular
+// amount. Changes no balance (D-09) — it is what makes "paid" and "how much is
+// left" derivable rather than stored (FR-012).
+export const settlements = sqliteTable(
+  "settlements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // The paying side, on a shared owed account.
+    paymentMovementId: integer("payment_movement_id")
+      .notNull()
+      .references(() => ledgerMovements.id, { onDelete: "cascade" }),
+    // The outstanding side, on the same shared owed account.
+    owedMovementId: integer("owed_movement_id")
+      .notNull()
+      .references(() => ledgerMovements.id, { onDelete: "cascade" }),
+    // How much of the outstanding item this payment covers. Always > 0; the
+    // total against one owed movement may never exceed its own amount (FR-016).
+    amountMinor: integer("amount_minor").notNull(),
+    createdBy: integer("created_by").references(() => users.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    uniqueIndex("settlements_pair_idx").on(
+      t.paymentMovementId,
+      t.owedMovementId,
+    ),
+    // The "how much is left" aggregate.
+    index("settlements_owed_idx").on(t.owedMovementId),
+  ],
+);
+
+// Replaces expense_attachments, income_attachments and claim_attachments (FR-032b).
+export const recordAttachments = sqliteTable(
+  "record_attachments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recordId: integer("record_id")
+      .notNull()
+      .references(() => ledgerRecords.id, { onDelete: "cascade" }),
+    // Path relative to STORAGE_PATH; records/YYYY/MM/... after the upgrade (D-16).
+    filename: text("filename").notNull(),
+    displayName: text("display_name").notNull(),
+    addedDate: text("added_date")
+      .notNull()
+      .default(sql`(date('now'))`),
+    // Where the file was before the upgrade. This is what makes the file move
+    // resumable and checkable: a rerun sees the file already at its destination
+    // and skips it, and verification compares the two hashes before any
+    // original is removed (D-16, SC-014). Cleared by the release that drops the
+    // legacy tables.
+    legacyFilename: text("legacy_filename"),
+  },
+  (t) => [index("record_attachments_record_idx").on(t.recordId)],
+);
+
+// Replaces expense_search_text and income_search_text, unchanged in shape.
+// Every existing reference number is folded in exactly as typed (SC-013).
+export const recordSearchText = sqliteTable("record_search_text", {
+  recordId: integer("record_id")
+    .primaryKey()
+    .references(() => ledgerRecords.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+});

@@ -1,35 +1,40 @@
-import {
-  ReconItemType,
-  StatementDirection,
-  StatementExtractionState,
-} from "$lib/enums.js";
-import type { ReconItemTypeCode } from "$lib/enums.js";
+import { StatementDirection, StatementExtractionState } from "$lib/enums.js";
 import { diffRecords, recordAudit } from "$lib/server/audit.js";
+import { mainCurrencyCode } from "$lib/server/currency/form.js";
 import { deleteFile } from "$lib/server/file-storage.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { reconciliationEvents } from "$lib/server/reconciliation/events.js";
-import { suggestLinesForRecord } from "$lib/server/reconciliation/suggestions.js";
 import {
-  EPSILON,
-  mainAmount,
-  round2,
+  directionFor,
+  suggestLinesForMovement,
+} from "$lib/server/reconciliation/suggestions.js";
+import { EPSILON, round2 } from "$lib/server/reconciliation/types.js";
+import type {
+  MovementCandidate,
+  StatementSummary,
+  StatementWithAccount,
 } from "$lib/server/reconciliation/types.js";
 import {
   deleteLine as deleteLineQuery,
   deleteStatement as deleteStatementQuery,
+  findRecordMovementOnAccount,
   getLine,
+  getMovementCandidate,
   getStatement,
+  insertAllocation,
   insertStatement,
   listAllocations,
-  listBankFacingItems,
-  listItemAllocations,
+  listMoneyHoldingAccounts,
   listLines,
+  listMovementAllocations,
+  listMovementCandidates,
   listStatements,
-  replaceItemAllocations,
+  replaceMovementAllocations as replaceMovementAllocationsQuery,
   updateLine as updateLineQuery,
   updateStatement,
 } from "$lib/server/queries/reconciliation.js";
 import type { ReconciliationDb } from "$lib/server/queries/reconciliation.js";
+import { createRecord } from "$lib/server/services/ledger.js";
 
 export class ReconciliationError extends Error {
   constructor(
@@ -50,14 +55,24 @@ function authorize(
   return locals.user.id;
 }
 
+/**
+ * Every statement line, with what it still has left to allocate and the account
+ * its statement belongs to. Carrying the account down onto each line is what
+ * lets both the suggestion rules and the screen refuse a line from another
+ * account without a second lookup (FR-021).
+ */
 function lineRemainders(db: ReconciliationDb) {
   const allocations = listAllocations(db);
+  const accountByStatement = new Map(
+    listStatements(db).map((statement) => [statement.id, statement.accountId]),
+  );
   return listLines(db).map((line) => {
     const allocated = allocations
       .filter((a) => a.lineId === line.id)
       .reduce((s, a) => s + a.amount, 0);
     return {
       ...line,
+      accountId: accountByStatement.get(line.statementId) ?? null,
       allocatedAmount: round2(allocated),
       remainingAmount: round2(line.amount - allocated),
     };
@@ -65,8 +80,8 @@ function lineRemainders(db: ReconciliationDb) {
 }
 function statementSummary(
   db: ReconciliationDb,
-  statement: NonNullable<ReturnType<typeof getStatement>>,
-) {
+  statement: StatementWithAccount,
+): StatementSummary {
   const lines = lineRemainders(db).filter(
     (l) => l.statementId === statement.id,
   );
@@ -106,12 +121,31 @@ export function getStatementDetail(
     lines: lineRemainders(db).filter((l) => l.statementId === id),
   };
 }
+
+/** Refuse an account that is not somewhere money actually sits (FR-021). */
+function requireMoneyHoldingAccount(db: ReconciliationDb, accountId: number) {
+  const account = listMoneyHoldingAccounts(db).find(
+    (candidate) => candidate.id === accountId,
+  );
+  if (!account)
+    throw new ReconciliationError(
+      "Choose a bank, wallet, cash or card account for this statement.",
+      409,
+    );
+  return account;
+}
+
 export function createStatement(
   db: ReconciliationDb,
   locals: App.Locals,
-  input: { originalFilename: string; storedFilePath: string },
+  input: {
+    originalFilename: string;
+    storedFilePath: string;
+    accountId: number;
+  },
 ) {
   const userId = authorize(locals, "add");
+  requireMoneyHoldingAccount(db, input.accountId);
   const s = insertStatement(db, {
     ...input,
     extractionState: StatementExtractionState.Extracting,
@@ -128,6 +162,47 @@ export function createStatement(
   });
   return s;
 }
+
+/**
+ * Move a statement to a different account.
+ *
+ * Reassigning changes which movements its lines can be matched against, so any
+ * match already saved against the old account would now be a match on the wrong
+ * account — the reassignment is refused until those are undone rather than
+ * silently leaving them behind (FR-021, FR-034a).
+ */
+export function setStatementAccount(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  id: number,
+  accountId: number,
+) {
+  const userId = authorize(locals, "change");
+  const before = getStatement(db, id);
+  if (!before) throw new ReconciliationError("Bank statement not found", 404);
+  requireMoneyHoldingAccount(db, accountId);
+  if (before.accountId === accountId) return statementSummary(db, before);
+
+  const lineIds = new Set(listLines(db, id).map((line) => line.id));
+  if (listAllocations(db).some((a) => lineIds.has(a.lineId)))
+    throw new ReconciliationError(
+      "Undo this statement's matches before moving it to another account.",
+      409,
+    );
+
+  const after = updateStatement(db, id, { accountId })!;
+  recordAudit(db, {
+    recordType: "reconciliation",
+    recordId: id,
+    userId,
+    action: "update",
+    changes: diffRecords(before, after),
+  });
+  const summary = statementSummary(db, after);
+  reconciliationEvents.emit("statement-update", { statement: summary });
+  return summary;
+}
+
 export function setStatementExtraction(
   db: ReconciliationDb,
   id: number,
@@ -252,6 +327,14 @@ export function removeStatement(
   });
   reconciliationEvents.emit("statement-deleted", { id });
 }
+
+/**
+ * Everything the workspace screen shows.
+ *
+ * Candidates are gathered per account rather than per record type: only the
+ * accounts that actually have a statement are worth offering matches for, and a
+ * movement is offered only against a statement on its own account (D-11).
+ */
 export function workspace(
   db: ReconciliationDb,
   locals: App.Locals,
@@ -259,58 +342,71 @@ export function workspace(
   to?: string | null,
 ) {
   authorize(locals, "view");
-  const records = listBankFacingItems(db, from, to);
-  const lines = lineRemainders(db);
   const statements = listStatements(db).map((s) => statementSummary(db, s));
-  return { records, lines, statements, allocations: listAllocations(db) };
+  const accountIds = [
+    ...new Set(
+      statements
+        .map((statement) => statement.accountId)
+        .filter((id): id is number => id != null),
+    ),
+  ];
+  return {
+    movements: listMovementCandidates(db, accountIds, from, to),
+    lines: lineRemainders(db),
+    statements,
+    allocations: listAllocations(db),
+    accounts: listMoneyHoldingAccounts(db),
+  };
 }
+
+/** How much of this movement is still unmatched, as a positive decimal. */
+function remainingOf(movement: MovementCandidate): number {
+  return movement.remainingAmount ?? movement.amount;
+}
+
 /**
- * Save the suggested exact-match allocations for many records in one pass.
+ * Save the suggested exact-match allocations for many movements in one pass.
  *
- * Suggestions are computed per record and independently, so two records can
+ * Suggestions are computed per movement and independently, so two movements can
  * both propose the same statement line. Walking the list against a live
- * remainder map — rather than the snapshot each record was suggested from —
- * lets an already-consumed line drop out of the next record's candidate set:
- * that record is reported as skipped and left for review instead of failing
+ * remainder map — rather than the snapshot each movement was suggested from —
+ * lets an already-consumed line drop out of the next movement's candidate set:
+ * that movement is reported as skipped and left for review instead of failing
  * the whole batch with a 409.
  *
- * Deliberately not wrapped in an outer transaction: `replaceItemAllocations`
- * opens its own, so every record's write is atomic on its own. A throw
- * mid-batch leaves the earlier records legitimately saved.
+ * Deliberately not wrapped in an outer transaction:
+ * `replaceMovementAllocations` opens its own, so every movement's write is
+ * atomic on its own. A throw mid-batch leaves the earlier ones legitimately
+ * saved.
  */
-export function autoMatchRecords(
+export function autoMatchMovements(
   db: ReconciliationDb,
   locals: App.Locals,
-  targets: { itemType: ReconItemTypeCode; itemId: number }[],
+  movementIds: number[],
 ) {
   const userId = authorize(locals, "change");
-  const items = listBankFacingItems(db);
   const lines = lineRemainders(db);
   const remainingByLine = new Map(
     lines.map((line) => [line.id, line.remainingAmount]),
   );
   let matched = 0;
   let skipped = 0;
-  const matchedKeys: string[] = [];
+  const matchedMovementIds: number[] = [];
 
-  for (const target of targets) {
-    const item = items.find(
-      (candidate) =>
-        candidate.itemType === target.itemType &&
-        candidate.itemId === target.itemId,
-    );
-    // Bulk matching only ever fills in untouched records — an existing
+  for (const movementId of movementIds) {
+    const movement = getMovementCandidate(db, movementId);
+    // Bulk matching only ever fills in untouched movements — an existing
     // allocation is somebody's decision and is never overwritten here.
     if (
-      !item ||
-      (item.allocatedAmount ?? 0) >= EPSILON ||
-      (item.remainingAmount ?? 0) < EPSILON
+      !movement ||
+      (movement.allocatedAmount ?? 0) >= EPSILON ||
+      remainingOf(movement) < EPSILON
     ) {
       skipped += 1;
       continue;
     }
-    const suggested = suggestLinesForRecord(
-      item,
+    const suggested = suggestLinesForMovement(
+      { ...movement, remainingAmount: remainingOf(movement) },
       lines.map((line) => ({
         ...line,
         remainingAmount: remainingByLine.get(line.id) ?? 0,
@@ -320,7 +416,7 @@ export function autoMatchRecords(
       skipped += 1;
       continue;
     }
-    let remaining = item.remainingAmount ?? 0;
+    let remaining = remainingOf(movement);
     const allocations: { lineId: number; amount: number }[] = [];
     for (const lineId of suggested) {
       const amount = round2(
@@ -334,12 +430,11 @@ export function autoMatchRecords(
       skipped += 1;
       continue;
     }
-    const before = listItemAllocations(db, item.itemType, item.itemId);
-    const saved = replaceItemAllocations(
+    const before = listMovementAllocations(db, movement.movementId);
+    const saved = replaceMovementAllocationsQuery(
       db,
-      item.itemType,
-      item.itemId,
-      mainAmount(item),
+      movement.movementId,
+      movement.amount,
       allocations,
       userId,
     );
@@ -353,43 +448,50 @@ export function autoMatchRecords(
     }
     recordAudit(db, {
       recordType: "reconciliation",
-      recordId: item.itemId,
+      recordId: movement.recordId,
       userId,
       action: "update",
       changes: [
         {
-          field: `allocations:${item.itemType}:${item.itemId}`,
+          field: `allocations:movement:${movement.movementId}`,
           before,
           after: saved,
         },
       ],
     });
     matched += 1;
-    matchedKeys.push(`${item.itemType}:${item.itemId}`);
+    matchedMovementIds.push(movement.movementId);
   }
 
   // One event for the whole batch: every connected client reloads the
-  // workspace on any allocation event, so emitting per record would cost
+  // workspace on any allocation event, so emitting per movement would cost
   // each open tab N redundant round-trips.
   if (matched)
     reconciliationEvents.emit("allocations-bulk-update", { matched });
-  return { matched, skipped, matchedKeys };
+  return { matched, skipped, matchedMovementIds };
 }
-export function replaceRecordAllocations(
+
+/**
+ * Replace every bank line matched against one movement.
+ *
+ * Nothing here touches the record itself — reconciling is a note that a bank
+ * line covers a movement, and it never changes an amount, a date or any content
+ * (FR-024). Partial and many-to-many matching are unchanged: several lines may
+ * cover one movement, and one line may be split across several (FR-022).
+ */
+export function replaceMovementAllocations(
   db: ReconciliationDb,
   locals: App.Locals,
-  itemType: ReconItemTypeCode,
-  itemId: number,
+  movementId: number,
   inputs: { lineId: number; amount: number }[],
 ) {
   const userId = authorize(locals, "change");
-  const item = listBankFacingItems(db).find(
-    (i) => i.itemType === itemType && i.itemId === itemId,
-  );
-  if (!item)
+  const movement = getMovementCandidate(db, movementId);
+  if (!movement)
     throw new ReconciliationError("Reconciliation record not found", 404);
   const seen = new Set<number>();
   const all = listAllocations(db);
+  const direction = directionFor(movement.amountMinor);
   for (const input of inputs) {
     if (seen.has(input.lineId))
       throw new ReconciliationError(
@@ -401,21 +503,21 @@ export function replaceRecordAllocations(
       throw new ReconciliationError("Allocation amounts must be positive", 409);
     const line = getLine(db, input.lineId);
     if (!line) throw new ReconciliationError("Statement line not found", 404);
-    const direction =
-      itemType === ReconItemType.Income
-        ? StatementDirection.In
-        : StatementDirection.Out;
+    const statement = getStatement(db, line.statementId);
+    // The rule this whole feature exists for: a statement's lines can only ever
+    // be matched against movements on that statement's own account (FR-021).
+    if (!statement || statement.accountId !== movement.accountId)
+      throw new ReconciliationError(
+        "This statement line belongs to a different account",
+        409,
+      );
     if (line.direction !== direction)
       throw new ReconciliationError(
         "This statement line has the wrong money direction",
         409,
       );
     const occupied = all
-      .filter(
-        (a) =>
-          a.lineId === line.id &&
-          !(a.itemType === itemType && a.itemId === itemId),
-      )
+      .filter((a) => a.lineId === line.id && a.movementId !== movementId)
       .reduce((s, a) => s + a.amount, 0);
     if (input.amount - (line.amount - occupied) > EPSILON)
       throw new ReconciliationError(
@@ -424,38 +526,141 @@ export function replaceRecordAllocations(
       );
   }
   const total = inputs.reduce((s, a) => s + a.amount, 0);
-  if (total - mainAmount(item) > EPSILON)
+  if (total - movement.amount > EPSILON)
     throw new ReconciliationError(
       "Allocations cannot exceed the Akaun record's amount",
       409,
     );
-  const before = listItemAllocations(db, itemType, itemId);
-  const saved = replaceItemAllocations(
+  const before = listMovementAllocations(db, movementId);
+  const saved = replaceMovementAllocationsQuery(
     db,
-    itemType,
-    itemId,
-    mainAmount(item),
+    movementId,
+    movement.amount,
     inputs.map((i) => ({ ...i, amount: round2(i.amount) })),
     userId,
   );
   recordAudit(db, {
     recordType: "reconciliation",
-    recordId: itemId,
+    recordId: movement.recordId,
     userId,
     action: "update",
     changes: [
-      { field: `allocations:${itemType}:${itemId}`, before, after: saved },
+      { field: `allocations:movement:${movementId}`, before, after: saved },
     ],
   });
   reconciliationEvents.emit("allocation-update", {
-    itemType,
-    itemId,
+    movementId,
     lineIds: [...new Set([...before, ...saved].map((a) => a.lineId))],
   });
   return {
-    record: listBankFacingItems(db).find(
-      (i) => i.itemType === itemType && i.itemId === itemId,
-    ),
+    movement: getMovementCandidate(db, movementId),
     allocations: saved,
+  };
+}
+
+/**
+ * Turn an unmatched bank line into a transfer between two accounts the user
+ * holds, and match it in the same action (FR-023).
+ *
+ * This is the answer to a line that has no record behind it because no record
+ * was ever needed: money moved from one of the user's own pots to another, so
+ * nothing was earned or spent. The record, its two sides and the match are
+ * written together — a half-written transfer would leave a movement nothing
+ * points at, and the line still looking unmatched.
+ */
+export function createTransferForLine(
+  db: ReconciliationDb,
+  locals: App.Locals,
+  lineId: number,
+  input: { otherAccountId: number; description?: string },
+) {
+  const userId = authorize(locals, "add");
+  const line = getLine(db, lineId);
+  if (!line) throw new ReconciliationError("Statement line not found", 404);
+  const statement = getStatement(db, line.statementId);
+  if (!statement)
+    throw new ReconciliationError("Bank statement not found", 404);
+  if (statement.accountId == null)
+    throw new ReconciliationError(
+      "Give this statement an account before recording a transfer from it.",
+      409,
+    );
+  if (statement.accountId === input.otherAccountId)
+    throw new ReconciliationError(
+      "A transfer needs two different accounts.",
+      409,
+    );
+  requireMoneyHoldingAccount(db, input.otherAccountId);
+  if (listAllocations(db).some((a) => a.lineId === lineId))
+    throw new ReconciliationError(
+      "This transaction is already matched. Undo the match before recording it as a transfer.",
+      409,
+    );
+
+  // Money into the statement's account came out of the other one, and the other
+  // way round for money out — the line's own direction settles both sides.
+  const statementAccountId = statement.accountId;
+  const movesIn = line.direction === StatementDirection.In;
+  const description =
+    input.description?.trim() || line.description || "Transfer";
+
+  const written = db.transaction(() => {
+    const created = createRecord(db, userId, {
+      kind: "transfer",
+      date: line.date,
+      description,
+      amount: line.amount,
+      currency: mainCurrencyCode(db),
+      exchangeRate: 1,
+      fromAccountId: movesIn ? input.otherAccountId : statementAccountId,
+      toAccountId: movesIn ? statementAccountId : input.otherAccountId,
+    });
+    if (!created.ok) throw new ReconciliationError(created.reason, 409);
+
+    const movement = findRecordMovementOnAccount(
+      db,
+      created.value.id,
+      statementAccountId,
+    );
+    if (!movement)
+      throw new ReconciliationError(
+        "The transfer was built without a side on this statement's account.",
+        409,
+      );
+
+    const allocation = insertAllocation(db, {
+      lineId,
+      movementId: movement.id,
+      amount: round2(line.amount),
+      itemAmountSnapshot: round2(Math.abs(movement.amountMinor) / 100),
+      createdBy: userId,
+    });
+    return { record: created.value, movementId: movement.id, allocation };
+  });
+
+  recordAudit(db, {
+    recordType: "reconciliation",
+    recordId: written.record.id,
+    userId,
+    action: "update",
+    changes: [
+      {
+        field: `allocations:movement:${written.movementId}`,
+        before: null,
+        after: [written.allocation],
+      },
+    ],
+  });
+  // Both streams hear about this: `createRecord` emits `record-update` on the
+  // ledger stream for the new transfer, and the reconciliation stream is told
+  // here so every open workspace sees the line stop being unmatched.
+  reconciliationEvents.emit("allocation-update", {
+    movementId: written.movementId,
+    lineIds: [lineId],
+  });
+  return {
+    record: written.record,
+    movement: getMovementCandidate(db, written.movementId),
+    allocation: written.allocation,
   };
 }

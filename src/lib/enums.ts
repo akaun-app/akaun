@@ -9,7 +9,12 @@
 
 // --- contacts ---
 export const EntityType = { Individual: 1, Business: 2 } as const;
-export const Role = { Customer: 1, Supplier: 2, Employee: 3 } as const;
+export const Role = {
+  Customer: 1,
+  Supplier: 2,
+  Employee: 3,
+  Partner: 4,
+} as const;
 
 // --- expenses / claims ---
 export const ExpenseStatus = { Unpaid: 1, Pending: 2, Paid: 3 } as const;
@@ -55,6 +60,7 @@ export const RoleLabels: Record<number, string> = {
   [Role.Customer]: "Customer",
   [Role.Supplier]: "Supplier",
   [Role.Employee]: "Employee",
+  [Role.Partner]: "Partner",
 };
 
 export const ExpenseStatusLabels: Record<number, string> = {
@@ -174,8 +180,13 @@ export const TemplateDocumentTypeLabels: Record<number, string> = {
 export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
 
 // --- reconciliation ---
-// Which ledger table a polymorphic reconciliation reference points at. `Expense`
-// is only ever a DIRECT (unclaimed) expense — a claimed one rides inside its claim.
+// RETIRED, RESERVED. Which ledger table a polymorphic reconciliation reference
+// used to point at, before an allocation began pointing at a ledger movement
+// (`reconciliation_allocations.movement_id`). Nothing writes these codes any
+// more; they stay here so codes 1-3 are never reused and any surviving
+// pre-upgrade `item_type` value keeps its original meaning while the two legacy
+// columns are still readable. Removed with them in the release that drops the
+// legacy tables. See specs/002-double-entry-ledger research.md D-11.
 export const ReconItemType = { Expense: 1, Claim: 2, Income: 3 } as const;
 // ClosedMatched = every statement line was matched; ClosedWithLeftovers = the
 // session closed with unresolved records or statement lines.
@@ -221,6 +232,88 @@ export const statementDirectionEnum = makeEnum(StatementDirectionLabels);
 export const statementExtractionStateEnum = makeEnum(
   StatementExtractionStateLabels,
 );
+
+// --- ledger ---
+// A role belongs to a *pot* and is set once when the account is created,
+// outliving thousands of records. It is what the account is for, and it is what
+// `AccountType` is derived from (never stored — see ledger/account-type.ts).
+export const AccountRole = {
+  Bank: 1,
+  Wallet: 2,
+  Cash: 3,
+  Card: 4, // places money sits
+  Equipment: 5, // things the business owns and keeps
+  Receivable: 6, // shared "money owed to us"   (system)
+  Payable: 7, // shared "money we owe"       (system)
+  OpeningBalances: 8, // where opening balances come from (system)
+  PartnerCapital: 9,
+  PartnerDrawings: 10, // one pair per partner contact
+  ExpenseCategory: 11,
+  IncomeCategory: 12, // what everyday screens call a category
+} as const;
+
+export const AccountType = {
+  Asset: 1,
+  Liability: 2,
+  Equity: 3,
+  Income: 4,
+  Expense: 5,
+} as const;
+
+// A kind belongs to one *event* on one date. It carries intent the movements
+// cannot: equipment bought looks exactly like money moved, and a direct journal
+// entry looks exactly like an expense.
+export const LedgerRecordKind = {
+  Expense: 1,
+  Income: 2,
+  Transfer: 3,
+  Payment: 4,
+  OpeningBalance: 5,
+  InvoiceIssue: 6,
+  Journal: 7,
+} as const;
+
+export type AccountRoleCode = (typeof AccountRole)[keyof typeof AccountRole];
+export type AccountTypeCode = (typeof AccountType)[keyof typeof AccountType];
+export type LedgerRecordKindCode =
+  (typeof LedgerRecordKind)[keyof typeof LedgerRecordKind];
+
+export const AccountRoleLabels: Record<number, string> = {
+  [AccountRole.Bank]: "bank",
+  [AccountRole.Wallet]: "wallet",
+  [AccountRole.Cash]: "cash",
+  [AccountRole.Card]: "card",
+  [AccountRole.Equipment]: "equipment",
+  [AccountRole.Receivable]: "receivable",
+  [AccountRole.Payable]: "payable",
+  [AccountRole.OpeningBalances]: "opening_balances",
+  [AccountRole.PartnerCapital]: "partner_capital",
+  [AccountRole.PartnerDrawings]: "partner_drawings",
+  [AccountRole.ExpenseCategory]: "expense_category",
+  [AccountRole.IncomeCategory]: "income_category",
+};
+
+export const AccountTypeLabels: Record<number, string> = {
+  [AccountType.Asset]: "asset",
+  [AccountType.Liability]: "liability",
+  [AccountType.Equity]: "equity",
+  [AccountType.Income]: "income",
+  [AccountType.Expense]: "expense",
+};
+
+export const LedgerRecordKindLabels: Record<number, string> = {
+  [LedgerRecordKind.Expense]: "expense",
+  [LedgerRecordKind.Income]: "income",
+  [LedgerRecordKind.Transfer]: "transfer",
+  [LedgerRecordKind.Payment]: "payment",
+  [LedgerRecordKind.OpeningBalance]: "opening_balance",
+  [LedgerRecordKind.InvoiceIssue]: "invoice_issue",
+  [LedgerRecordKind.Journal]: "journal",
+};
+
+export const accountRoleEnum = makeEnum(AccountRoleLabels);
+export const accountTypeEnum = makeEnum(AccountTypeLabels);
+export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
 
 export const TemplateFont = {
   Inter: 1,

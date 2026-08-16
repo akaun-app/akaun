@@ -1,8 +1,12 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from "events";
 
-export const incomeEvents = new EventEmitter();
-export const expenseEvents = new EventEmitter();
-export const claimEvents = new EventEmitter();
+// `expenseEvents`, `incomeEvents` and `claimEvents` are gone. One store of
+// records means one emitter — `ledgerEvents` in $lib/server/ledger/events.ts —
+// which carries the record's kind, so the service layer never has to remember
+// which of several to fire. Forgetting one was silent, and silence is exactly
+// the failure FR-042 is written against (D-21). The `/api/expenses/stream` and
+// `/api/income/stream` URLs are unchanged; each filters `ledgerEvents` down to
+// its own kind.
 export const contactEvents = new EventEmitter();
 export const quotationEvents = new EventEmitter();
 export const invoiceEvents = new EventEmitter();
@@ -13,13 +17,6 @@ export const invoiceEvents = new EventEmitter();
 // streams before Node's leak warning. Listeners are cleaned up reliably, so the
 // limit only guards against a genuine leak, not normal load.
 const MAX_LISTENERS = 200;
-for (const emitter of [
-	incomeEvents,
-	expenseEvents,
-	claimEvents,
-	contactEvents,
-	quotationEvents,
-	invoiceEvents
-]) {
-	emitter.setMaxListeners(MAX_LISTENERS);
+for (const emitter of [contactEvents, quotationEvents, invoiceEvents]) {
+  emitter.setMaxListeners(MAX_LISTENERS);
 }

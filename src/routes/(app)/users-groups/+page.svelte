@@ -48,14 +48,21 @@
 		memberCount: number;
 	};
 
+	// Mirrors ALL_RESOURCES in src/lib/server/permissions.ts, which is the rule.
+	// Quotations and invoices are deliberately absent here as they were before —
+	// this screen has never offered them.
 	const RESOURCES = [
 		{ id: 'dashboard', label: 'Dashboard' },
 		{ id: 'expenses', label: 'Expenses' },
 		{ id: 'income', label: 'Income' },
-		{ id: 'claims', label: 'Claims' },
 		{ id: 'import', label: 'Auto Import' },
 		{ id: 'contacts', label: 'Contacts' },
-		{ id: 'reconciliation', label: 'Reconciliation' }
+		{ id: 'reconciliation', label: 'Reconciliation' },
+		{ id: 'accounts', label: 'Accounts' },
+		{ id: 'reports', label: 'Reports' },
+		// Off for everyone by default: entering a record's two sides by hand is
+		// how you make the books say anything you like (FR-040).
+		{ id: 'journal', label: 'Journal' }
 	] as const;
 	const ACTIONS = ['view', 'add', 'change', 'delete'] as const;
 

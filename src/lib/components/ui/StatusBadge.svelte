@@ -2,8 +2,9 @@
   import { ExpenseStatus } from "$lib/enums.js";
 
   type Tone = { label: string; tone: string };
-  // Accepts either an ExpenseStatus INT code (expenses) or a string label.
-  // Claims pass 'claimed'/'pending' strings (their codes collide with expense codes).
+  // Accepts either an ExpenseStatus INT code or a string label. Labels are used
+  // wherever a status's integer codes would collide with the expense ones
+  // (reconciliation, quotations, invoices, ledger records).
   let { status }: { status: number | string } = $props();
 
   const byCode: Record<number, Tone> = {
@@ -15,8 +16,13 @@
     unpaid: { label: "Unpaid", tone: "red" },
     pending: { label: "Pending", tone: "amber" },
     paid: { label: "Paid", tone: "green" },
-    claimed: { label: "Claimed", tone: "green" },
     received: { label: "Received", tone: "green" },
+    // Ledger records: a record with no side on a shared owed account is paid the
+    // moment it exists; one that owes somebody reads owed until settlements
+    // cover it, and part-paid while they cover only some of it (FR-012–FR-014).
+    owed: { label: "Owed", tone: "red" },
+    "part-paid": { label: "Part paid", tone: "amber" },
+    settled: { label: "Settled", tone: "green" },
     // Quotation statuses (labels from QuotationStatusLabels in enums.ts)
     draft: { label: "Draft", tone: "" },
     sent: { label: "Sent", tone: "blue" },

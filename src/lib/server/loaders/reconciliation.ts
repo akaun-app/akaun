@@ -2,7 +2,8 @@ import { redirect } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { workspace } from "$lib/server/services/reconciliation.js";
-import { suggestLinesForRecord } from "$lib/server/reconciliation/suggestions.js";
+import { suggestLinesForMovement } from "$lib/server/reconciliation/suggestions.js";
+
 export function loadReconciliationPage(
   locals: App.Locals,
   from?: string | null,
@@ -14,29 +15,28 @@ export function loadReconciliationPage(
   const statementById = new Map(
     result.statements.map((statement) => [statement.id, statement]),
   );
-  const lines = result.lines.map((line) => ({
-    ...line,
-    statementFilename:
-      statementById.get(line.statementId)?.originalFilename ?? "Bank statement",
-  }));
-  const records = result.records.map((record) => {
+  const lines = result.lines.map((line) => {
+    const statement = statementById.get(line.statementId);
+    return {
+      ...line,
+      statementFilename: statement?.originalFilename ?? "Bank statement",
+      accountName: statement?.accountName ?? null,
+    };
+  });
+  const movements = result.movements.map((movement) => {
     const savedLineIds = new Set(
       result.allocations
-        .filter(
-          (allocation) =>
-            allocation.itemType === record.itemType &&
-            allocation.itemId === record.itemId,
-        )
+        .filter((allocation) => allocation.movementId === movement.movementId)
         .map((allocation) => allocation.lineId),
     );
     return {
-      ...record,
-      suggestedLineIds: suggestLinesForRecord(record, lines, savedLineIds),
+      ...movement,
+      suggestedLineIds: suggestLinesForMovement(movement, lines, savedLineIds),
     };
   });
   return {
     ...result,
-    records,
+    movements,
     lines,
     permissions: locals.permissions?.reconciliation ?? {
       view: false,

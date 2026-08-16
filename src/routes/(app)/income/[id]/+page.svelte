@@ -9,4 +9,4 @@
 	<title>Income - Akaun</title>
 </svelte:head>
 
-<IncomePage {data} {form} openId={data.openIncomeId} />
+<IncomePage {data} {form} openId={data.openId} />

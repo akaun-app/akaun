@@ -2,7 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { untrack, onMount, onDestroy } from 'svelte';
-	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon } from '@lucide/svelte';
+	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon, ShieldCheck, AlertTriangle } from '@lucide/svelte';
+	import { resolve } from '$app/paths';
+	import { formatDate, formatMinor } from '$lib/format.js';
 	import { Slider } from '$lib/components/ui/slider/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -26,7 +28,7 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'company' | 'category' | 'intelligence' | 'templates' | 'advanced';
+	type Tab = 'general' | 'company' | 'category' | 'books' | 'intelligence' | 'templates' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Mobile detection for Sheet side
@@ -83,22 +85,50 @@
 		})()
 	);
 
-	// Expense categories state
+	// Which account a new expense or income starts with (FR-011). Only asked
+	// about when there is more than one account to choose between.
 	// svelte-ignore state_referenced_locally
-	let expCats = $state<string[]>([...data.expenseCategories]);
+	let defaultAccount = $state(String(data.ledgerDefaultAccountId ?? ''));
+	const defaultAccountName = $derived(
+		data.moneyAccounts.find((a) => String(a.id) === defaultAccount)?.name ?? 'Choose an account'
+	);
+
+	// --- Categories ---
+	// A category is an account underneath (FR-006a), but the word on screen stays
+	// "category" — nobody should have to learn a second name for the same thing.
+	//
+	// Every add and removal is staged here and nothing reaches the database until
+	// the Category tab's own Save. `id: null` marks a category the user has just
+	// added: it has no account behind it yet, which is what tells a staged row
+	// apart from one that already exists.
+	type ServerCategory = PageData['expenseCategories'][number];
+	type CategoryRow = { id: number | null; name: string; isSystem: boolean; inUse: boolean };
+
+	const stageCategory = (c: ServerCategory): CategoryRow => ({ ...c });
+	const categorySignature = (rows: CategoryRow[]) =>
+		JSON.stringify(rows.map((r) => [r.id, r.name]));
+
+	// svelte-ignore state_referenced_locally
+	let expCats = $state<CategoryRow[]>(data.expenseCategories.map(stageCategory));
 	let newExpCat = $state('');
 
-	// Income categories state
 	// svelte-ignore state_referenced_locally
-	let incCats = $state<string[]>([...data.incomeCategories]);
+	let incCats = $state<CategoryRow[]>(data.incomeCategories.map(stageCategory));
 	let newIncCat = $state('');
 
+	const stagedCategories = $derived(
+		JSON.stringify({
+			expense: expCats.map((c) => ({ id: c.id, name: c.name })),
+			income: incCats.map((c) => ({ id: c.id, name: c.name }))
+		})
+	);
+
 	// Document numbering state — one shared template, applied to every type
-	const SEQ_TYPES: SequenceDocType[] = ['expense', 'income', 'claim', 'quotation', 'invoice'];
+	const SEQ_TYPES: SequenceDocType[] = ['expense', 'income', 'payment', 'quotation', 'invoice'];
 	const SEQ_LABELS: Record<SequenceDocType, string> = {
 		expense: 'Expense',
 		income: 'Income',
-		claim: 'Claim',
+		payment: 'Payment',
 		quotation: 'Quotation',
 		invoice: 'Invoice'
 	};
@@ -502,6 +532,76 @@
 	// svelte-ignore state_referenced_locally
 	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
 
+	// --- Books tab: check the books, and what the one-off update decided ---
+
+	/**
+	 * The whole-books check (SC-002). Every record has two sides that have to
+	 * cancel out; this adds all of them up and says whether any don't.
+	 */
+	type IntegrityResult = {
+		ok: boolean;
+		recordsChecked: number;
+		unbalancedRecords: { recordId: number; differenceMinor: number }[];
+		totalDifferenceMinor: number;
+		booksBalance: boolean;
+		wholeBooksDifferenceMinor: number;
+		elapsedMs: number;
+	};
+	let integrity = $state<IntegrityResult | null>(null);
+	let integrityChecking = $state(false);
+
+	async function checkTheBooks() {
+		integrityChecking = true;
+		try {
+			const res = await fetch('/api/ledger/integrity');
+			if (!res.ok) {
+				toast.error('The books could not be checked just now.');
+				return;
+			}
+			integrity = await res.json();
+		} catch {
+			toast.error('The books could not be checked just now.');
+		} finally {
+			integrityChecking = false;
+		}
+	}
+
+	/**
+	 * How each old reimbursement's payer was worked out, said in words.
+	 *
+	 * The stored values are slugs for the code's benefit; nobody reading this
+	 * screen should have to decode one (Principle VII). The step names are taken
+	 * from `PageData` rather than imported, because the type they come from lives
+	 * under `$lib/server` and cannot be reached from a component.
+	 */
+	type PayerStep = NonNullable<PageData['upgrade']>['report']['payerAttributions'][number]['step'];
+	const PAYER_STEP_TEXT: Record<PayerStep, string> = {
+		'email-match': 'matched by email address',
+		'name-match': 'matched by name',
+		'sole-user-email-match': 'matched by email address, through the only other user account',
+		'sole-user-name-match': 'matched by name, through the only other user account',
+		'created-contact': 'nobody matched, so a new contact was created from the login',
+		'named-contact': 'the record already said who it was',
+		'bank-fallback': 'nobody was named, so it was treated as paid from the bank account'
+	};
+
+	const upgradeReport = $derived(data.upgrade?.report ?? null);
+	const upgradeVerify = $derived(data.upgrade?.verify ?? null);
+	// Nothing to say means nothing on screen — an installation whose update went
+	// cleanly, or one that never had anything to update, sees no section at all.
+	const hasUpgradeNotes = $derived(
+		!!upgradeReport &&
+			(upgradeReport.uncategorisedRecordIds.length > 0 ||
+				upgradeReport.missingAttachments.length > 0 ||
+				upgradeReport.roundingDifferences.length > 0 ||
+				upgradeReport.payerAttributions.length > 0 ||
+				upgradeReport.bankFallbackRecordIds.length > 0 ||
+				upgradeReport.unrepointedAllocationIds.length > 0 ||
+				(!!upgradeVerify && !upgradeVerify.ok))
+	);
+
+	const recordList = (ids: number[]) => ids.map((id) => `#${id}`).join(', ');
+
 	// Search index rebuild state
 	type RebuildStatus = {
 		running: boolean;
@@ -826,6 +926,7 @@
 			}
 			if (action === 'saveGeneral') {
 				mainCur = data.currency;
+				defaultAccount = String(data.ledgerDefaultAccountId ?? '');
 			}
 			if (action === 'saveCompany') {
 				companyName = data.companyName;
@@ -837,8 +938,8 @@
 				if (logoFileInput) logoFileInput.value = '';
 			}
 			if (action === 'saveCategories') {
-				expCats = [...data.expenseCategories];
-				incCats = [...data.incomeCategories];
+				expCats = data.expenseCategories.map(stageCategory);
+				incCats = data.incomeCategories.map(stageCategory);
 			}
 			if (action === 'saveSequenceTemplate') {
 				seqTemplate = data.sequenceTemplate;
@@ -863,13 +964,14 @@
 
 	const isDirty = $derived(
 		mainCur !== data.currency ||
+		defaultAccount !== String(data.ledgerDefaultAccountId ?? '') ||
 		seqTemplate !== data.sequenceTemplate ||
 		companyName !== data.companyName ||
 		companyAddress !== data.companyAddress ||
 		companyRegistrationNo !== data.companyRegistrationNo ||
 		logoChange !== 'none' ||
-		JSON.stringify(expCats) !== JSON.stringify(data.expenseCategories) ||
-		JSON.stringify(incCats) !== JSON.stringify(data.incomeCategories) ||
+		categorySignature(expCats) !== categorySignature(data.expenseCategories.map(stageCategory)) ||
+		categorySignature(incCats) !== categorySignature(data.incomeCategories.map(stageCategory)) ||
 		providersDirty ||
 		aiParallelTasks !== data.autoImportParallelTasks ||
 		aiCategoryHints !== data.autoImportCategoryHints ||
@@ -879,6 +981,7 @@
 
 	function resetAllUnsaved() {
 		mainCur = data.currency;
+		defaultAccount = String(data.ledgerDefaultAccountId ?? '');
 		seqTemplate = data.sequenceTemplate;
 		if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
 		companyName = data.companyName;
@@ -888,8 +991,8 @@
 		logoPreviewUrl = data.companyLogoUrl;
 		logoChange = 'none';
 		if (logoFileInput) logoFileInput.value = '';
-		expCats = [...data.expenseCategories];
-		incCats = [...data.incomeCategories];
+		expCats = data.expenseCategories.map(stageCategory);
+		incCats = data.incomeCategories.map(stageCategory);
 		newExpCat = '';
 		newIncCat = '';
 		providers = [...data.providers];
@@ -942,28 +1045,39 @@
 		allowNavigation = false;
 	});
 
-	function addExpCat() {
-		const v = newExpCat.trim();
-		if (v && !expCats.includes(v)) {
-			expCats = [...expCats, v];
-			newExpCat = '';
-		}
+	/** Stages a new category. Nothing is created until the section's Save. */
+	function stageNewCategory(rows: CategoryRow[], name: string): CategoryRow[] {
+		const taken = rows.some((c) => c.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+		if (taken) return rows;
+		return [...rows, { id: null, name, isSystem: false, inUse: false }];
 	}
 
-	function removeExpCat(cat: string) {
+	function addExpCat() {
+		const v = newExpCat.trim();
+		if (!v) return;
+		expCats = stageNewCategory(expCats, v);
+		newExpCat = '';
+	}
+
+	function removeExpCat(cat: CategoryRow) {
 		expCats = expCats.filter((c) => c !== cat);
 	}
 
 	function addIncCat() {
 		const v = newIncCat.trim();
-		if (v && !incCats.includes(v)) {
-			incCats = [...incCats, v];
-			newIncCat = '';
-		}
+		if (!v) return;
+		incCats = stageNewCategory(incCats, v);
+		newIncCat = '';
 	}
 
-	function removeIncCat(cat: string) {
+	function removeIncCat(cat: CategoryRow) {
 		incCats = incCats.filter((c) => c !== cat);
+	}
+
+	/** Why a category's remove button is off, or null when it is on. */
+	function categoryRemoveBlocked(cat: CategoryRow): string | null {
+		if (cat.isSystem) return 'Akaun needs this one, so it has to stay.';
+		return null;
 	}
 
 	function handleExpKey(e: KeyboardEvent) {
@@ -1001,14 +1115,17 @@
 		}
 	}
 
-	const TABS: { id: Tab; label: string }[] = [
+	// Derived rather than fixed only because the Books tab is there or not
+	// depending on whether this user may see the reports side of things.
+	const TABS: { id: Tab; label: string }[] = $derived([
 		{ id: 'general', label: 'General' },
 		{ id: 'company', label: 'Company' },
 		{ id: 'category', label: 'Category' },
+		...(data.canSeeBooks ? [{ id: 'books' as Tab, label: 'Books' }] : []),
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'templates', label: 'Templates' },
 		{ id: 'advanced', label: 'Advanced' }
-	];
+	]);
 </script>
 
 <svelte:head>
@@ -1043,11 +1160,14 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">General</h2>
-						<p class="set-section-sub">Currency and document numbering</p>
+						<p class="set-section-sub">Currency, accounts and document numbering</p>
 					</div>
 					<form method="POST" action="?/saveGeneral" use:enhance={() => ({ update }) => update({ reset: false })}>
 						{#if !data.currencyLocked}
 							<input type="hidden" name="currencyCode" value={mainCur} />
+						{/if}
+						{#if data.moneyAccounts.length > 1}
+							<input type="hidden" name="defaultAccountId" value={defaultAccount} />
 						{/if}
 						<p class="set-subsection-label">Display</p>
 						<div class="set-rows">
@@ -1071,6 +1191,31 @@
 									</Select.Root>
 								{/if}
 							</div>
+							<!--
+								Which account a new expense or income starts with (FR-011). With
+								only one account there is nothing to ask, so the row is absent
+								rather than shown with a single option.
+							-->
+							{#if data.moneyAccounts.length > 1}
+								<div class="set-row">
+									<div>
+										<div class="set-row-label">Money usually comes from</div>
+										<div class="set-row-value" style="font-size:12px; margin-top:2px;">New expenses and income start with this account already filled in. You can still change it on any record.</div>
+									</div>
+									{#if data.canManageCategories}
+										<Select.Root type="single" name="defaultAccountDisplay" bind:value={defaultAccount}>
+											<Select.Trigger class="set-input-right set-input-wide">{defaultAccountName}</Select.Trigger>
+											<Select.Content>
+												{#each data.moneyAccounts as account (account.id)}
+													<Select.Item value={String(account.id)} label={account.name} />
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									{:else}
+										<div class="set-input-right" style="color:var(--muted-foreground);">{defaultAccountName}</div>
+									{/if}
+								</div>
+							{/if}
 						</div>
 						{#if data.currencyLocked}
 							<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:6px; margin-bottom:0;">
@@ -1246,44 +1391,247 @@
 					</div>
 
 					<form method="POST" action="?/saveCategories" use:enhance>
-						<input type="hidden" name="expenseCategories" value={JSON.stringify(expCats)} />
-						<input type="hidden" name="incomeCategories" value={JSON.stringify(incCats)} />
+						<input type="hidden" name="categories" value={stagedCategories} />
 
 						<p class="set-subsection-label" style="margin-top:0;">Expense</p>
 						<div class="cat-chips">
-							{#each expCats as cat (cat)}
+							{#each expCats as cat (cat.id ?? cat.name)}
 								<span class="cat-chip-removable">
-									{cat}
-									<button type="button" class="chip-remove" onclick={() => removeExpCat(cat)} aria-label="Remove {cat}">
-										<X size={11} />
-									</button>
+									{cat.name}
+									{#if data.canManageCategories}
+										<button
+											type="button"
+											class="chip-remove"
+											disabled={categoryRemoveBlocked(cat) !== null}
+											title={categoryRemoveBlocked(cat) ?? undefined}
+											onclick={() => removeExpCat(cat)}
+											aria-label="Remove {cat.name}"
+										>
+											<X size={11} />
+										</button>
+									{/if}
 								</span>
 							{/each}
 						</div>
-						<div class="cat-add-row">
-							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
-							<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
-						</div>
+						{#if data.canManageCategories}
+							<div class="cat-add-row">
+								<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
+								<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
+							</div>
+						{/if}
 
 						<p class="set-subsection-label" style="margin-top:24px;">Income</p>
 						<div class="cat-chips">
-							{#each incCats as cat (cat)}
+							{#each incCats as cat (cat.id ?? cat.name)}
 								<span class="cat-chip-removable">
-									{cat}
-									<button type="button" class="chip-remove" onclick={() => removeIncCat(cat)} aria-label="Remove {cat}">
-										<X size={11} />
-									</button>
+									{cat.name}
+									{#if data.canManageCategories}
+										<button
+											type="button"
+											class="chip-remove"
+											disabled={categoryRemoveBlocked(cat) !== null}
+											title={categoryRemoveBlocked(cat) ?? undefined}
+											onclick={() => removeIncCat(cat)}
+											aria-label="Remove {cat.name}"
+										>
+											<X size={11} />
+										</button>
+									{/if}
 								</span>
 							{/each}
 						</div>
-						<div class="cat-add-row">
-							<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
-							<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
-						</div>
+						{#if data.canManageCategories}
+							<div class="cat-add-row">
+								<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
+								<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
+							</div>
+						{/if}
 
-						<Button type="submit" class="mt-4">Save</Button>
+						<p class="set-hint">
+							Nothing changes until you save. Removing a category that records already use
+							keeps every one of them — it just stops being offered for new ones.
+						</p>
+
+						{#if data.canManageCategories}
+							<Button type="submit" class="mt-4">Save</Button>
+						{/if}
 					</form>
 				</div>
+
+			{:else if activeTab === 'books'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Check the books</h2>
+						<p class="set-section-sub">
+							Every record has two sides that have to cancel each other out. This adds up every
+							side of every record and tells you straight away if any of them don't.
+						</p>
+					</div>
+					<div class="set-rows">
+						<div class="set-row">
+							<div>
+								<div class="set-row-label">Run the check</div>
+								<div class="set-row-value" style="font-size:12px; margin-top:2px;">
+									{#if integrity}
+										{integrity.recordsChecked} records checked in {integrity.elapsedMs}ms.
+									{:else}
+										Safe to run any time — it only reads.
+									{/if}
+								</div>
+							</div>
+							<Button type="button" variant="ghost" disabled={integrityChecking} onclick={checkTheBooks}>
+								<ShieldCheck size={14} />
+								{integrityChecking ? 'Checking…' : 'Check now'}
+							</Button>
+						</div>
+					</div>
+
+					{#if integrity}
+						{#if integrity.ok}
+							<p class="books-note books-note-good">
+								<ShieldCheck size={14} />
+								<span>All good. Every record balances, and so does everything added up together.</span>
+							</p>
+						{:else}
+							<p class="books-note books-note-bad">
+								<AlertTriangle size={14} />
+								<span>
+									{integrity.unbalancedRecords.length === 1
+										? 'One record does not add up.'
+										: `${integrity.unbalancedRecords.length} records do not add up.`}
+									Nothing has been changed — this is only a report.
+								</span>
+							</p>
+							<ul class="books-list">
+								{#each integrity.unbalancedRecords as row (row.recordId)}
+									<li>Record #{row.recordId} is out by {formatMinor(Math.abs(row.differenceMinor))}</li>
+								{/each}
+							</ul>
+							{#if !integrity.booksBalance}
+								<p class="set-hint">
+									Added up across everything, the books are out by
+									{formatMinor(Math.abs(integrity.wholeBooksDifferenceMinor))}.
+								</p>
+							{/if}
+						{/if}
+					{/if}
+				</div>
+
+				<!--
+					What the one-off move to the new way of recording money had to decide
+					for itself (FR-036b, FR-036c). Shown only when there is something to
+					say; an installation that came up clean sees nothing here.
+				-->
+				{#if hasUpgradeNotes && upgradeReport}
+					<div class="set-section" style="margin-top:32px;">
+						<div class="set-section-head">
+							<h2 class="set-section-title">What the update worked out</h2>
+							<p class="set-section-sub">
+								Moving your records to the new way of keeping them{#if data.upgrade?.finishedAt}, on
+									{formatDate(data.upgrade.finishedAt.slice(0, 10))}{/if}, meant making a few
+								calls without asking you. Here is every one of them, so you can check.
+							</p>
+						</div>
+
+						{#if upgradeVerify && !upgradeVerify.ok}
+							<p class="books-note books-note-bad">
+								<AlertTriangle size={14} />
+								<span>
+									The update could not prove it left everything as it found it, so nothing old
+									was thrown away. A copy of your data from before it ran is kept in
+									<code>data/backups</code>.
+								</span>
+							</p>
+							<ul class="books-list">
+								{#each upgradeVerify.findings as finding, i (i)}
+									<li>{finding.what} — was {finding.before}, now {finding.after}</li>
+								{/each}
+							</ul>
+						{/if}
+
+						{#if upgradeReport.payerAttributions.length > 0}
+							<p class="set-subsection-label" style="margin-top:0;">Who each old reimbursement was owed to</p>
+							<p class="set-hint" style="margin-top:0;">
+								Old reimbursements only recorded the login that created them, not the person.
+								This is who each one was matched to, and how.
+							</p>
+							<ul class="books-list">
+								{#each upgradeReport.payerAttributions as row (`${row.legacyKind}-${row.legacyId}`)}
+									<li>
+										<strong>{row.contactName ?? 'A new contact'}</strong>
+										— {PAYER_STEP_TEXT[row.step]}
+										<span class="books-dim">(was {row.legacyKind} #{row.legacyId})</span>
+									</li>
+								{/each}
+							</ul>
+							<p class="set-hint">
+								Got one wrong? Merge that contact into the right one on the
+								<a href={resolve('/(app)/contacts')}>Contacts</a> screen — every record they are on
+								moves across at once.
+							</p>
+						{/if}
+
+						{#if upgradeReport.bankFallbackRecordIds.length > 0}
+							<p class="set-subsection-label">Expenses with nobody to owe</p>
+							<p class="set-hint" style="margin-top:0;">
+								These were never marked paid and named nobody, so there was no one to owe them
+								to. They are recorded as paid from your bank account — if any of them were
+								really paid by a person, open the record and say so.
+							</p>
+							<ul class="books-list">
+								<li>{recordList(upgradeReport.bankFallbackRecordIds)}</li>
+							</ul>
+						{/if}
+
+						{#if upgradeReport.uncategorisedRecordIds.length > 0}
+							<p class="set-subsection-label">Records with no category</p>
+							<p class="set-hint" style="margin-top:0;">
+								No category could be read for these, so they sit under Uncategorised until you
+								give them one.
+							</p>
+							<ul class="books-list">
+								<li>{recordList(upgradeReport.uncategorisedRecordIds)}</li>
+							</ul>
+						{/if}
+
+						{#if upgradeReport.missingAttachments.length > 0}
+							<p class="set-subsection-label">Files that could not be found</p>
+							<p class="set-hint" style="margin-top:0;">
+								These attachments were not where the record said they were. Each record still
+								points at the old place, so nothing has been lost that was there.
+							</p>
+							<ul class="books-list">
+								{#each upgradeReport.missingAttachments as file (file)}
+									<li>{file}</li>
+								{/each}
+							</ul>
+						{/if}
+
+						{#if upgradeReport.roundingDifferences.length > 0}
+							<p class="set-subsection-label">Amounts that did not divide evenly</p>
+							<p class="set-hint" style="margin-top:0;">
+								Money is now kept in whole cents. These amounts had a fraction of a cent that
+								had to go somewhere.
+							</p>
+							<ul class="books-list">
+								{#each upgradeReport.roundingDifferences as row (row.recordId)}
+									<li>Record #{row.recordId} — {formatMinor(Math.abs(row.differenceMinor))}</li>
+								{/each}
+							</ul>
+						{/if}
+
+						{#if upgradeReport.unrepointedAllocationIds.length > 0}
+							<p class="set-subsection-label">Bank matches that did not carry over</p>
+							<p class="set-hint" style="margin-top:0;">
+								These bank lines were matched to a record before, and the match could not be
+								moved across. Match them again on the Reconciliation screen.
+							</p>
+							<ul class="books-list">
+								<li>{recordList(upgradeReport.unrepointedAllocationIds)}</li>
+							</ul>
+						{/if}
+					</div>
+				{/if}
 
 			{:else if activeTab === 'intelligence'}
 				<div class="set-section">
@@ -1772,6 +2120,60 @@
 		gap: 8px;
 		align-items: center;
 		margin-top: 12px;
+	}
+
+	.set-hint {
+		font-size: 12px;
+		color: var(--muted-foreground);
+		margin-top: 12px;
+		max-width: 62ch;
+		line-height: 1.5;
+	}
+
+	.set-hint a {
+		color: var(--primary);
+	}
+
+	.books-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		font-size: 13px;
+		line-height: 1.5;
+		border-radius: 8px;
+		padding: 10px 14px;
+		margin-top: 14px;
+		max-width: 68ch;
+	}
+
+	.books-note-good {
+		background: var(--green-soft);
+		color: var(--green);
+	}
+
+	.books-note-bad {
+		background: var(--red-soft);
+		color: var(--red);
+	}
+
+	.books-list {
+		margin: 10px 0 0;
+		padding-left: 18px;
+		font-size: 12.5px;
+		line-height: 1.7;
+		color: var(--muted-foreground);
+		max-width: 68ch;
+		overflow-wrap: anywhere;
+	}
+
+	.books-dim {
+		color: var(--muted-foreground);
+		opacity: 0.75;
+	}
+
+	.chip-remove:disabled {
+		cursor: not-allowed;
+		opacity: 0.3;
 	}
 
 	.chip-remove {

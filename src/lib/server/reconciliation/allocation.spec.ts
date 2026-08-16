@@ -19,11 +19,17 @@ describe("reconciliation allocations", () => {
     expect(allocationState(100, 110)).toBe("overallocated");
   });
 
-  it("exposes only the uncovered amount when a reopened claim grows", () => {
+  // These two are about drift: a record was matched to a bank line, and its own
+  // amount has since changed. `item_amount_snapshot` is what makes that
+  // detectable at all, and these say what the difference should read as. Claims
+  // used to be the way an amount moved after matching; a record's amount can
+  // still be corrected while nothing has settled or reconciled it, so the rule
+  // outlived the concept that named it.
+  it("exposes only the uncovered amount when a matched record grows", () => {
     expect(remainingAmount(150, 100)).toBe(50);
   });
 
-  it("exposes an overpayment when a reopened claim shrinks", () => {
+  it("exposes an overpayment when a matched record shrinks", () => {
     expect(remainingAmount(80, 100)).toBe(-20);
   });
 

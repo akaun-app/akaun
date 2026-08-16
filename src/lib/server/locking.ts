@@ -1,33 +1,31 @@
-import { QuotationStatus, InvoiceStatus, ClaimStatus } from '$lib/enums.js';
+import { QuotationStatus } from "$lib/enums.js";
 
-// A linked expense is editable while its claim is Pending. Marking the claim Done settles
-// the accounting data; reopening the claim returns it to Pending and unlocks corrections.
-export function canEditAmount(expense: {
-	claimId: number | null;
-	claimStatus?: number | null;
-}): boolean {
-	return expense.claimId === null || expense.claimStatus !== ClaimStatus.Done;
-}
-
-// Attachments are supporting documents, not accounting data, but once their claim is
-// reconciled (Done) they're locked permanently — same protection as the claim itself.
-export function canDeleteExpenseAttachment(expense: {
-	claimId: number | null;
-	claimStatus: number | null;
-}): boolean {
-	return expense.claimId === null || expense.claimStatus !== ClaimStatus.Done;
-}
-
-// A reconciled (Done) claim's date and linked expenses are immutable, and so is the claim
-// itself — editing or deleting settled accounting data is never allowed.
-export function canEditClaimData(claim: { status: number }): boolean {
-	return claim.status !== ClaimStatus.Done;
-}
+// A record's own locking rules live with the ledger, in
+// $lib/server/ledger/locking.ts: a record is fixed once a payment has settled it
+// or a bank line has been matched to it (FR-017a). The claim rules that used to
+// live here are gone with claims themselves — a claim is now a payment plus the
+// settlements saying what it covered, and "settled" is what locks the records it
+// covered.
+//
+// Re-exported here so the document-lifecycle rules below and the record rules
+// stay one import for a caller that needs both.
+export {
+  ALWAYS_EDITABLE_FIELDS,
+  canDeleteRecord,
+  canEditField,
+  lockStateOf,
+  LOCKED_FIELDS,
+} from "./ledger/locking.js";
 
 export function canEditQuotation(quotation: { status: number }): boolean {
-	return quotation.status !== QuotationStatus.Converted;
+  return quotation.status !== QuotationStatus.Converted;
 }
 
-export function canEditInvoice(invoice: { status: number }): boolean {
-	return invoice.status !== InvoiceStatus.Paid && invoice.status !== InvoiceStatus.Cancelled;
-}
+// `canEditInvoice` used to live here. It gated on `InvoiceStatus.Paid`, and
+// nothing writes that status any more — whether an invoice is paid is worked out
+// from the settlements against its side on the shared owed account (D-10), and
+// `invoices.status` now carries only the document lifecycle: draft, sent,
+// cancelled. A rule that tests a value nothing sets describes nothing, so it and
+// its test are gone rather than left to look load-bearing. What it used to do —
+// sealing an issued invoice's amount, date, customer and lines — is enforced in
+// `PATCH /api/invoices/[id]`, against `ledger_record_id` being set.

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ReconItemType, StatementDirection } from "$lib/enums.js";
+import { StatementDirection } from "$lib/enums.js";
 import { findDuplicateLines, rankCandidates } from "./matching.js";
-import type { BankFacingItem, StatementLineRow } from "./types.js";
+import type { MovementCandidate, StatementLineRow } from "./types.js";
+
+/** Every statement in these tests belongs to this account. */
+const STATEMENT_ACCOUNT = 7;
 
 function line(overrides: Partial<StatementLineRow> = {}): StatementLineRow {
   return {
@@ -17,83 +20,131 @@ function line(overrides: Partial<StatementLineRow> = {}): StatementLineRow {
   };
 }
 
-function item(
-  overrides: Partial<BankFacingItem> & { itemId: number },
-): BankFacingItem {
+/**
+ * A movement on the statement's account, money out by default — the sign is
+ * the whole direction rule now, so every fixture states it in cents.
+ */
+function movement(
+  overrides: Partial<MovementCandidate> & { movementId: number },
+): MovementCandidate {
   return {
-    itemType: ReconItemType.Expense,
-    label: `item-${overrides.itemId}`,
-    date: "2026-07-15",
+    recordId: overrides.movementId,
+    accountId: STATEMENT_ACCOUNT,
+    amountMinor: -10_000,
     amount: 100,
-    exchangeRate: 1,
+    label: `record-${overrides.movementId}`,
+    date: "2026-07-15",
+    description: "",
+    contactName: null,
     ...overrides,
   };
 }
 
 describe("rankCandidates", () => {
-  it("uses statement direction as a hard filter", () => {
-    const ranked = rankCandidates(line(), [
-      item({ itemId: 1, itemType: ReconItemType.Income }),
-      item({ itemId: 2, itemType: ReconItemType.Expense }),
-      item({ itemId: 3, itemType: ReconItemType.Claim }),
+  it("never offers a movement on another account", () => {
+    const ranked = rankCandidates(line(), STATEMENT_ACCOUNT, [
+      movement({ movementId: 1, accountId: STATEMENT_ACCOUNT + 1 }),
+      movement({ movementId: 2 }),
     ]);
 
-    expect(ranked.map((candidate) => candidate.itemId)).toEqual([2, 3]);
+    expect(ranked.map((candidate) => candidate.movementId)).toEqual([2]);
+  });
+
+  it("uses the movement's sign as the direction filter", () => {
+    const moneyIn = rankCandidates(
+      line({ direction: StatementDirection.In }),
+      STATEMENT_ACCOUNT,
+      [
+        movement({ movementId: 1, amountMinor: 10_000 }),
+        movement({ movementId: 2, amountMinor: -10_000 }),
+      ],
+    );
+    const moneyOut = rankCandidates(line(), STATEMENT_ACCOUNT, [
+      movement({ movementId: 1, amountMinor: 10_000 }),
+      movement({ movementId: 2, amountMinor: -10_000 }),
+    ]);
+
+    expect(moneyIn.map((candidate) => candidate.movementId)).toEqual([1]);
+    expect(moneyOut.map((candidate) => candidate.movementId)).toEqual([2]);
   });
 
   it("scores exact amounts at 100 and amounts within one percent at 55", () => {
-    const ranked = rankCandidates(line({ description: "unrelated" }), [
-      item({ itemId: 1, label: "exact" }),
-      item({ itemId: 2, label: "near", amount: 100.99 }),
-      item({ itemId: 3, label: "outside", amount: 101.01 }),
-    ]);
+    const ranked = rankCandidates(
+      line({ description: "unrelated" }),
+      STATEMENT_ACCOUNT,
+      [
+        movement({ movementId: 1, label: "exact" }),
+        movement({ movementId: 2, label: "near", amountMinor: -10_099 }),
+        movement({ movementId: 3, label: "outside", amountMinor: -10_101 }),
+      ],
+    );
 
-    expect(ranked.map(({ itemId, score }) => ({ itemId, score }))).toEqual([
-      { itemId: 1, score: 100 },
-      { itemId: 2, score: 55 },
+    expect(
+      ranked.map(({ movementId, score }) => ({ movementId, score })),
+    ).toEqual([
+      { movementId: 1, score: 100 },
+      { movementId: 2, score: 55 },
     ]);
   });
 
   it("subtracts two points per day and excludes candidates outside seven days", () => {
-    const ranked = rankCandidates(line({ description: "unrelated" }), [
-      item({ itemId: 1, label: "six days ago", date: "2026-07-09" }),
-      item({ itemId: 2, label: "same day" }),
-      item({ itemId: 3, label: "eight days ago", date: "2026-07-07" }),
-    ]);
+    const ranked = rankCandidates(
+      line({ description: "unrelated" }),
+      STATEMENT_ACCOUNT,
+      [
+        movement({ movementId: 1, label: "six days ago", date: "2026-07-09" }),
+        movement({ movementId: 2, label: "same day" }),
+        movement({
+          movementId: 3,
+          label: "eight days ago",
+          date: "2026-07-07",
+        }),
+      ],
+    );
 
-    expect(ranked.map(({ itemId, score }) => ({ itemId, score }))).toEqual([
-      { itemId: 2, score: 100 },
-      { itemId: 1, score: 88 },
+    expect(
+      ranked.map(({ movementId, score }) => ({ movementId, score })),
+    ).toEqual([
+      { movementId: 2, score: 100 },
+      { movementId: 1, score: 88 },
     ]);
   });
 
   it("adds eight points when a normalised description token breaks a tie", () => {
     const ranked = rankCandidates(
       line({ description: "PAYMENT, ACME STORE" }),
+      STATEMENT_ACCOUNT,
       [
-        item({ itemId: 1, label: "Other merchant" }),
-        item({ itemId: 2, label: "Invoice", contactName: "Acme" }),
+        movement({ movementId: 1, label: "Other merchant" }),
+        movement({ movementId: 2, label: "Invoice", contactName: "Acme" }),
       ],
     );
 
-    expect(ranked.map(({ itemId, score }) => ({ itemId, score }))).toEqual([
-      { itemId: 2, score: 108 },
-      { itemId: 1, score: 100 },
+    expect(
+      ranked.map(({ movementId, score }) => ({ movementId, score })),
+    ).toEqual([
+      { movementId: 2, score: 108 },
+      { movementId: 1, score: 100 },
     ]);
   });
 
-  it("never offers an expense that belongs to a claim", () => {
-    const ranked = rankCandidates(line(), [
-      item({ itemId: 1, claimId: 42 }),
-      item({ itemId: 2, claimId: null }),
-    ]);
+  it("compares amounts as whole cents, so no float tolerance is involved", () => {
+    // 0.1 + 0.2 is 0.30000000000000004 as a float; both sides are cents here,
+    // so a line for 0.30 matches a movement of 30 cents exactly.
+    const ranked = rankCandidates(
+      line({ amount: 0.1 + 0.2, description: "unrelated" }),
+      STATEMENT_ACCOUNT,
+      [movement({ movementId: 1, amountMinor: -30 })],
+    );
 
-    expect(ranked.map((candidate) => candidate.itemId)).toEqual([2]);
+    expect(
+      ranked.map(({ movementId, score }) => ({ movementId, score })),
+    ).toEqual([{ movementId: 1, score: 100 }]);
   });
 });
 
 describe("findDuplicateLines", () => {
-  it("flags every line sharing session, date, near-equal amount, and normalised description", () => {
+  it("flags every line sharing statement, date, cent-equal amount, and normalised description", () => {
     const duplicates = findDuplicateLines([
       line({ id: 11, description: "  Grab   RIDE ", amount: 25 }),
       line({ id: 12, description: "grab ride", amount: 25.004 }),

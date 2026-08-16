@@ -1,6 +1,29 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.1.0 → 1.2.0
+Bump rationale: MINOR — a new principle (VII. Plain Language for a Non-Expert Reader) was added.
+No existing principle was removed or redefined incompatibly. Principle IV's "names state intent"
+clean-code rule is unaffected: VII governs prose written for a human reader, not code identifiers.
+
+Added sections:
+  - Core Principles → VII. Plain Language for a Non-Expert Reader
+
+Modified principles: none
+
+Removed sections: none
+
+Templates requiring updates:
+  ✅ .specify/templates/spec-template.md — reviewed, already instructs "describe this user journey
+     in plain language"; consistent, no change needed
+  ✅ .specify/templates/plan-template.md — reviewed, no prose-style guidance to correct
+  ✅ .specify/templates/tasks-template.md — reviewed, task lines are imperative and already plain
+  ✅ .specify/templates/checklist-template.md — reviewed, consistent
+  ✅ CLAUDE.md — reviewed, consistent (holds pattern detail, not prose-style rules)
+
+Follow-up TODOs: none
+
+--- Previous amendment (1.1.0) ---
 Version change: 1.0.0 → 1.1.0
 Bump rationale: MINOR — a new principle (V. Test-First Where It Counts) was added and the
 testing guidance in Development Workflow & Quality Gates was materially expanded. No existing
@@ -179,6 +202,37 @@ Where this codebase has already settled a recurring problem, that solution is th
 **Rationale**: Consistency is the cheapest quality mechanism available. A second way to do a
 solved thing costs more than the first way ever saved.
 
+### VII. Plain Language for a Non-Expert Reader
+
+Everything written for a human to read — specifications, plans, clarification questions,
+recommendations, UI labels, error messages, commit and PR descriptions — MUST be readable by
+someone who does not know the domain. The maintainer is not an accountant and is learning the
+domain alongside the product; a document he cannot check is a document that cannot be reviewed,
+and an unreviewed specification silently encodes whatever the author assumed.
+
+- **Prefer the everyday word.** "What the business owes" over "liabilities". "Money a partner
+  takes out" over "drawings". "Add up from the movements" over "derive from the ledger".
+- **A formal term is allowed only when it is the term that must appear** — on a statutory
+  filing, in a regulation, or in an established product convention. Pair it with its plain
+  meaning once, at first use, and then use it consistently.
+- **A document that needs more than a handful of domain terms MUST carry a short glossary
+  table near the top**, giving each term's plain meaning in one line. `spec.md` for
+  `002-double-entry-ledger` is the reference example.
+- **Explain the "why", not just the rule.** A requirement a reader cannot evaluate is one they
+  cannot disagree with, and agreement obtained that way is worthless.
+- **When recommending a decision, state the tradeoff in plain terms and name what is given up.**
+  Present the honest comparison, not only the preferred option.
+- **This governs prose, not identifiers.** Code, schema and type names follow Principle IV and
+  the domain's own vocabulary; renaming a correct technical identifier to something chattier is
+  a violation of IV, not compliance with VII.
+- **Correct, do not simplify away.** Plain wording MUST NOT drop a constraint, soften a MUST,
+  or make a requirement untestable. If a sentence cannot be made plainer without losing
+  precision, keep the precision and add the plain-language gloss beside it.
+
+**Rationale**: A specification is a shared agreement, and an agreement only one party can read
+is not shared. The cost of jargon here is not style — it is decisions approved without being
+understood, and rework when the misunderstanding surfaces during implementation.
+
 ## Technology & Platform Constraints
 
 The following are fixed and MUST NOT change without a MAJOR amendment:
@@ -250,6 +304,8 @@ MUST be recorded in the plan's Complexity Tracking table with the simpler altern
 it was rejected — an unjustified violation blocks the plan. Reviewers verify the four mutation
 obligations (permission, validation, audit, SSE) and adherence to the Principle VI patterns on
 every change that touches a route or a detail sheet. On any change presented as a bug fix,
-reviewers verify the accompanying failing-then-passing test required by Principle V.
+reviewers verify the accompanying failing-then-passing test required by Principle V. On any
+specification, plan, or change to user-facing copy, reviewers verify Principle VII: no
+unexplained domain term, and a glossary where the document needs more than a few.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-10 | **Last Amended**: 2026-08-10
+**Version**: 1.2.0 | **Ratified**: 2026-08-10 | **Last Amended**: 2026-08-15

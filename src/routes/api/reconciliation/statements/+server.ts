@@ -1,5 +1,6 @@
 import type { RequestHandler } from "./$types.js";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -13,6 +14,14 @@ import {
   ReconciliationError,
 } from "$lib/server/services/reconciliation.js";
 import { processStatementImport } from "$lib/server/reconciliation/statement-import.js";
+
+/**
+ * A statement must say which account it belongs to (FR-021). Without it there
+ * is no way to know which movements its lines could be, which is exactly how
+ * money sitting in a wallet ended up offered against a bank statement.
+ */
+const accountIdSchema = z.coerce.number().int().positive();
+
 export const GET: RequestHandler = ({ locals }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
   if (!hasPermission(locals, "reconciliation", "view"))
@@ -27,6 +36,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const file = form.get("file");
   if (!(file instanceof File))
     return Response.json({ error: "file is required" }, { status: 400 });
+  const accountId = accountIdSchema.safeParse(form.get("accountId"));
+  if (!accountId.success)
+    return Response.json(
+      { error: "Choose the account this statement belongs to" },
+      { status: 400 },
+    );
   if (file.size > MAX_UPLOAD_BYTES)
     return Response.json(
       { error: "File is larger than 15 MB" },
@@ -43,6 +58,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const statement = createStatement(db, locals, {
       originalFilename: file.name,
       storedFilePath: path,
+      accountId: accountId.data,
     });
     void processStatementImport(db, {
       statementId: statement.id,

@@ -1,64 +1,65 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
-  import { useIsMobile } from "$lib/hooks/useIsMobile.svelte.js";
-  import { createResourceStream, mergeById } from "$lib/sse.js";
+  import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import {
-    TrendingUp,
+    Calendar,
+    Lock,
     Plus,
     Search,
-    Tag,
-    Calendar,
     SlidersHorizontal,
-    X,
-    Paperclip,
-    Upload,
+    Tag,
     Trash2,
-    Circle,
-    CircleCheck,
-    ChevronRight,
+    TrendingUp,
+    X,
   } from "@lucide/svelte";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
-  import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
-  import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
-  import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
-  import ContactSelect from "$lib/components/ui/ContactSelect.svelte";
-  import AmountInput from "$lib/components/ui/AmountInput.svelte";
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
-  import AttachmentManager from "$lib/components/ui/AttachmentManager.svelte";
-  import AuditTrail from "$lib/components/ui/AuditTrail.svelte";
   import ConfirmDialog from "$lib/components/ui/ConfirmDialog.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import StatCard from "$lib/components/ui/StatCard.svelte";
   import BulkActionBar from "$lib/components/ui/BulkActionBar.svelte";
+  import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
+  import AmountInput from "$lib/components/ui/AmountInput.svelte";
+  import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
+  import * as Sheet from "$lib/components/ui/sheet/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import { Textarea } from "$lib/components/ui/textarea/index.js";
-  import * as Select from "$lib/components/ui/select/index.js";
-  import { Role, EntityType } from "$lib/enums.js";
+  import RecordSheet from "$lib/components/ledger/RecordSheet.svelte";
   import {
-    formatMoney,
-    formatMoneyRM,
-    formatDate,
     formatDateShort,
+    formatMinor,
+    formatMinorAmount,
   } from "$lib/format.js";
   import {
     mainCurrency,
     mainCurrencySymbol,
   } from "$lib/currency-state.svelte.js";
-  import {
-    CURRENCIES,
-    currencySymbol,
-    currencyDecimals,
-    formatCurrencyAmount,
-  } from "$lib/currency.js";
+  import { formatCurrencyAmount } from "$lib/currency.js";
+  import { createResourceStream, mergeById } from "$lib/sse.js";
+  import { SvelteSet } from "svelte/reactivity";
+  import { AccountRole, LedgerRecordKind } from "$lib/enums.js";
   import { goto, pushState } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { onMount } from "svelte";
-  import type { loadIncomePage } from "$lib/server/loaders/income.js";
+  import type { RecordView } from "$lib/server/ledger/types.js";
+  import type { loadLedgerPage } from "$lib/server/loaders/ledger.js";
 
-  type PageData = ReturnType<typeof loadIncomePage>;
-  type ActionData = { error?: string; success?: boolean; id?: number } | null;
+  /**
+   * Money coming in.
+   *
+   * Every row is a record in the one store, and the two accounts it names are
+   * what it was for and which account received it. Equipment is deliberately
+   * absent from the category list — it is bought, never earned — which is the
+   * one place this screen and the expenses screen differ (D-01).
+   *
+   * Nothing here uses an accounting word (Principle VII).
+   */
+  type PageData = ReturnType<typeof loadLedgerPage>;
+  type ActionData = {
+    error?: string;
+    success?: boolean;
+    deleted?: number;
+    refusedReason?: string | null;
+  } | null;
 
   let {
     data,
@@ -66,373 +67,216 @@
     openId,
   }: { data: PageData; form: ActionData; openId: number | null } = $props();
 
-  // New-income customer picker state (submitted via hidden inputs).
-  let newContactId = $state<number | null>(null);
-  let newContactName = $state<string | null>(null);
-  let newIncomeCategory = $state<string>("");
+  // The list the screen draws: what the server sent, until the stream says
+  // otherwise. Writable, so an SSE event edits it in place; derived, so a real
+  // navigation or a form action re-syncs it back to the server's answer.
+  let records = $derived(data.records);
 
-  // Local reactive list — updated by SSE events and re-synced when SvelteKit reloads SSR data
-  // svelte-ignore state_referenced_locally
-  let incomes = $state(data.incomes);
-  $effect(() => {
-    incomes = data.incomes;
-  });
+  // --- Reading one record -----------------------------------------------
+  // Income leaves its category account and lands in the account that received
+  // it, so the category is the side with the negative amount.
+  function categoryOf(record: RecordView) {
+    return (
+      record.movements.find(
+        (m) => m.accountRole === AccountRole.IncomeCategory,
+      ) ??
+      record.movements.find((m) => m.amountMinor < 0) ??
+      null
+    );
+  }
 
-  // Search + filter state
+  function categoryName(record: RecordView): string {
+    return categoryOf(record)?.accountName ?? "";
+  }
+
+  // `locked` and `lockedReason` are computed server-side and travel with the
+  // record, so the rule in src/lib/server/ledger/locking.ts is read here rather
+  // than hand-duplicated — there is nothing for the two copies to disagree on.
+
+  // --- Filter and sort state ---------------------------------------------
   let searchRaw = $state("");
   let search = $state("");
-  let selectedCats = $state<string[]>([]);
-  let dateFrom = $state("");
-  let dateTo = $state("");
+  let selectedCats = $state<number[]>([]);
   let amountMin = $state("");
   let amountMax = $state("");
+  let dateFrom = $state("");
+  let dateTo = $state("");
   let sort = $state({ key: "date", dir: "desc" as "asc" | "desc" });
+  let selected = new SvelteSet<number>();
 
-  // UI state
   let showNew = $state(false);
   let mobileFilterOpen = $state(false);
   let mobileSearchOpen = $state(false);
   let mobileSearchEl = $state<HTMLInputElement | null>(null);
+  let deleteDialogOpen = $state(false);
+  let deleteFormEl = $state<HTMLFormElement | null>(null);
+  // Shown until it is dismissed or the next action replaces it.
+  let actionError = $derived(form?.error ?? form?.refusedReason ?? "");
+
   $effect(() => {
     if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus();
   });
-  type Attachment = {
-    id: number;
-    filename: string;
-    displayName: string;
-    addedDate: string;
-  };
-  type FullIncome = (typeof data.incomes)[0] & { attachments: Attachment[] };
-  let detailIncome = $state<FullIncome | null>(null);
-  let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
-  let deleteDialogOpen = $state(false);
-  let deleteFormEl = $state<HTMLFormElement | null>(null);
-  let selected = $state(new Set<number>());
 
-  // --- Edit mode (detail sheet) ---
-  let isEditing = $state(false);
-  let saving = $state(false);
-  let saveError = $state("");
-  let editContactId = $state<number | null>(null);
-  let editContactName = $state<string | null>(null);
-  let editCategory = $state("");
-  let editDate = $state("");
-  let editAmount = $state("");
-  let editCurrency = $state(mainCurrency());
-  let editExchangeRate = $state("1");
-  let editReference = $state("");
-  let editDescriptionText = $state("");
-  let editRemark = $state("");
-
-  // Switching the edit-currency select back to the main currency hides the rate field but
-  // left editExchangeRate holding the stale foreign rate, so a later amount edit was still
-  // converted (mainAmount = amount × exchangeRate) using that stale rate. Keep it pinned to 1
-  // whenever the selected currency is the main currency.
+  // Debounced search
   $effect(() => {
-    if (editCurrency === mainCurrency()) editExchangeRate = "1";
-  });
-
-  function startEdit() {
-    if (!detailIncome) return;
-    editContactId = detailIncome.contactId;
-    editContactName = null;
-    editCategory = detailIncome.category;
-    editDate = detailIncome.date;
-    editAmount = String(detailIncome.amount);
-    editCurrency = detailIncome.currency;
-    editExchangeRate = String(detailIncome.exchangeRate);
-    editReference = detailIncome.reference ?? "";
-    editDescriptionText = detailIncome.descriptionText ?? "";
-    editRemark = detailIncome.remark ?? "";
-    saveError = "";
-    isEditing = true;
-  }
-
-  async function saveEdit() {
-    if (!detailIncome) return;
-    saving = true;
-    saveError = "";
-    try {
-      let resolvedContactId = editContactId;
-      if (!resolvedContactId && editContactName) {
-        const cr = await fetch("/api/contacts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            entityType: EntityType.Business,
-            legalName: editContactName,
-            roles: [Role.Customer],
-          }),
-        });
-        if (!cr.ok) {
-          saveError = "Failed to create contact — try again";
-          saving = false;
-          return;
-        }
-        resolvedContactId = (await cr.json()).id;
-      }
-      const res = await fetch(`/api/income/${detailIncome.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contactId: resolvedContactId,
-          category: editCategory,
-          date: editDate,
-          amount: parseFloat(editAmount) || 0,
-          currency: editCurrency,
-          exchangeRate: parseFloat(editExchangeRate) || 1,
-          reference: editReference,
-          descriptionText: editDescriptionText,
-          remark: editRemark,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        saveError = err.error ?? "Save failed";
-      } else {
-        const refreshed = await fetch(`/api/income/${detailIncome.id}`);
-        if (refreshed.ok) detailIncome = await refreshed.json();
-        isEditing = false;
-        auditTrailRef?.refresh();
-      }
-    } catch {
-      saveError = "Network error — try again";
-    } finally {
-      saving = false;
-    }
-  }
-  let newIncomeFiles = $state<File[]>([]);
-  let newIncomeDrag = $state(false);
-  let newIncomeFileInput = $state<HTMLInputElement | null>(null);
-
-  // --- Foreign-currency entry (hidden by default) ---
-  const todayISO = () => new Date().toISOString().slice(0, 10);
-  let showForeign = $state(false);
-  // svelte-ignore state_referenced_locally
-  let newCurrency = $state(data.lastForeignCurrency ?? mainCurrency());
-  let newAmount = $state<string>("");
-  let newForeignAmount = $state<string>("");
-  let newRate = $state<string>("");
-  let newDate = $state<string>(todayISO());
-  let rateFetching = $state(false);
-  let rateError = $state("");
-
-  $effect(() => {
-    if (!showForeign) return;
-    const cur = newCurrency;
-    const d = newDate;
-    if (cur === mainCurrency() || !d) {
-      rateError = "";
-      return;
-    }
-    rateFetching = true;
-    rateError = "";
-    const t = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`,
-        );
-        const json = await res.json();
-        if (json.rate != null) newRate = String(json.rate);
-        else {
-          newRate = "";
-          rateError = "No rate found — enter it manually";
-        }
-      } catch {
-        newRate = "";
-        rateError = "Could not fetch rate — enter it manually";
-      } finally {
-        rateFetching = false;
-      }
-    }, 400);
+    const v = searchRaw;
+    const t = setTimeout(() => (search = v), 300);
     return () => clearTimeout(t);
   });
 
-  const isForeign = $derived(showForeign && newCurrency !== mainCurrency());
-  // Main-currency value derived from the foreign amount × rate (shown read-only in the
-  // main amount field while a foreign currency is active).
-  const convertedMain = $derived.by(() => {
-    const a = parseFloat(newForeignAmount);
-    const r = parseFloat(newRate);
-    if (!isForeign || isNaN(a) || isNaN(r) || r <= 0) return null;
-    return a * r;
-  });
-  const convertedDisplay = $derived(
-    convertedMain != null
-      ? convertedMain.toFixed(currencyDecimals(mainCurrency()))
-      : "",
-  );
-  const foreignRateMissing = $derived(isForeign && !(parseFloat(newRate) > 0));
-
-  // Mobile panel detection — full-screen bottom sheet on mobile
-  const screen = useIsMobile();
-  const isMobile = $derived(screen.current);
-  const panelSide = $derived(isMobile ? "bottom" : "right");
-
-  // Debounce search
-  $effect(() => {
-    const raw = searchRaw;
-    const t = setTimeout(() => (search = raw), 300);
-    return () => clearTimeout(t);
-  });
-
-  $effect(() => {
-    if (form?.success) showNew = false;
-  });
-  $effect(() => {
-    if (!showNew) {
-      newIncomeFiles = [];
-      newContactId = null;
-      newContactName = null;
-      newIncomeCategory = "";
-      showForeign = false;
-      newCurrency = data.lastForeignCurrency ?? mainCurrency();
-      newAmount = "";
-      newForeignAmount = "";
-      newRate = "";
-      rateError = "";
-      newDate = todayISO();
-    }
-  });
-
-  function toggleCat(cat: string) {
-    selectedCats = selectedCats.includes(cat)
-      ? selectedCats.filter((c) => c !== cat)
-      : [...selectedCats, cat];
-  }
-
-  // Filtered + sorted list
+  // --- Derived ------------------------------------------------------------
   const filtered = $derived.by(() => {
-    let list = incomes.slice();
-    if (selectedCats.length)
-      list = list.filter((i) => selectedCats.includes(i.category));
-    const mn = amountMin !== "" ? parseFloat(amountMin) : null;
-    const mx = amountMax !== "" ? parseFloat(amountMax) : null;
-    if (mn != null) list = list.filter((i) => i.mainAmount >= mn);
-    if (mx != null) list = list.filter((i) => i.mainAmount <= mx);
-    if (dateFrom) list = list.filter((i) => i.date >= dateFrom);
-    if (dateTo) list = list.filter((i) => i.date <= dateTo);
+    let rows = records.slice();
+    if (selectedCats.length) {
+      rows = rows.filter((r) => {
+        const category = categoryOf(r);
+        return category !== null && selectedCats.includes(category.accountId);
+      });
+    }
+    const mn = amountMin !== "" ? parseFloat(amountMin) * 100 : null;
+    const mx = amountMax !== "" ? parseFloat(amountMax) * 100 : null;
+    if (mn != null) rows = rows.filter((r) => r.amountMinor >= mn);
+    if (mx != null) rows = rows.filter((r) => r.amountMinor <= mx);
+    if (dateFrom) rows = rows.filter((r) => r.date >= dateFrom);
+    if (dateTo) rows = rows.filter((r) => r.date <= dateTo);
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(
-        (i) =>
-          (i.contactName ?? "").toLowerCase().includes(q) ||
-          (i.descriptionText ?? "").toLowerCase().includes(q) ||
-          (i.reference ?? "").toLowerCase().includes(q) ||
-          i.category.toLowerCase().includes(q) ||
-          i.incomeNumber.toLowerCase().includes(q),
+      rows = rows.filter(
+        (r) =>
+          r.description.toLowerCase().includes(q) ||
+          (r.contactName ?? "").toLowerCase().includes(q) ||
+          (r.recordNumber ?? "").toLowerCase().includes(q) ||
+          r.reference.toLowerCase().includes(q) ||
+          categoryName(r).toLowerCase().includes(q),
       );
     }
-    list.sort((a, b) => {
-      const av = a[sort.key as keyof typeof a] as string | number;
-      const bv = b[sort.key as keyof typeof b] as string | number;
+
+    const key = sort.key;
+    rows.sort((a, b) => {
+      const av = sortValue(a, key);
+      const bv = sortValue(b, key);
       let cmp = av < bv ? -1 : av > bv ? 1 : 0;
       if (cmp === 0) cmp = a.id - b.id;
       return sort.dir === "asc" ? cmp : -cmp;
     });
-    return list;
+    return rows;
   });
 
-  function onSort(key: string) {
-    sort =
-      sort.key === key
-        ? { key, dir: sort.dir === "asc" ? "desc" : "asc" }
-        : { key, dir: "asc" };
+  function sortValue(record: RecordView, key: string): string | number {
+    switch (key) {
+      case "description":
+        return record.description.toLowerCase();
+      case "contactName":
+        return (record.contactName ?? "").toLowerCase();
+      case "category":
+        return categoryName(record).toLowerCase();
+      case "amount":
+        return record.amountMinor;
+      default:
+        return record.date;
+    }
   }
 
-  function toggleOne(id: number) {
-    const s = new Set(selected);
-    s.has(id) ? s.delete(id) : s.add(id);
-    selected = s;
-  }
-
-  function toggleAll() {
-    if (selected.size === filtered.length) selected = new Set();
-    else selected = new Set(filtered.map((i) => i.id));
-  }
-
-  const selTotal = $derived(
-    filtered
-      .filter((i) => selected.has(i.id))
-      .reduce((s, i) => s + i.mainAmount, 0),
-  );
   const filteredTotal = $derived(
-    filtered.reduce((s, i) => s + i.mainAmount, 0),
-  );
-  const allSelected = $derived(
-    filtered.length > 0 && selected.size === filtered.length,
-  );
-  const someSelected = $derived(
-    selected.size > 0 && selected.size < filtered.length,
+    filtered.reduce((sum, r) => sum + r.amountMinor, 0),
   );
   const activeFilterCount = $derived(
     selectedCats.length +
-      (dateFrom || dateTo ? 1 : 0) +
       (amountMin || amountMax ? 1 : 0) +
+      (dateFrom || dateTo ? 1 : 0) +
       (search.trim() ? 1 : 0),
   );
+  const allSelected = $derived(
+    filtered.length > 0 && filtered.every((r) => selected.has(r.id)),
+  );
+  const someSelected = $derived(
+    filtered.some((r) => selected.has(r.id)) && !allSelected,
+  );
+  const selectedList = $derived(filtered.filter((r) => selected.has(r.id)));
+  const selTotal = $derived(
+    selectedList.reduce((sum, r) => sum + r.amountMinor, 0),
+  );
+  // A record a payment or a bank line still points at refuses deletion, so the
+  // bar says so up front rather than after the fact.
+  const lockedSelected = $derived(selectedList.filter((r) => r.locked).length);
 
-  function clearSel() {
-    selected = new Set();
-  }
-  function clearAllFilters() {
-    selectedCats = [];
-    dateFrom = "";
-    dateTo = "";
-    amountMin = "";
-    amountMax = "";
-    searchRaw = "";
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  // Stats — derived from local state so they update in real-time
   const stats = $derived.by(() => {
     const now = new Date();
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const qStart = `${now.getFullYear()}-${String(Math.floor(now.getMonth() / 3) * 3 + 1).padStart(2, "0")}-01`;
     return {
-      thisMonth: incomes
-        .filter((i) => i.date.startsWith(monthKey))
-        .reduce((s, i) => s + i.mainAmount, 0),
-      thisQuarter: incomes
-        .filter((i) => i.date >= qStart)
-        .reduce((s, i) => s + i.mainAmount, 0),
+      thisMonth: records
+        .filter((r) => r.date.startsWith(monthKey))
+        .reduce((sum, r) => sum + r.amountMinor, 0),
+      thisQuarter: records
+        .filter((r) => r.date >= qStart)
+        .reduce((sum, r) => sum + r.amountMinor, 0),
       largest:
-        incomes.length > 0 ? Math.max(...incomes.map((i) => i.mainAmount)) : 0,
-      allTotal: incomes.reduce((s, i) => s + i.mainAmount, 0),
-      count: incomes.length,
+        records.length > 0 ? Math.max(...records.map((r) => r.amountMinor)) : 0,
+      allTotal: records.reduce((sum, r) => sum + r.amountMinor, 0),
+      count: records.length,
     };
   });
 
-  // SSE — real-time updates from server
-  type IncomeStreamMsg =
-    | { type: "income-update"; item: (typeof data.incomes)[0] }
-    | { type: "income-delete"; id: number };
-  createResourceStream<IncomeStreamMsg>("/api/income/stream", (msg) => {
-    if (msg.type === "income-update") incomes = mergeById(incomes, [msg.item]);
-    else if (msg.type === "income-delete")
-      incomes = incomes.filter((i) => i.id !== msg.id);
-  });
+  // --- Selection ----------------------------------------------------------
+  function toggleAll() {
+    if (allSelected) filtered.forEach((r) => selected.delete(r.id));
+    else filtered.forEach((r) => selected.add(r.id));
+  }
 
-  async function openIncome(
-    inc: (typeof data.incomes)[0],
-    { push = true } = {},
-  ) {
-    detailIncome = { ...inc, attachments: [] };
-    isEditing = false;
+  function toggleOne(id: number) {
+    if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+  }
+
+  function clearSel() {
+    selected.clear();
+  }
+
+  function onSort(key: string) {
+    if (sort.key === key) {
+      sort = { key, dir: sort.dir === "asc" ? "desc" : "asc" };
+    } else {
+      sort = { key, dir: key === "amount" || key === "date" ? "desc" : "asc" };
+    }
+  }
+
+  function clearAllFilters() {
+    selectedCats = [];
+    amountMin = "";
+    amountMax = "";
+    dateFrom = "";
+    dateTo = "";
+    searchRaw = "";
+  }
+
+  function toggleCat(id: number) {
+    selectedCats = selectedCats.includes(id)
+      ? selectedCats.filter((x) => x !== id)
+      : [...selectedCats, id];
+  }
+
+  // --- Detail drawer ------------------------------------------------------
+  // The open record is looked up by id rather than copied, so a change arriving
+  // over the stream reaches the open drawer without a second fetch.
+  let openRecordId = $state<number | null>(null);
+  const detailRecord = $derived(
+    openRecordId === null
+      ? null
+      : (records.find((r) => r.id === openRecordId) ?? null),
+  );
+
+  function openRecord(record: RecordView, { push = true } = {}) {
+    openRecordId = record.id;
     if (push) {
-      pushState(resolve("/(app)/income/[id]", { id: String(inc.id) }), {
+      pushState(resolve("/(app)/income/[id]", { id: String(record.id) }), {
         viaPush: true,
       });
     }
-    const res = await fetch(`/api/income/${inc.id}`);
-    if (res.ok) detailIncome = await res.json();
   }
 
   function closeDetail() {
-    detailIncome = null;
-    isEditing = false;
+    openRecordId = null;
     if (page.state.viaPush) {
       history.back();
     } else {
@@ -440,10 +284,30 @@
     }
   }
 
+  // --- Live updates -------------------------------------------------------
+  type LedgerStreamMsg =
+    | { type: "record-update"; record: RecordView }
+    | { type: "record-deleted"; id: number }
+    | { type: "settlement-changed"; recordIds: number[] };
+
+  createResourceStream<LedgerStreamMsg>("/api/income/stream", (msg) => {
+    if (msg.type === "record-update") {
+      // The stream is already filtered to this screen's kind; the check keeps a
+      // future change to that filter from quietly pulling other records in.
+      if (msg.record.kind !== LedgerRecordKind.Income) return;
+      records = mergeById(records, [msg.record]);
+    } else if (msg.type === "record-deleted") {
+      records = records.filter((r) => r.id !== msg.id);
+      if (openRecordId === msg.id) closeDetail();
+    }
+    // `settlement-changed` needs no handling of its own: the same write emits a
+    // `record-update` for every record whose paid state moved.
+  });
+
   onMount(() => {
     if (openId) {
-      const found = incomes.find((i) => i.id === openId);
-      if (found) openIncome(found, { push: false });
+      const found = data.records.find((r) => r.id === openId);
+      if (found) openRecord(found, { push: false });
     }
   });
 </script>
@@ -455,7 +319,7 @@
       <h1 class="page-title">Income</h1>
       <p class="page-sub">
         {stats.count} records ·
-        <span class="num">+{formatMoneyRM(stats.allTotal)}</span> total
+        <span class="num">+{formatMinor(stats.allTotal)}</span> total
       </p>
     </div>
     <div class="topbar-right">
@@ -499,12 +363,14 @@
       >
         {#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
       </button>
-      <button
-        onclick={() => (showNew = true)}
-        style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
-      >
-        <Plus size={15} /> <span class="btn-text">Record income</span>
-      </button>
+      {#if data.perms.add}
+        <button
+          onclick={() => (showNew = true)}
+          style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
+        >
+          <Plus size={15} /> <span class="btn-text">Record income</span>
+        </button>
+      {/if}
     </div>
   </header>
 
@@ -514,28 +380,39 @@
       tone="green"
       label="This month"
       cur={"+" + mainCurrencySymbol()}
-      value={formatMoney(stats.thisMonth)}
+      value={formatMinorAmount(stats.thisMonth)}
     />
     <StatCard
       label="This quarter"
       cur={"+" + mainCurrencySymbol()}
-      value={formatMoney(stats.thisQuarter)}
+      value={formatMinorAmount(stats.thisQuarter)}
     />
     <StatCard
       label="Largest payment"
       cur={"+" + mainCurrencySymbol()}
-      value={formatMoney(stats.largest)}
+      value={formatMinorAmount(stats.largest)}
     />
     <StatCard
       tone="green"
       label="All received"
       cur={"+" + mainCurrencySymbol()}
-      value={formatMoney(stats.allTotal)}
+      value={formatMinorAmount(stats.allTotal)}
     />
   </div>
 
   <div class="work">
     <div class="work-main layout-standard" style="padding-top:12px;">
+      {#if actionError}
+        <div class="page-error">
+          {actionError}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onclick={() => (actionError = "")}><X size={13} /></button
+          >
+        </div>
+      {/if}
+
       <!-- Toolbar -->
       <div class="toolbar">
         <div class="toolbar-heading">
@@ -578,39 +455,14 @@
                     >Clear</button
                   >{/if}
               </div>
-              {#each data.categories as cat}
+              {#each data.categories as cat (cat.id)}
                 <button
-                  onclick={() => toggleCat(cat)}
-                  style="display:flex; align-items:center; gap:9px; width:100%; border:none; background:none; font-family:inherit; font-size:13px; color:var(--foreground); padding:7px 8px; border-radius:7px; cursor:pointer; text-align:left;"
-                  onmouseover={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "var(--accent)";
-                  }}
-                  onmouseout={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "";
-                  }}
-                  onfocus={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "var(--accent)";
-                  }}
-                  onblur={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "";
-                  }}
+                  onclick={() => toggleCat(cat.id)}
+                  class="cat-option"
+                  class:on={selectedCats.includes(cat.id)}
                 >
-                  <span
-                    style="width:16px; height:16px; border-radius:4px; border:1.5px solid {selectedCats.includes(
-                      cat,
-                    )
-                      ? 'var(--primary)'
-                      : 'var(--border-strong)'}; background:{selectedCats.includes(
-                      cat,
-                    )
-                      ? 'var(--primary)'
-                      : 'var(--card)'}; display:grid; place-items:center; flex-shrink:0;"
-                  >
-                    {#if selectedCats.includes(cat)}<svg
+                  <span class="cat-box" aria-hidden="true">
+                    {#if selectedCats.includes(cat.id)}<svg
                         width="10"
                         height="10"
                         viewBox="0 0 24 24"
@@ -622,7 +474,7 @@
                         ><path d="M20 6 9 17l-5-5" /></svg
                       >{/if}
                   </span>
-                  {cat}
+                  {cat.name}
                 </button>
               {/each}
             </div>
@@ -710,7 +562,7 @@
         <div class="result-meta">
           <span>Showing <b>{filtered.length}</b> of {stats.count}</span>
           <span class="result-total"
-            >Filtered total <b class="num">+{formatMoneyRM(filteredTotal)}</b
+            >Filtered total <b class="num">+{formatMinor(filteredTotal)}</b
             ></span
           >
         </div>
@@ -746,12 +598,12 @@
                 </button>
               </th>
               <th
-                class={`sortable ${sort.key === "descriptionText" ? "sorted" : ""}`}
-                onclick={() => onSort("descriptionText")}
+                class={`sortable ${sort.key === "description" ? "sorted" : ""}`}
+                onclick={() => onSort("description")}
                 style="cursor:pointer; user-select:none;"
               >
                 <span class="th-inner"
-                  >Description {sort.key === "descriptionText"
+                  >Description {sort.key === "description"
                     ? sort.dir === "asc"
                       ? "↑"
                       : "↓"
@@ -817,7 +669,7 @@
               <tr
                 class="exp-row"
                 class:selected={selected.has(inc.id)}
-                onclick={() => openIncome(inc)}
+                onclick={() => openRecord(inc)}
               >
                 <td
                   class="td-check"
@@ -837,7 +689,7 @@
                     )
                       ? 'var(--primary)'
                       : 'var(--card)'}; display:grid; place-items:center; cursor:pointer; color:var(--primary-foreground); padding:0; flex-shrink:0;"
-                    aria-label="Select {inc.incomeNumber}"
+                    aria-label="Select {inc.recordNumber ?? inc.description}"
                   >
                     {#if selected.has(inc.id)}<svg
                         width="10"
@@ -851,20 +703,24 @@
                 </td>
                 <td class="td-primary">
                   <div class="cell-item">
-                    <span class="cell-itemname"
-                      >{inc.descriptionText || "—"}</span
-                    >
-                    <span class="cell-itemnum">{inc.incomeNumber}</span>
+                    <span class="cell-itemname">
+                      {inc.description || "—"}
+                      {#if inc.locked}<span
+                          class="row-lock"
+                          title={inc.lockedReason}><Lock size={11} /></span
+                        >{/if}
+                    </span>
+                    <span class="cell-itemnum">{inc.recordNumber ?? ""}</span>
                   </div>
                 </td>
                 <td class="td-supplier" data-label="Source"
-                  >{inc.contactName || ""}</td
+                  >{inc.contactName ?? ""}</td
                 >
                 <td data-label="Category">
                   <span
                     style="display:inline-flex; align-items:center; font-size:11.5px; background:var(--secondary); color:var(--secondary-foreground); padding:2px 9px; border-radius:999px; white-space:nowrap;"
                   >
-                    {inc.category}
+                    {categoryName(inc)}
                   </span>
                 </td>
                 <td class="td-date" data-label="Date">
@@ -874,7 +730,8 @@
                 </td>
                 <td class="td-amount" data-label="Amount">
                   <span class="amount-num" style="color:var(--green);"
-                    >+{mainCurrencySymbol()} {formatMoney(inc.mainAmount)}</span
+                    >+{mainCurrencySymbol()}
+                    {formatMinorAmount(inc.amountMinor)}</span
                   >
                   {#if inc.currency !== mainCurrency()}
                     <span class="amount-orig"
@@ -918,7 +775,13 @@
       </div>
       <div class="table-foot">
         <span>{filtered.length} of {stats.count} records</span>
-        <span class="muted">Updated just now</span>
+        {#if data.total > records.length}
+          <span class="muted"
+            >Showing the {records.length} most recent of {data.total}</span
+          >
+        {:else}
+          <span class="muted">Updated just now</span>
+        {/if}
       </div>
     </div>
   </div>
@@ -927,20 +790,51 @@
   <BulkActionBar
     show={selected.size > 0}
     count={selected.size}
-    total={`+${mainCurrencySymbol()} ${formatMoney(selTotal)}`}
+    total={`+${mainCurrencySymbol()} ${formatMinorAmount(selTotal)}`}
     onclear={clearSel}
   >
     {#snippet actions()}
-      <button
-        class="bulk-actions-ghost"
-        onclick={clearSel}
-        style="padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;"
-      >
-        Deselect all
-      </button>
+      {#if data.perms.delete}
+        <button
+          type="button"
+          class="bulk-actions-ghost"
+          style="display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer;"
+          onclick={() => (deleteDialogOpen = true)}
+        >
+          <Trash2 size={14} /> Delete
+        </button>
+      {/if}
     {/snippet}
   </BulkActionBar>
 </div>
+
+<ConfirmDialog
+  bind:open={deleteDialogOpen}
+  title={selected.size === 1
+    ? "Delete this income record?"
+    : "Delete these income records?"}
+  description={lockedSelected > 0
+    ? `${lockedSelected} of the ${selected.size} selected can't be deleted while a payment or a bank line still points at them — the rest will be removed. This can't be undone.`
+    : `This removes ${selected.size} ${selected.size === 1 ? "record" : "records"} and both sides of each. It can't be undone.`}
+  confirmLabel="Delete"
+  danger
+  onConfirm={() => deleteFormEl?.requestSubmit()}
+/>
+
+<form
+  method="POST"
+  action="?/delete"
+  bind:this={deleteFormEl}
+  use:enhance={() =>
+    async ({ update }) => {
+      deleteDialogOpen = false;
+      clearSel();
+      await update();
+    }}
+  style="display:none"
+>
+  <input type="hidden" name="ids" value={[...selected].join(",")} />
+</form>
 
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
@@ -968,17 +862,17 @@
             >{/if}
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:7px;">
-          {#each data.categories as cat}
+          {#each data.categories as cat (cat.id)}
             <button
-              onclick={() => toggleCat(cat)}
-              style="border:1px solid {selectedCats.includes(cat)
+              onclick={() => toggleCat(cat.id)}
+              style="border:1px solid {selectedCats.includes(cat.id)
                 ? 'var(--primary)'
-                : 'var(--border)'}; background:{selectedCats.includes(cat)
+                : 'var(--border)'}; background:{selectedCats.includes(cat.id)
                 ? 'var(--primary-soft)'
-                : 'var(--card)'}; color:{selectedCats.includes(cat)
+                : 'var(--card)'}; color:{selectedCats.includes(cat.id)
                 ? 'var(--primary)'
                 : 'var(--foreground)'}; font-family:inherit; font-size:13px; padding:5px 12px; border-radius:999px; cursor:pointer;"
-              >{cat}</button
+              >{cat.name}</button
             >
           {/each}
         </div>
@@ -1045,730 +939,108 @@
   </Sheet.Portal>
 </Sheet.Root>
 
-<!-- Detail sheet -->
-<Sheet.Root
-  open={!!detailIncome}
-  onOpenChange={(o) => {
-    if (!o) closeDetail();
-  }}
->
-  <Sheet.Portal>
-    <Sheet.Overlay />
-    <Sheet.Content
-      side={panelSide}
-      style={isMobile
-        ? "height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;"
-        : "width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;"}
-    >
-      {#if detailIncome}
-        <div
-          style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-        >
-          <div>
-            <div class="sheet-eyebrow">{detailIncome.incomeNumber}</div>
-            <div class="sheet-title-text">
-              {detailIncome.contactName ?? "—"}
-            </div>
-          </div>
-          <Sheet.Close class="sheet-close">
-            <X size={16} />
-          </Sheet.Close>
-        </div>
-        {#if isEditing}
-          <!-- Edit mode -->
-          <div
-            style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-          >
-            {#if saveError}
-              <div
-                style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-              >
-                {saveError}
-              </div>
-            {/if}
+<!-- Record detail -->
+<RecordSheet
+  open={detailRecord !== null}
+  record={detailRecord}
+  kind="income"
+  accounts={data.accounts}
+  categories={data.categories}
+  contacts={data.contacts}
+  defaultAccountId={data.defaultAccountId}
+  lastForeignCurrency={data.lastForeignCurrency}
+  canChange={data.perms.change}
+  canDelete={data.perms.delete}
+  onclose={closeDetail}
+/>
 
-            <div class="field">
-              <label class="field-label" for="edit-customer">Customer</label>
-              <ContactSelect
-                role={Role.Customer}
-                bind:value={editContactId}
-                bind:newName={editContactName}
-                placeholder="Search or add a customer…"
-                initialLabel={detailIncome.contactName}
-              />
-            </div>
-
-            <div class="field-grid field">
-              <div>
-                <label class="field-label" for="edit-date">Date</label>
-                <DatePicker name="editDate" bind:value={editDate} />
-              </div>
-              <div>
-                <label class="field-label" for="edit-amount"
-                  >Amount{editCurrency !== mainCurrency()
-                    ? ` (${editCurrency})`
-                    : ""}</label
-                >
-                <AmountInput
-                  id="edit-amount"
-                  placeholder="0.00"
-                  bind:value={editAmount}
-                  prefix={currencySymbol(editCurrency)}
-                />
-              </div>
-            </div>
-
-            <div class="field-grid field">
-              <div>
-                <label class="field-label" for="editCurrency">Currency</label>
-                <Select.Root type="single" bind:value={editCurrency}>
-                  <Select.Trigger id="editCurrency" class="w-full"
-                    >{editCurrency}</Select.Trigger
-                  >
-                  <Select.Content>
-                    {#each CURRENCIES as c (c.code)}
-                      <Select.Item
-                        value={c.code}
-                        label={`${c.code} — ${c.name}`}
-                      />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              </div>
-              {#if editCurrency !== mainCurrency()}
-                <div>
-                  <label class="field-label" for="editRate"
-                    >Rate (1 {editCurrency} = ? {mainCurrency()})</label
-                  >
-                  <Input
-                    id="editRate"
-                    type="text"
-                    inputmode="decimal"
-                    placeholder="1.0"
-                    bind:value={editExchangeRate}
-                  />
-                </div>
-              {/if}
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editCategory">Category</label>
-              <Select.Root type="single" bind:value={editCategory}>
-                <Select.Trigger id="editCategory" class="w-full">
-                  {editCategory || "Select category"}
-                </Select.Trigger>
-                <Select.Content>
-                  {#each data.categories as cat}
-                    <Select.Item value={cat} label={cat} />
-                  {/each}
-                </Select.Content>
-              </Select.Root>
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editReference">Reference</label>
-              <Input
-                id="editReference"
-                type="text"
-                placeholder="e.g. INV-001"
-                bind:value={editReference}
-              />
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editDescriptionText"
-                >Description</label
-              >
-              <Textarea
-                id="editDescriptionText"
-                placeholder="Optional notes…"
-                class="leading-relaxed"
-                bind:value={editDescriptionText}
-              />
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="editRemark">Remark</label>
-              <Textarea
-                id="editRemark"
-                placeholder="Optional remark…"
-                class="leading-relaxed"
-                bind:value={editRemark}
-              />
-            </div>
-          </div>
-
-          <div class="sheet-foot">
-            <div class="sheet-foot-actions">
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-delete"
-                onclick={() => (deleteDialogOpen = true)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="sheet-btn"
-                style="margin-left:auto;"
-                onclick={() => (isEditing = false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-primary"
-                onclick={saveEdit}
-                disabled={saving}
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </div>
-        {:else}
-          <!-- View mode -->
-          <div style="flex:1; overflow-y:auto; padding:20px 22px;">
-            <div class="detail-amount">
-              <span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-              <span class="detail-amount-val inc"
-                >+{formatMoney(detailIncome.mainAmount)}</span
-              >
-            </div>
-            {#if detailIncome.currency !== mainCurrency()}
-              <div class="detail-orig">
-                Original: {detailIncome.currency}
-                {formatCurrencyAmount(
-                  detailIncome.amount,
-                  detailIncome.currency,
-                )}
-                · rate {detailIncome.exchangeRate}
-              </div>
-            {/if}
-            <div class="detail-statusrow">
-              <StatusBadge status="received" />
-            </div>
-            <div class="detail-section-label">Bank reconciliation</div>
-            <button
-              type="button"
-              class="related-link reconciliation-control"
-              onclick={() => {
-                goto(resolve("/reconciliation"));
-              }}
-            >
-              <span
-                class:cleared={detailIncome.cleared}
-                class="reconciliation-control-icon"
-              >
-                {#if detailIncome.cleared}<CircleCheck
-                    size={17}
-                  />{:else}<Circle size={17} />{/if}
-              </span>
-              <span class="reconciliation-control-copy">
-                <span class="reconciliation-control-title">
-                  {detailIncome.cleared ? "Cleared" : "Not cleared"}
-                </span>
-                <span class="reconciliation-control-sub">
-                  {detailIncome.cleared
-                    ? "Fully allocated in reconciliation"
-                    : "Match this income to a bank statement line"}
-                </span>
-              </span>
-              <ChevronRight size={14} class="reconciliation-control-chevron" />
-            </button>
-            <div class="detail-list">
-              <div class="detail-row">
-                <div class="detail-key">Customer</div>
-                <div class="detail-val">{detailIncome.contactName ?? "—"}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-key">Category</div>
-                <div class="detail-val">{detailIncome.category}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-key">Date</div>
-                <div class="detail-val num">
-                  {formatDate(detailIncome.date)}
-                </div>
-              </div>
-              {#if detailIncome.reference}
-                <div class="detail-row">
-                  <div class="detail-key">Reference</div>
-                  <div class="detail-val num">{detailIncome.reference}</div>
-                </div>
-              {/if}
-              {#if detailIncome.descriptionText}
-                <div class="detail-row">
-                  <div class="detail-key">Description</div>
-                  <div class="detail-val">{detailIncome.descriptionText}</div>
-                </div>
-              {/if}
-              {#if detailIncome.remark}
-                <div class="detail-row">
-                  <div class="detail-key">Remark</div>
-                  <div class="detail-val">{detailIncome.remark}</div>
-                </div>
-              {/if}
-            </div>
-            <AttachmentManager
-              apiBase={`/api/income/${detailIncome.id}`}
-              bind:attachments={detailIncome.attachments}
-            />
-            <AuditTrail
-              bind:this={auditTrailRef}
-              recordType="income"
-              recordId={detailIncome.id}
-            />
-          </div>
-          <div class="sheet-foot">
-            <div class="sheet-foot-actions">
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-delete"
-                onclick={() => (deleteDialogOpen = true)}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-              <button
-                type="button"
-                class="sheet-btn sheet-btn-primary"
-                onclick={startEdit}
-              >
-                Edit
-              </button>
-            </div>
-          </div>
-        {/if}
-      {/if}
-    </Sheet.Content>
-  </Sheet.Portal>
-</Sheet.Root>
-
-{#if detailIncome}
-  <ConfirmDialog
-    bind:open={deleteDialogOpen}
-    title="Delete income record?"
-    description={`This will permanently delete ${detailIncome.incomeNumber} and its ${detailIncome.attachments.length} attachment(s). This can't be undone.`}
-    confirmLabel="Delete"
-    danger
-    onConfirm={() => deleteFormEl?.requestSubmit()}
-  />
-  <form
-    method="POST"
-    action="?/delete"
-    bind:this={deleteFormEl}
-    use:enhance={() =>
-      async ({ result, update }) => {
-        if (result.type === "success") {
-          deleteDialogOpen = false;
-          closeDetail();
-        }
-        await update();
-      }}
-    style="display:none"
-  >
-    <input type="hidden" name="id" value={detailIncome.id} />
-  </form>
-{/if}
-
-<!-- New income sheet -->
-<Sheet.Root bind:open={showNew}>
-  <Sheet.Portal>
-    <Sheet.Overlay />
-    <Sheet.Content
-      side={panelSide}
-      style={isMobile
-        ? "height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;"
-        : "width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;"}
-    >
-      <div
-        style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-      >
-        <div>
-          <div class="sheet-eyebrow">New</div>
-          <div class="sheet-title-text">Record income</div>
-        </div>
-        <Sheet.Close class="sheet-close">
-          <X size={16} />
-        </Sheet.Close>
-      </div>
-      <form
-        method="POST"
-        action="?/create"
-        use:enhance={() =>
-          async ({ result, update }) => {
-            if (result.type === "success" && newIncomeFiles.length > 0) {
-              const id = (result.data as Record<string, unknown>)?.id as
-                | number
-                | undefined;
-              if (id) {
-                for (const file of newIncomeFiles) {
-                  const fd = new FormData();
-                  fd.append("file", file);
-                  await fetch(`/api/income/${id}/attachments`, {
-                    method: "POST",
-                    body: fd,
-                  });
-                }
-              }
-              newIncomeFiles = [];
-            }
-            await update();
-          }}
-        style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-      >
-        {#if form?.error}
-          <div
-            style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-          >
-            {form.error}
-          </div>
-        {/if}
-
-        <div class="field">
-          <label class="field-label" for="source">Customer *</label>
-          <ContactSelect
-            role={Role.Customer}
-            bind:value={newContactId}
-            bind:newName={newContactName}
-            placeholder="Search or add a customer…"
-          />
-          <input type="hidden" name="contactId" value={newContactId ?? ""} />
-          <input
-            type="hidden"
-            name="newContactName"
-            value={newContactName ?? ""}
-          />
-        </div>
-
-        <div class="field-grid field">
-          <div>
-            <label class="field-label" for="date">Date *</label>
-            <DatePicker name="date" bind:value={newDate} />
-          </div>
-          <div>
-            <label class="field-label" for="amount"
-              >Amount{isForeign ? ` (${mainCurrency()})` : ""} *</label
-            >
-            {#if isForeign}
-              <AmountInput
-                id="amount"
-                placeholder="0.00"
-                readonly
-                value={convertedDisplay}
-              />
-            {:else}
-              <AmountInput
-                id="amount"
-                placeholder="0.00"
-                required
-                bind:value={newAmount}
-              />
-            {/if}
-          </div>
-        </div>
-
-        <!-- Foreign currency (advanced, hidden by default) -->
-        <input
-          type="hidden"
-          name="amount"
-          value={isForeign ? newForeignAmount : newAmount}
-        />
-        <input
-          type="hidden"
-          name="currency"
-          value={isForeign ? newCurrency : mainCurrency()}
-        />
-        <input
-          type="hidden"
-          name="exchangeRate"
-          value={isForeign ? newRate : "1"}
-        />
-        <div class="field">
-          {#if !showForeign}
-            <button
-              type="button"
-              class="foreign-toggle"
-              onclick={() => (showForeign = true)}
-            >
-              <Plus size={13} /> Foreign currency
-            </button>
-          {:else}
-            <div class="foreign-box">
-              <div class="foreign-head">
-                <span class="field-label" style="margin:0;"
-                  >Foreign currency</span
-                >
-                <button
-                  type="button"
-                  class="foreign-close"
-                  onclick={() => {
-                    showForeign = false;
-                    newCurrency = mainCurrency();
-                    newForeignAmount = "";
-                    newRate = "";
-                    rateError = "";
-                  }}
-                  aria-label="Remove foreign currency"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label class="field-label" for="fx-cur">Currency</label>
-                <Select.Root type="single" bind:value={newCurrency}>
-                  <Select.Trigger id="fx-cur" class="w-full"
-                    >{newCurrency}</Select.Trigger
-                  >
-                  <Select.Content>
-                    {#each CURRENCIES as c (c.code)}
-                      <Select.Item
-                        value={c.code}
-                        label={`${c.code} — ${c.name}`}
-                      />
-                    {/each}
-                  </Select.Content>
-                </Select.Root>
-              </div>
-              <div class="field-grid">
-                <div>
-                  <label class="field-label" for="fx-amount"
-                    >Amount{isForeign ? ` (${newCurrency})` : ""}</label
-                  >
-                  <AmountInput
-                    id="fx-amount"
-                    placeholder="0.00"
-                    required={isForeign}
-                    bind:value={newForeignAmount}
-                    prefix={currencySymbol(newCurrency)}
-                    disabled={!isForeign}
-                  />
-                </div>
-                <div>
-                  <label class="field-label" for="fx-rate"
-                    >Rate (1 {newCurrency} = ? {mainCurrency()})</label
-                  >
-                  <Input
-                    id="fx-rate"
-                    type="text"
-                    inputmode="decimal"
-                    placeholder="0.0000"
-                    bind:value={newRate}
-                    disabled={!isForeign}
-                  />
-                </div>
-              </div>
-              {#if isForeign}
-                <div class="foreign-note">
-                  {#if rateFetching}
-                    Fetching rate…
-                  {:else if rateError}
-                    {rateError}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="category">Category *</label>
-          <Select.Root
-            type="single"
-            name="category"
-            bind:value={newIncomeCategory}
-          >
-            <Select.Trigger id="category" class="w-full">
-              {newIncomeCategory || "Select category"}
-            </Select.Trigger>
-            <Select.Content>
-              {#each data.categories as cat}
-                <Select.Item value={cat} label={cat} />
-              {/each}
-            </Select.Content>
-          </Select.Root>
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="reference">Reference *</label>
-          <Input
-            id="reference"
-            name="reference"
-            type="text"
-            required
-            placeholder="e.g. INV-001"
-          />
-        </div>
-
-        <div class="field">
-          <label class="field-label" for="descriptionText">Description</label>
-          <Textarea
-            id="descriptionText"
-            name="descriptionText"
-            placeholder="Optional notes…"
-            class="leading-relaxed"
-          />
-        </div>
-
-        <div class="field">
-          <span class="field-label"
-            >Attachments <span
-              style="font-weight:400; color:var(--muted-foreground);"
-              >optional</span
-            ></span
-          >
-          {#if newIncomeFiles.length > 0}
-            <div class="attach-list" style="margin-bottom:8px;">
-              {#each newIncomeFiles as file, i}
-                <div class="attach-item">
-                  <div class="attach-thumb"><Paperclip size={14} /></div>
-                  <div class="attach-meta">
-                    <div class="attach-name">{file.name}</div>
-                    <div class="attach-sub">
-                      {(file.size / 1024).toFixed(0)} KB
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    class="attach-del"
-                    onclick={() =>
-                      (newIncomeFiles = newIncomeFiles.filter(
-                        (_, j) => j !== i,
-                      ))}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-          <div
-            class="attach-drop-area"
-            class:drag={newIncomeDrag}
-            role="button"
-            tabindex="0"
-            aria-label="Attach files"
-            ondragover={(e) => {
-              e.preventDefault();
-              newIncomeDrag = true;
-            }}
-            ondragleave={() => (newIncomeDrag = false)}
-            ondrop={(e) => {
-              e.preventDefault();
-              newIncomeDrag = false;
-              if (e.dataTransfer?.files)
-                newIncomeFiles = [
-                  ...newIncomeFiles,
-                  ...Array.from(e.dataTransfer.files),
-                ];
-            }}
-            onclick={() => newIncomeFileInput?.click()}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                newIncomeFileInput?.click();
-              }
-            }}
-          >
-            <div
-              class="attach-empty attach-empty-drop"
-              style="pointer-events:none;"
-            >
-              <Upload size={14} /> Drop files here or click to browse
-            </div>
-          </div>
-          <input
-            bind:this={newIncomeFileInput}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
-            multiple
-            style="display:none"
-            onchange={(e) => {
-              const f = (e.target as HTMLInputElement).files;
-              if (f) newIncomeFiles = [...newIncomeFiles, ...Array.from(f)];
-              (e.target as HTMLInputElement).value = "";
-            }}
-          />
-        </div>
-
-        <div
-          style="border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:flex-end; gap:9px; margin-top:auto;"
-        >
-          <button
-            type="button"
-            onclick={() => (showNew = false)}
-            style="height:34px; padding:0 14px; border:1px solid var(--border); background:var(--card); color:var(--foreground); border-radius:8px; font-family:inherit; font-size:13px; cursor:pointer;"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={foreignRateMissing}
-            title={foreignRateMissing
-              ? "Enter an exchange rate first"
-              : undefined}
-            style="height:34px; padding:0 14px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; opacity:{foreignRateMissing
-              ? 0.5
-              : 1};"
-          >
-            Record income
-          </button>
-        </div>
-      </form>
-    </Sheet.Content>
-  </Sheet.Portal>
-</Sheet.Root>
+<!-- New income -->
+<RecordSheet
+  open={showNew}
+  record={null}
+  kind="income"
+  accounts={data.accounts}
+  categories={data.categories}
+  contacts={data.contacts}
+  defaultAccountId={data.defaultAccountId}
+  lastForeignCurrency={data.lastForeignCurrency}
+  canChange={data.perms.change}
+  onclose={() => (showNew = false)}
+/>
 
 <style>
-  .reconciliation-control {
+  .page-error {
     display: flex;
-    width: 100%;
     align-items: center;
-    gap: 11px;
-    margin-bottom: 16px;
-    padding: 11px 12px;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--red-soft);
+    color: var(--red);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .page-error button {
+    display: flex;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .cat-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--foreground);
+    padding: 7px 8px;
+    border-radius: 7px;
+    cursor: pointer;
     text-align: left;
   }
-
-  .reconciliation-control-icon {
+  .cat-option:hover,
+  .cat-option:focus-visible {
+    background: var(--accent);
+  }
+  .cat-box {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--border-strong);
+    background: var(--card);
     display: grid;
-    width: 32px;
-    height: 32px;
-    flex: 0 0 32px;
     place-items: center;
-    border-radius: 8px;
-    background: var(--secondary);
+    flex-shrink: 0;
+  }
+  .cat-option.on .cat-box {
+    border-color: var(--primary);
+    background: var(--primary);
+  }
+
+  .row-lock {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-left: 5px;
     color: var(--muted-foreground);
   }
 
-  .reconciliation-control-icon.cleared {
-    background: var(--green-soft);
-    color: var(--green);
-  }
-
-  .reconciliation-control-copy {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .reconciliation-control-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--foreground);
-  }
-
-  .reconciliation-control-sub {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11.5px;
-    color: var(--muted-foreground);
-  }
-
-  .reconciliation-control-chevron {
-    flex: none;
-    color: var(--muted-foreground);
+  @media (max-width: 767px) {
+    /* Category chip, then source text, then date */
+    td[data-label="Category"] {
+      order: 6 !important;
+    }
+    .td-supplier {
+      order: 7 !important;
+    }
+    .td-date {
+      order: 8 !important;
+    }
   }
 </style>

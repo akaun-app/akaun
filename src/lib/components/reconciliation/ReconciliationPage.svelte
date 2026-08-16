@@ -10,6 +10,7 @@
   import { SvelteURLSearchParams } from "svelte/reactivity";
   import {
     ArrowDownLeft,
+    ArrowLeftRight,
     ArrowUpRight,
     Banknote,
     Calendar,
@@ -23,6 +24,7 @@
     SlidersHorizontal,
     Trash2,
     Upload,
+    Wallet,
     X,
   } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
@@ -33,8 +35,7 @@
   import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
   import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
   import {
-    ReconItemType,
-    ReconItemTypeLabels,
+    LedgerRecordKindLabels,
     StatementDirection,
     StatementExtractionState,
   } from "$lib/enums.js";
@@ -45,15 +46,18 @@
   import type { loadReconciliationPage } from "$lib/server/loaders/reconciliation.js";
 
   type Data = ReturnType<typeof loadReconciliationPage>;
-  type RecordRow = Data["records"][number];
+  /** One side of a record, on the account a statement belongs to. */
+  type MovementRow = Data["movements"][number];
   type Statement = Data["statements"][number];
   type StatementLine = Data["lines"][number];
   type Draft = { lineId: number; amount: number };
   type Tab = "records" | "statements";
   type RecordStatus = "review" | "matched";
   type StatementStatus = "active" | "completed";
-  /** Must not exceed the `records` array cap in /api/reconciliation/auto-match. */
+  /** Must not exceed the `movementIds` array cap in /api/reconciliation/auto-match. */
   const BULK_MATCH_CHUNK = 500;
+  /** Half a cent — the point where a decimal remainder stops being a rounding artefact. */
+  const CENT = 0.005;
 
   let { data }: { data: Data } = $props();
   const screen = useIsMobile();
@@ -86,8 +90,10 @@
   let from = $state(page.url.searchParams.get("from") ?? "");
   let to = $state(page.url.searchParams.get("to") ?? "");
   let mobileFilterOpen = $state(false);
-  let selectedKey = $state(page.url.searchParams.get("record") ?? "");
-  let selectedRecord = $state<RecordRow | null>(null);
+  let selectedMovementId = $state(
+    Number(page.url.searchParams.get("movement")) || null,
+  );
+  let selectedMovement = $state<MovementRow | null>(null);
   let selectedStatementId = $state(
     Number(page.url.searchParams.get("statement")) || null,
   );
@@ -98,13 +104,26 @@
   let bulkOpen = $state(false);
   let bulkSaving = $state(false);
   let retrying = $state(false);
-  let uploadInput = $state<HTMLInputElement | null>(null);
   let deleteStatementOpen = $state(false);
   let deleteLineOpen = $state(false);
   let pendingLineId = $state<number | null>(null);
   let discardOpen = $state(false);
   let deferredAction = $state<(() => void) | null>(null);
   let editingLineId = $state<number | null>(null);
+  // Upload now needs two answers, not one: which file, and which account the
+  // statement belongs to (FR-021). The file itself stays out of `$state` — a
+  // `File` is not a plain object.
+  let uploadOpen = $state(false);
+  let uploadAccountId = $state<number | null>(null);
+  let uploadFileName = $state("");
+  let uploading = $state(false);
+  let uploadInput = $state<HTMLInputElement | null>(null);
+  let pendingUpload: File | null = null;
+  // "Record this as a transfer from another account" (FR-023).
+  let transferLineId = $state<number | null>(null);
+  let transferAccountId = $state<number | null>(null);
+  let transferDescription = $state("");
+  let transferSaving = $state(false);
 
   const selectedStatement = $derived(
     data.statements.find((statement) => statement.id === selectedStatementId) ??
@@ -113,14 +132,14 @@
   const selectedStatementLines = $derived(
     data.lines.filter((line) => line.statementId === selectedStatementId),
   );
-  const reviewRecords = $derived(
-    data.records.filter(
-      (record) => Math.abs(record.remainingAmount ?? 0) >= 0.005,
+  const reviewMovements = $derived(
+    data.movements.filter(
+      (movement) => Math.abs(movement.remainingAmount ?? 0) >= CENT,
     ),
   );
-  const matchedRecords = $derived(
-    data.records.filter(
-      (record) => Math.abs(record.remainingAmount ?? 0) < 0.005,
+  const matchedMovements = $derived(
+    data.movements.filter(
+      (movement) => Math.abs(movement.remainingAmount ?? 0) < CENT,
     ),
   );
   const activeStatements = $derived(
@@ -142,8 +161,8 @@
     recordStatuses.length === 0 || recordStatuses.includes("matched"),
   );
   const recordStatusTotal = $derived(
-    (includeReview ? reviewRecords.length : 0) +
-      (includeMatched ? matchedRecords.length : 0),
+    (includeReview ? reviewMovements.length : 0) +
+      (includeMatched ? matchedMovements.length : 0),
   );
   const singleRecordStatus = $derived(
     recordStatuses.length === 1 ? recordStatuses[0] : null,
@@ -171,16 +190,16 @@
         ? 1
         : 0,
   );
-  const visibleRecords = $derived.by(() => {
-    let source: RecordRow[] = [];
-    if (includeReview) source = source.concat(reviewRecords);
-    if (includeMatched) source = source.concat(matchedRecords);
+  const visibleMovements = $derived.by(() => {
+    let source: MovementRow[] = [];
+    if (includeReview) source = source.concat(reviewMovements);
+    if (includeMatched) source = source.concat(matchedMovements);
     const normalized = query.trim().toLocaleLowerCase();
     return source
       .filter(
-        (record) =>
+        (movement) =>
           !normalized ||
-          `${record.label} ${record.contactName ?? ""} ${typeLabel(record.itemType)}`
+          `${movement.label} ${movement.contactName ?? ""} ${movement.accountName ?? ""} ${kindLabel(movement.kind)}`
             .toLocaleLowerCase()
             .includes(normalized),
       )
@@ -189,41 +208,47 @@
   const visibleStatements = $derived.by(() => {
     let source: Statement[] = [];
     if (includeActiveStatements) source = source.concat(activeStatements);
-    if (includeCompletedStatements)
-      source = source.concat(completedStatements);
+    if (includeCompletedStatements) source = source.concat(completedStatements);
     const normalized = query.trim().toLocaleLowerCase();
     return source.filter(
       (statement) =>
         !normalized ||
-        statement.originalFilename.toLocaleLowerCase().includes(normalized),
+        `${statement.originalFilename} ${statement.accountName ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalized),
     );
   });
   const bulkMatchable = $derived(
-    visibleRecords.filter((record) => matchStatus(record) === "exact-match"),
+    visibleMovements.filter(
+      (movement) => matchStatus(movement) === "exact-match",
+    ),
   );
   const savedAllocations = $derived.by(() => {
-    const record = selectedRecord;
-    return record
+    const movement = selectedMovement;
+    return movement
       ? data.allocations.filter(
-          (allocation) =>
-            allocation.itemType === record.itemType &&
-            allocation.itemId === record.itemId,
+          (allocation) => allocation.movementId === movement.movementId,
         )
       : [];
   });
+  /**
+   * The lines this movement could be. Only lines from a statement on the
+   * movement's own account are ever offered — that is FR-021, and it is why a
+   * wallet purchase can no longer appear against a bank statement.
+   */
   const compatibleLines = $derived.by(() => {
-    if (!selectedRecord) return [];
+    const movement = selectedMovement;
+    if (!movement) return [];
     const direction =
-      selectedRecord.itemType === ReconItemType.Income
-        ? StatementDirection.In
-        : StatementDirection.Out;
+      movement.amountMinor > 0 ? StatementDirection.In : StatementDirection.Out;
     const savedIds = new Set(
       savedAllocations.map((allocation) => allocation.lineId),
     );
     return data.lines.filter(
       (line) =>
+        line.accountId === movement.accountId &&
         line.direction === direction &&
-        (line.remainingAmount >= 0.005 || savedIds.has(line.id)),
+        (line.remainingAmount >= CENT || savedIds.has(line.id)),
     );
   });
   const availableLines = $derived(
@@ -236,14 +261,9 @@
       drafts.reduce((sum, draft) => sum + Number(draft.amount || 0), 0) * 100,
     ) / 100,
   );
-  const recordTotal = $derived(
-    selectedRecord
-      ? Math.round(selectedRecord.amount * selectedRecord.exchangeRate * 100) /
-          100
-      : 0,
-  );
+  const movementTotal = $derived(selectedMovement?.amount ?? 0);
   const draftRemaining = $derived(
-    Math.round((recordTotal - draftTotal) * 100) / 100,
+    Math.round((movementTotal - draftTotal) * 100) / 100,
   );
   const dirty = $derived(
     JSON.stringify(normalizeDrafts(drafts)) !==
@@ -254,41 +274,51 @@
       JSON.stringify(normalizeDrafts(initialDrafts)),
   );
   const hasSuggestion = $derived(
-    !!selectedRecord?.suggestedLineIds.length && savedAllocations.length === 0,
+    !!selectedMovement?.suggestedLineIds.length &&
+      savedAllocations.length === 0,
   );
   const suggestionApplied = $derived(
-    !!selectedRecord &&
-      drafts.length === selectedRecord.suggestedLineIds.length &&
-      selectedRecord.suggestedLineIds.every((id) =>
+    !!selectedMovement &&
+      drafts.length === selectedMovement.suggestedLineIds.length &&
+      selectedMovement.suggestedLineIds.every((id) =>
         drafts.some((draft) => draft.lineId === id),
       ),
   );
+  /** A line with nothing allocated to it yet is the only kind a transfer can explain. */
+  const transferLine = $derived(
+    data.lines.find((line) => line.id === transferLineId) ?? null,
+  );
+  const transferTargets = $derived(
+    data.accounts.filter(
+      (account) => account.id !== selectedStatement?.accountId,
+    ),
+  );
 
-  // Which record's allocations `drafts` currently holds. Deliberately a plain
+  // Which movement's allocations `drafts` currently holds. Deliberately a plain
   // `let`, not `$state`: the effect below writes it, and making it reactive
   // would feed that write straight back in as a dependency.
-  let hydratedKey = "";
+  let hydratedId: number | null = null;
 
   // Two jobs, and the difference matters:
-  //   1. `?record=…` in the URL (refresh, pasted link) opens a record without
-  //      going through `loadRecord`, so its saved allocations have to be
-  //      staged here — otherwise Save would replace them with whatever the
+  //   1. `?movement=…` in the URL (refresh, pasted link) opens a movement
+  //      without going through `loadMovement`, so its saved allocations have to
+  //      be staged here — otherwise Save would replace them with whatever the
   //      empty composer holds.
-  //   2. After an invalidation, re-point `selectedRecord` at the fresh loader
+  //   2. After an invalidation, re-point `selectedMovement` at the fresh loader
   //      object so the composer shows current amounts. This must NOT re-stage
   //      drafts: an SSE event from another tab would wipe edits in progress.
   $effect(() => {
-    const records = data.records;
-    const key = selectedKey;
-    if (!key) {
-      hydratedKey = "";
+    const movements = data.movements;
+    const id = selectedMovementId;
+    if (!id) {
+      hydratedId = null;
       return;
     }
-    const refreshed = records.find((record) => recordKey(record) === key);
+    const refreshed = movements.find((movement) => movement.movementId === id);
     if (!refreshed) return;
-    selectedRecord = refreshed;
-    if (hydratedKey === key) return;
-    hydratedKey = key;
+    selectedMovement = refreshed;
+    if (hydratedId === id) return;
+    hydratedId = id;
     stageSavedAllocations(refreshed);
   });
 
@@ -299,22 +329,20 @@
     },
   );
 
-  function recordKey(record: Pick<RecordRow, "itemType" | "itemId">) {
-    return `${record.itemType}:${record.itemId}`;
-  }
-  function typeLabel(type: number) {
-    const value = ReconItemTypeLabels[type] ?? "record";
-    return value[0].toUpperCase() + value.slice(1);
+  function kindLabel(kind: number | undefined) {
+    const value = (kind && LedgerRecordKindLabels[kind]) || "record";
+    const words = value.replace(/_/g, " ");
+    return words[0].toUpperCase() + words.slice(1);
   }
   function matchStatus(
-    record: RecordRow,
+    movement: MovementRow,
   ): "matched" | "exact-match" | "partial-match" | "no-match" {
-    if (Math.abs(record.remainingAmount ?? 0) < 0.005) return "matched";
-    if ((record.allocatedAmount ?? 0) >= 0.005) return "partial-match";
-    return record.suggestedLineIds.length ? "exact-match" : "no-match";
+    if (Math.abs(movement.remainingAmount ?? 0) < CENT) return "matched";
+    if ((movement.allocatedAmount ?? 0) >= CENT) return "partial-match";
+    return movement.suggestedLineIds.length ? "exact-match" : "no-match";
   }
-  function matchRank(record: RecordRow) {
-    const status = matchStatus(record);
+  function matchRank(movement: MovementRow) {
+    const status = matchStatus(movement);
     return status === "exact-match"
       ? 0
       : status === "partial-match"
@@ -323,11 +351,11 @@
           ? 2
           : 3;
   }
-  function buildSuggestionDrafts(record: RecordRow): Draft[] {
-    if (!record.suggestedLineIds.length) return [];
-    let remaining = Math.round(record.amount * record.exchangeRate * 100) / 100;
+  function buildSuggestionDrafts(movement: MovementRow): Draft[] {
+    if (!movement.suggestedLineIds.length) return [];
+    let remaining = movement.amount;
     const result: Draft[] = [];
-    for (const lineId of record.suggestedLineIds) {
+    for (const lineId of movement.suggestedLineIds) {
       const line = data.lines.find((candidate) => candidate.id === lineId);
       if (!line) continue;
       const amount = Math.min(line.remainingAmount, remaining);
@@ -357,7 +385,7 @@
     if (query) params.set("q", query);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
-    if (selectedKey) params.set("record", selectedKey);
+    if (selectedMovementId) params.set("movement", String(selectedMovementId));
     if (selectedStatementId)
       params.set("statement", String(selectedStatementId));
     // eslint-disable-next-line svelte/no-navigation-without-resolve -- route is resolved; only query state is appended.
@@ -376,38 +404,34 @@
     action?.();
   }
   /**
-   * Fill the composer for `record`: its saved allocations if it has any, the
+   * Fill the composer for `movement`: its saved allocations if it has any, the
    * suggested set otherwise. Shared by the in-app row click and the
-   * URL-restore effect so both open a record in the same state.
+   * URL-restore effect so both open a movement in the same state.
    */
-  function stageSavedAllocations(record: RecordRow) {
+  function stageSavedAllocations(movement: MovementRow) {
     const saved = data.allocations
-      .filter(
-        (allocation) =>
-          allocation.itemType === record.itemType &&
-          allocation.itemId === record.itemId,
-      )
+      .filter((allocation) => allocation.movementId === movement.movementId)
       .map((allocation) => ({
         lineId: allocation.lineId,
         amount: allocation.amount,
       }));
-    drafts = saved.length ? saved : buildSuggestionDrafts(record);
+    drafts = saved.length ? saved : buildSuggestionDrafts(movement);
     savedDrafts = [...saved];
     initialDrafts = [...drafts];
   }
-  function loadRecord(record: RecordRow) {
-    selectedKey = recordKey(record);
-    // Staged here and now, so the effect above treats this record as hydrated
+  function loadMovement(movement: MovementRow) {
+    selectedMovementId = movement.movementId;
+    // Staged here and now, so the effect above treats this movement as hydrated
     // and leaves the drafts alone on the next invalidation.
-    hydratedKey = selectedKey;
-    selectedRecord = record;
-    stageSavedAllocations(record);
+    hydratedId = movement.movementId;
+    selectedMovement = movement;
+    stageSavedAllocations(movement);
     updateUrl();
   }
-  function chooseRecord(record: RecordRow) {
-    guard(() => loadRecord(record));
+  function chooseMovement(movement: MovementRow) {
+    guard(() => loadMovement(movement));
   }
-  function closeRecord() {
+  function closeMovement() {
     guard(clearSelection);
   }
   function chooseStatement(statement: Statement) {
@@ -424,8 +448,8 @@
     guard(() => {
       tab = value;
       query = "";
-      selectedKey = "";
-      selectedRecord = null;
+      selectedMovementId = null;
+      selectedMovement = null;
       drafts = [];
       savedDrafts = [];
       initialDrafts = [];
@@ -466,7 +490,7 @@
       savedAllocations.find((allocation) => allocation.lineId === line.id)
         ?.amount ?? 0;
     const available = line.remainingAmount + savedHere;
-    const remaining = Math.max(0, recordTotal - draftTotal);
+    const remaining = Math.max(0, movementTotal - draftTotal);
     drafts = [
       ...drafts,
       { lineId: line.id, amount: Math.min(available, remaining || available) },
@@ -478,14 +502,14 @@
     );
   }
   function applySuggestion() {
-    if (!selectedRecord) return;
-    drafts = buildSuggestionDrafts(selectedRecord);
+    if (!selectedMovement) return;
+    drafts = buildSuggestionDrafts(selectedMovement);
   }
   async function saveAllocations(): Promise<boolean> {
-    if (!selectedRecord || saving || draftRemaining < -0.005) return false;
+    if (!selectedMovement || saving || draftRemaining < -CENT) return false;
     saving = true;
     const response = await fetch(
-      `/api/reconciliation/records/${selectedRecord.itemType}/${selectedRecord.itemId}/allocations`,
+      `/api/reconciliation/records/${selectedMovement.movementId}/allocations`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -507,36 +531,36 @@
     return true;
   }
   async function saveAndAdvance() {
-    if (!selectedRecord) return;
-    const queue = visibleRecords;
+    if (!selectedMovement) return;
+    const queue = visibleMovements;
     const index = queue.findIndex(
-      (record) => recordKey(record) === selectedKey,
+      (movement) => movement.movementId === selectedMovementId,
     );
-    const nextKey =
+    const nextId =
       index >= 0 && index + 1 < queue.length
-        ? recordKey(queue[index + 1])
+        ? queue[index + 1].movementId
         : null;
     const ok = await saveAllocations();
     if (!ok) return;
-    const nextRecord =
-      (nextKey &&
-        data.records.find(
-          (record) =>
-            recordKey(record) === nextKey &&
-            Math.abs(record.remainingAmount ?? 0) >= 0.005,
+    const nextMovement =
+      (nextId &&
+        data.movements.find(
+          (movement) =>
+            movement.movementId === nextId &&
+            Math.abs(movement.remainingAmount ?? 0) >= CENT,
         )) ||
-      visibleRecords.find(
-        (record) => Math.abs(record.remainingAmount ?? 0) >= 0.005,
+      visibleMovements.find(
+        (movement) => Math.abs(movement.remainingAmount ?? 0) >= CENT,
       );
-    if (nextRecord) {
-      loadRecord(nextRecord);
+    if (nextMovement) {
+      loadMovement(nextMovement);
       return;
     }
     clearSelection();
   }
   function clearSelection() {
-    selectedKey = "";
-    selectedRecord = null;
+    selectedMovementId = null;
+    selectedMovement = null;
     drafts = [];
     savedDrafts = [];
     initialDrafts = [];
@@ -545,26 +569,24 @@
   async function runAutoMatch() {
     bulkOpen = false;
     if (bulkSaving || saving) return;
-    // Hand edits on the open record outrank its suggestion, so persist them
-    // first — that also takes the record out of the batch, since the server
+    // Hand edits on the open movement outrank its suggestion, so persist them
+    // first — that also takes the movement out of the batch, since the server
     // skips anything already allocated.
-    if (selectedRecord && manuallyEdited && !(await saveAllocations())) return;
-    const targets = bulkMatchable.map(({ itemType, itemId }) => ({
-      itemType,
-      itemId,
-    }));
+    if (selectedMovement && manuallyEdited && !(await saveAllocations()))
+      return;
+    const targets = bulkMatchable.map((movement) => movement.movementId);
     if (!targets.length) return;
     bulkSaving = true;
     let matched = 0;
     let skipped = 0;
-    // The endpoint caps a batch at BULK_MATCH_CHUNK records; each request
+    // The endpoint caps a batch at BULK_MATCH_CHUNK movements; each request
     // re-reads the live line balances, so chunking stays consistent.
     for (let start = 0; start < targets.length; start += BULK_MATCH_CHUNK) {
       const response = await fetch("/api/reconciliation/auto-match", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          records: targets.slice(start, start + BULK_MATCH_CHUNK),
+          movementIds: targets.slice(start, start + BULK_MATCH_CHUNK),
         }),
       }).catch(() => null);
       const result = await response?.json().catch(() => null);
@@ -588,27 +610,38 @@
       }`,
     );
     await invalidateAll();
-    const next = visibleRecords.find((record) => {
-      const status = matchStatus(record);
+    const next = visibleMovements.find((movement) => {
+      const status = matchStatus(movement);
       return status === "partial-match" || status === "no-match";
     });
     if (next) {
-      loadRecord(next);
+      loadMovement(next);
       return;
     }
     clearSelection();
   }
-  async function upload(event: Event) {
+  function openUpload() {
+    pendingUpload = null;
+    uploadFileName = "";
+    uploadAccountId = data.accounts[0]?.id ?? null;
+    uploadOpen = true;
+  }
+  function chooseUploadFile(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file) return;
+    pendingUpload = input.files?.[0] ?? null;
+    uploadFileName = pendingUpload?.name ?? "";
+  }
+  async function upload() {
+    if (!pendingUpload || !uploadAccountId || uploading) return;
+    uploading = true;
     const form = new FormData();
-    form.set("file", file);
+    form.set("file", pendingUpload);
+    form.set("accountId", String(uploadAccountId));
     const response = await fetch("/api/reconciliation/statements", {
       method: "POST",
       body: form,
     }).catch(() => null);
+    uploading = false;
     if (!response?.ok) {
       const result = await response?.json().catch(() => null);
       toast.error(
@@ -618,9 +651,76 @@
       return;
     }
     toast.success("Statement extraction started");
+    uploadOpen = false;
+    pendingUpload = null;
+    uploadFileName = "";
     tab = "statements";
     statementStatuses = ["active"];
     updateUrl();
+    await invalidateAll();
+  }
+  /** Move a statement to the account it really belongs to (FR-034a). */
+  async function reassignStatement(accountId: number) {
+    if (!selectedStatementId) return;
+    const response = await fetch(
+      `/api/reconciliation/statements/${selectedStatementId}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountId }),
+      },
+    ).catch(() => null);
+    if (!response?.ok) {
+      const result = await response?.json().catch(() => null);
+      toast.error(
+        result?.error ?? "This statement could not be moved to that account.",
+      );
+      await invalidateAll();
+      return;
+    }
+    toast.success("Statement account updated");
+    await invalidateAll();
+  }
+  function openTransfer(line: StatementLine) {
+    transferLineId = line.id;
+    transferAccountId = transferTargets[0]?.id ?? null;
+    transferDescription = line.description;
+  }
+  function closeTransfer() {
+    transferLineId = null;
+    transferAccountId = null;
+    transferDescription = "";
+  }
+  /**
+   * Record a line as money moved between two of the user's own accounts, and
+   * match it in the same action (FR-023). Nothing was earned or spent, so there
+   * was never a record to find — this creates the one that was missing.
+   */
+  async function saveTransfer() {
+    if (!transferLineId || !transferAccountId || transferSaving) return;
+    transferSaving = true;
+    const response = await fetch(
+      `/api/reconciliation/lines/${transferLineId}/transfer`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          otherAccountId: transferAccountId,
+          description: transferDescription,
+        }),
+      },
+    ).catch(() => null);
+    transferSaving = false;
+    if (!response?.ok) {
+      const result = await response?.json().catch(() => null);
+      toast.error(
+        result?.error ??
+          "This transaction could not be recorded as a transfer.",
+      );
+      return;
+    }
+    toast.success("Transfer recorded and matched");
+    closeTransfer();
     await invalidateAll();
   }
   async function editLine(line: StatementLine, field: string, value: string) {
@@ -707,8 +807,8 @@
     <div class="topbar-left">
       <h1 class="page-title">Reconciliation</h1>
       <p class="page-sub">
-        {reviewRecords.length} record{reviewRecords.length === 1 ? "" : "s"} need
-        review · <span class="num">{formatMoney(bankRemaining)}</span> unallocated
+        {reviewMovements.length} record{reviewMovements.length === 1 ? "" : "s"}
+        need review · <span class="num">{formatMoney(bankRemaining)}</span> unallocated
       </p>
     </div>
     <div class="topbar-right">
@@ -727,17 +827,10 @@
             : "Search bank statements"}
         />
       </div>
-      {#if data.permissions.add}<input
-          bind:this={uploadInput}
-          class="sr-only"
-          type="file"
-          accept="application/pdf,image/png,image/jpeg"
-          onchange={upload}
-          aria-label="Choose bank statement"
-        /><button
+      {#if data.permissions.add}<button
           class="primary-action"
           type="button"
-          onclick={() => uploadInput?.click()}
+          onclick={openUpload}
           ><Upload size={15} aria-hidden="true" /><span>Upload Statement</span
           ></button
         >{/if}
@@ -772,7 +865,8 @@
           >{#if activeFilterCount > 0}<button
               class="clear-filters"
               type="button"
-              onclick={clearFilters}><X size={13} aria-hidden="true" /> Clear</button
+              onclick={clearFilters}
+              ><X size={13} aria-hidden="true" /> Clear</button
             >{/if}{@render BulkMatchButton()}
         </div>
         <div class="toolbar-filters">
@@ -799,8 +893,8 @@
                     >{#if recordStatuses.includes("review")}<Check
                         size={11}
                       />{/if}</span
-                  >Needs Review <span class="tab-count"
-                    >{reviewRecords.length}</span
+                  >Needs Review
+                  <span class="tab-count">{reviewMovements.length}</span
                   ></button
                 ><button
                   type="button"
@@ -811,14 +905,17 @@
                     >{#if recordStatuses.includes("matched")}<Check
                         size={11}
                       />{/if}</span
-                  >Matched <span class="tab-count"
-                    >{matchedRecords.length}</span
+                  >Matched
+                  <span class="tab-count">{matchedMovements.length}</span
                   ></button
                 >
               </div>
             </FilterDropdown>
             <FilterDropdown label="Date" active={dateRangeActive} align="right">
-              {#snippet icon()}<Calendar size={14} aria-hidden="true" />{/snippet}
+              {#snippet icon()}<Calendar
+                  size={14}
+                  aria-hidden="true"
+                />{/snippet}
               <div class="filter-daterange">
                 <div class="filter-daterange-head">
                   <span>Date range</span>
@@ -870,8 +967,8 @@
                     >{#if statementStatuses.includes("active")}<Check
                         size={11}
                       />{/if}</span
-                  >Active <span class="tab-count"
-                    >{activeStatements.length}</span
+                  >Active
+                  <span class="tab-count">{activeStatements.length}</span
                   ></button
                 ><button
                   type="button"
@@ -882,8 +979,8 @@
                     >{#if statementStatuses.includes("completed")}<Check
                         size={11}
                       />{/if}</span
-                  >Completed <span class="tab-count"
-                    >{completedStatements.length}</span
+                  >Completed
+                  <span class="tab-count">{completedStatements.length}</span
                   ></button
                 >
               </div>
@@ -898,53 +995,53 @@
               <table class="exp-table">
                 <thead
                   ><tr
-                    ><th>Record</th><th>Type</th><th>Date</th><th
+                    ><th>Record</th><th>Account</th><th>Date</th><th
                       class="ta-right">Total</th
                     ><th>Match</th><th class="ta-right">Remaining</th><th
                       aria-label="Open"
                     ></th></tr
                   ></thead
                 ><tbody
-                  >{#each visibleRecords as record (recordKey(record))}<tr
+                  >{#each visibleMovements as movement (movement.movementId)}<tr
                       class="exp-row"
-                      class:selected={recordKey(record) === selectedKey}
+                      class:selected={movement.movementId ===
+                        selectedMovementId}
                       tabindex="0"
-                      onclick={() => chooseRecord(record)}
+                      onclick={() => chooseMovement(movement)}
                       onkeydown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          chooseRecord(record);
+                          chooseMovement(movement);
                         }
                       }}
                       ><td class="td-primary"
                         ><div class="cell-item">
-                          <span class="cell-itemname">{record.label}</span><span
-                            class="cell-itemnum"
-                            >{record.contactName || "No contact"}</span
+                          <span class="cell-itemname">{movement.label}</span
+                          ><span class="cell-itemnum"
+                            >{kindLabel(movement.kind)} · {movement.contactName ||
+                              "No contact"}</span
                           >
                         </div></td
-                      ><td data-label="Type"
+                      ><td data-label="Account"
                         ><span class="type-chip"
-                          >{typeLabel(record.itemType)}</span
+                          >{movement.accountName ?? "No account"}</span
                         ></td
                       ><td class="td-date" data-label="Date"
-                        >{formatDate(record.date)}</td
+                        >{formatDate(movement.date)}</td
                       ><td class="td-amount" data-label="Total"
                         ><span class="amount-num"
-                          >{formatMoney(
-                            record.amount * record.exchangeRate,
-                          )}</span
+                          >{formatMoney(movement.amount)}</span
                         ></td
                       ><td data-label="Match"
-                        ><StatusBadge status={matchStatus(record)} /></td
+                        ><StatusBadge status={matchStatus(movement)} /></td
                       ><td class="td-amount remaining" data-label="Remaining"
                         ><span class="amount-num"
-                          >{formatMoney(record.remainingAmount ?? 0)}</span
+                          >{formatMoney(movement.remainingAmount ?? 0)}</span
                         ></td
                       ><td class="td-chevron"
                         ><ChevronRight size={15} aria-hidden="true" /></td
                       ><td class="row-break"></td></tr
-                    >{/each}{#if visibleRecords.length === 0}<tr
+                    >{/each}{#if visibleMovements.length === 0}<tr
                       class="empty-row"
                       ><td colspan="7"
                         ><EmptyState
@@ -958,7 +1055,9 @@
                               : "Try adjusting the status or date filters."}
                           >{#snippet icon()}{#if singleRecordStatus === "matched"}<Banknote
                                 size={20}
-                              />{:else}<Check size={20} />{/if}{/snippet}</EmptyState
+                              />{:else}<Check
+                                size={20}
+                              />{/if}{/snippet}</EmptyState
                         ></td
                       ></tr
                     >{/if}</tbody
@@ -967,12 +1066,12 @@
             </div>
             <div class="table-foot">
               <span
-                >Showing <b>{visibleRecords.length}</b> of {recordStatusTotal}</span
+                >Showing <b>{visibleMovements.length}</b> of {recordStatusTotal}</span
               >
             </div>
           </div>
           <div class="desktop-composer">
-            {#if selectedRecord}{@render AllocationComposer()}{:else if reviewRecords.length === 0}<EmptyState
+            {#if selectedMovement}{@render AllocationComposer()}{:else if reviewMovements.length === 0}<EmptyState
                 title="You're all caught up"
                 sub="Every eligible Akaun record in this date range is fully allocated."
                 >{#snippet icon()}<Check size={20} />{/snippet}</EmptyState
@@ -988,79 +1087,84 @@
       {:else}
         <div class="statement-pane">
           <div class="table-card">
-          <table class="exp-table">
-            <thead
-              ><tr
-                ><th>Statement</th><th>Date Range</th><th>Status</th><th
-                  >Matched</th
-                ><th class="ta-right">Remaining</th><th aria-label="Open"
-                ></th></tr
-              ></thead
-            ><tbody
-              >{#each visibleStatements as statement (statement.id)}<tr
-                  class="exp-row"
-                  tabindex="0"
-                  onclick={() => chooseStatement(statement)}
-                  onkeydown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      chooseStatement(statement);
-                    }
-                  }}
-                  ><td class="td-primary"
-                    ><div class="cell-item">
-                      <span
-                        class="cell-itemname filename"
-                        title={statement.originalFilename}
-                        >{statement.originalFilename}</span
-                      ><span class="cell-itemnum"
-                        >Uploaded {formatDate(
-                          statement.createdAt.slice(0, 10),
-                        )}</span
-                      >
-                    </div></td
-                  ><td class="td-date" data-label="Date Range"
-                    >{statement.dateFrom && statement.dateTo
-                      ? `${formatDate(statement.dateFrom)} – ${formatDate(statement.dateTo)}`
-                      : "No transactions"}</td
-                  ><td data-label="Status"
-                    ><StatusBadge status={statusLabel(statement)} /></td
-                  ><td data-label="Matched"
-                    ><span class="num"
-                      >{statement.matchedCount} / {statement.totalLines}</span
-                    ></td
-                  ><td class="td-amount" data-label="Remaining"
-                    ><span class="amount-num"
-                      >{formatMoney(statement.remainingAmount)}</span
-                    ></td
-                  ><td class="td-chevron"
-                    ><ChevronRight size={15} aria-hidden="true" /></td
-                  ><td class="row-break"></td></tr
-                >{/each}{#if visibleStatements.length === 0}<tr
-                  class="empty-row"
-                  ><td colspan="6"
-                    ><EmptyState
-                      title={singleStatementStatus === "completed"
-                        ? "No completed statements"
-                        : "No active statements"}
-                      sub={singleStatementStatus === "completed"
-                        ? "Statements move here automatically when every line is fully allocated."
-                        : singleStatementStatus === "active"
-                          ? "Upload a bank statement to extract transactions and start matching."
-                          : "Try adjusting the status filter."}
-                      >{#snippet icon()}<FileText
-                          size={20}
-                        />{/snippet}{#snippet action()}{#if singleStatementStatus !== "completed" && data.permissions.add}<button
-                            class="sheet-btn-primary compact"
-                            type="button"
-                            onclick={() => uploadInput?.click()}
-                            ><Plus size={14} />Upload Statement</button
-                          >{/if}{/snippet}</EmptyState
-                    ></td
-                  ></tr
-                >{/if}</tbody
-            >
-          </table>
+            <table class="exp-table">
+              <thead
+                ><tr
+                  ><th>Statement</th><th>Account</th><th>Date Range</th><th
+                    >Status</th
+                  ><th>Matched</th><th class="ta-right">Remaining</th><th
+                    aria-label="Open"
+                  ></th></tr
+                ></thead
+              ><tbody
+                >{#each visibleStatements as statement (statement.id)}<tr
+                    class="exp-row"
+                    tabindex="0"
+                    onclick={() => chooseStatement(statement)}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        chooseStatement(statement);
+                      }
+                    }}
+                    ><td class="td-primary"
+                      ><div class="cell-item">
+                        <span
+                          class="cell-itemname filename"
+                          title={statement.originalFilename}
+                          >{statement.originalFilename}</span
+                        ><span class="cell-itemnum"
+                          >Uploaded {formatDate(
+                            statement.createdAt.slice(0, 10),
+                          )}</span
+                        >
+                      </div></td
+                    ><td data-label="Account"
+                      ><span class="type-chip"
+                        >{statement.accountName ?? "No account"}</span
+                      ></td
+                    ><td class="td-date" data-label="Date Range"
+                      >{statement.dateFrom && statement.dateTo
+                        ? `${formatDate(statement.dateFrom)} – ${formatDate(statement.dateTo)}`
+                        : "No transactions"}</td
+                    ><td data-label="Status"
+                      ><StatusBadge status={statusLabel(statement)} /></td
+                    ><td data-label="Matched"
+                      ><span class="num"
+                        >{statement.matchedCount} / {statement.totalLines}</span
+                      ></td
+                    ><td class="td-amount" data-label="Remaining"
+                      ><span class="amount-num"
+                        >{formatMoney(statement.remainingAmount)}</span
+                      ></td
+                    ><td class="td-chevron"
+                      ><ChevronRight size={15} aria-hidden="true" /></td
+                    ><td class="row-break"></td></tr
+                  >{/each}{#if visibleStatements.length === 0}<tr
+                    class="empty-row"
+                    ><td colspan="7"
+                      ><EmptyState
+                        title={singleStatementStatus === "completed"
+                          ? "No completed statements"
+                          : "No active statements"}
+                        sub={singleStatementStatus === "completed"
+                          ? "Statements move here automatically when every line is fully allocated."
+                          : singleStatementStatus === "active"
+                            ? "Upload a bank statement to extract transactions and start matching."
+                            : "Try adjusting the status filter."}
+                        >{#snippet icon()}<FileText
+                            size={20}
+                          />{/snippet}{#snippet action()}{#if singleStatementStatus !== "completed" && data.permissions.add}<button
+                              class="sheet-btn-primary compact"
+                              type="button"
+                              onclick={openUpload}
+                              ><Plus size={14} />Upload Statement</button
+                            >{/if}{/snippet}</EmptyState
+                      ></td
+                    ></tr
+                  >{/if}</tbody
+              >
+            </table>
           </div>
           <div class="table-foot">
             <span
@@ -1093,37 +1197,39 @@
 {/snippet}
 
 {#snippet AllocationComposer()}
-  {#if selectedRecord}<section
-      class="composer"
-      aria-label={`Allocate ${selectedRecord.label}`}
-    >
+  {#if selectedMovement}{@const movesIn = selectedMovement.amountMinor > 0}
+    <section class="composer" aria-label={`Allocate ${selectedMovement.label}`}>
       <header class="composer-head">
-        <div
-          class="type-icon"
-          class:income={selectedRecord.itemType === ReconItemType.Income}
-        >
-          {#if selectedRecord.itemType === ReconItemType.Income}<ArrowDownLeft
+        <div class="type-icon" class:income={movesIn}>
+          {#if movesIn}<ArrowDownLeft size={17} />{:else}<ArrowUpRight
               size={17}
-            />{:else}<ArrowUpRight size={17} />{/if}
+            />{/if}
         </div>
         <div class="composer-title">
-          <span>{typeLabel(selectedRecord.itemType)}</span>
-          <h2>{selectedRecord.label}</h2>
-          <p>{selectedRecord.contactName || formatDate(selectedRecord.date)}</p>
+          <span
+            >{kindLabel(selectedMovement.kind)} · {selectedMovement.accountName ??
+              "No account"}</span
+          >
+          <h2>{selectedMovement.label}</h2>
+          <p>
+            {selectedMovement.contactName || formatDate(selectedMovement.date)}
+          </p>
         </div>
         {#if compactWorkspace}<button
             class="icon-btn"
             type="button"
             aria-label="Close allocation composer"
-            onclick={closeRecord}><X size={16} /></button
+            onclick={closeMovement}><X size={16} /></button
           >{/if}
       </header>
       <div class="amount-strip">
-        <div><span>Total</span><strong>{formatMoney(recordTotal)}</strong></div>
+        <div>
+          <span>Total</span><strong>{formatMoney(movementTotal)}</strong>
+        </div>
         <div><span>Staged</span><strong>{formatMoney(draftTotal)}</strong></div>
         <div
-          class:balanced={Math.abs(draftRemaining) < 0.005}
-          class:error={draftRemaining < -0.005}
+          class:balanced={Math.abs(draftRemaining) < CENT}
+          class:error={draftRemaining < -CENT}
         >
           <span>Remaining</span><strong>{formatMoney(draftRemaining)}</strong>
         </div>
@@ -1132,25 +1238,27 @@
         {#if hasSuggestion}<div class="suggestion">
             <div>
               <strong
-                >{suggestionApplied ? "Auto-matched" : "Exact Match Found"}</strong
+                >{suggestionApplied
+                  ? "Auto-matched"
+                  : "Exact Match Found"}</strong
               ><span
-                >{selectedRecord.suggestedLineIds.length} transaction{selectedRecord
+                >{selectedMovement.suggestedLineIds.length} transaction{selectedMovement
                   .suggestedLineIds.length === 1
                   ? ""
-                  : "s"} total exactly {formatMoney(recordTotal)}.</span
+                  : "s"} total exactly {formatMoney(movementTotal)}.</span
               >
             </div>
-            {#if !suggestionApplied}<button type="button" onclick={applySuggestion}
-                >Use Suggested Match</button
+            {#if !suggestionApplied}<button
+                type="button"
+                onclick={applySuggestion}>Use Suggested Match</button
               >{/if}
           </div>{/if}
         <div class="section-heading">
           <div>
             <h3>Compatible Statement Lines</h3>
             <p>
-              {selectedRecord.itemType === ReconItemType.Income
-                ? "Money In"
-                : "Money Out"} transactions with available balance
+              {movesIn ? "Money In" : "Money Out"} transactions on
+              {selectedMovement.accountName ?? "this account"}
             </p>
           </div>
           <span>{availableLines.length}</span>
@@ -1201,7 +1309,7 @@
               </div>
             </div>{/each}{#if availableLines.length === 0}<EmptyState
               title="No compatible transactions"
-              sub={`Upload a statement containing ${selectedRecord.itemType === ReconItemType.Income ? "money in" : "money out"} transactions with an available balance.`}
+              sub={`Upload a statement for ${selectedMovement.accountName ?? "this account"} containing ${movesIn ? "money in" : "money out"} transactions with an available balance.`}
               >{#snippet icon()}<Banknote size={20} />{/snippet}</EmptyState
             >{/if}
         </div>
@@ -1209,8 +1317,8 @@
       <footer class="composer-foot">
         <div>
           <span>Staged total</span><strong>{formatMoney(draftTotal)}</strong
-          ><small class:error={draftRemaining < -0.005}
-            >{draftRemaining < -0.005
+          ><small class:error={draftRemaining < -CENT}
+            >{draftRemaining < -CENT
               ? `${formatMoney(Math.abs(draftRemaining))} over record total`
               : `${formatMoney(draftRemaining)} remaining`}</small
           >
@@ -1227,14 +1335,14 @@
             disabled={!data.permissions.change ||
               saving ||
               !dirty ||
-              draftRemaining < -0.005}
+              draftRemaining < -CENT}
             onclick={saveAndAdvance}
             >{saving
               ? "Saving…"
-              : visibleRecords.some(
-                    (record) =>
-                      recordKey(record) !== selectedKey &&
-                      Math.abs(record.remainingAmount ?? 0) >= 0.005,
+              : visibleMovements.some(
+                    (movement) =>
+                      movement.movementId !== selectedMovementId &&
+                      Math.abs(movement.remainingAmount ?? 0) >= CENT,
                   )
                 ? "Save & Next"
                 : "Save"}</button
@@ -1260,7 +1368,7 @@
     <div style="margin-bottom:16px;">
       <div class="filter-mobile-head">
         <span>Status</span>
-        {#if (tab === "records" ? recordStatusActive : statementStatusActive)}<button
+        {#if tab === "records" ? recordStatusActive : statementStatusActive}<button
             type="button"
             class="filter-mobile-clear"
             onclick={() => {
@@ -1281,9 +1389,8 @@
               >{#if recordStatuses.includes("review")}<Check
                   size={11}
                 />{/if}</span
-            >Needs Review <span class="tab-count"
-              >{reviewRecords.length}</span
-            ></button
+            >Needs Review
+            <span class="tab-count">{reviewMovements.length}</span></button
           ><button
             type="button"
             class="filter-check"
@@ -1293,8 +1400,8 @@
               >{#if recordStatuses.includes("matched")}<Check
                   size={11}
                 />{/if}</span
-            >Matched <span class="tab-count">{matchedRecords.length}</span
-            ></button
+            >Matched
+            <span class="tab-count">{matchedMovements.length}</span></button
           >
         </div>
       {:else}
@@ -1308,8 +1415,8 @@
               >{#if statementStatuses.includes("active")}<Check
                   size={11}
                 />{/if}</span
-            >Active <span class="tab-count">{activeStatements.length}</span
-            ></button
+            >Active
+            <span class="tab-count">{activeStatements.length}</span></button
           ><button
             type="button"
             class="filter-check"
@@ -1319,9 +1426,8 @@
               >{#if statementStatuses.includes("completed")}<Check
                   size={11}
                 />{/if}</span
-            >Completed <span class="tab-count"
-              >{completedStatements.length}</span
-            ></button
+            >Completed
+            <span class="tab-count">{completedStatements.length}</span></button
           >
         </div>
       {/if}
@@ -1373,9 +1479,9 @@
 >
 
 <Sheet.Root
-  open={compactWorkspace && !!selectedRecord}
+  open={compactWorkspace && !!selectedMovement}
   onOpenChange={(open) => {
-    if (!open) closeRecord();
+    if (!open) closeMovement();
   }}
   ><Sheet.Content
     side={panelSide}
@@ -1414,6 +1520,28 @@
             >{selectedStatement.dateFrom && selectedStatement.dateTo
               ? `${formatDate(selectedStatement.dateFrom)} – ${formatDate(selectedStatement.dateTo)}`
               : "Waiting for transactions"}</span
+          >
+        </div>
+        <div class="statement-account">
+          <span class="mini-label"
+            ><Wallet size={13} aria-hidden="true" /> Account</span
+          >
+          <select
+            name="statement-account"
+            aria-label="Account this statement belongs to"
+            value={selectedStatement.accountId ?? ""}
+            disabled={!data.permissions.change}
+            onchange={(event) =>
+              reassignStatement(Number(event.currentTarget.value))}
+            >{#if selectedStatement.accountId == null}<option value=""
+                >Not assigned yet</option
+              >{/if}{#each data.accounts as account (account.id)}<option
+                value={account.id}>{account.name}</option
+              >{/each}</select
+          >
+          <small
+            >Only records that touched this account are offered as matches for
+            its transactions.</small
           >
         </div>
         <div class="statement-stats">
@@ -1546,7 +1674,13 @@
                       onchange={(event) =>
                         editLine(line, "note", event.currentTarget.value)}
                     /></label
-                  >{#if data.permissions.delete}<button
+                  >{#if data.permissions.add && line.allocatedAmount < CENT}<button
+                      class="line-transfer"
+                      type="button"
+                      onclick={() => openTransfer(line)}
+                      ><ArrowLeftRight size={13} />Record as a transfer from
+                      another account</button
+                    >{/if}{#if data.permissions.delete}<button
                       class="line-delete"
                       type="button"
                       onclick={() => {
@@ -1582,16 +1716,165 @@
               type="button"
               onclick={() => (deleteStatementOpen = true)}
               ><Trash2 size={14} />Delete</button
-            >{/if}<Sheet.Close class="sheet-btn">Close</Sheet.Close>{#if data
-            .permissions.add &&
-            selectedStatement.extractionState ===
-              StatementExtractionState.Failed}<button
+            >{/if}<Sheet.Close class="sheet-btn">Close</Sheet.Close
+          >{#if data.permissions.add && selectedStatement.extractionState === StatementExtractionState.Failed}<button
               class="sheet-btn-primary"
               type="button"
               disabled={retrying}
               onclick={retryExtraction}
               >{retrying ? "Retrying…" : "Retry Extraction"}</button
             >{/if}
+        </div>
+      </div>{/if}</Sheet.Content
+  ></Sheet.Root
+>
+
+<Sheet.Root
+  open={uploadOpen}
+  onOpenChange={(open) => {
+    if (!open) uploadOpen = false;
+  }}
+  ><Sheet.Content
+    side={panelSide}
+    class="recon-sheet"
+    style="gap:0; width:500px; max-width:95vw; height:100dvh; border-radius:0;"
+    ><div class="sheet-head">
+      <div>
+        <span class="sheet-eyebrow"><Upload size={13} />Bank Statement</span>
+        <h2 class="sheet-title-text">Upload a statement</h2>
+      </div>
+      <Sheet.Close class="sheet-close" aria-label="Close upload"
+        ><X size={16} /></Sheet.Close
+      >
+    </div>
+    <div class="upload-body">
+      <div class="field">
+        <span class="field-label">Account</span>
+        <select
+          name="upload-account"
+          aria-label="Account this statement belongs to"
+          value={uploadAccountId ?? ""}
+          onchange={(event) =>
+            (uploadAccountId = Number(event.currentTarget.value) || null)}
+          >{#if data.accounts.length === 0}<option value=""
+              >No accounts to choose from</option
+            >{/if}{#each data.accounts as account (account.id)}<option
+              value={account.id}>{account.name}</option
+            >{/each}</select
+        >
+        <small class="field-hint"
+          >The statement's transactions can only be matched against records that
+          touched this account.</small
+        >
+      </div>
+      <div class="field">
+        <span class="field-label">File</span>
+        <input
+          bind:this={uploadInput}
+          class="sr-only"
+          type="file"
+          accept="application/pdf,image/png,image/jpeg"
+          onchange={chooseUploadFile}
+          aria-label="Choose bank statement"
+        /><button
+          class="sheet-btn"
+          type="button"
+          onclick={() => uploadInput?.click()}
+          ><FileText size={14} />{uploadFileName ||
+            "Choose a PDF, JPEG or PNG"}</button
+        >
+        <small class="field-hint">Up to 15 MB.</small>
+      </div>
+    </div>
+    <div class="sheet-foot">
+      <div class="sheet-foot-actions">
+        <Sheet.Close class="sheet-btn">Cancel</Sheet.Close><button
+          class="sheet-btn-primary"
+          type="button"
+          disabled={!uploadFileName || !uploadAccountId || uploading}
+          onclick={upload}>{uploading ? "Uploading…" : "Upload"}</button
+        >
+      </div>
+    </div></Sheet.Content
+  ></Sheet.Root
+>
+
+<Sheet.Root
+  open={!!transferLine}
+  onOpenChange={(open) => {
+    if (!open) closeTransfer();
+  }}
+  ><Sheet.Content
+    side={panelSide}
+    class="recon-sheet"
+    style="gap:0; width:500px; max-width:95vw; height:100dvh; border-radius:0;"
+    ><div class="sheet-head">
+      <div>
+        <span class="sheet-eyebrow"
+          ><ArrowLeftRight size={13} />Money You Moved</span
+        >
+        <h2 class="sheet-title-text">Record as a transfer</h2>
+      </div>
+      <Sheet.Close class="sheet-close" aria-label="Close transfer"
+        ><X size={16} /></Sheet.Close
+      >
+    </div>
+    {#if transferLine}<div class="upload-body">
+        <div class="detail-amount">
+          <span class="detail-amount-val"
+            >{formatMoney(transferLine.amount)}</span
+          >
+        </div>
+        <p class="transfer-explain">
+          Nothing was earned or spent here — money moved between two of your own
+          accounts, so no record was ever created for it. Saving this creates
+          that record and matches this transaction to it.
+        </p>
+        <div class="field">
+          <span class="field-label"
+            >{transferLine.direction === StatementDirection.In
+              ? "Money came from"
+              : "Money went to"}</span
+          >
+          <select
+            name="transfer-account"
+            aria-label="The other account in this transfer"
+            value={transferAccountId ?? ""}
+            onchange={(event) =>
+              (transferAccountId = Number(event.currentTarget.value) || null)}
+            >{#if transferTargets.length === 0}<option value=""
+                >No other account to choose from</option
+              >{/if}{#each transferTargets as account (account.id)}<option
+                value={account.id}>{account.name}</option
+              >{/each}</select
+          >
+        </div>
+        <div class="field">
+          <span class="field-label">Description</span>
+          <input
+            name="transfer-description"
+            autocomplete="off"
+            bind:value={transferDescription}
+            placeholder="Transfer"
+          />
+        </div>
+        <div class="field">
+          <span class="field-label">Date</span>
+          <span class="field-static">{formatDate(transferLine.date)}</span>
+          <small class="field-hint"
+            >Taken from the bank transaction, so the two always agree.</small
+          >
+        </div>
+      </div>
+      <div class="sheet-foot">
+        <div class="sheet-foot-actions">
+          <Sheet.Close class="sheet-btn">Cancel</Sheet.Close><button
+            class="sheet-btn-primary"
+            type="button"
+            disabled={!transferAccountId || transferSaving}
+            onclick={saveTransfer}
+            >{transferSaving ? "Saving…" : "Save & Match"}</button
+          >
         </div>
       </div>{/if}</Sheet.Content
   ></Sheet.Root
@@ -2373,7 +2656,8 @@
     font: inherit;
     font-size: 12px;
   }
-  .line-delete {
+  .line-delete,
+  .line-transfer {
     grid-column: 1/-1;
     justify-self: start;
     display: inline-flex;
@@ -2385,7 +2669,72 @@
     color: var(--red);
     font: inherit;
     font-size: 11.5px;
+    text-align: left;
     cursor: pointer;
+  }
+  .line-transfer {
+    color: var(--primary);
+  }
+  /* Which account a statement belongs to decides what can match it, so it sits
+     at the top of the sheet rather than among the counts. */
+  .statement-account {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .statement-account .mini-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .statement-account select {
+    height: 34px;
+    padding: 0 9px;
+    border: 1px solid var(--input);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 13px;
+  }
+  .statement-account small {
+    font-size: 11.5px;
+    color: var(--muted-foreground);
+    line-height: 1.5;
+  }
+  .upload-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 22px;
+  }
+  .upload-body select,
+  .upload-body input {
+    width: 100%;
+    height: 34px;
+    padding: 0 9px;
+    border: 1px solid var(--input);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 13px;
+  }
+  .upload-body .sheet-btn {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 7px;
+  }
+  .field-static {
+    display: block;
+    font-size: 13px;
+    color: var(--muted-foreground);
+  }
+  .transfer-explain {
+    margin: 0 0 18px;
+    font-size: 12.5px;
+    color: var(--muted-foreground);
+    line-height: 1.6;
   }
   .sheet-btn-delete {
     margin-right: auto;

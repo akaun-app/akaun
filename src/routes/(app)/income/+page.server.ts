@@ -1,5 +1,7 @@
-import type { PageServerLoad, Actions } from './$types.js';
-import { loadIncomePage, incomeActions } from '$lib/server/loaders/income.js';
+import type { PageServerLoad, Actions } from "./$types.js";
+import { loadLedgerPage, ledgerActions } from "$lib/server/loaders/ledger.js";
+import { LedgerRecordKind } from "$lib/enums.js";
 
-export const load: PageServerLoad = ({ locals }) => loadIncomePage(locals, null);
-export const actions: Actions = incomeActions;
+export const load: PageServerLoad = ({ locals }) =>
+  loadLedgerPage(locals, LedgerRecordKind.Income, null);
+export const actions: Actions = ledgerActions;

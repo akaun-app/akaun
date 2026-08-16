@@ -37,6 +37,8 @@
 	let { data, form, openId }: { data: PageData; form: ActionData; openId: number | null } = $props();
 
 	type Contact = (typeof data.contacts)[0];
+	type Usage = PageData['usage'][number];
+	const NO_USAGE: Usage = { records: 0, expenses: 0, incomes: 0, quotations: 0, invoices: 0 };
 
 	// svelte-ignore state_referenced_locally
 	let contacts = $state<Contact[]>(data.contacts);
@@ -46,9 +48,15 @@
 	let usage = $state(data.usage);
 	$effect(() => { usage = data.usage; });
 
-	function isInUse(id: number): boolean {
+	// Mirrors src/lib/server/queries/contacts.ts's cannotDeleteContactReason — a
+	// contact anything points at is archived, never deleted (FR-009a). The rule
+	// lives server-side and can't be imported into a component, so the sentence
+	// is kept in step by hand.
+	function deleteBlockedReason(id: number): string | null {
 		const u = usage[id];
-		return !!u && (u.expenses > 0 || u.incomes > 0);
+		if (!u) return null;
+		if (u.records === 0 && u.quotations === 0 && u.invoices === 0) return null;
+		return 'Records name this contact, so it cannot be deleted. Archive it instead — everything already recorded stays exactly as it is.';
 	}
 
 	let deleteTarget = $state<Contact | null>(null);
@@ -84,7 +92,7 @@
 		return () => clearTimeout(t);
 	});
 
-	const ROLE_OPTIONS = [Role.Customer, Role.Supplier, Role.Employee];
+	const ROLE_OPTIONS = [Role.Customer, Role.Supplier, Role.Employee, Role.Partner];
 
 	const counts = $derived.by(() => {
 		const base = contacts;
@@ -93,6 +101,7 @@
 			customer: base.filter((c) => c.roles.includes(Role.Customer)).length,
 			supplier: base.filter((c) => c.roles.includes(Role.Supplier)).length,
 			employee: base.filter((c) => c.roles.includes(Role.Employee)).length,
+			partner: base.filter((c) => c.roles.includes(Role.Partner)).length,
 		};
 	});
 
@@ -149,14 +158,14 @@
 	// the live `contacts` array on every render, so an SSE update is reflected, but a
 	// concurrent delete drops that id out cleanly via the `.filter(Boolean)` below.
 	let manualMergeIds = $state<number[]>([]);
-	let manualMergeUsage = $state<Record<number, { expenses: number; incomes: number }>>({});
+	let manualMergeUsage = $state<Record<number, Usage>>({});
 	let manualMergeError = $state('');
 
 	const manualMergeContacts = $derived(
 		manualMergeIds
 			.map((id) => contacts.find((c) => c.id === id))
 			.filter((c): c is Contact => !!c)
-			.map((c) => ({ ...c, usage: manualMergeUsage[c.id] ?? { expenses: 0, incomes: 0 } }))
+			.map((c) => ({ ...c, usage: manualMergeUsage[c.id] ?? NO_USAGE }))
 	);
 
 	async function openManualMerge() {
@@ -173,10 +182,7 @@
 		}
 		const data2 = await res.json();
 		manualMergeUsage = Object.fromEntries(
-			data2.contacts.map((c: { id: number; usage: { expenses: number; incomes: number } }) => [
-				c.id,
-				c.usage
-			])
+			data2.contacts.map((c: { id: number; usage: Usage }) => [c.id, c.usage])
 		);
 		manualMergeIds = ids;
 		showManualMerge = true;
@@ -247,7 +253,7 @@
 	type Cluster = {
 		normalized: string;
 		matchedOn: string[];
-		contacts: (Contact & { usage: { expenses: number; incomes: number } })[];
+		contacts: (Contact & { usage: Usage })[];
 	};
 	let showMerge = $state(false);
 	let clusters = $state<Cluster[]>([]);
@@ -340,7 +346,7 @@
 			<!-- Toolbar -->
 			<div class="toolbar">
 				<div class="status-tabs">
-					{#each [[0, 'All', counts.all], [Role.Customer, 'Customer', counts.customer], [Role.Supplier, 'Supplier', counts.supplier], [Role.Employee, 'Employee', counts.employee]] as [val, label, count]}
+					{#each [[0, 'All', counts.all], [Role.Customer, 'Customer', counts.customer], [Role.Supplier, 'Supplier', counts.supplier], [Role.Employee, 'Employee', counts.employee], [Role.Partner, 'Partner', counts.partner]] as [val, label, count]}
 						<button
 							class="status-tab"
 							class:active={roleFilter === val}
@@ -592,6 +598,13 @@
 								</label>
 							{/each}
 						</div>
+						{#if fRoles.includes(Role.Partner)}
+							<p class="field-hint">
+								A partner gets two accounts of their own — money put in and money taken out — so
+								they show up by name in the partner statement. Removing the role keeps whatever
+								they already hold and just tucks the accounts out of the way.
+							</p>
+						{/if}
 					</div>
 
 					<div class="field">
@@ -625,8 +638,8 @@
 								type="button"
 								class="sheet-btn sheet-btn-delete"
 								style="margin-right:auto;"
-								disabled={isInUse(editingLive.id)}
-								title={isInUse(editingLive.id) ? 'Has expense or income records — cannot be deleted' : undefined}
+								disabled={!!deleteBlockedReason(editingLive.id)}
+								title={deleteBlockedReason(editingLive.id) ?? undefined}
 								onclick={() => requestDelete(editingLive)}
 							>
 								<Trash2 size={14} /> Delete

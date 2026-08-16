@@ -13,7 +13,10 @@
 		address: string | null;
 		remark: string | null;
 		createdAt: string;
-		usage?: { expenses: number; incomes: number };
+		// `records` counts every kind naming the contact — expenses, income,
+		// payments, transfers and issued invoices — which is what merging actually
+		// relinks. The per-kind breakdown is kept for the detail line.
+		usage?: { records: number; expenses: number; incomes: number };
 	};
 
 	let {
@@ -51,8 +54,7 @@
 		{ label: 'Created', value: (c) => formatDate(c.createdAt) },
 		{
 			label: 'Usage',
-			value: (c) =>
-				c.usage ? `${c.usage.expenses} expense(s), ${c.usage.incomes} income(s)` : '—'
+			value: (c) => (c.usage ? `${c.usage.records} record(s)` : '—')
 		}
 	];
 
@@ -63,14 +65,12 @@
 
 	const survivor = $derived(contacts.find((c) => c.id === survivorId) ?? null);
 	const losers = $derived(contacts.filter((c) => c.id !== survivorId));
-	const loserUsageTotal = $derived(
-		losers.reduce(
-			(acc, c) => ({
-				expenses: acc.expenses + (c.usage?.expenses ?? 0),
-				incomes: acc.incomes + (c.usage?.incomes ?? 0)
-			}),
-			{ expenses: 0, incomes: 0 }
-		)
+	// Counted from `records`, not from expenses + income. Since the ledger became
+	// one store, a contact can also be named by a payment, a transfer or an issued
+	// invoice — adding only the two old kinds told the user fewer records would
+	// move than actually will.
+	const loserRecordTotal = $derived(
+		losers.reduce((total, c) => total + (c.usage?.records ?? 0), 0)
 	);
 
 	const loserIds = $derived(losers.map((c) => c.id));
@@ -106,9 +106,10 @@
 			<b>{survivor.legalName}</b> will be kept.
 			{#if losers.length > 0}
 				<b>{losers.map((c) => c.legalName).join(', ')}</b> will be permanently deleted.
-				{#if loserUsageTotal.expenses > 0 || loserUsageTotal.incomes > 0}
-					{loserUsageTotal.expenses} expense(s) and {loserUsageTotal.incomes} income(s) will be
-					relinked to <b>{survivor.legalName}</b>.
+				{#if loserRecordTotal > 0}
+					{loserRecordTotal}
+					{loserRecordTotal === 1 ? 'record' : 'records'} will be relinked to
+					<b>{survivor.legalName}</b>.
 				{/if}
 			{/if}
 		</div>
