@@ -29,6 +29,7 @@ import {
 import { isSharedOwedRole } from "../ledger/account-type.js";
 import { lockStateOf } from "../ledger/locking.js";
 import { toMinor } from "../ledger/money.js";
+import { coverageFor } from "../ledger/coverage.js";
 import { recordSettlementState } from "../ledger/settlement-rules.js";
 import type {
   LedgerDb,
@@ -219,6 +220,8 @@ type DerivedState = {
   movements: Map<number, MovementView[]>;
   paidState: Map<number, { paid: boolean; outstandingMinor: Minor }>;
   lockState: Map<number, LockState>;
+  /** How much bank lines cover, per record, before the coverage rule runs. */
+  allocatedMinor: Map<number, Minor>;
   attachmentCount: Map<number, number>;
 };
 
@@ -274,12 +277,46 @@ function matchedMovements(db: LedgerDb, movementIds: number[]): Set<number> {
   );
 }
 
+/**
+ * How much of each of these movements bank lines account for.
+ *
+ * One grouped aggregate beside the existence check above, on the same table and
+ * the same movement ids — a worklist needs the size of the cover, not just
+ * whether any exists (research.md R-08). Whole cents: `amount` is the
+ * allocation's decimal figure, so it is converted once, here, and never summed
+ * as a float (D-02).
+ */
+function allocatedByMovement(
+  db: LedgerDb,
+  movementIds: number[],
+): Map<number, Minor> {
+  const out = new Map<number, Minor>();
+  if (movementIds.length === 0) return out;
+
+  const rows = db
+    .select({
+      movementId: reconciliationAllocations.movementId,
+      amountMinor: sql<number>`cast(round(sum(abs(${reconciliationAllocations.amount})) * 100) as integer)`,
+    })
+    .from(reconciliationAllocations)
+    .where(inArray(reconciliationAllocations.movementId, movementIds))
+    .groupBy(reconciliationAllocations.movementId)
+    .all();
+
+  for (const row of rows) {
+    if (row.movementId === null) continue;
+    out.set(row.movementId, row.amountMinor);
+  }
+  return out;
+}
+
 /** Everything derived, for a whole page of records, in a fixed number of queries. */
 function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
   const empty: DerivedState = {
     movements: new Map(),
     paidState: new Map(),
     lockState: new Map(),
+    allocatedMinor: new Map(),
     attachmentCount: new Map(),
   };
   if (recordIds.length === 0) return empty;
@@ -303,6 +340,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
   const movementIds = movementRows.map((m) => m.id);
   const settled = settledByMovement(db, movementIds);
   const matched = matchedMovements(db, movementIds);
+  const allocated = allocatedByMovement(db, movementIds);
 
   const movements = new Map<number, MovementView[]>();
   const owedSides = new Map<number, SettlementSide[]>();
@@ -347,6 +385,20 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
     paidState.set(id, recordSettlementState(owedSides.get(id) ?? []));
   }
 
+  // What bank lines cover, per record. Summed from the movement allocations
+  // already fetched above, so the coverage rule has whole cents to work with
+  // and no second pass over the hot path (FR-056).
+  const allocatedMinor = new Map<number, Minor>();
+  for (const id of recordIds) allocatedMinor.set(id, 0);
+  for (const m of movementRows) {
+    const covered = allocated.get(m.id) ?? 0;
+    if (covered === 0) continue;
+    allocatedMinor.set(
+      m.recordId,
+      (allocatedMinor.get(m.recordId) ?? 0) + covered,
+    );
+  }
+
   const attachmentRows = db
     .select({
       recordId: recordAttachments.recordId,
@@ -361,6 +413,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
     movements,
     paidState,
     lockState,
+    allocatedMinor,
     attachmentCount: new Map(attachmentRows.map((r) => [r.recordId, r.n])),
   };
 }
@@ -380,16 +433,29 @@ function toRecordView(
     reconciled: false,
   };
   const lock = lockStateOf(lockState);
+  const movements = derived.movements.get(row.id) ?? [];
   return {
     ...base,
     contactName,
     amountMinor: toMinor(base.amount, base.exchangeRate),
-    movements: derived.movements.get(row.id) ?? [],
+    movements,
     paid: paidState.paid,
     outstandingMinor: paidState.outstandingMinor,
     locked: lock.locked,
     lockedReason: lock.reason,
     reconciled: lockState.reconciled,
+    // Every side of every record on the page is already loaded by deriveFor(),
+    // so the count a row needs costs no extra query (FR-003).
+    sideCount: movements.length,
+    ...coverageFor({
+      amountMinor: toMinor(base.amount, base.exchangeRate),
+      allocations: [
+        {
+          movementId: 0,
+          amountMinor: derived.allocatedMinor.get(row.id) ?? 0,
+        },
+      ],
+    }),
     attachmentCount: derived.attachmentCount.get(row.id) ?? 0,
   };
 }
@@ -442,6 +508,25 @@ function recordConditions(filters: RecordListFilters): SQL[] {
     );
   }
 
+  if (filters.cleared !== undefined) {
+    // Covered means: bank lines account for the whole of the record's own
+    // figure. Asked of the database rather than of the page, so "not yet
+    // cleared" can be paged through without loading everything first — the same
+    // shape the `paid` filter uses below.
+    //
+    // Every account, not only those with a statement uploaded: a record on an
+    // account nobody has reconciled has no allocations at all, so it is not
+    // cleared, which is exactly what the worklist should say (FR-056).
+    const covered = sql`coalesce((
+      SELECT sum(abs(${reconciliationAllocations.amount}))
+      FROM ${reconciliationAllocations}
+      INNER JOIN ${ledgerMovements}
+        ON ${ledgerMovements.id} = ${reconciliationAllocations.movementId}
+      WHERE ${ledgerMovements.recordId} = ${ledgerRecords.id}
+    ), 0) * 100 >= abs(round(${ledgerRecords.amount} * ${ledgerRecords.exchangeRate} * 100)) - 0.5`;
+    conditions.push(filters.cleared ? covered : sql`NOT ${covered}`);
+  }
+
   if (filters.paid !== undefined) {
     // Paid means: no side on a shared owed account is still uncovered. Asked of
     // the database rather than of the page, so `paid=false` can be paged
@@ -467,9 +552,18 @@ export function listRecords(
   db: LedgerDb,
   filters: RecordListFilters = {},
 ): RecordListResult {
-  const { limit = 100, offset = 0 } = filters;
+  const { limit = 100, offset = 0, sort = "date" } = filters;
   const conditions = recordConditions(filters);
   const where = conditions.length ? and(...conditions) : undefined;
+
+  // Newest first by default. `amount` sorts by the record's own figure, and the
+  // id is the tie-break in both, so a page boundary never repeats or drops a
+  // row. The running balance is only offered in date order (FR-043), which is
+  // why the caller has to say which sort is in force.
+  const orderBy =
+    sort === "amount"
+      ? [desc(ledgerRecords.amount), desc(ledgerRecords.id)]
+      : [desc(ledgerRecords.date), desc(ledgerRecords.id)];
 
   const rows = db
     .select({
@@ -479,7 +573,7 @@ export function listRecords(
     .from(ledgerRecords)
     .leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
     .where(where)
-    .orderBy(desc(ledgerRecords.date), desc(ledgerRecords.id))
+    .orderBy(...orderBy)
     .limit(limit)
     .offset(offset)
     .all();
@@ -525,24 +619,15 @@ export function getRecordRow(db: LedgerDb, id: number): LedgerRecordRow | null {
   return row ? toRecordRow(row) : null;
 }
 
-/** The record a pre-upgrade link points at, so old URLs keep working (D-14). */
-export function findByLegacy(
-  db: LedgerDb,
-  legacyKind: LegacyKind,
-  legacyId: number,
-): number | null {
-  const row = db
-    .select({ id: ledgerRecords.id })
-    .from(ledgerRecords)
-    .where(
-      and(
-        eq(ledgerRecords.legacyKind, legacyKind),
-        eq(ledgerRecords.legacyId, legacyId),
-      ),
-    )
-    .get();
-  return row?.id ?? null;
-}
+// `findByLegacy()` was here: it resolved a pre-upgrade `/expenses/[id]` or
+// `/income/[id]` link to the record that id became. The three addresses it
+// served are retired outright rather than redirected, so nothing asks the
+// question any more (FR-025a, D-04).
+//
+// The `legacy_kind` / `legacy_id` columns and their unique index STAY. They are
+// provenance — which old table a record came from and what its id was there —
+// and the upgrade's idempotency key. FR-037 does not name them; only the lookup
+// went (research.md R-06).
 
 export function getMovements(db: LedgerDb, recordId: number): MovementView[] {
   return deriveFor(db, [recordId]).movements.get(recordId) ?? [];

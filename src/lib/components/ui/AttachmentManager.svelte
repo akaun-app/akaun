@@ -7,7 +7,7 @@
 		apiBase,
 		attachments = $bindable()
 	}: {
-		/** Base URL of the owning record, e.g. `/api/expenses/123`. */
+		/** Base URL of the owning record, e.g. `/api/records/123`. */
 		apiBase: string;
 		attachments: Attachment[];
 	} = $props();

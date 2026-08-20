@@ -17,8 +17,10 @@ export const Role = {
 } as const;
 
 // --- expenses / claims ---
-export const ExpenseStatus = { Unpaid: 1, Pending: 2, Paid: 3 } as const;
-export const ClaimStatus = { Pending: 1, Done: 2 } as const;
+// `ExpenseStatus` and `ClaimStatus` were here. Payment state is never stored:
+// paid, part-paid and owed are derived from settlements at read time, so there
+// is no status code left to name (FR-037, FR-012). `DocumentType` below stays —
+// it is still live in the import pipeline.
 
 // --- import_queue ---
 export const ImportState = {
@@ -44,9 +46,6 @@ export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
 
 export type EntityTypeCode = (typeof EntityType)[keyof typeof EntityType];
 export type RoleCode = (typeof Role)[keyof typeof Role];
-export type ExpenseStatusCode =
-  (typeof ExpenseStatus)[keyof typeof ExpenseStatus];
-export type ClaimStatusCode = (typeof ClaimStatus)[keyof typeof ClaimStatus];
 export type ImportStateCode = (typeof ImportState)[keyof typeof ImportState];
 export type DocumentTypeCode = (typeof DocumentType)[keyof typeof DocumentType];
 export type ResetScopeCode = (typeof ResetScope)[keyof typeof ResetScope];
@@ -61,17 +60,6 @@ export const RoleLabels: Record<number, string> = {
   [Role.Supplier]: "Supplier",
   [Role.Employee]: "Employee",
   [Role.Partner]: "Partner",
-};
-
-export const ExpenseStatusLabels: Record<number, string> = {
-  [ExpenseStatus.Unpaid]: "unpaid",
-  [ExpenseStatus.Pending]: "pending",
-  [ExpenseStatus.Paid]: "paid",
-};
-
-export const ClaimStatusLabels: Record<number, string> = {
-  [ClaimStatus.Pending]: "pending",
-  [ClaimStatus.Done]: "done",
 };
 
 export const ImportStateLabels: Record<number, string> = {
@@ -118,8 +106,6 @@ function makeEnum(labels: Record<number, string>) {
 
 export const entityTypeEnum = makeEnum(EntityTypeLabels);
 export const roleEnum = makeEnum(RoleLabels);
-export const expenseStatusEnum = makeEnum(ExpenseStatusLabels);
-export const claimStatusEnum = makeEnum(ClaimStatusLabels);
 export const importStateEnum = makeEnum(ImportStateLabels);
 export const documentTypeEnum = makeEnum(DocumentTypeLabels);
 export const resetScopeEnum = makeEnum(ResetScopeLabels);

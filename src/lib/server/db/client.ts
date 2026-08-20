@@ -9,12 +9,22 @@ import { DATABASE_PATH } from "../env.js";
 import { createLogger } from "../logger.js";
 import * as schema from "./schema.js";
 import {
+  legacyDropAllowed,
+  readLegacyDropStateAt,
+} from "./legacy-drop-guard.js";
+import {
   users,
   groups,
   groupPermissions,
+  userPermissions,
   userGroups,
   documentTemplates,
 } from "./schema.js";
+import {
+  mergeRecordsPermissions,
+  type PermissionRow,
+} from "../permissions/merge-records.js";
+import { getSetting, setSetting, SETTING_KEYS } from "../settings.js";
 import { TemplateDocumentType, TemplateFont } from "$lib/enums.js";
 import { makeDefaultLayout } from "../pdf/template-types.js";
 
@@ -24,11 +34,54 @@ const DEFAULT_ADMIN_PASSWORD = "akaun-admin";
 
 function createDb() {
   mkdirSync(dirname(DATABASE_PATH), { recursive: true });
+  // Before the database is opened for writing at all, and deliberately so.
+  //
+  // This release's migration drops the tables an unconverted installation still
+  // keeps its records in. If the conversion has not run, the server does not
+  // start — and the file has to be left *byte-identical*, which is why the check
+  // reads through its own read-only connection: opening this database for
+  // writing sets `journal_mode` and checkpoints the WAL on close, which rewrites
+  // the main file even when nothing logically changed (FR-037a, research.md
+  // R-05).
+  const allowed = legacyDropAllowed(readLegacyDropStateAt(DATABASE_PATH));
+  if (!allowed.ok) {
+    log.error(allowed.reason);
+    console.error(`\n${allowed.reason}\n`);
+    process.exit(1);
+  }
+
   const raw = new Database(DATABASE_PATH);
   raw.exec("PRAGMA journal_mode = WAL;");
-  raw.exec("PRAGMA foreign_keys = ON;");
+
   const db = drizzle(raw, { schema });
+
+  // Foreign keys are OFF for the migration and ON for everything after it, and
+  // the order matters.
+  //
+  // A SQLite table is altered by rebuilding it: create the new shape, copy the
+  // rows, drop the original, rename. With enforcement ON, that `DROP TABLE`
+  // runs an implicit DELETE of every row first — which fires ON DELETE CASCADE
+  // on the children. Rebuilding `invoices` would take its lines with it, and
+  // rebuilding `bank_statements` would take every extracted statement line.
+  //
+  // The PRAGMA cannot go in the migration file: Drizzle wraps each migration in
+  // BEGIN … COMMIT, and SQLite ignores `PRAGMA foreign_keys` inside a
+  // transaction. So it is set here, on the connection, around the call.
+  raw.exec("PRAGMA foreign_keys = OFF;");
   migrate(db, { migrationsFolder: "drizzle" });
+  raw.exec("PRAGMA foreign_keys = ON;");
+
+  // And then checked, because "off during the migration" is only safe if the
+  // migration left the references intact. A violation here means a rebuild
+  // above copied a row whose parent no longer exists.
+  const violations = raw.query("PRAGMA foreign_key_check").all();
+  if (violations.length > 0) {
+    log.error(
+      { violations: violations.length },
+      "Foreign key violations after migration",
+    );
+  }
+
   return { db, raw };
 }
 
@@ -71,13 +124,7 @@ const SEED_GROUPS = [
     description: "Maintains day-to-day records across the shared ledger.",
     isSuperuser: false,
     permissions: {
-      expenses: {
-        canView: true,
-        canAdd: true,
-        canChange: true,
-        canDelete: false,
-      },
-      income: {
+      records: {
         canView: true,
         canAdd: true,
         canChange: true,
@@ -129,8 +176,9 @@ const SEED_GROUPS = [
         canChange: false,
         canDelete: false,
       },
-      // `journal` is deliberately absent: no seeded group may enter a record's
-      // sides by hand. It is granted explicitly or not at all (FR-040).
+      // `adjustments` is deliberately absent: no seeded group may write a record
+      // between any two accounts or add a third side. It is granted explicitly
+      // or not at all (FR-031a).
     },
   },
   {
@@ -139,13 +187,7 @@ const SEED_GROUPS = [
       "Adds new records but cannot edit, claim or delete existing ones.",
     isSuperuser: false,
     permissions: {
-      expenses: {
-        canView: false,
-        canAdd: true,
-        canChange: false,
-        canDelete: false,
-      },
-      income: {
+      records: {
         canView: false,
         canAdd: true,
         canChange: false,
@@ -204,13 +246,7 @@ const SEED_GROUPS = [
     description: "Read-only visibility across all financial records.",
     isSuperuser: false,
     permissions: {
-      expenses: {
-        canView: true,
-        canAdd: false,
-        canChange: false,
-        canDelete: false,
-      },
-      income: {
+      records: {
         canView: true,
         canAdd: false,
         canChange: false,
@@ -281,6 +317,94 @@ export function ensureDefaultTemplate(): void {
       layoutJson: JSON.stringify(makeDefaultLayout()),
     })
     .run();
+}
+
+/**
+ * Collapses the `expenses` and `income` permissions into one `records`
+ * permission, and renames `journal` to `adjustments` (FR-029, FR-031b).
+ *
+ * Writes **both** `group_permissions` and `user_permissions`.
+ * `dropClaimPermissions()` is the precedent for retiring a resource string and
+ * it touched groups only; repeating that omission here would silently discard
+ * every per-user override, which is exactly the failure FR-029 forbids
+ * (research.md R-04).
+ *
+ * The merge itself is pure and lives in `permissions/merge-records.ts`. This
+ * applier only reads rows, hands them over and writes the answer back, guarded
+ * by a settings key so it runs once: the merge is idempotent, but a rerun would
+ * re-grant a permission an administrator removed afterwards.
+ */
+export function applyRecordsPermission(): void {
+  if (getSetting(db, SETTING_KEYS.recordsPermissionMerged) === "1") return;
+
+  const groupRows = db
+    .select({
+      ownerId: groupPermissions.groupId,
+      resource: groupPermissions.resource,
+      canView: groupPermissions.canView,
+      canAdd: groupPermissions.canAdd,
+      canChange: groupPermissions.canChange,
+      canDelete: groupPermissions.canDelete,
+    })
+    .from(groupPermissions)
+    .all() as PermissionRow[];
+
+  const userRows = db
+    .select({
+      ownerId: userPermissions.userId,
+      resource: userPermissions.resource,
+      canView: userPermissions.canView,
+      canAdd: userPermissions.canAdd,
+      canChange: userPermissions.canChange,
+      canDelete: userPermissions.canDelete,
+    })
+    .from(userPermissions)
+    .all() as PermissionRow[];
+
+  const mergedGroups = mergeRecordsPermissions(groupRows);
+  const mergedUsers = mergeRecordsPermissions(userRows);
+
+  // Replace wholesale rather than patch: the merge collapses two primary keys
+  // onto one, so there is no in-place edit that is correct at every step.
+  db.transaction((tx) => {
+    tx.delete(groupPermissions).run();
+    if (mergedGroups.length > 0) {
+      tx.insert(groupPermissions)
+        .values(
+          mergedGroups.map((r) => ({
+            groupId: r.ownerId,
+            resource: r.resource,
+            canView: r.canView,
+            canAdd: r.canAdd,
+            canChange: r.canChange,
+            canDelete: r.canDelete,
+          })),
+        )
+        .run();
+    }
+
+    tx.delete(userPermissions).run();
+    if (mergedUsers.length > 0) {
+      tx.insert(userPermissions)
+        .values(
+          mergedUsers.map((r) => ({
+            userId: r.ownerId,
+            resource: r.resource,
+            canView: r.canView,
+            canAdd: r.canAdd,
+            canChange: r.canChange,
+            canDelete: r.canDelete,
+          })),
+        )
+        .run();
+    }
+  });
+
+  setSetting(db, SETTING_KEYS.recordsPermissionMerged, "1");
+  log.info(
+    { groups: mergedGroups.length, users: mergedUsers.length },
+    "Merged the expenses and income permissions into records",
+  );
 }
 
 export function ensureGroupSeed(): void {

@@ -168,144 +168,12 @@ export const contactSearchText = sqliteTable("contact_search_text", {
   text: text("text").notNull(),
 });
 
-/**
- * @deprecated Superseded by `ledger_records` (kind = Payment) plus `settlements`.
- * Kept unread for one release so the pre-upgrade data stays recoverable until the
- * ledger upgrade's verification passes (FR-038). Dropped in the release after the
- * one that introduces the double-entry ledger.
- */
-export const claims = sqliteTable("claims", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  claimNumber: text("claim_number").notNull(),
-  date: text("date").notNull(),
-  // ClaimStatus code (1 = pending, 2 = done). See enums.ts.
-  status: integer("status").notNull().default(1),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: text("created_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-});
-
-/**
- * @deprecated Superseded by `ledger_records` (kind = Expense) plus `ledger_movements`.
- * Kept unread for one release — see the note on `claims`.
- */
-export const expenses = sqliteTable("expenses", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  expenseNumber: text("expense_number").notNull().unique(),
-  itemName: text("item_name").notNull(),
-  // Replaces the old free-text `supplier` column. SET NULL: retiring a contact
-  // must never delete financial records.
-  contactId: integer("contact_id").references(() => contacts.id, {
-    onDelete: "set null",
-  }),
-  reference: text("reference").notNull().default(""),
-  remark: text("remark").notNull().default(""),
-  category: text("category").notNull().default("Other"),
-  // ExpenseStatus code (1 = unpaid, 2 = pending, 3 = paid). See enums.ts.
-  status: integer("status").notNull().default(1),
-  date: text("date").notNull(),
-  amount: real("amount").notNull(),
-  // Raw OCR/PDF text captured during auto-import (or by the search-rebuild worker
-  // re-extracting from the stored attachment). Null for manually created records.
-  // Folded into expense_search_text so scanned content is searchable even when the
-  // LLM's structured fields didn't capture it.
-  extractedText: text("extracted_text"),
-  // The currency `amount` is denominated in. Main-currency value = amount * exchangeRate.
-  currency: text("currency").notNull().default("USD"),
-  // Main-currency units per 1 unit of `currency`. 1 when the record is already in the
-  // main currency; locked at transaction time so historical conversions never drift.
-  exchangeRate: real("exchange_rate").notNull().default(1),
-  claimId: integer("claim_id").references(() => claims.id, {
-    onDelete: "set null",
-  }),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: text("created_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-  updatedAt: text("updated_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-});
-
-/**
- * @deprecated Superseded by `ledger_records` (kind = Income) plus `ledger_movements`.
- * Kept unread for one release — see the note on `claims`.
- */
-export const incomes = sqliteTable("incomes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  incomeNumber: text("income_number").notNull(),
-  // Replaces the old free-text `source` column (the customer/payer party).
-  contactId: integer("contact_id").references(() => contacts.id, {
-    onDelete: "set null",
-  }),
-  descriptionText: text("description_text").notNull().default(""),
-  reference: text("reference").notNull().default(""),
-  remark: text("remark").notNull().default(""),
-  category: text("category").notNull().default("Other"),
-  date: text("date").notNull(),
-  amount: real("amount").notNull(),
-  // See expenses.extractedText.
-  extractedText: text("extracted_text"),
-  // See expenses.currency / expenses.exchangeRate.
-  currency: text("currency").notNull().default("USD"),
-  exchangeRate: real("exchange_rate").notNull().default(1),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: text("created_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-});
-
-/**
- * @deprecated Superseded by `record_attachments`. Kept unread for one release —
- * see the note on `claims`.
- */
-export const expenseAttachments = sqliteTable("expense_attachments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  expenseId: integer("expense_id")
-    .notNull()
-    .references(() => expenses.id, { onDelete: "cascade" }),
-  filename: text("filename").notNull(),
-  displayName: text("display_name").notNull(),
-  addedDate: text("added_date")
-    .notNull()
-    .default(sql`(date('now'))`),
-});
-
-/**
- * @deprecated Superseded by `record_attachments`. Kept unread for one release —
- * see the note on `claims`.
- */
-export const incomeAttachments = sqliteTable("income_attachments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  incomeId: integer("income_id")
-    .notNull()
-    .references(() => incomes.id, { onDelete: "cascade" }),
-  filename: text("filename").notNull(),
-  displayName: text("display_name").notNull(),
-  addedDate: text("added_date")
-    .notNull()
-    .default(sql`(date('now'))`),
-});
-
-/**
- * @deprecated Superseded by `record_attachments`. Kept unread for one release —
- * see the note on `claims`.
- */
-export const claimAttachments = sqliteTable("claim_attachments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  claimId: integer("claim_id")
-    .notNull()
-    .references(() => claims.id, { onDelete: "cascade" }),
-  filename: text("filename").notNull(),
-  displayName: text("display_name").notNull(),
-  addedDate: text("added_date")
-    .notNull()
-    .default(sql`(date('now'))`),
-});
+// `claims`, `expenses` and `incomes` were here, with their attachment and
+// search-text side tables. Every one of them is dropped by this release: the
+// double-entry conversion moved their rows into `ledger_records` +
+// `ledger_movements`, and nothing has read them since (FR-037, data-model.md
+// §1). The migration that drops them is gated by `legacy-drop-guard.ts`, which
+// refuses to start a server whose records have not been converted yet.
 
 // Document types that get an auto-generated running number. A local enum (not
 // $lib/enums.ts's unrelated `DocumentType`/`TemplateDocumentType`) to avoid
@@ -344,53 +212,11 @@ export const appSequences = sqliteTable(
   ],
 );
 
-/**
- * @deprecated Superseded by `record_search_text`. Kept unread for one release —
- * see the note on `claims`.
- */
-export const expenseSearchText = sqliteTable("expense_search_text", {
-  expenseId: integer("expense_id")
-    .primaryKey()
-    .references(() => expenses.id, { onDelete: "cascade" }),
-  text: text("text").notNull(),
-});
-
-/**
- * @deprecated Superseded by `record_search_text`. Kept unread for one release —
- * see the note on `claims`.
- */
-export const incomeSearchText = sqliteTable("income_search_text", {
-  incomeId: integer("income_id")
-    .primaryKey()
-    .references(() => incomes.id, { onDelete: "cascade" }),
-  text: text("text").notNull(),
-});
-
 // App-wide settings shared by all users (global KV).
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
 });
-
-// User-defined categories for expenses and income.
-export const CATEGORY_TYPE = { expense: 0, income: 1 } as const;
-export type CategoryType = (typeof CATEGORY_TYPE)[keyof typeof CATEGORY_TYPE];
-
-/**
- * @deprecated A category is now an account with the ExpenseCategory or
- * IncomeCategory role (FR-006a). Kept unread for one release — see the note on
- * `claims`.
- */
-export const categories = sqliteTable(
-  "categories",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    type: integer("type").notNull(), // 0 = expense, 1 = income (see CATEGORY_TYPE)
-    name: text("name").notNull(),
-    rank: text("rank").notNull(),
-  },
-  (t) => [uniqueIndex("categories_type_name_idx").on(t.type, t.name)],
-);
 
 // Cache of historical exchange rates, stored in the provider's native pair shape: each
 // row is `rate` = `quote` units per 1 `base` on `date`. Rows are self-describing, so a
@@ -522,10 +348,10 @@ export const invoices = sqliteTable("invoices", {
   terms: text("terms"),
   // Plain integer — no FK to avoid circular reference with quotations.
   sourceQuotationId: integer("source_quotation_id"),
-  /** @deprecated Stops being read — its job is now `ledger_record_id`. */
-  resultIncomeId: integer("result_income_id").references(() => incomes.id, {
-    onDelete: "set null",
-  }),
+  // `result_income_id` was here. Its job passed to `ledger_record_id`, and its
+  // foreign key pointed into `incomes` — one of the tables this release drops,
+  // which is why the migration has to rebuild this table rather than only drop
+  // the column (FR-037b, data-model.md §1).
   // Which income category the invoice earns into, chosen on issue and defaulting
   // to the seeded Sales income account (FR-018a).
   incomeAccountId: integer("income_account_id").references(() => accounts.id, {
@@ -714,7 +540,15 @@ export const bankStatements = sqliteTable(
     // transaction, where `PRAGMA foreign_keys=OFF` is a no-op, so that drop
     // fails on any database that holds real statement lines. Appending keeps the
     // migration a plain ADD COLUMN.
-    accountId: integer("account_id").references(() => accounts.id),
+    //
+    // Required now (FR-055, invariant 9). It was nullable only because a
+    // pre-upgrade statement predated the chart of accounts; the conversion
+    // backfilled every one of those, and this release's migration backfills any
+    // that are somehow left before adding the constraint. Reconciling starts
+    // from an account, so a statement without one cannot be reached at all.
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => accounts.id),
   },
   (t) => [index("bank_statements_state_idx").on(t.extractionState)],
 );
@@ -753,12 +587,11 @@ export const reconciliationAllocations = sqliteTable(
     lineId: integer("line_id")
       .notNull()
       .references(() => bankStatementLines.id, { onDelete: "cascade" }),
-    /** @deprecated Replaced by `movement_id`. Kept nullable and unread for one
-     * release so the backfill that repointed every existing bank match stays
-     * inspectable against what it came from (FR-034, D-17). */
-    itemType: integer("item_type"),
-    /** @deprecated See `item_type`. */
-    itemId: integer("item_id"),
+    // `item_type` and `item_id` were here: the pre-upgrade way of naming what a
+    // bank line covered, replaced by `movement_id`. They were kept nullable and
+    // unread for one release so the backfill stayed inspectable against what it
+    // came from; that release is over, and no reader remains anywhere in `src/`
+    // (FR-037b, R-10).
     // The ledger movement this bank line covers. Nullable for exactly the reason
     // `bank_statements.account_id` is — a pre-upgrade allocation predates every
     // movement, and the upgrade's reconciliation phase repoints it at the bank

@@ -12,6 +12,7 @@ import {
   setOpeningBalance,
 } from "$lib/server/services/accounts.js";
 import { toMinor } from "$lib/server/ledger/money.js";
+import { listStatementSummaries } from "$lib/server/services/reconciliation.js";
 import { isValidDate } from "$lib/server/date.js";
 import type { AccountRoleCode } from "$lib/enums.js";
 
@@ -28,10 +29,71 @@ export function loadAccountsPage(
 
   const accounts = listAccounts(db, { includeArchived: true });
 
+  /**
+   * How many statements each account has still to finish (FR-053).
+   *
+   * The drawer's "Check against the bank" card needs this because there is no
+   * longer a top-level Reconciliation list where a half-done statement would be
+   * noticed — if the only way in is through the account, the account has to say
+   * whether there is anything waiting.
+   *
+   * Only read when the user may reconcile at all; there is nothing to tell
+   * somebody who cannot open the surface it points at.
+   */
+  const unfinishedStatements = new Map<number, number>();
+  if (hasPermission(locals, "reconciliation", "view")) {
+    for (const statement of listStatementSummaries(db, locals)) {
+      if (statement.completed || statement.accountId == null) continue;
+      unfinishedStatements.set(
+        statement.accountId,
+        (unfinishedStatements.get(statement.accountId) ?? 0) + 1,
+      );
+    }
+  }
+
   // A link to an account that has been deleted, or that never existed, lands on
   // the list rather than an empty drawer.
   if (openAccountId !== null && !accounts.some((a) => a.id === openAccountId)) {
     throw redirect(302, "/accounts");
+  }
+
+  return {
+    accounts,
+    openAccountId,
+    defaultAccountId: defaultAccountId(db),
+    // Plain object, because a Map does not survive the trip to the browser.
+    unfinishedStatements: Object.fromEntries(unfinishedStatements),
+    perms: {
+      add: hasPermission(locals, "accounts", "add"),
+      change: hasPermission(locals, "accounts", "change"),
+      delete: hasPermission(locals, "accounts", "delete"),
+      // Whether to offer the way in to reconciling at all (FR-049).
+      reconcile: hasPermission(locals, "reconciliation", "view"),
+    },
+  };
+}
+
+/**
+ * The other half of the chart: what money was earned and spent on.
+ *
+ * Same table, same service, same actions as `loadAccountsPage` — a category is
+ * an account underneath (002 FR-006a). What differs is only which rows the
+ * screen lists, because a list of 22 categories beside 4 accounts read as
+ * nothing but categories.
+ */
+export function loadCategoriesPage(
+  locals: App.Locals,
+  openAccountId: number | null,
+) {
+  if (!hasPermission(locals, "accounts", "view"))
+    throw redirect(302, "/dashboard");
+
+  const accounts = listAccounts(db, { includeArchived: true });
+
+  // A link to a category that has been deleted, or that never existed, lands on
+  // the list rather than on an empty drawer.
+  if (openAccountId !== null && !accounts.some((a) => a.id === openAccountId)) {
+    throw redirect(302, "/categories");
   }
 
   return {

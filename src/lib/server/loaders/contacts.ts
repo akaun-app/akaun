@@ -4,6 +4,7 @@ import {
   listContacts,
   getContactUsageCounts,
 } from "$lib/server/queries/contacts.js";
+import { contactBalances } from "$lib/server/queries/settlements.js";
 import {
   createContact,
   patchContact,
@@ -31,14 +32,53 @@ export function loadContactsPage(
     throw redirect(302, "/contacts");
   }
 
+  /**
+   * What each contact owes, or is owed — the purchase and sales ledger.
+   *
+   * Real bookkeeping keeps this as a subsidiary ledger behind the two shared
+   * owed accounts: one account per supplier and customer, reconciling to the
+   * control account. Here it is derived from the movements instead, which is
+   * why adding a contact never touches the chart of accounts (FR-008a) and why
+   * these figures can never disagree with the ledger they come from.
+   *
+   * `contactBalances()` has computed this correctly since the double-entry
+   * release and nothing has ever displayed it.
+   *
+   * Gated on `records.view`, not on `contacts.view`: it is derived from records,
+   * so seeing it means being allowed to see them.
+   */
+  const canSeeRecords = hasPermission(locals, "records", "view");
+  const owedToUs = canSeeRecords ? contactBalances(db, "owed-to-us") : [];
+  const weOwe = canSeeRecords ? contactBalances(db, "we-owe") : [];
+
+  // One figure per contact, signed the way the screen reads it: positive when
+  // they owe us, negative when we owe them. A contact on both sides nets out,
+  // which is the answer a person wants when they buy from a customer.
+  const balances: Record<number, number> = {};
+  for (const row of owedToUs) {
+    balances[row.contactId] =
+      (balances[row.contactId] ?? 0) + row.outstandingMinor;
+  }
+  for (const row of weOwe) {
+    balances[row.contactId] =
+      (balances[row.contactId] ?? 0) - row.outstandingMinor;
+  }
+
   return {
     contacts,
     usage,
+    balances,
+    totals: {
+      owedToUsMinor: owedToUs.reduce((sum, r) => sum + r.outstandingMinor, 0),
+      weOweMinor: weOwe.reduce((sum, r) => sum + r.outstandingMinor, 0),
+    },
     openContactId,
     perms: {
       add: hasPermission(locals, "contacts", "add"),
       change: hasPermission(locals, "contacts", "change"),
       delete: hasPermission(locals, "contacts", "delete"),
+      /** Whether to offer the statement link at all. */
+      records: canSeeRecords,
     },
   };
 }

@@ -1,17 +1,15 @@
 <script lang="ts">
-  import { ExpenseStatus } from "$lib/enums.js";
-
   type Tone = { label: string; tone: string };
-  // Accepts either an ExpenseStatus INT code or a string label. Labels are used
-  // wherever a status's integer codes would collide with the expense ones
-  // (reconciliation, quotations, invoices, ledger records).
-  let { status }: { status: number | string } = $props();
-
-  const byCode: Record<number, Tone> = {
-    [ExpenseStatus.Unpaid]: { label: "Unpaid", tone: "red" },
-    [ExpenseStatus.Pending]: { label: "Pending", tone: "amber" },
-    [ExpenseStatus.Paid]: { label: "Paid", tone: "green" },
-  };
+  /**
+   * A status, by its label.
+   *
+   * This used to accept an `ExpenseStatus` integer code as well, from the days
+   * when a status was a stored column. Nothing stores one now — every status is
+   * derived and named — so every caller passes a string and the numeric branch
+   * was unreachable. `ExpenseStatus` itself goes with the tables it described
+   * (FR-037).
+   */
+  let { status }: { status: string } = $props();
   const byLabel: Record<string, Tone> = {
     unpaid: { label: "Unpaid", tone: "red" },
     pending: { label: "Pending", tone: "amber" },
@@ -23,6 +21,10 @@
     owed: { label: "Owed", tone: "red" },
     "part-paid": { label: "Part paid", tone: "amber" },
     settled: { label: "Settled", tone: "green" },
+    // Whether the bank agrees the money moved — a different question from
+    // whether it is paid, so a different chip (FR-056).
+    cleared: { label: "Cleared", tone: "blue" },
+    "not cleared": { label: "Not cleared", tone: "" },
     // Quotation statuses (labels from QuotationStatusLabels in enums.ts)
     draft: { label: "Draft", tone: "" },
     sent: { label: "Sent", tone: "blue" },
@@ -47,11 +49,7 @@
     "no-match": { label: "No match", tone: "gray" },
   };
 
-  const m = $derived(
-    typeof status === "number"
-      ? (byCode[status] ?? byCode[ExpenseStatus.Unpaid])
-      : (byLabel[status] ?? byLabel.unpaid),
-  );
+  const m = $derived(byLabel[status] ?? byLabel.unpaid);
 </script>
 
 <span class="statusbadge tone-{m.tone}">

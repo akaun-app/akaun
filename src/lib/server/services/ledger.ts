@@ -13,7 +13,12 @@ import type {
   RecordView,
   Refusable,
 } from "../ledger/types.js";
-import { accountRefs, systemAccounts } from "../queries/accounts.js";
+import {
+  accountRefs,
+  getAccount,
+  systemAccounts,
+} from "../queries/accounts.js";
+import { sidesFromAccounts } from "../ledger/sides-from-accounts.js";
 import {
   deleteRecord,
   getRecord,
@@ -108,7 +113,13 @@ export function createRecord(
     db,
     actingUserId,
     {
-      kind: kindCodeFor(data.kind),
+      // A journal-shaped record that is really an everyday purchase or sale
+      // says so, so ordinary spending is not filed under the heading reserved
+      // for corrections (see `storedKind` in ledger/types.ts).
+      kind:
+        data.kind === "journal" && data.storedKind !== undefined
+          ? data.storedKind
+          : kindCodeFor(data.kind),
       date: data.date,
       description: data.description,
       amount: data.amount,
@@ -173,7 +184,7 @@ export function patchRecord(
   let movements: MovementDraft[] | undefined;
 
   if (rebuild) {
-    const sides = sidesFor(existing, patch);
+    const sides = sidesFor(db, existing, patch);
     if (!sides.ok) return sides;
     const amount = patch.amount ?? existing.amount;
     const exchangeRate = patch.exchangeRate ?? existing.exchangeRate;
@@ -247,6 +258,7 @@ function touchesMoney(patch: RecordPatch): boolean {
  * account of where the money went.
  */
 function sidesFor(
+  db: LedgerDb,
   existing: RecordView,
   patch: RecordPatch,
 ): Refusable<RecordCreate> {
@@ -257,6 +269,40 @@ function sidesFor(
     currency: patch.currency ?? existing.currency,
     exchangeRate: patch.exchangeRate ?? existing.exchangeRate,
   };
+
+  // Both accounts named means the user re-answered the two questions the form
+  // asks, so the kind is derived again from scratch — an expense whose paying
+  // side becomes another bank account really is a transfer now, and keeping the
+  // old kind would file it under a heading that is no longer true (FR-012).
+  //
+  // The `adjustments` gate is applied by the route before this runs; the
+  // derivation is pure, so asking it twice gives the same answer.
+  if (patch.fromAccountId !== undefined && patch.toAccountId !== undefined) {
+    const derived = sidesFromAccounts(
+      {
+        fromAccountId: patch.fromAccountId,
+        toAccountId: patch.toAccountId,
+        amountMinor: toMinor(base.amount, base.exchangeRate),
+        contactId:
+          patch.contactId !== undefined ? patch.contactId : existing.contactId,
+      },
+      {
+        accountById: (id) => {
+          const account = getAccount(db, id);
+          return account
+            ? {
+                id: account.id,
+                role: account.role,
+                archived: account.archivedAt !== null,
+              }
+            : null;
+        },
+        canAdjust: true,
+      },
+    );
+    if (!derived.ok) return derived;
+    return { ok: true, value: { ...base, ...derived.value } };
+  }
 
   const into = existing.movements.find((m) => m.amountMinor > 0);
   const outOf = existing.movements.find((m) => m.amountMinor < 0);

@@ -15,6 +15,9 @@ import {
   resourceForKind,
 } from "$lib/server/ledger/record-permissions.js";
 import { isValidDate } from "$lib/server/date.js";
+import { getAccount } from "$lib/server/queries/accounts.js";
+import { sidesFromAccounts } from "$lib/server/ledger/sides-from-accounts.js";
+import { toMinor } from "$lib/server/ledger/money.js";
 
 const accountId = z.number().int().positive();
 
@@ -79,7 +82,43 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error);
 
-  const result = patchRecord(db, id, locals.user!.id, parsed.data);
+  const patch = parsed.data;
+
+  // Both accounts named means the kind is being re-derived, so the same gate
+  // the create path applies is applied here — after the derivation, because
+  // whether a record needs the ability is a fact about the accounts it names
+  // (FR-031c). The derivation is pure, so the service asking it again below
+  // gets the same answer.
+  if (patch.fromAccountId !== undefined && patch.toAccountId !== undefined) {
+    const derived = sidesFromAccounts(
+      {
+        fromAccountId: patch.fromAccountId,
+        toAccountId: patch.toAccountId,
+        amountMinor: toMinor(
+          patch.amount ?? existing.amount,
+          patch.exchangeRate ?? existing.exchangeRate,
+        ),
+        contactId:
+          patch.contactId !== undefined ? patch.contactId : existing.contactId,
+      },
+      {
+        accountById: (accountId) => {
+          const account = getAccount(db, accountId);
+          return account
+            ? {
+                id: account.id,
+                role: account.role,
+                archived: account.archivedAt !== null,
+              }
+            : null;
+        },
+        canAdjust: hasPermission(locals, "adjustments", "change"),
+      },
+    );
+    if (!derived.ok) return refused(derived.reason);
+  }
+
+  const result = patchRecord(db, id, locals.user!.id, patch);
   if (!result.ok) return refused(result.reason);
   return Response.json(result.value);
 };

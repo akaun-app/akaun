@@ -28,7 +28,7 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'general' | 'company' | 'category' | 'books' | 'intelligence' | 'templates' | 'advanced';
+	type Tab = 'general' | 'company' | 'books' | 'intelligence' | 'templates' | 'advanced';
 	let activeTab = $state<Tab>('general');
 
 	// Mobile detection for Sheet side
@@ -93,35 +93,12 @@
 		data.moneyAccounts.find((a) => String(a.id) === defaultAccount)?.name ?? 'Choose an account'
 	);
 
-	// --- Categories ---
-	// A category is an account underneath (FR-006a), but the word on screen stays
-	// "category" — nobody should have to learn a second name for the same thing.
-	//
-	// Every add and removal is staged here and nothing reaches the database until
-	// the Category tab's own Save. `id: null` marks a category the user has just
-	// added: it has no account behind it yet, which is what tells a staged row
-	// apart from one that already exists.
-	type ServerCategory = PageData['expenseCategories'][number];
-	type CategoryRow = { id: number | null; name: string; isSystem: boolean; inUse: boolean };
-
-	const stageCategory = (c: ServerCategory): CategoryRow => ({ ...c });
-	const categorySignature = (rows: CategoryRow[]) =>
-		JSON.stringify(rows.map((r) => [r.id, r.name]));
-
-	// svelte-ignore state_referenced_locally
-	let expCats = $state<CategoryRow[]>(data.expenseCategories.map(stageCategory));
-	let newExpCat = $state('');
-
-	// svelte-ignore state_referenced_locally
-	let incCats = $state<CategoryRow[]>(data.incomeCategories.map(stageCategory));
-	let newIncCat = $state('');
-
-	const stagedCategories = $derived(
-		JSON.stringify({
-			expense: expCats.map((c) => ({ id: c.id, name: c.name })),
-			income: incCats.map((c) => ({ id: c.id, name: c.name }))
-		})
-	);
+	// Categories are accounts, created, renamed and archived on the Accounts
+	// screen — the one place accounts are managed. This tab used to offer a
+	// second, differently-behaved way to do the same job: it staged rows and
+	// reconciled them on Save, while Accounts wrote each change immediately, so
+	// the same action had two shapes depending on where it was started from
+	// (FR-019, FR-020).
 
 	// Document numbering state — one shared template, applied to every type
 	const SEQ_TYPES: SequenceDocType[] = ['expense', 'income', 'payment', 'quotation', 'invoice'];
@@ -937,10 +914,6 @@
 				logoChange = 'none';
 				if (logoFileInput) logoFileInput.value = '';
 			}
-			if (action === 'saveCategories') {
-				expCats = data.expenseCategories.map(stageCategory);
-				incCats = data.incomeCategories.map(stageCategory);
-			}
 			if (action === 'saveSequenceTemplate') {
 				seqTemplate = data.sequenceTemplate;
 				if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
@@ -970,8 +943,6 @@
 		companyAddress !== data.companyAddress ||
 		companyRegistrationNo !== data.companyRegistrationNo ||
 		logoChange !== 'none' ||
-		categorySignature(expCats) !== categorySignature(data.expenseCategories.map(stageCategory)) ||
-		categorySignature(incCats) !== categorySignature(data.incomeCategories.map(stageCategory)) ||
 		providersDirty ||
 		aiParallelTasks !== data.autoImportParallelTasks ||
 		aiCategoryHints !== data.autoImportCategoryHints ||
@@ -991,10 +962,6 @@
 		logoPreviewUrl = data.companyLogoUrl;
 		logoChange = 'none';
 		if (logoFileInput) logoFileInput.value = '';
-		expCats = data.expenseCategories.map(stageCategory);
-		incCats = data.incomeCategories.map(stageCategory);
-		newExpCat = '';
-		newIncCat = '';
 		providers = [...data.providers];
 		aiParallelTasks = data.autoImportParallelTasks;
 		aiCategoryHints = data.autoImportCategoryHints;
@@ -1045,49 +1012,6 @@
 		allowNavigation = false;
 	});
 
-	/** Stages a new category. Nothing is created until the section's Save. */
-	function stageNewCategory(rows: CategoryRow[], name: string): CategoryRow[] {
-		const taken = rows.some((c) => c.name.toLocaleLowerCase() === name.toLocaleLowerCase());
-		if (taken) return rows;
-		return [...rows, { id: null, name, isSystem: false, inUse: false }];
-	}
-
-	function addExpCat() {
-		const v = newExpCat.trim();
-		if (!v) return;
-		expCats = stageNewCategory(expCats, v);
-		newExpCat = '';
-	}
-
-	function removeExpCat(cat: CategoryRow) {
-		expCats = expCats.filter((c) => c !== cat);
-	}
-
-	function addIncCat() {
-		const v = newIncCat.trim();
-		if (!v) return;
-		incCats = stageNewCategory(incCats, v);
-		newIncCat = '';
-	}
-
-	function removeIncCat(cat: CategoryRow) {
-		incCats = incCats.filter((c) => c !== cat);
-	}
-
-	/** Why a category's remove button is off, or null when it is on. */
-	function categoryRemoveBlocked(cat: CategoryRow): string | null {
-		if (cat.isSystem) return 'Akaun needs this one, so it has to stay.';
-		return null;
-	}
-
-	function handleExpKey(e: KeyboardEvent) {
-		if (e.key === 'Enter') { e.preventDefault(); addExpCat(); }
-	}
-
-	function handleIncKey(e: KeyboardEvent) {
-		if (e.key === 'Enter') { e.preventDefault(); addIncCat(); }
-	}
-
 	// --- Template tab state ---
 	// svelte-ignore state_referenced_locally
 	let templates = $state<TemplateRow[]>([...(data.templates as TemplateRow[])]);
@@ -1120,7 +1044,6 @@
 	const TABS: { id: Tab; label: string }[] = $derived([
 		{ id: 'general', label: 'General' },
 		{ id: 'company', label: 'Company' },
-		{ id: 'category', label: 'Category' },
 		...(data.canSeeBooks ? [{ id: 'books' as Tab, label: 'Books' }] : []),
 		{ id: 'intelligence', label: 'Intelligence' },
 		{ id: 'templates', label: 'Templates' },
@@ -1202,7 +1125,7 @@
 										<div class="set-row-label">Money usually comes from</div>
 										<div class="set-row-value" style="font-size:12px; margin-top:2px;">New expenses and income start with this account already filled in. You can still change it on any record.</div>
 									</div>
-									{#if data.canManageCategories}
+									{#if data.canManageAccounts}
 										<Select.Root type="single" name="defaultAccountDisplay" bind:value={defaultAccount}>
 											<Select.Trigger class="set-input-right set-input-wide">{defaultAccountName}</Select.Trigger>
 											<Select.Content>
@@ -1216,6 +1139,24 @@
 									{/if}
 								</div>
 							{/if}
+
+							<!--
+								A link out, not a tab. Categories are managed on their own
+								screen and nowhere else (FR-019/FR-020) — this only says where
+								that screen is, because someone looking for them is as likely
+								to open Settings as Accounts.
+							-->
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Categories</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">What money is earned and spent on. Managed on their own screen.</div>
+								</div>
+								<a
+										class="set-input-right"
+										href={resolve('/(app)/categories')}
+										style="color:var(--primary); text-decoration:none;">Open Categories →</a
+									>
+							</div>
 						</div>
 						{#if data.currencyLocked}
 							<p class="set-row-value" style="font-size:12px; display:flex; align-items:center; gap:4px; margin-top:6px; margin-bottom:0;">
@@ -1380,81 +1321,6 @@
 							</div>
 						</div>
 						<Button type="submit" class="mt-4">Save</Button>
-					</form>
-				</div>
-
-			{:else if activeTab === 'category'}
-				<div class="set-section">
-					<div class="set-section-head">
-						<h2 class="set-section-title">Category</h2>
-						<p class="set-section-sub">Categories available when recording expenses and income</p>
-					</div>
-
-					<form method="POST" action="?/saveCategories" use:enhance>
-						<input type="hidden" name="categories" value={stagedCategories} />
-
-						<p class="set-subsection-label" style="margin-top:0;">Expense</p>
-						<div class="cat-chips">
-							{#each expCats as cat (cat.id ?? cat.name)}
-								<span class="cat-chip-removable">
-									{cat.name}
-									{#if data.canManageCategories}
-										<button
-											type="button"
-											class="chip-remove"
-											disabled={categoryRemoveBlocked(cat) !== null}
-											title={categoryRemoveBlocked(cat) ?? undefined}
-											onclick={() => removeExpCat(cat)}
-											aria-label="Remove {cat.name}"
-										>
-											<X size={11} />
-										</button>
-									{/if}
-								</span>
-							{/each}
-						</div>
-						{#if data.canManageCategories}
-							<div class="cat-add-row">
-								<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newExpCat} onkeydown={handleExpKey} />
-								<Button type="button" variant="ghost" onclick={addExpCat}><Plus size={14} /> Add</Button>
-							</div>
-						{/if}
-
-						<p class="set-subsection-label" style="margin-top:24px;">Income</p>
-						<div class="cat-chips">
-							{#each incCats as cat (cat.id ?? cat.name)}
-								<span class="cat-chip-removable">
-									{cat.name}
-									{#if data.canManageCategories}
-										<button
-											type="button"
-											class="chip-remove"
-											disabled={categoryRemoveBlocked(cat) !== null}
-											title={categoryRemoveBlocked(cat) ?? undefined}
-											onclick={() => removeIncCat(cat)}
-											aria-label="Remove {cat.name}"
-										>
-											<X size={11} />
-										</button>
-									{/if}
-								</span>
-							{/each}
-						</div>
-						{#if data.canManageCategories}
-							<div class="cat-add-row">
-								<Input class="flex-1 min-w-0" type="text" placeholder="New category name..." bind:value={newIncCat} onkeydown={handleIncKey} />
-								<Button type="button" variant="ghost" onclick={addIncCat}><Plus size={14} /> Add</Button>
-							</div>
-						{/if}
-
-						<p class="set-hint">
-							Nothing changes until you save. Removing a category that records already use
-							keeps every one of them — it just stops being offered for new ones.
-						</p>
-
-						{#if data.canManageCategories}
-							<Button type="submit" class="mt-4">Save</Button>
-						{/if}
 					</form>
 				</div>
 
@@ -2115,12 +1981,6 @@
 		gap: 6px;
 	}
 
-	.cat-add-row {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-		margin-top: 12px;
-	}
 
 	.set-hint {
 		font-size: 12px;
@@ -2171,28 +2031,8 @@
 		opacity: 0.75;
 	}
 
-	.chip-remove:disabled {
-		cursor: not-allowed;
-		opacity: 0.3;
-	}
 
-	.chip-remove {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		background: none;
-		border: none;
-		padding: 1px;
-		cursor: pointer;
-		color: inherit;
-		opacity: 0.6;
-		border-radius: 2px;
-	}
 
-	.chip-remove:hover {
-		opacity: 1;
-		background: oklch(0 0 0 / 0.1);
-	}
 
 	.seq-chip-row {
 		display: flex;

@@ -6,8 +6,9 @@ import {
   ensureDefaultAdmin,
   ensureGroupSeed,
   ensureDefaultTemplate,
+  applyRecordsPermission,
 } from "$lib/server/db/client.js";
-import { ensureLedgerUpgrade } from "$lib/server/ledger/upgrade/index.js";
+import { seedAccounts } from "$lib/server/db/seed-accounts.js";
 import { getSessionUser } from "$lib/server/auth.js";
 import { users } from "$lib/server/db/schema.js";
 import { getEffectivePermissions } from "$lib/server/permissions.js";
@@ -19,13 +20,19 @@ if (env.LOG_LEVEL) setLogLevel(env.LOG_LEVEL);
 export const init = async () => {
   await ensureDefaultAdmin();
   ensureGroupSeed();
+  // Beside the group seed, because it finishes the same job: the seed writes the
+  // `records` ability for a fresh install, and this rewrites the two abilities it
+  // replaces for an existing one (FR-029).
+  applyRecordsPermission();
+  // The chart of accounts a new installation starts with. This is what the
+  // ledger upgrade's account seeding did on a fresh install; the upgrade itself
+  // is gone with the tables it converted (research.md R-06).
+  seedAccounts(db);
   ensureDefaultTemplate();
-  // Runs in place of the ensureDefaultCategories() call it replaces: a category
-  // is now an account, and seeding the chart of accounts is one of the update's
-  // phases. Blocking, so the first request is never served against a database
-  // that is half converted — and idempotent, so on every later start it reads
-  // one settings row and returns (FR-037, D-15, SC-008).
-  ensureLedgerUpgrade(db, "server-startup");
+  // `ensureLedgerUpgrade()` was called here. The conversion it ran is finished
+  // for every installation this release can start against — `legacy-drop-guard`
+  // refuses to start one where it is not — and the tables it read are gone, so
+  // the module went with them (FR-037, research.md R-06).
   startImportWorker();
 };
 

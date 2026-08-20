@@ -1,15 +1,12 @@
 import {
   LayoutDashboard,
   Wallet,
-  TrendingUp,
   Upload,
   Users,
   ScrollText,
   Receipt,
-  Scale,
   Landmark,
   ChartColumn,
-  BookOpen,
 } from "@lucide/svelte";
 import type { Component } from "svelte";
 import type { ResourceName } from "$lib/server/permissions.js";
@@ -30,19 +27,15 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
     Icon: LayoutDashboard,
     resource: "dashboard",
   },
+  // One list of everything that happened with money. Expenses, Income and
+  // Journal were three doors into one store, and a transfer belonged to none of
+  // them (FR-007, FR-023).
   {
-    id: "expenses",
-    label: "Expenses",
-    href: "/expenses",
+    id: "records",
+    label: "Records",
+    href: "/records",
     Icon: Wallet,
-    resource: "expenses",
-  },
-  {
-    id: "income",
-    label: "Income",
-    href: "/income",
-    Icon: TrendingUp,
-    resource: "income",
+    resource: "records",
   },
   {
     id: "quotations",
@@ -72,13 +65,9 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
     Icon: Upload,
     resource: "import",
   },
-  {
-    id: "reconciliation",
-    label: "Reconciliation",
-    href: "/reconciliation",
-    Icon: Scale,
-    resource: "reconciliation",
-  },
+  // Reconciliation is not a menu item any more: a statement always belonged to
+  // exactly one account, so reconciling is reached from that account's drawer
+  // at /accounts/[id]/reconcile (FR-023, FR-048).
   {
     id: "accounts",
     label: "Accounts",
@@ -93,14 +82,6 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
     Icon: ChartColumn,
     resource: "reports",
   },
-  // Hidden until someone grants the `journal` permission — no seeded group has it.
-  {
-    id: "journal",
-    label: "Journal",
-    href: "/journal",
-    Icon: BookOpen,
-    resource: "journal",
-  },
 ];
 
 export const MAX_MOBILE_NAV_ITEMS = 5;
@@ -109,8 +90,7 @@ export const MAX_MOBILE_NAV_ITEMS = 5;
 // items, kept under MAX_MOBILE_NAV_ITEMS so the cap isn't immediately maxed out.
 export const DEFAULT_MOBILE_VISIBLE_IDS = new Set([
   "dashboard",
-  "expenses",
-  "income",
+  "records",
   "import",
 ]);
 

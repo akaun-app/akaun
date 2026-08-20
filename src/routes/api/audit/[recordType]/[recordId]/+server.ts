@@ -6,15 +6,15 @@ import { hasPermission, type ResourceName } from "$lib/server/permissions.js";
 // audit RecordType -> the ResourceName whose 'view' permission gates it.
 //
 // 'expense' and 'income' survive for entries written before the ledger upgrade;
-// every ledger write since is a 'record'. A record of any kind is gated on
-// `expenses` view here rather than on its own kind's resource, because the audit
-// trail is read from inside a drawer the user already had to be allowed to open.
+// every ledger write since is a 'record'. All three are gated on `records` view:
+// the audit trail is read from inside a drawer the user already had to be
+// allowed to open, and there is now one ability for every kind of record.
 const RESOURCE_BY_RECORD_TYPE: Record<RecordType, ResourceName> = {
-  expense: "expenses",
-  income: "income",
-  record: "expenses",
+  expense: "records",
+  income: "records",
+  record: "records",
   account: "accounts",
-  settlement: "expenses",
+  settlement: "records",
   contact: "contacts",
   quotation: "quotations",
   invoice: "invoices",

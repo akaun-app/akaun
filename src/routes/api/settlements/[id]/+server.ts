@@ -9,7 +9,7 @@ import { undoSettlement } from "$lib/server/services/settlements.js";
  * settlement was locking becomes editable again (FR-017).
  */
 export const DELETE: RequestHandler = async ({ locals, params }) => {
-  if (!hasPermission(locals, "expenses", "delete")) return forbidden();
+  if (!hasPermission(locals, "records", "delete")) return forbidden();
 
   const id = Number((params as { id: string }).id);
   if (!Number.isInteger(id) || id <= 0) {

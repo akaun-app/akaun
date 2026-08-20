@@ -119,10 +119,4 @@
 		line-height: 1.55;
 		margin: 0 0 18px;
 	}
-	.hint {
-		font-size: 12px;
-		color: var(--muted-foreground);
-		margin: 6px 0 0;
-		line-height: 1.5;
-	}
 </style>

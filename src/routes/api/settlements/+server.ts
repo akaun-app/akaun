@@ -31,7 +31,7 @@ const createSchema = z
  * into age bands for the views; neither caller has to ask twice.
  */
 export const GET: RequestHandler = async ({ locals, url }) => {
-  if (!hasPermission(locals, "expenses", "view")) return forbidden();
+  if (!hasPermission(locals, "records", "view")) return forbidden();
 
   const p = url.searchParams;
   const direction =
@@ -52,7 +52,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-  if (!hasPermission(locals, "expenses", "add")) return forbidden();
+  if (!hasPermission(locals, "records", "add")) return forbidden();
 
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error);

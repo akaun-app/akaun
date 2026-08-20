@@ -52,17 +52,26 @@
 	// Quotations and invoices are deliberately absent here as they were before —
 	// this screen has never offered them.
 	const RESOURCES = [
-		{ id: 'dashboard', label: 'Dashboard' },
-		{ id: 'expenses', label: 'Expenses' },
-		{ id: 'income', label: 'Income' },
-		{ id: 'import', label: 'Auto Import' },
-		{ id: 'contacts', label: 'Contacts' },
-		{ id: 'reconciliation', label: 'Reconciliation' },
-		{ id: 'accounts', label: 'Accounts' },
-		{ id: 'reports', label: 'Reports' },
-		// Off for everyone by default: entering a record's two sides by hand is
-		// how you make the books say anything you like (FR-040).
-		{ id: 'journal', label: 'Journal' }
+		{ id: 'dashboard', label: 'Dashboard', description: 'The opening summary of money in, money out and what is still owed.' },
+		{
+			id: 'records',
+			label: 'Records',
+			description:
+				'Everything that happened with money — purchases, sales, transfers, payments.'
+		},
+		{ id: 'import', label: 'Auto Import', description: 'Reading receipts and statements and turning them into records.' },
+		{ id: 'contacts', label: 'Contacts', description: 'The people and businesses records are attached to.' },
+		{ id: 'reconciliation', label: 'Reconciliation', description: 'Checking an account against the statement its bank sends.' },
+		{ id: 'accounts', label: 'Accounts', description: 'The list of accounts money moves between, including spending categories.' },
+		{ id: 'reports', label: 'Reports', description: 'Profit and loss, balance sheet and partner statements. Viewing only — a report is never edited.' },
+		// Off for everyone by default: a record written this way can make the
+		// books say anything and still add up (FR-031a).
+		{
+			id: 'adjustments',
+			label: 'Adjustments',
+			description:
+				'Lets someone write a record between any two accounts, and add more than two sides. Needed for corrections and year-end adjustments. Grant it only to someone you trust with the books, because a record written this way can make the accounts say anything and still add up.'
+		}
 	] as const;
 	const ACTIONS = ['view', 'add', 'change', 'delete'] as const;
 
@@ -691,7 +700,10 @@
 										<tbody>
 											{#each RESOURCES as r}
 												<tr class="ax-resrow">
-													<td><span class="ax-resname">{r.label}</span></td>
+													<td>
+														<span class="ax-resname">{r.label}</span>
+														<span class="ax-resdesc">{r.description}</span>
+													</td>
 													{#each ACTIONS as action}
 														{@const inherited = editingInheritedPerms[r.id]?.[action] ?? false}
 														{@const extra = editingUserPermOverrides[r.id]?.[action] ?? false}
@@ -855,7 +867,10 @@
 								{#each RESOURCES as r}
 									{@const perms = groupDraft?.permissions[r.id] ?? { view: false, add: false, change: false, delete: false }}
 									<tr class="ax-resrow">
-										<td><span class="ax-resname">{r.label}</span></td>
+										<td>
+														<span class="ax-resname">{r.label}</span>
+														<span class="ax-resdesc">{r.description}</span>
+													</td>
 										<td>
 											<div class="ax-permcellwrap">
 												<input
@@ -1477,7 +1492,16 @@
 		font-size: 13px;
 	}
 	.ax-resrow:last-child td { border-bottom: none; }
-	.ax-resname { font-weight: 500; }
+	.ax-resname { font-weight: 500; display: block; }
+	/* FR-031e — `adjustments` is unguessable from its name alone. */
+	.ax-resdesc {
+		display: block;
+		margin-top: 2px;
+		max-width: 340px;
+		font-size: 12px;
+		line-height: 1.4;
+		color: var(--muted-foreground);
+	}
 	.ax-permcellwrap { display: flex; justify-content: center; }
 	.perm-cb { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
 	.perm-cb-all { accent-color: var(--foreground); }

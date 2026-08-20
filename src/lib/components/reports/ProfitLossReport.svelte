@@ -3,7 +3,7 @@
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import type { ProfitLossReport } from '$lib/server/ledger/types.js';
 	import ReportNotes from './ReportNotes.svelte';
-	import { openAccountHistory } from './report-links.js';
+	import { openCategory } from './report-links.js';
 	import './reports.css';
 
 	/**
@@ -77,7 +77,7 @@
 										<button
 											type="button"
 											class="rep-open related-link"
-											onclick={() => openAccountHistory(line.accountId)}
+											onclick={() => openCategory(line.accountId)}
 										>
 											<span>{line.accountName}</span>
 											<ChevronRight size={13} />

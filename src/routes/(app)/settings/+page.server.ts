@@ -1,3 +1,8 @@
+import type {
+  UpgradeReport,
+  UpgradeState,
+  VerifyResult,
+} from "$lib/server/ledger/types.js";
 import { MONEY_POT_ROLES } from "$lib/server/ledger/account-type.js";
 import type { PageServerLoad, Actions } from "./$types.js";
 import { z } from "zod";
@@ -11,18 +16,9 @@ import {
 } from "$lib/server/settings.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
-  canDeleteAccount,
   defaultAccountId,
   listAccounts,
 } from "$lib/server/queries/accounts.js";
-import {
-  createAccount,
-  patchAccount,
-  removeAccount,
-} from "$lib/server/services/accounts.js";
-import { readUpgradeState } from "$lib/server/ledger/upgrade/index.js";
-import { AccountRole, type AccountRoleCode } from "$lib/enums.js";
-import type { AccountView } from "$lib/server/ledger/types.js";
 import {
   saveCompanyLogo,
   deleteFile,
@@ -48,32 +44,12 @@ import { fail } from "@sveltejs/kit";
  * accounts underneath. There is no second list and no mapping between the two,
  * so what Settings offers and what an expense screen offers can never drift.
  */
-const CATEGORY_ROLE = {
-  expense: AccountRole.ExpenseCategory,
-  income: AccountRole.IncomeCategory,
-} as const;
-
-/** Just what the chips on the Category tab need to know about each account. */
-function toCategoryRows(rows: AccountView[]) {
-  return rows.map((a) => ({
-    id: a.id,
-    name: a.name,
-    // One of the accounts the app needs to work — it cannot be taken away.
-    isSystem: a.isSystem,
-    // Already used by records, so removing it would throw history away.
-    // Taking it off the list stops it being offered instead.
-    inUse: a.movementCount > 0,
-  }));
-}
-
 export const load: PageServerLoad = async ({ locals }) => {
-  const expenseCategories = toCategoryRows(
-    listAccounts(db, { role: CATEGORY_ROLE.expense }),
-  );
-  const incomeCategories = toCategoryRows(
-    listAccounts(db, { role: CATEGORY_ROLE.income }),
-  );
-  const canManageCategories = hasPermission(locals, "accounts", "change");
+  // Categories are accounts, and accounts are created, renamed and archived on
+  // the Accounts screen. Settings no longer lists them (FR-019, FR-020); this
+  // one ability is still read, because the default-account setting below writes
+  // an account (FR-011).
+  const canManageAccounts = hasPermission(locals, "accounts", "change");
 
   // Which account new records start with, and the accounts it may be (FR-011).
   // With one account there is nothing to ask, so the setting stays off screen.
@@ -88,15 +64,41 @@ export const load: PageServerLoad = async ({ locals }) => {
   // What the one-off update to the new way of recording did, and whether the
   // books balance. Only the part meant to be read is sent — the before/after
   // snapshot behind it is working data, not something to put on a screen.
+  //
+  // Read straight from the settings row now. The module that wrote it is
+  // retired with the tables it converted (research.md R-06), but what it
+  // recorded is still worth showing: it is the account of a one-off change to
+  // this installation's own books, and nothing rewrites it.
   const canSeeBooks = hasPermission(locals, "reports", "view");
-  const upgradeState = canSeeBooks ? readUpgradeState(db) : null;
-  const upgrade = upgradeState
-    ? {
-        finishedAt: upgradeState.finishedAt,
-        verify: upgradeState.verify,
-        report: upgradeState.report,
-      }
+  const upgradeRaw = canSeeBooks
+    ? getSetting(db, SETTING_KEYS.ledgerUpgradeState)
     : null;
+  const emptyReport: UpgradeReport = {
+    uncategorisedRecordIds: [],
+    missingAttachments: [],
+    roundingDifferences: [],
+    payerAttributions: [],
+    bankFallbackRecordIds: [],
+    unrepointedAllocationIds: [],
+  };
+  let upgrade: {
+    finishedAt: string | null;
+    verify: VerifyResult | null;
+    report: UpgradeReport;
+  } | null = null;
+  if (upgradeRaw) {
+    try {
+      const state = JSON.parse(upgradeRaw) as Partial<UpgradeState>;
+      upgrade = {
+        finishedAt: state.finishedAt ?? null,
+        verify: state.verify ?? null,
+        report: state.report ?? emptyReport,
+      };
+    } catch {
+      // An unreadable row says nothing; the screen simply shows no notes.
+      upgrade = null;
+    }
+  }
 
   const sequenceTemplate =
     getSetting(db, SETTING_KEYS.sequenceTemplate) ?? DEFAULT_SEQUENCE_TEMPLATE;
@@ -134,9 +136,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   }));
 
   return {
-    expenseCategories,
-    incomeCategories,
-    canManageCategories,
+    canManageAccounts,
     moneyAccounts,
     ledgerDefaultAccountId,
     canSeeBooks,
@@ -158,48 +158,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     templates: listTemplates(db),
   };
 };
-
-/** One row of a staged category list. A null id means "the user just added it". */
-const categoryEntrySchema = z.object({
-  id: z.number().int().positive().nullable(),
-  name: z.string().trim().min(1).max(80),
-});
-
-/** Both lists, as the Category tab wants them to end up. */
-const categoriesSchema = z.object({
-  // At least one of each: an expense or income screen with nothing to pick
-  // from cannot record anything.
-  expense: z.array(categoryEntrySchema).min(1),
-  income: z.array(categoryEntrySchema).min(1),
-});
-
-/** What one staged list asks of the accounts behind it. */
-function planCategoryChanges(
-  role: AccountRoleCode,
-  entries: z.infer<typeof categoryEntrySchema>[],
-) {
-  const existing = listAccounts(db, { role });
-  const keptIds = new Set(entries.map((e) => e.id).filter((id) => id !== null));
-  const seen = new Set<string>();
-  const duplicated: string[] = [];
-
-  for (const entry of entries) {
-    const key = entry.name.toLocaleLowerCase();
-    if (seen.has(key)) duplicated.push(entry.name);
-    seen.add(key);
-  }
-
-  return {
-    duplicated,
-    create: entries.filter((e) => e.id === null).map((e) => e.name),
-    rename: entries.flatMap((e) =>
-      e.id !== null && existing.some((a) => a.id === e.id && a.name !== e.name)
-        ? [{ id: e.id, name: e.name }]
-        : [],
-    ),
-    drop: existing.filter((a) => !keptIds.has(a.id)),
-  };
-}
 
 export const actions: Actions = {
   saveGeneral: async ({ locals, request }) => {
@@ -284,87 +242,6 @@ export const actions: Actions = {
     setSetting(db, SETTING_KEYS.companyRegistrationNo, companyRegistrationNo);
 
     return { success: true, action: "saveCompany" };
-  },
-
-  /**
-   * The Category tab's one Save.
-   *
-   * The browser stages every add and removal locally and sends the two lists it
-   * wants to end up with; the difference against what is there now is worked out
-   * here. A row with no id is one the user added and nothing has created yet.
-   *
-   * Everything goes through the accounts service, never a raw insert, so each
-   * change writes its own audit entry and reaches other open tabs by itself.
-   */
-  saveCategories: async ({ locals, request }) => {
-    if (!hasPermission(locals, "accounts", "change")) {
-      return fail(403, { error: "Forbidden" });
-    }
-
-    const data = await request.formData();
-    let payload: z.infer<typeof categoriesSchema>;
-    try {
-      const parsed = categoriesSchema.safeParse(
-        JSON.parse(String(data.get("categories") ?? "")),
-      );
-      if (!parsed.success) {
-        return fail(400, {
-          error: "Give every category a name, and keep at least one of each.",
-        });
-      }
-      payload = parsed.data;
-    } catch {
-      return fail(400, { error: "Invalid categories data" });
-    }
-
-    const plans = (["expense", "income"] as const).map((side) => ({
-      role: CATEGORY_ROLE[side] as AccountRoleCode,
-      ...planCategoryChanges(CATEGORY_ROLE[side], payload[side]),
-    }));
-
-    const duplicated = plans.flatMap((plan) => plan.duplicated);
-    if (duplicated.length > 0) {
-      return fail(400, {
-        error: `You already have a category called “${duplicated[0]}”.`,
-      });
-    }
-    if (
-      plans.some((plan) => plan.create.length > 0) &&
-      !hasPermission(locals, "accounts", "add")
-    ) {
-      return fail(403, { error: "Forbidden" });
-    }
-    if (
-      plans.some((plan) => plan.drop.length > 0) &&
-      !hasPermission(locals, "accounts", "delete")
-    ) {
-      return fail(403, { error: "Forbidden" });
-    }
-
-    const userId = locals.user!.id;
-    for (const plan of plans) {
-      // Removals first, so a name freed here can be used again below.
-      for (const account of plan.drop) {
-        // A category no record has used is genuinely gone; one that has
-        // history stays and simply stops being offered (FR-009).
-        const result = canDeleteAccount(db, account.id).ok
-          ? removeAccount(db, account.id, userId)
-          : patchAccount(db, account.id, userId, { archived: true });
-        if (!result.ok) return fail(409, { error: result.reason });
-      }
-      for (const renamed of plan.rename) {
-        const result = patchAccount(db, renamed.id, userId, {
-          name: renamed.name,
-        });
-        if (!result.ok) return fail(409, { error: result.reason });
-      }
-      for (const name of plan.create) {
-        const result = createAccount(db, userId, { role: plan.role, name });
-        if (!result.ok) return fail(409, { error: result.reason });
-      }
-    }
-
-    return { success: true, action: "saveCategories" };
   },
 
   saveSequenceTemplate: async ({ request }) => {

@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { expenses, incomes, importQueue, contacts } from '../db/schema.js';
-import { ImportState, DocumentType } from '$lib/enums.js';
+import { ledgerRecords, importQueue, contacts } from '../db/schema.js';
+import { ImportState, DocumentType, LedgerRecordKind } from '$lib/enums.js';
 import { normalizeName } from '../queries/contacts.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
 
@@ -82,29 +82,36 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	}
 
 	const isIncome = job.documentType === DocumentType.Income;
-	const table = isIncome ? incomes : expenses;
+	// One record store since the double-entry conversion. Expenses and incomes are
+	// kinds of record, not tables of their own, so the candidate pool is narrowed by
+	// `kind` instead of chosen by table. Every field compared below — amount, date,
+	// reference, extracted text — lives on the record itself; `ledger_movements` is
+	// deliberately NOT joined, because a record has one row per side and joining them
+	// would offer the same candidate twice.
+	const kind = isIncome ? LedgerRecordKind.Income : LedgerRecordKind.Expense;
 
-	function candidateQuery() {
+	function candidateQuery(extra?: SQL) {
 		return db
 			.select({
-				id: table.id,
-				amount: table.amount,
-				date: table.date,
-				reference: table.reference,
+				id: ledgerRecords.id,
+				amount: ledgerRecords.amount,
+				date: ledgerRecords.date,
+				reference: ledgerRecords.reference,
 				legalName: contacts.legalName,
-				extractedText: table.extractedText,
+				extractedText: ledgerRecords.extractedText,
 				originalFilename: importQueue.originalFilename
 			})
-			.from(table)
-			.leftJoin(contacts, eq(contacts.id, table.contactId))
+			.from(ledgerRecords)
+			.leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
 			.leftJoin(
 				importQueue,
 				and(
-					eq(importQueue.resultId, table.id),
+					eq(importQueue.resultId, ledgerRecords.id),
 					eq(importQueue.resultType, job.documentType),
 					eq(importQueue.state, ImportState.Imported)
 				)
-			);
+			)
+			.where(extra ? and(eq(ledgerRecords.kind, kind), extra) : eq(ledgerRecords.kind, kind));
 	}
 
 	// Bounded candidate pool — never a full-table scan. Union of: the most recent N
@@ -112,12 +119,15 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	// exact reference match (a resubmission may carry a corrected date), and any exact
 	// filename match via import_queue (a scanner-reused name from further back in time).
 	const candidates = new Map<number, Candidate>();
-	for (const row of candidateQuery().orderBy(desc(table.date)).limit(RECENT_CANDIDATE_LIMIT).all()) {
+	for (const row of candidateQuery()
+		.orderBy(desc(ledgerRecords.date))
+		.limit(RECENT_CANDIDATE_LIMIT)
+		.all()) {
 		candidates.set(row.id, row);
 	}
 
 	if (job.reference && job.reference.trim()) {
-		for (const row of candidateQuery().where(eq(table.reference, job.reference.trim())).all()) {
+		for (const row of candidateQuery(eq(ledgerRecords.reference, job.reference.trim())).all()) {
 			candidates.set(row.id, row);
 		}
 	}
@@ -135,7 +145,7 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 		.all();
 	const filenameIds = filenameHits.map((r) => r.resultId).filter((id): id is number => id != null);
 	if (filenameIds.length) {
-		for (const row of candidateQuery().where(inArray(table.id, filenameIds)).all()) {
+		for (const row of candidateQuery(inArray(ledgerRecords.id, filenameIds)).all()) {
 			candidates.set(row.id, row);
 		}
 	}

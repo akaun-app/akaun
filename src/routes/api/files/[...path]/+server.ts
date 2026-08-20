@@ -3,12 +3,7 @@ import { readFileSync } from "fs";
 import { join, resolve, sep } from "path";
 import { eq } from "drizzle-orm";
 import { db } from "$lib/server/db/client.js";
-import {
-  expenseAttachments,
-  incomeAttachments,
-  claimAttachments,
-  bankStatements,
-} from "$lib/server/db/schema.js";
+import { recordAttachments, bankStatements } from "$lib/server/db/schema.js";
 import { getSetting, SETTING_KEYS } from "$lib/server/settings.js";
 import { STORAGE_PATH } from "$lib/server/env.js";
 import { hasPermission } from "$lib/server/permissions.js";
@@ -33,23 +28,15 @@ export const GET: RequestHandler = ({ locals, params }) => {
     return new Response("Forbidden", { status: 403 });
   }
 
-  // Shared ledger — any authenticated user may read a file that belongs to a record.
-  const owned =
-    db
-      .select({ id: expenseAttachments.id })
-      .from(expenseAttachments)
-      .where(eq(expenseAttachments.filename, filePath))
-      .get() ??
-    db
-      .select({ id: incomeAttachments.id })
-      .from(incomeAttachments)
-      .where(eq(incomeAttachments.filename, filePath))
-      .get() ??
-    db
-      .select({ id: claimAttachments.id })
-      .from(claimAttachments)
-      .where(eq(claimAttachments.filename, filePath))
-      .get();
+  // Shared ledger — any authenticated user may read a file that belongs to a
+  // record. One table answers now: the three legacy attachment tables this also
+  // checked are dropped by this release, and the conversion had already moved
+  // every one of their rows into `record_attachments` (FR-014, FR-039).
+  const owned = db
+    .select({ id: recordAttachments.id })
+    .from(recordAttachments)
+    .where(eq(recordAttachments.filename, filePath))
+    .get();
   const bankStatementFile = db
     .select({ id: bankStatements.id })
     .from(bankStatements)

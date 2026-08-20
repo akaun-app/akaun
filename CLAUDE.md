@@ -2,244 +2,463 @@
 
 ## Verification Policy
 
-Do not attempt automated browser/UI testing or live verification (no Playwright, no logging into the dev server, no scraping `.env` for credentials to drive a session). Verify changes via static code analysis only: read the diff, check types/lint (`bun run check`, `bun run lint`), and reason about correctness from the code. Leave visual/behavioral confirmation to the user.
+Do not test the UI in a browser. Do not start the dev server to check your work. Do not
+read `.env` to get login details. Check your work by reading code only: read the diff, run
+`bun run check` and `bun run lint`, and think about correctness. The user does all visual
+and behaviour checks.
 
 **`data/` is real. Never write a script that touches it.** `DATABASE_PATH` and
-`STORAGE_PATH` default to paths *relative to the working directory*, and `.env` sets them
-to `./data/akaun.db` and `./data/storage` — so any process started in the project root
-points at the maintainer's real books and receipts. Overriding those variables inside an
-ad-hoc script does **not** isolate it. This has destroyed a real `data/` directory and
-required a full restore; the same accident happened again from a running dev server.
+`STORAGE_PATH` are relative to the working directory, and `.env` sets them to
+`./data/akaun.db` and `./data/storage`. Any process that starts in the project root
+therefore writes to the maintainer's real books and receipts. If you set these two
+variables inside your own script, the script is still not safe. This once deleted a real
+`data/` directory and needed a full restore. A running dev server then did the same damage
+a second time.
 
-Concretely, before doing anything that could run application code:
+Before you do anything that can run application code:
 
-1. **Check for a running dev server** (`ps aux | grep "vite dev"`). SvelteKit's `init()`
-   runs `ensureLedgerUpgrade`, so a dev server converts the books and moves attachment
-   files — by design (FR-037: the installation updates itself, with no command and no
-   setting) — and it does so again on every restart your file edits trigger. If that is
-   not what you want right now, stop the server before editing, not after.
-2. **The upgrade refuses to run under a test runner**, and takes its paths as arguments
-   (`runLedgerUpgrade(db, guard, { databasePath, storageRoot })`), so a test must supply
-   its own. Handing it a temporary *database* is not enough on its own — the files are
-   configured separately, which is exactly how the first accident happened.
-3. **Hash `data/akaun.db` before and after** anything you're unsure of. That is a cheap,
-   decisive check, and it is what finally distinguished cause from coincidence here.
+1. **Look for a dev server**: `ps aux | grep "vite dev"`. SvelteKit's `init()` calls
+   `ensureLedgerUpgrade`, so a dev server converts the books and moves attachment files.
+   This is by design (FR-037: the installation upgrades itself, with no command and no
+   setting). It happens again after each restart that your edits cause. If you do not want
+   this now, stop the server before you edit, not after.
+2. **The upgrade does not run under a test runner.** It takes its paths as arguments:
+   `runLedgerUpgrade(db, guard, { databasePath, storageRoot })`. A test must give its own
+   paths. A temporary database alone is not enough, because the file paths are a separate
+   setting. This caused the first accident.
+3. **Hash `data/akaun.db` before and after** each step you are not sure about. The check is
+   cheap and the answer is clear.
+
+## Delegation
+
+**Use subagents often, to keep the main context window clean.** Give a subagent each task
+that reads many files but returns a short answer: find code, search for a pattern, check
+how a convention is used, or summarize a long file. The file contents then stay in the
+subagent, and only the result comes back. Keep decisions and edits in the main thread. Keep
+search output out of it.
+
+**Give more resources to a difficult task.** Use a stronger model, more reasoning effort, an
+instruction to be thorough, or several agents in parallel on separate parts. A weak agent
+on a hard task returns a wrong answer, and the work must then be done again. That costs
+more context than doing it correctly one time.
 
 ## Architecture Decisions
 
 ### Real-Time Updates: SSE-Only
 
-All features that need live UI updates must use **Server-Sent Events (SSE)**, not polling.
+Use **Server-Sent Events (SSE)** for all live UI updates. Do not poll. Polling wastes
+requests and is slower, and the client code is simpler with SSE.
 
-**Pattern:**
-- Create a `GET` endpoint at `src/routes/api/<feature>/stream/+server.ts` that returns a `ReadableStream` with `Content-Type: text/event-stream`
-- Use the singleton `importEvents` EventEmitter pattern (`src/lib/server/import/events.ts`) — create a parallel `<feature>Events` emitter for each domain
-- Every server action (POST, PATCH, DELETE) that mutates state must call `events.emit(...)` after the DB write so all connected clients see the change
-- On the client, open the EventSource in `onMount` and close it in `onDestroy` — never in `$effect` (which re-runs on reactive dependency changes and would tear down the connection)
+**Pattern**
+- Add a `GET` endpoint at `src/routes/api/<feature>/stream/+server.ts`. It returns a
+  `ReadableStream` with `Content-Type: text/event-stream`.
+- Copy the singleton `importEvents` EventEmitter (`src/lib/server/import/events.ts`). Make
+  one `<feature>Events` emitter for each domain.
+- Each server action that changes state (POST, PATCH, DELETE) must call `events.emit(...)`
+  after the DB write. All connected clients then see the change.
+- In the client, open the EventSource in `onMount` and close it in `onDestroy`. Never do
+  this in `$effect`: `$effect` runs again when a dependency changes, and it would close the
+  connection.
 
-**Client merge pattern** (`mergeServerJobs` in the import page is the reference implementation):
-- On connect, the stream sends a full snapshot of current state
-- Subsequent events are incremental updates (`item-update`, `item-deleted`, etc.)
-- `mergeServerJobs`-style merge: update existing items, prepend brand-new items from other tabs
-- Do **not** add items to local `$state` optimistically from the upload/create action — let the SSE event be the sole driver. This eliminates race conditions between the fetch response and the SSE event arriving on the same connection.
-- Do **not** store non-plain objects (e.g. `File`, `Blob`) in Svelte 5 `$state` — keep them in a plain `Map` alongside the reactive array
+**Client merge pattern** — `mergeServerJobs` on the import page is the reference:
+- The stream sends a full snapshot when the client connects.
+- Each later event is one change (`item-update`, `item-deleted`, and so on).
+- Merge like `mergeServerJobs`: update the items you have, and add new items from other tabs
+  at the start of the list.
+- Do not add an item to local `$state` from the upload or create action. Let the SSE event
+  add it. This removes the race between the fetch response and the SSE event.
+- Do not put a `File` or a `Blob` in Svelte 5 `$state`. Keep such objects in a plain `Map`
+  next to the reactive array.
 
-**Snapshot vs. no-snapshot:**
-- Import queue (small, finite set of active jobs): send a full snapshot on connect so reconnects catch up automatically.
-- Paginated lists (income, expenses, accounts): **no snapshot**. SSR provides the initial state; SSE provides incremental updates only. If the connection drops briefly, `EventSource` auto-reconnects and the next event re-syncs the affected item. A full page reload re-fetches the correct state.
-
-**Why not polling?**
-Polling was considered and rejected. SSE gives instant updates, no wasted requests, and simpler client code once the pattern is established.
+**Snapshot or no snapshot**
+- Import queue: send a full snapshot on connect. The set of active jobs is small, so a
+  reconnect catches up by itself.
+- Paginated lists (records, accounts): send **no** snapshot. SSR gives the first
+  state, and SSE gives only the changes. If the connection stops, `EventSource` reconnects
+  and the next event corrects the item. A page reload gets the correct state.
 
 ### The Ledger: One Record Store, Two Sides
 
-Every record says where money came from and where it went. `ledger_records` is what
-happened; `ledger_movements` is each side of it, against an account in `accounts`.
-Expenses and Income are **filtered views of the one store**, not tables of their own.
+Each record says where the money came from and where it went. `ledger_records` holds what
+happened. `ledger_movements` holds each side of it, against an account in `accounts`.
+Expenses and Income are **filtered views of this one store**. They have no tables of their
+own.
 
-- **Money is whole cents in an integer column** (`amount_minor`, signed). Never float
-  arithmetic on money. A record also keeps the decimal `amount` the user typed plus its
-  locked `exchange_rate`, for display and audit — that figure is **never summed for a
-  report**. `ledger/money.ts` is the only converter.
-- **A movement is positive when value goes INTO that account, negative when it leaves,
-  and a record's movements always sum to zero.** So money we owe, income earned and
-  owner capital all sit at negative balances; `ledger/account-type.ts`'s `displaySign`
-  flips them for display in **one** place. Don't flip a sign anywhere else — including
-  in a CSV export, which must read the same way round as the screen it came from.
-- **`ledger/entry-builder.ts` is the single place movements are constructed.** Screens
-  describe what happened in everyday terms (`kind: 'expense'`, `paidFromAccountId`); the
-  builder turns that into sides and is the one enforcement point for the balance rule.
-  A route or service that assembles movements itself is a defect.
-- **Nothing about payment state is stored.** `paid`, `outstandingMinor`, `locked`, a
-  contact's balance and every account balance are computed from movements and
-  settlements, so two screens can never disagree. There is no status column.
-- **A category *is* an account** (`ExpenseCategory` / `IncomeCategory` role). The word
-  "category" stays on screen; the `categories` table is deprecated and unread.
-- **One emitter for every kind of record**: `ledgerEvents` (`record-update`,
-  `record-deleted`, `settlement-changed`) plus `accountEvents`, both in
-  `$lib/server/ledger/events.ts`. Each stream filters `ledgerEvents` down to its own
-  kind — `/api/expenses/stream` and `/api/income/stream` keep their URLs. Three emitters
-  meant forgetting one was silent; one emitter carrying the kind removes that.
-- **`ledger/types.ts` is the interface freeze.** Changing a type there is a change every
-  caller sees — treat it as a broadcast, not a quiet edit.
+- **Money is whole cents in a signed integer column** (`amount_minor`). Never do float
+  arithmetic on money. A record also keeps the decimal `amount` that the user typed and the
+  `exchange_rate` at that time. These two values are for display and audit only — **never
+  add the decimal `amount` into a report total**. `ledger/money.ts` is the only converter.
+- **A movement is positive when value goes INTO the account and negative when value leaves
+  it. The movements of one record always add up to zero.** Money you owe, income and owner
+  capital therefore have negative balances. `displaySign` in `ledger/account-type.ts`
+  changes the sign for display, in **one** place. Do not change a sign anywhere else. A CSV
+  export must show the same signs as the screen it comes from.
+- **Build movements only in `ledger/entry-builder.ts`.** Screens describe the event in
+  simple terms (`kind: 'expense'`, `paidFromAccountId`), and the builder makes the two
+  sides. The builder is the only place that enforces the zero-sum rule. A route or a service
+  that builds its own movements is a defect.
+- **Payment state is never stored.** `paid`, `outstandingMinor`, `locked`, a contact balance
+  and each account balance are calculated from the movements and the settlements. Two
+  screens can then never show different values. There is no status column.
+- **A category is an account**, with the role `ExpenseCategory` or `IncomeCategory`. The
+  screens keep the word "category". The `categories` table is deprecated and nothing reads
+  it.
+- **One emitter for all record kinds**: `ledgerEvents` (`record-update`, `record-deleted`,
+  `settlement-changed`), plus `accountEvents`. Both are in
+  `$lib/server/ledger/events.ts`. One list of every kind means one stream too:
+  `/api/records/stream` forwards everything the emitter carries with **no kind filter**, and
+  the per-kind stream URLs retired with the screens they fed. With three emitters, a forgotten
+  emit was silent; with per-kind filters, a record that was neither an expense nor an income
+  appeared on no list until the page was reloaded.
+- **`ledger/types.ts` is a frozen interface.** A change there is a change for every caller.
+  Do not make such a change quietly.
 
-**Named URL exception — the kinds with no screen of their own.** Expense, Income and
-Journal records each have a list screen and a `/<feature>/[id]` deep link. **Payment,
-Transfer, OpeningBalance and InvoiceIssue records deliberately do not**, because none of
-them is a thing a user goes looking for by itself — each is reached from the thing it
-happened to:
+**Which screen an account appears on.** One rule, and it is the balance-sheet /
+income-statement line every accounting system draws: things with a balance a reader looks for
+are **accounts** (`/accounts`); what money was earned and spent *on* is a **category**
+(`/categories`). `ACCOUNT_ROLES` and `CATEGORY_ROLES` in
+`components/accounts/account-roles.ts` are the one place that split is written.
 
-| Kind | Where you find it |
-|---|---|
-| Payment | The expense or invoice it settled, through `SettlementList` |
-| Transfer | The history of either account it moved money between |
-| OpeningBalance | Its account's drawer, as "Starting balance" |
-| InvoiceIssue | The invoice that created it |
+Both are rows in `accounts` and both go through `accountsActions` — a category is an account
+underneath, because double-entry needs both sides of a record to name one (002 FR-006a). Only
+the screen differs, and it differs because a flat list of all of them failed in practice: a
+real installation had 22 categories against 4 accounts that hold or owe money, so the list
+read as nothing but categories. Equipment sits with the accounts (bought and kept, so it is on
+the balance sheet — 002 FR-006b) even though the record form offers it beside the categories.
 
-Consequence to keep in mind: `SettlementList.svelte`'s `canOpen` links only Expense and
-Income rows, so a payment row renders without a chevron — a deliberately dead-ended row
-rather than a chevron that goes nowhere. If a payments list is ever added, that is the one
-function to update. This is the Principle VI exception recorded in writing; `plan.md`'s
-Complexity Tracking records the separate, larger claims exception.
+**The three ledgers.** `accounts` holds two of the books real bookkeeping keeps apart, and
+`contacts` holds the third:
 
-**Named full-page exception.** Reports (`/reports/*`) and an account's history
-(`/accounts/[id]/history`) are full pages, not drawers: they are multi-column tables read
-side by side and exported, not a record's fields. Each still has its own deep-linkable
-URL. Every screen that *is* a record detail — account, opening balance, payment, journal
-entry, record detail — keeps the Sheet standard, so the drawer chrome stays uniform.
-Note the split on accounts: `/accounts/[id]` is the drawer (shallow-routed), and
-`/accounts/[id]/history` is the report the drawer links to through the relation-card
-contract.
+| Book | Where it lives | Shown on |
+|---|---|---|
+| What money was for | `accounts`, roles `ExpenseCategory` / `IncomeCategory` / `Equipment` | Accounts › Categories |
+| Where money sits, and what is owed either way | `accounts`, the money-pot, Receivable/Payable, opening-balance and partner roles | Accounts › Money & owed |
+| Who owes whom | `contacts` + the contact on each record | Contacts, and `/records?contact=` |
+
+The third is the purchase and sales ledger. Real bookkeeping gives every supplier and customer
+its own account behind a control account; here it is **derived from the movements** instead, so
+adding a contact never touches the chart of accounts (002 FR-008a) and the per-contact figures
+can never disagree with the ledger. **`contactBalances()` in `queries/settlements.ts` is its one
+source** — do not add a second way to total what a contact owes.
+
+A category is an account and a contact is not, and both are deliberate. See 002 FR-006a and
+FR-008a before proposing either change; the reasoning, including why per-contact accounts make
+the account list worse, is recorded there.
+
+**Every kind has one list and one deep link.** Expense, Income, Payment, Transfer, OpeningBalance,
+InvoiceIssue and Journal records all appear on the one Records screen and all open at
+`/records/[id]`.
+
+This replaced a named exception, and the reason it existed is worth keeping: Expense, Income and
+Journal each had a list screen and a deep link, and the other four deliberately had neither, because
+"a user does not look for these records by themselves". Each was reached from the record it belonged
+to — a payment from the expense it settled, a transfer from either account's history, an opening
+balance from its account's drawer. That was true while there were three screens; it stopped being
+true when there was one list of everything that happened.
+
+Result to remember: `canOpen` in `SettlementList.svelte` now returns true for every kind. It is kept
+as a function rather than inlined, because it is still the one place to change if a kind ever stops
+being openable.
+
+**Named full-page exception.** Reports (`/reports/*`) are full pages, not drawers. They are wide
+tables that the user reads column by column and exports, not the fields of one record. Every screen
+that shows the detail of one record keeps the Sheet standard — account, opening balance, payment,
+payment and record detail — so the drawer looks the same everywhere.
+
+`/accounts/[id]/history` is **gone**. An account's movements are the Records list narrowed to that
+account: `/records?account=<id>`, with a running balance, an opening figure before the first row and
+a closing figure after the last. It is the same rows read the same way, so it is one screen with a
+filter on it rather than a page of its own. The account drawer at `/accounts/[id]` links to it with a
+relation card. The running balance disappears the moment another filter is applied or the sort
+changes, and the screen says why — a balance over a filtered subset would look like a bank balance
+and not be one.
 
 ### Permissions (RBAC)
 
-Every resource action gates through `hasPermission(locals, resource, action)` (`src/lib/server/permissions.ts`) — never through role checks or client-side hiding alone.
+Gate every action on a resource with `hasPermission(locals, resource, action)`
+(`src/lib/server/permissions.ts`). Never use a role check, and never rely on a hidden button
+in the client.
 
-- `ResourceName` is a closed union (`dashboard`, `expenses`, `income`, `import`, `contacts`, `quotations`, `invoices`, `reconciliation`, `accounts`, `reports`, `journal`); `ActionName` is `view | add | change | delete`. Adding a new resource means adding it to `ResourceName`/`ALL_RESOURCES` in `permissions.ts`.
-- Two of those carry rules of their own. `reports` is **view-only** — it must never be granted `add`/`change`/`delete` anywhere, because seeing every figure is a different thing from being able to change one. `journal` is granted by **no seeded group**: entering a record's two sides by hand is how the books can be made to say anything, so it is granted deliberately or not at all.
-- `hooks.server.ts` calls `getEffectivePermissions(db, userId)` once per request and stores the result on `locals.permissions` / `locals.isSuperuser`. Route code never queries permissions itself — it only calls `hasPermission`.
-- Effective permissions = union of the user's group permissions (`groupPermissions`), OR'd with any per-user overrides (`userPermissions`) — overrides are additive, never restrictive. A group with `isSuperuser: true` bypasses all checks (`hasPermission` short-circuits on `locals.isSuperuser`).
-- Every API route that reads or mutates a resource must call `hasPermission(locals, resource, action)` and return a `403` on failure — see `src/routes/api/income/+server.ts` for the reference shape (`view` for GET, `add`/`change`/`delete` for the corresponding verbs).
+- `ResourceName` is a closed union (`dashboard`, `records`, `import`, `contacts`,
+  `quotations`, `invoices`, `reconciliation`, `accounts`, `reports`, `adjustments`).
+  `ActionName` is `view | add | change | delete`. To add a resource, add it to
+  `ResourceName` and `ALL_RESOURCES` in `permissions.ts` — `ALL_RESOURCES` duplicates the
+  union rather than deriving from it, so both must change together.
+- `records` is one ability over every kind of record. It replaced `expenses` + `income`, which
+  were two names for one store: a transfer, a payment or an opening balance was checked
+  against whichever screen it happened to be recorded from, and a record entered by hand was
+  covered by neither.
+- Two resources have extra rules. `reports` is **view-only**: never grant `add`, `change` or
+  `delete` on it anywhere, because to see a figure is not the same as to change it. **No
+  seeded group grants `adjustments`** (formerly `journal`): it allows a record between any two
+  accounts and a third side, so a user who has it can make the books say anything and still
+  have them add up. Grant it on purpose or not at all.
+- `adjustments` is checked **after** the derivation, never before: whether a record needs it is
+  a fact about the accounts it names, not about what the client sent. Enforced on the server
+  (`sides-from-accounts.ts`), never by hiding a control.
+- `hooks.server.ts` calls `getEffectivePermissions(db, userId)` one time for each request and
+  puts the result in `locals.permissions` and `locals.isSuperuser`. Route code never queries
+  permissions. It only calls `hasPermission`.
+- The effective permissions are the group permissions (`groupPermissions`) plus the per-user
+  overrides (`userPermissions`). An override can only add a permission, never remove one. A
+  group with `isSuperuser: true` passes all checks, because `hasPermission` returns early on
+  `locals.isSuperuser`.
+- Each API route that reads or changes a resource must call `hasPermission(locals, resource,
+  action)` and return `403` if it fails. `src/routes/api/records/+server.ts` is the reference:
+  `view` for GET, and `add`, `change` or `delete` for the other verbs.
 
 ### Settings Page Patterns
 
-The consolidated Settings page (`src/routes/(app)/settings/+page.svelte`) established two patterns other multi-field or list-editing pages should reuse:
+The Settings page (`src/routes/(app)/settings/+page.svelte`) has two patterns. Use them
+again on other pages with many fields or with editable lists.
 
-- **Unsaved-changes guard**: an `isDirty` `$derived` compares live `$state` against the server-loaded snapshot. `beforeNavigate` intercepts in-app navigation while dirty and opens `ConfirmDialog` (`unsavedConfirmOpen`) instead of navigating away.
-- **Stage locally, save once**: edits to list-like settings (providers, categories, company logo) mutate local `$state` only — nothing hits the DB until the page's single Save action runs. A locally-added, not-yet-persisted row is marked so it can be told apart from saved rows without a round-trip — the Category tab stages *account* rows and marks a new one with `id: null`, then diffs the staged list server-side into create / rename / drop. A dropped category that already has records is **archived, not deleted**, so its history survives.
+- **Unsaved-changes guard**: an `isDirty` `$derived` compares the live `$state` with the
+  snapshot from the server. While the page is dirty, `beforeNavigate` stops in-app
+  navigation and opens `ConfirmDialog` (`unsavedConfirmOpen`).
+- **Stage locally, save one time**: an edit to a list (providers, categories, company logo)
+  changes local `$state` only. Nothing goes to the DB until the single Save action runs.
+  Mark a new row, so you can tell it from a saved row without a request to the server. The
+  Category tab stages *account* rows and gives a new one `id: null`. The server then
+  compares the staged list with the saved list and creates, renames or drops each row. A
+  dropped category that has records is **archived, not deleted**, so its history stays.
 
 ### Drawer / Detail Sheet Standard
 
-Every record-detail and create/edit drawer (contacts, expenses, income, accounts, payments, journal entries, etc.) is built on the shared `Sheet` primitive (`$lib/components/ui/sheet`, a bits-ui `Dialog` wrapper) and must follow this shape. The goal is that a user can't tell which feature they're in from the drawer chrome alone.
+Build every record-detail drawer and every create/edit drawer on the shared `Sheet`
+primitive (`$lib/components/ui/sheet`, a wrapper for the bits-ui `Dialog`) — contacts,
+records, accounts, payments and so on. Follow the shape below. A
+user must not be able to tell the feature from the drawer frame alone.
 
-**Named exception — task workspaces:** A route whose primary purpose is a multi-step working surface may use a full-page workspace instead of a drawer/detail sheet. The reconciliation matching route, `/reconciliation/[id]/match`, is the reference exception: matching needs simultaneous access to bank transactions, candidate records, selection state, and reconciliation actions, so the available width and persistent context of a full workspace are essential. This exception changes only the visual treatment; each workspace must still have its own real, deep-linkable and shareable URL, and navigation to it must preserve the deep-link rules documented below.
+**Named exception — task workspaces:** a route that is a work surface with many steps can be
+a full page instead of a drawer. The statement-matching route
+`/accounts/[id]/reconcile/[statementId]` is the reference: matching needs the bank's lines, the
+candidate records, the selection state and the actions visible at the same time, so it needs the
+width and the kept context of a full page. Its sibling `/accounts/[id]/reconcile` — the statements
+on one account — is a full page for the same reason. The exception changes the visual treatment
+only. Each workspace must still have its own real URL that a user can deep-link and share, and
+navigation to it must keep the deep-link rules below.
+
+(This paragraph used to cite `/reconciliation/[id]/match`, a route commit `e5568b1f` had already
+deleted. Reconciling became one continuous page with no address of its own, and the documented
+exception went on naming a route that did not exist. The address above is real.)
 
 **Shell**
-- Desktop: slides in from the right, `width: 500px; max-width: 95vw`.
-- Always include `gap:0;` in the `Sheet.Content` inline `style=`. The base `sheet-content.svelte` ships a Tailwind `gap-4` (16px) flex gap between its children; since header/body/footer already control their own spacing via padding, the extra flex gap just adds unwanted dead space above the hero amount/first field.
-- Mobile: slides up from the bottom (`panelSide = isMobile ? 'bottom' : 'right'`).
-  - Full-view sheets (record detail/edit, `height: 100dvh`) get **square** corners — they cover the whole viewport so a radius reads as a bug, not a feature.
-  - Partial-height sheets (e.g. filter panels) keep **rounded** top corners (`16px 16px 0 0`).
+- Desktop: the sheet comes in from the right. `width: 500px; max-width: 95vw`.
+- Always put `gap:0;` in the inline `style=` of `Sheet.Content`. The base
+  `sheet-content.svelte` has a Tailwind `gap-4` (16px) flex gap between its children. The
+  header, body and footer set their own padding, so this gap only adds empty space above the
+  first field or the amount.
+- Mobile: the sheet comes up from the bottom (`panelSide = isMobile ? 'bottom' : 'right'`).
+  - A full-view sheet (record detail or edit, `height: 100dvh`) gets **square** corners. It
+    covers the whole screen, so a radius looks like a fault.
+  - A part-height sheet, such as a filter panel, keeps **rounded** top corners
+    (`16px 16px 0 0`).
 
-**Header** (`padding: 22px 22px 16px`, border-bottom)
-- Left: `.sheet-eyebrow` (small muted label/icon) + `.sheet-title-text`.
-- Right: **only** the close button (`Sheet.Close` with class `sheet-close` + `X` icon, size 16). Never put a dropdown menu, status badge, or any other action here — those belong in the body or footer.
+**Header** (`padding: 22px 22px 16px`, border at the bottom)
+- Left: `.sheet-eyebrow` (a small grey label or icon) and `.sheet-title-text`.
+- Right: the close button **only** (`Sheet.Close` with class `sheet-close` and the `X` icon,
+  size 16). Never put a menu, a status badge or another action here. These go in the body or
+  in the footer.
 
 **Body** (`padding: 20px 22px`, scrollable, `flex: 1`)
-- Hero amount (`.detail-amount`) for records with a monetary value.
-- A true lifecycle status renders via `StatusBadge.svelte` inside `.detail-statusrow`, directly under the hero amount — never in the header.
-- Forms use the existing `.field` / `.field-label` conventions.
-- Attachments and the audit trail go at the bottom of the body, in that order: `AttachmentManager.svelte` first, then `<AuditTrail recordType="..." recordId={...} />` last. Every create/update/delete action must call `recordAudit`/`diffRecords` (`src/lib/server/audit.ts`) after the DB write; the client holds a `bind:this` ref to `AuditTrail` and calls `.refresh()` on it after a successful save so the trail updates without a full reload.
+- Show the amount in large text (`.detail-amount`) for a record with a money value.
+- Show a true lifecycle status with `StatusBadge.svelte` in `.detail-statusrow`, directly
+  below the amount. Never in the header.
+- Forms use the `.field` and `.field-label` classes.
+- Put the attachments and the audit trail at the end of the body, in this order:
+  `AttachmentManager.svelte` first, then `<AuditTrail recordType="..." recordId={...} />`
+  last. Each create, update and delete action must call `recordAudit` or `diffRecords`
+  (`src/lib/server/audit.ts`) after the DB write. The client keeps a `bind:this` reference to
+  `AuditTrail` and calls `.refresh()` after a successful save, so the trail updates without a
+  page reload.
 
-**Footer** (`.sheet-foot`, defined once in `layout.css` — don't redeclare it per page)
-- Sticky: lives *outside* the scrollable body, not inside it. For forms, this means the `<form>` itself is the flex column (`flex:1; display:flex; flex-direction:column; overflow:hidden;`) with a scrollable fields div and a non-scrolling `.sheet-foot` as siblings inside it — see `contacts/+page.svelte` for the reference implementation.
-- Optional `.sheet-foot-note` (muted, 12px) above the action row for contextual info.
-- `.sheet-foot-actions`: flex row, `gap: 8px`, right-aligned, using the shared button classes from `layout.css`:
-  - `.sheet-btn` — base neutral outline button.
-  - `.sheet-btn-delete` — `.sheet-btn` + icon gap; always `Trash2` (size 14) + "Delete" label, leftmost action (use `margin-right:auto` to pin it to the far left when Cancel/Save also exist). Add `disabled` + a `title` tooltip when deletion is blocked by a relationship (a settled or reconciled record, an in-use contact, an account holding movements, etc.) — don't silently hide the button.
-  - `.sheet-btn-primary` — filled primary button (Save / Record payment / etc.), rightmost.
-- Delete always routes through the shared `ConfirmDialog.svelte` (`danger` prop) + a hidden `<form method="POST" action="?/delete">` submitted via `requestSubmit()`. Never a header dropdown/kebab menu.
+**Footer** (`.sheet-foot`, defined one time in `layout.css` — do not define it again on a
+page)
+- The footer is sticky. It is *outside* the scrollable body. In a form, the `<form>` element
+  is the flex column (`flex:1; display:flex; flex-direction:column; overflow:hidden;`), and
+  the scrollable fields div and the `.sheet-foot` are its children.
+  `contacts/+page.svelte` is the reference.
+- `.sheet-foot-note` is optional: grey 12px text above the buttons, for extra information.
+- `.sheet-foot-actions` is a flex row, `gap: 8px`, aligned right. Use the shared button
+  classes from `layout.css`:
+  - `.sheet-btn` — the plain outline button.
+  - `.sheet-btn-delete` — `.sheet-btn` with a gap for the icon. Always the `Trash2` icon
+    (size 14) and the label "Delete". It is the first action on the left; use
+    `margin-right:auto` to hold it at the far left when Cancel and Save are also there. If a
+    relation blocks the delete, set `disabled` and add a `title` tooltip — for example a
+    settled or reconciled record, a contact in use, or an account with movements. Do not
+    hide the button.
+  - `.sheet-btn-primary` — the filled primary button (Save, Record payment, and so on), last
+    on the right.
+- Delete always uses the shared `ConfirmDialog.svelte` (`danger` prop) and a hidden
+  `<form method="POST" action="?/delete">` that you submit with `requestSubmit()`. Never a
+  menu in the header.
 
 **Status chips**
-- Any true lifecycle status (a record's paid / part-paid / owed, an invoice's draft / sent / paid) goes through `StatusBadge.svelte` — don't hand-roll an inline `<span class="statusbadge ...">`. Add new tones/labels to its `byLabel`/`byCode` maps rather than duplicating the markup.
-- Role badges (contacts) are a different concept — not a lifecycle status — and intentionally keep their own pill style using `var(--secondary)`. This is a deliberate exception, not a gap to "fix".
+- Show each true lifecycle status with `StatusBadge.svelte` — paid, part-paid or owed for a
+  record; draft, sent or paid for an invoice. Do not write an inline
+  `<span class="statusbadge ...">`. Add a new tone or label to the `byLabel` and `byCode`
+  maps in the component.
+- A contact role badge is not a lifecycle status. It keeps its own pill style with
+  `var(--secondary)`. This difference is deliberate. Do not "fix" it.
 
 ### Cross-Feature Relation Cards
 
-Whenever a record-detail sheet shows a reference to a *different* record (e.g. an account's own history, the payments that settled an expense), the card/row must follow one of the two shapes below, and **both shapes share the same interaction contract**. The goal: a user shouldn't see two different "this points at another record" affordances that behave differently.
+A record-detail sheet often shows a reference to a *different* record — the history of an
+account, or the payments that settled an expense. Use one of the two shapes below. **Both
+shapes follow the same interaction rules.** A user must not see two references that look the
+same but behave differently.
 
-**Two shapes, same contract**
-- **Single-record reference** (this record points at exactly one other record) — icon box (`34×34`, radius 7, `background: var(--accent)`) + title/status + muted subline + trailing chevron. Reference: `.ob-card` in `components/accounts/AccountSheet.svelte`.
-- **List-of-many** (this record has many of another type linked to it) — compact row, no icon box, primary text + muted subline on the left, optional `StatusBadge`/amount, trailing chevron. Reference: `components/ledger/SettlementList.svelte`.
+**Two shapes, same rules**
+- **Single-record reference** (this record points to one other record) — icon box (`34×34`,
+  radius 7, `background: var(--accent)`), title with status, grey second line, chevron at the
+  end. Reference: `.ob-card` in `components/accounts/AccountSheet.svelte`.
+- **List of many** (this record has many records of another type) — compact row, no icon box,
+  main text and grey second line on the left, optional `StatusBadge` or amount, chevron at
+  the end. Reference: `components/ledger/SettlementList.svelte`.
 
-**Interaction contract (applies to both shapes)**
-- If the card/row has exactly **one** action (navigate to the related record), the whole element is a `<button type="button">`, not a wrapped `<div>` with an inner link.
-- Add the shared `related-link` class (defined once in `layout.css`) alongside the layout class — it provides `cursor: pointer` and the hover treatment (`border-color: var(--primary); background: var(--accent);`). Don't redeclare this hover rule per feature.
-- End with a trailing `ChevronRight` (size 13–14, `color: var(--muted-foreground)`) as a static "this is clickable" affordance hint, visible even without hovering.
-- Navigate via the deep-link pattern below — never inline-render the other feature's detail sheet.
+**Interaction rules (both shapes)**
+- If the card or row has **one** action only (go to the related record), make the whole
+  element a `<button type="button">`. Do not use a `<div>` with a link inside it.
+- Add the shared `related-link` class next to the layout class. It is defined one time in
+  `layout.css` and gives `cursor: pointer` and the hover style
+  (`border-color: var(--primary); background: var(--accent);`). Do not write this hover rule
+  again per feature.
+- End with a `ChevronRight` (size 13–14, `color: var(--muted-foreground)`). It shows the user
+  that the element is clickable, also without hover.
+- Navigate with the deep-link pattern below. Never render the detail sheet of the other
+  feature inside this one.
 
-**Multi-action rows still share the `related-link` hover**
-- A row with more than one independent action (e.g. `AttachmentManager`'s `.attach-item`: open file, delete) still gets the shared `related-link` class for visual consistency with single-action relation cards — same `border-color`/`background` hover on the row.
-- Don't duplicate the hover on the inner action elements too — the row hover already signals interactivity. Only the action that has a *different* effect than "this row relates to something" — e.g. the delete button's destructive hover — keeps its own distinct hover.
-- **Exception to the `<button onclick={goto(...)}>` rule above**: when the primary action navigates to a real URL outside the app (e.g. opening an uploaded file, not another Akaun record), use a real `<a href>` instead of a `goto()` button, so native browser behaviors work — right-click context menu, Ctrl/Cmd-click to open in a new tab, middle-click. Wrap everything except the other action(s) in the anchor (see `.attach-link-area` in `AttachmentManager.svelte`); a `<button>` can't nest inside `<a>`, so sibling actions like delete stay outside it as their own click targets. The `goto()`-button pattern is reserved for in-app SPA navigation, where there's no real href to give native semantics to anyway.
+**Rows with more than one action keep the same hover**
+- A row with two or more independent actions also gets the `related-link` class — for example
+  `.attach-item` in `AttachmentManager`, which opens a file and deletes it. The row then has
+  the same `border-color` and `background` hover as a single-action card.
+- Do not add the hover to the elements inside the row. The row hover is enough. Only an
+  action with a different result keeps its own hover, such as the destructive hover of the
+  delete button.
+- **Exception to the `<button onclick={goto(...)}>` rule**: use a real `<a href>` when the
+  main action opens a URL outside the app, such as an uploaded file. The browser then gives
+  its normal behaviour — the context menu, Ctrl/Cmd-click for a new tab, and middle-click.
+  Put everything except the other actions inside the anchor (see `.attach-link-area` in
+  `AttachmentManager.svelte`). A `<button>` cannot be inside an `<a>`, so the delete button
+  stays outside the anchor as its own click target. Use the `goto()` button only for
+  navigation inside the app, where there is no real href.
 
-**Deep-link pattern (every record is a shareable URL)**
+**Deep-link pattern (each record has a URL the user can share)**
 
-Every record detail (expenses, income, contacts, accounts) is reachable at a real path, `/<feature>/[id]`, so a user can copy the URL while a sheet is open and send it to someone else. The Sheet stays the only visual treatment — there is no separate full-page detail view — this is achieved with SvelteKit shallow routing (`pushState`/`history.back()`), not a second route paradigm.
+Each record detail (records, contacts, accounts) has a real path, `/<feature>/[id]`, so a
+user can copy the URL while the sheet is open and send it to another person. The Sheet stays the only visual treatment; there is no separate full-page detail
+view. SvelteKit shallow routing does this (`pushState` and `history.back()`). Do not add a
+second kind of route.
 
-- Each feature has a shared page component (`$lib/components/<feature>/<Feature>Page.svelte`) rendered by **two** thin routes: `/<feature>/+page.svelte` (passes `openId={null}`) and `/<feature>/[id]/+page.svelte` (passes `openId={data.open<Feature>Id}`). Both routes' `+page.server.ts` call one shared loader (`$lib/server/loaders/<feature>.ts`) so actions/load logic live in one place.
-- The shared loader redirects to the bare list (`/<feature>`) if `openId` doesn't match a loaded record (deleted, bad id, no access to that specific record).
-- In-app, clicking a row calls the page's open-detail function, which sets the local `$state` record **and** calls `pushState(resolve('/(app)/<feature>/[id]', { id: String(id) }), { viaPush: true })` — this updates the URL live without a real navigation, so SSE connections and scroll position are preserved.
-- Closing (X / overlay / Escape, all routed through `Sheet.Root`'s `onOpenChange`) calls a `closeDetail()` that checks `page.state.viaPush` (from `$app/state`): if true, `history.back()` (unwinds to the list URL we pushed from, and gives the browser/mobile back button this behavior for free); if false (arrived via a pasted link or page refresh, no useful history entry), `goto(resolve('/<feature>'), { replaceState: true })`.
-- On mount, if `openId` was passed in (a real navigation to `/<feature>/[id]`, not an in-app click), the open-detail function is called with `{ push: false }` since the URL is already correct.
-- Cross-feature navigation buttons (e.g. an account drawer's "See every movement" card) call `goto(resolve('/(app)/<feature>/[id]', { id: String(targetId) }))` directly — no query strings.
-- Reference implementations: `openExpense`/`closeDetail` in `ExpensesPage.svelte`, `openDetail`/`closeDetail` in `AccountsPage.svelte`. Contacts is a variant — `/contacts/[id]` opens the existing shared edit form directly (`openEdit(c, { push: false })`); only editing an *existing* contact gets a URL, "Add contact" does not. Copy this pattern verbatim for any new feature that needs a detail sheet.
+- Each feature has one shared page component
+  (`$lib/components/<feature>/<Feature>Page.svelte`), rendered by **two** small routes:
+  `/<feature>/+page.svelte` passes `openId={null}`, and `/<feature>/[id]/+page.svelte`
+  passes `openId={data.open<Feature>Id}`. The `+page.server.ts` of both routes calls the same
+  loader (`$lib/server/loaders/<feature>.ts`), so the load logic and the actions stay in one
+  place. **Records is the worked example**: `RecordsPage.svelte` + `/records` + `/records/[id]`
+  + `loaders/records.ts`. It is one screen where there were three — Expenses, Income and
+  Journal were three copies of this same pattern over one store, and the loader they now share
+  is the one that used to differ between them in three lines.
+- The shared loader redirects to the list (`/<feature>`) if `openId` is not one of the loaded
+  records — the record is deleted, the id is wrong, or the user has no access to it.
+- A click on a row calls the open-detail function of the page. The function sets the local
+  `$state` record **and** calls
+  `pushState(resolve('/(app)/<feature>/[id]', { id: String(id) }), { viaPush: true })`. This
+  changes the URL without a navigation, so the SSE connection and the scroll position stay.
+- The X button, the overlay and Escape all go through `onOpenChange` of `Sheet.Root` and call
+  `closeDetail()`. `closeDetail()` reads `page.state.viaPush` from `$app/state`. If it is
+  true, call `history.back()`: this returns to the list URL, and the browser and mobile back
+  buttons then work for free. If it is false, the user came from a pasted link or a reload
+  and there is no useful history entry, so call
+  `goto(resolve('/<feature>'), { replaceState: true })`.
+- On mount, if the page got an `openId`, call the open-detail function with `{ push: false }`.
+  This was a real navigation to `/<feature>/[id]`, so the URL is already correct.
+- A button that goes to another feature calls
+  `goto(resolve('/(app)/<feature>/[id]', { id: String(targetId) }))` directly, with no query
+  string. Example: the "See every movement" card in the account drawer.
+- References: `openRecord` and `closeDetail` in `RecordsPage.svelte`; `openDetail` and
+  `closeDetail` in `AccountsPage.svelte`. Contacts is a variant: `/contacts/[id]` opens the
+  shared edit form directly (`openEdit(c, { push: false })`), and only an edit of an
+  *existing* contact gets a URL — "Add contact" does not. Copy this pattern exactly for each
+  new feature that needs a detail sheet.
 
 ## Tooling
 
-**The two Vitest projects need two different runtimes, so `bun run test` runs them
-separately.**
+**The two Vitest projects need two different runtimes, so `bun run test` runs them one after
+the other.**
 
-- `server` runs under **Bun** (`bun --bun vitest --project server`). It has to: the
-  upgrade-conversion spec tests against a real temporary SQLite database, as the
-  constitution requires, and that needs `bun:sqlite`.
-- `client` runs under **Node** (`vitest --project client`). It has to: Playwright cannot
-  launch a browser under Bun's runtime — it fails with `Failed to connect to the browser
-  session … within the timeout` after about a minute.
+- The `server` project runs under **Bun** (`bun --bun vitest --project server`). The
+  upgrade-conversion spec tests against a real temporary SQLite database, as the constitution
+  requires, and that needs `bun:sqlite`.
+- The `client` project runs under **Node** (`vitest --project client`). Playwright cannot
+  start a browser under Bun. It fails after about one minute with `Failed to connect to the
+  browser session … within the timeout`.
 
-`bun run test` chains both. `bun run test:unit` is the Bun one, so pass
-`--project server` when using it directly; a server spec run under Node dies on
-`bun:sqlite`, and a client spec run under Bun hangs on the browser.
+`bun run test` runs both. `bun run test:unit` is the Bun one, so add `--project server` when
+you use it directly. A server spec under Node fails on `bun:sqlite`, and a client spec under
+Bun stops at the browser.
 
-Two further consequences of the Bun half:
+Two more results of the Bun half:
 
-- `vite.config.ts` sets `ssr.noExternal: ['zod']`. Left external, zod resolves through
-  Bun's CJS interop to a namespace with no `z` on it, and **every** spec that imports a
-  schema dies with `undefined is not an object (evaluating 'z.object')`. Production is
-  unaffected.
-- Keep using the idiomatic `import { z } from 'zod'`. The fix belongs in the config, not
-  in a hundred import statements.
+- `vite.config.ts` sets `ssr.noExternal: ['zod']`. If zod stays external, Bun's CJS interop
+  gives a namespace with no `z` on it, and **every** spec that imports a schema fails with
+  `undefined is not an object (evaluating 'z.object')`. Production is not affected.
+- Keep the normal `import { z } from 'zod'`. The fix belongs in the config, not in a hundred
+  import statements.
 
-**Prettier needs `.prettierignore` to be usable at all.** Without it Prettier walks the
-whole tree and reports ~3,900 files, 3,600 of them build output under `src-tauri/` — so
-`bun run lint` could never pass. Note `.gitignore` is *not* consulted by Prettier, so
-anything ignored there that is still on disk has to be repeated. There is still no
-Prettier config, so `prettier-plugin-svelte` never loads and `.svelte` files are skipped
-entirely; the remaining ~200 `src` failures are a pre-existing tabs-vs-spaces split, best
-fixed as its own chore rather than inside a feature branch.
+**Prettier needs `.prettierignore` to be usable.** Without it, Prettier reads the whole tree
+and reports about 3,900 files. About 3,600 of them are build output under `src-tauri/`, so
+`bun run lint` can never pass. Prettier does not read `.gitignore`, so repeat there each path
+that git ignores but that is still on the disk. There is still no Prettier config, so
+`prettier-plugin-svelte` never loads and Prettier skips all `.svelte` files. The other ~200
+failures in `src` are an old mix of tabs and spaces. Fix them as their own chore, not inside
+a feature branch.
 
 ## Gotchas
 
-**`bun run check` wedges any dev-server client that's already open.** `check` runs `svelte-kit sync`, which regenerates `.svelte-kit/generated/client/nodes/*.js`, `root.js` and `matchers.js`. Vite hot-reloads those modules, but a browser tab loaded before the regen keeps the old route→node mapping, so a route index can resolve to a *different* page component than the one the server rendered. The symptoms are misleading and look nothing like a tooling problem:
+**`bun run check` breaks a dev-server tab that is already open.** `check` runs
+`svelte-kit sync`, which writes `.svelte-kit/generated/client/nodes/*.js`, `root.js` and
+`matchers.js` again. Vite reloads these modules, but a tab that loaded before the change keeps
+the old map from route to node. A route index can then load a different page component than
+the server rendered. The symptoms do not look like a tooling problem:
 
-- The page goes **blank** with the correct URL but the wrong (or root-layout) `<title>`.
-- The console throws from a component you never navigated to — e.g. `ReportsPage.svelte:203 Cannot read properties of undefined (reading 'length')`, because `ReportsPage` got mounted with another route's `data`.
-- It's preceded by `Failed to hydrate: HierarchyRequestError: Failed to execute 'appendChild' on 'Node'`, since the SSR HTML is for the route you actually requested.
+- The page is **blank**. The URL is correct, but the `<title>` is wrong, or it is the
+  root-layout title.
+- The console shows an error from a component that you did not open — for example
+  `ReportsPage.svelte:203 Cannot read properties of undefined (reading 'length')`, because
+  `ReportsPage` got the data of another route.
+- Before that error, the console shows `Failed to hydrate: HierarchyRequestError: Failed to
+  execute 'appendChild' on 'Node'`, because the SSR HTML is for the route you asked for.
 
-This is reproducible on demand: open a page, run `bunx svelte-kit sync`, watch it break. **A plain reload does not fix it** — the browser keeps modules keyed to the old optimizer hash. Recovery is: stop the dev server, `rm -rf node_modules/.vite`, restart, reload. Nothing is wrong with the app code, so don't go bug-hunting in the component the stack trace names.
+You can repeat this at any time: open a page, run `bunx svelte-kit sync`, and watch it break.
+**A reload does not repair it** — the browser keeps the modules of the old optimizer hash. To
+repair: stop the dev server, `rm -rf node_modules/.vite`, start the server, reload the page.
+The app code is correct, so do not look for a bug in the component that the stack trace
+names.
 
-Practical rule: run `bun run check` when no dev client is open, or treat the page as needing a full restart afterwards.
+Rule: run `bun run check` when no dev client is open. If you cannot, expect to restart the
+dev server after it.
 
-**`$lib/server` can't be imported client-side.** SvelteKit strips/blocks `$lib/server/*` imports from `.svelte` files at build time. Rules that both halves need — the record lock (`ledger/locking.ts`), the display sign (`ledger/account-type.ts`), the derived paid state (`ledger/settlement-rules.ts`), the balance rule the journal screen previews (`ledger/entry-builder.ts`) — are hand-duplicated client-side with a `// Mirrors src/lib/server/<file>.ts's <fnName> — ...` comment explaining the rule. See `components/accounts/display-sign.ts`, `components/ledger/record-status.ts`, `components/journal/journal-rules.ts`. Keep both copies in sync manually — there's no shared import to enforce it.
+**`$lib/server` cannot be imported in the client.** SvelteKit blocks each `$lib/server/*`
+import in a `.svelte` file at build time. Some rules are needed on both sides: the record
+lock (`ledger/locking.ts`), the display sign (`ledger/account-type.ts`), the derived paid
+state (`ledger/settlement-rules.ts`), and the balance rule the record form shows live as extra
+sides are added (`ledger/entry-builder.ts`). These rules are copied by hand into client files.
+Each copy has a comment that explains the rule:
+`// Mirrors src/lib/server/<file>.ts's <fnName> — ...`. See:
 
-Prefer *not* needing a mirror: `GET /api/records` already returns `paid`, `outstandingMinor`, `locked` and `lockedReason` computed server-side, so a screen that just displays them needs no copy of the rule at all. Mirror only what has to run before a round trip.
+- `components/accounts/display-sign.ts` — the display sign, and the role groupings the accounts
+  screen reads. Its `ROLE_GROUPS` consumer is gone: the account list is flat now, and the six
+  headings became filter values in `account-roles.ts`.
+- `components/ledger/record-status.ts` — the derived paid state, and the cleared label.
+- `components/ledger/journal-rules.ts` — the balance rule. It moved here from
+  `components/journal/` when the Journal screen was folded into Records; the form that shows a
+  running difference live is now `RecordSheet.svelte`.
+
+Keep the two copies the same by hand. No import enforces this, and any new client mirror needs
+its own `// Mirrors …` comment.
+
+Better: do not make a copy. `GET /api/records` already returns `paid`, `outstandingMinor`,
+`locked` and `lockedReason` from the server, so a screen that only displays these values
+needs no copy of the rule. Copy a rule only when it must run before a request to the server.

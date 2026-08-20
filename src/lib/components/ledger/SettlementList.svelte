@@ -40,20 +40,25 @@
 		emptyLabel?: string;
 	} = $props();
 
-	// Only two kinds of record have a screen of their own, so only those rows can
-	// be opened. A payment has no page to send anyone to, so its row is a plain
-	// line rather than a chevron that goes nowhere.
-	function canOpen(kind: number): boolean {
-		return kind === LedgerRecordKind.Expense || kind === LedgerRecordKind.Income;
+	/**
+	 * Every kind opens now.
+	 *
+	 * This used to answer true for expenses and income only, because those were
+	 * the two kinds with a screen of their own: a payment row ended in nothing
+	 * rather than in a chevron that went nowhere, which was the right call while
+	 * it was true. One Records list gave every kind a deep link at
+	 * `/records/[id]`, so the reason the chevron was withheld is gone (FR-027).
+	 *
+	 * Kept as a function rather than inlined as `true`: it is still the one place
+	 * to change if a kind ever stops being openable.
+	 */
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the parameter is kept so this stays the one place to change if a kind stops being openable.
+	function canOpen(_kind: number): boolean {
+		return true;
 	}
 
 	function open(link: SettlementLink) {
-		const id = String(link.otherRecordId);
-		if (link.otherKind === LedgerRecordKind.Expense) {
-			goto(resolve('/(app)/expenses/[id]', { id }));
-		} else if (link.otherKind === LedgerRecordKind.Income) {
-			goto(resolve('/(app)/income/[id]', { id }));
-		}
+		goto(resolve('/(app)/records/[id]', { id: String(link.otherRecordId) }));
 	}
 
 	/** What to call the other side when it was saved without a description. */

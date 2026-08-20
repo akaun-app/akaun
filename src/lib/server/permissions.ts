@@ -12,8 +12,12 @@ type Db = BunSQLiteDatabase<typeof schema>;
 
 export type ResourceName =
   | "dashboard"
-  | "expenses"
-  | "income"
+  // Everything that happened with money — purchases, sales, transfers,
+  // payments. One ability for one screen: `expenses` and `income` were two
+  // names for one store and a record that was neither (a transfer, a payment)
+  // was checked against whichever screen it happened to be written from
+  // (FR-028, FR-029).
+  | "records"
   | "import"
   | "contacts"
   | "quotations"
@@ -21,20 +25,22 @@ export type ResourceName =
   | "reconciliation"
   // The chart of accounts (which everyday screens call categories).
   | "accounts"
-  // Profit and loss, balance sheet, partner statement, account history and the
-  // whole-books check. View-only: it grants no add/change anywhere (FR-039).
+  // Profit and loss, balance sheet, partner statement and the whole-books
+  // check. View-only: it grants no add/change anywhere (FR-039).
   | "reports"
-  // Direct entry of a record's sides by hand. Its own resource, granted to no
-  // seeded group, so the screen is unreachable until someone grants it (FR-040).
-  | "journal";
+  // Free choice of account, and a third side. Granted to no seeded group, so a
+  // record that could make the books say anything needs a deliberate grant
+  // (FR-031a). Formerly `journal`.
+  | "adjustments";
 export type ActionName = "view" | "add" | "change" | "delete";
 export type PermissionSet = Record<ActionName, boolean>;
 export type EffectivePermissions = Record<ResourceName, PermissionSet>;
 
+// Duplicates the union above rather than deriving from it — a TypeScript union
+// has no runtime value. Both must change together.
 const ALL_RESOURCES: ResourceName[] = [
   "dashboard",
-  "expenses",
-  "income",
+  "records",
   "import",
   "contacts",
   "quotations",
@@ -42,7 +48,7 @@ const ALL_RESOURCES: ResourceName[] = [
   "reconciliation",
   "accounts",
   "reports",
-  "journal",
+  "adjustments",
 ];
 
 function emptyPermissions(): EffectivePermissions {

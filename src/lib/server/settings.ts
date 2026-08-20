@@ -9,6 +9,11 @@ export const SETTING_KEYS = {
   ledgerDefaultAccountId: "ledger_default_account_id",
   // The ledger upgrade's phase, before-snapshot, backup path and report (D-15).
   ledgerUpgradeState: "ledger_upgrade_state",
+  // Set once `expenses` + `income` have been merged into `records` and
+  // `journal` renamed to `adjustments`. The merge is idempotent, but a rerun
+  // would re-grant a permission an administrator deliberately removed
+  // afterwards, so it runs exactly once (data-model.md §3).
+  recordsPermissionMerged: "permissions.recordsMerged",
   currencyCode: "display.currencyCode",
   autoImportApiKey: "autoImport.apiKey",
   autoImportModel: "autoImport.model",

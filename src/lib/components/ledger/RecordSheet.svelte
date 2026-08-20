@@ -18,6 +18,13 @@
 	import { CURRENCIES } from '$lib/currency.js';
 	import { LedgerRecordKind } from '$lib/enums.js';
 	import AccountSelect from './AccountSelect.svelte';
+	import { isSharedOwedRole } from '$lib/components/accounts/display-sign.js';
+	import {
+		differenceMinor,
+		sideMinor,
+		whyNotSaveable,
+		type SideDraft
+	} from './journal-rules.js';
 	import SettlementList, { type SettlementLink } from './SettlementList.svelte';
 	import { statusLabelFor } from './record-status.js';
 	import type { AccountView, RecordView } from '$lib/server/ledger/types.js';
@@ -34,19 +41,18 @@
 	 * Writes go through `/api/records`, and the list updates from the SSE event
 	 * rather than from this component's response — one driver, no race.
 	 */
-	type Kind = 'expense' | 'income' | 'transfer' | 'payment';
-
 	let {
 		open = $bindable(false),
 		record = null,
-		kind,
 		accounts,
 		categories,
+		allAccounts = [],
 		contacts = [],
 		defaultAccountId = null,
 		lastForeignCurrency = null,
 		canChange = false,
 		canDelete = false,
+		canAdjust = false,
 		onclose,
 		onsaved,
 		ondeleted,
@@ -54,17 +60,20 @@
 	}: {
 		open?: boolean;
 		record?: RecordView | null;
-		kind: Kind;
 		/** Every place money sits — what "which account?" offers. */
 		accounts: AccountView[];
-		/** The category accounts this screen offers. */
+		/** The category accounts — what a record was for, either direction. */
 		categories: AccountView[];
+		/** Every account, for the full list a user with `adjustments` can reach. */
+		allAccounts?: AccountView[];
 		contacts?: { id: number; legalName: string }[];
 		defaultAccountId?: number | null;
-		/** The last foreign currency this user recorded in, on this screen. */
+		/** The last foreign currency this user recorded in. */
 		lastForeignCurrency?: string | null;
 		canChange?: boolean;
 		canDelete?: boolean;
+		/** Free choice of account, and a third side (FR-031). */
+		canAdjust?: boolean;
 		onclose: () => void;
 		onsaved?: (record: RecordView) => void;
 		ondeleted?: (id: number) => void;
@@ -87,10 +96,14 @@
 	let reference = $state('');
 	let remark = $state('');
 	let contactId = $state<number | null>(null);
-	let categoryAccountId = $state<number | null>(null);
-	let moneyAccountId = $state<number | null>(null);
+	// The two everyday questions, and the only two the form asks about accounts:
+	// which account the money left, and which it went to. The kind is derived
+	// from them on the server and never picked here (D-01, FR-006).
+	let fromAccountId = $state<number | null>(null);
 	let toAccountId = $state<number | null>(null);
-	let someoneElsePaid = $state(false);
+	// Third and later sides, shown only with `adjustments` (FR-010).
+	let extraSides = $state<SideDraft[]>([]);
+	let nextSideKey = 0;
 
 	// --- Foreign currency, hidden until asked for --------------------------
 	// A record keeps the amount exactly as it was typed, in the currency it was
@@ -133,24 +146,30 @@
 		rateError = '';
 
 		if (source) {
+			// Value leaving an account is negative and value arriving is positive,
+			// so the two sides name themselves — the same rule for every kind, with
+			// no per-screen branch to get wrong. An expense somebody else paid
+			// simply has "Money we owe" as its paying side, which is exactly what
+			// the user picked to record it that way (FR-008).
 			const into = source.movements.find((m) => m.amountMinor > 0);
 			const outOf = source.movements.find((m) => m.amountMinor < 0);
-			if (kind === 'income') {
-				categoryAccountId = outOf?.accountId ?? null;
-				moneyAccountId = into?.accountId ?? null;
-			} else if (kind === 'transfer') {
-				moneyAccountId = outOf?.accountId ?? null;
-				toAccountId = into?.accountId ?? null;
-			} else {
-				categoryAccountId = into?.accountId ?? null;
-				someoneElsePaid = source.outstandingMinor > 0 || !source.paid;
-				moneyAccountId = someoneElsePaid ? null : (outOf?.accountId ?? null);
-			}
+			fromAccountId = outOf?.accountId ?? null;
+			toAccountId = into?.accountId ?? null;
+
+			// A record with more than two sides keeps the rest of them editable.
+			const [, ...rest] = source.movements
+				.filter((m) => m.accountId !== outOf?.accountId && m.accountId !== into?.accountId)
+				.map((m) => m);
+			extraSides = (rest.length ? rest : source.movements.slice(2)).map((m) => ({
+				key: nextSideKey++,
+				accountId: m.accountId,
+				direction: m.amountMinor >= 0 ? ('in' as const) : ('out' as const),
+				amount: (Math.abs(m.amountMinor) / 100).toFixed(2)
+			}));
 		} else {
-			categoryAccountId = null;
-			moneyAccountId = null;
+			fromAccountId = null;
 			toAccountId = null;
-			someoneElsePaid = false;
+			extraSides = [];
 		}
 	});
 
@@ -255,34 +274,119 @@
 		record?.kind === LedgerRecordKind.Payment ? 'What this paid off' : 'Payments against this'
 	);
 
+
+	/**
+	 * What each side offers, before the full list is asked for.
+	 *
+	 * Money usually leaves a place it was being held and arrives at what it was
+	 * for, or the other way round for a sale, so both shortlists carry both — the
+	 * user is never asked which direction they are recording, only where the
+	 * money came from and where it went. "Money we owe" and "Money owed to us"
+	 * belong on the shortlist too: choosing one is how somebody records that
+	 * another person paid, or that a customer has not yet (FR-008, FR-011).
+	 */
+	const sideChoices = $derived(
+		[...accounts, ...categories]
+			.filter((a, i, all) => all.findIndex((b) => b.id === a.id) === i)
+	);
+
 	// Money cannot move to the account it came from, so the destination never
 	// offers the source. Clearing a destination the source has just become lets
 	// AccountSelect pick the next one, rather than leaving a choice sitting in a
 	// picker that no longer lists it.
-	const toAccountChoices = $derived(
-		kind === 'transfer' ? accounts.filter((a) => a.id !== moneyAccountId) : accounts
-	);
+	const toAccountChoices = $derived(sideChoices.filter((a) => a.id !== fromAccountId));
 	$effect(() => {
-		if (kind !== 'transfer') return;
-		if (toAccountId !== null && toAccountId === moneyAccountId) toAccountId = null;
+		if (toAccountId !== null && toAccountId === fromAccountId) toAccountId = null;
 	});
 
-	const title = $derived.by(() => {
-		if (kind === 'transfer') return isNew ? 'Move money' : 'Money moved';
-		if (kind === 'payment') return isNew ? 'Record a payment' : 'Payment';
-		if (kind === 'income') return isNew ? 'Add income' : 'Income';
-		return isNew ? 'Add expense' : 'Expense';
-	});
+	/**
+	 * What this record is called, once it exists.
+	 *
+	 * A new record has no kind yet — that is the whole point, it is derived from
+	 * the two accounts when it is saved — so the title of a new one says what is
+	 * being done rather than what it will turn out to be.
+	 */
+	const KIND_TITLES: Record<number, string> = {
+		[LedgerRecordKind.Expense]: 'Purchase',
+		[LedgerRecordKind.Income]: 'Sale',
+		[LedgerRecordKind.Transfer]: 'Money moved',
+		[LedgerRecordKind.Payment]: 'Payment',
+		[LedgerRecordKind.OpeningBalance]: 'Starting balance',
+		[LedgerRecordKind.InvoiceIssue]: 'Invoice',
+		[LedgerRecordKind.Journal]: 'Adjustment'
+	};
+
+	const title = $derived(
+		isNew ? 'New record' : (KIND_TITLES[record!.kind] ?? 'Record')
+	);
 
 	const eyebrow = $derived(record?.recordNumber ?? (isNew ? 'New' : 'Record'));
 
-	const moneyLabel = $derived(
-		kind === 'income'
-			? 'Received into'
-			: kind === 'transfer'
-				? 'Moved from'
-				: 'Paid from'
+	/**
+	 * A record created by issuing an invoice is read-only here (FR-013).
+	 */
+	const fromInvoice = $derived(record?.kind === LedgerRecordKind.InvoiceIssue);
+	const readOnly = $derived(fromInvoice || locked || (!canChange && !isNew));
+
+	/** A payment's sides are decided in the payment drawer, not restated here. */
+	const isPayment = $derived(record?.kind === LedgerRecordKind.Payment);
+
+	// --- The running difference, live (FR-010) -------------------------------
+	// The two named sides always cancel — the builder fills them from the
+	// record's own figure — so only the extra sides can push it away from zero.
+	const roleOf = $derived((accountId: number) =>
+		allAccounts.concat(sideChoices).find((a) => a.id === accountId)?.role
 	);
+
+	const typedAmount = $derived(
+		isForeign ? parseFloat(foreignAmount || '0') : parseFloat(amount || '0')
+	);
+
+	const allSides = $derived.by((): SideDraft[] => {
+		const main = Math.round(Math.abs(typedAmount || 0) * 100) / 100;
+		return [
+			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: String(main) },
+			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: String(main) },
+			...extraSides
+		];
+	});
+
+	const differenceLive = $derived(differenceMinor(allSides));
+
+	/** Why this cannot be saved yet, in the words the server would use. */
+	const blockedReason = $derived(
+		extraSides.length > 0 ? whyNotSaveable(allSides, roleOf, contactId) : null
+	);
+
+	function addSide() {
+		extraSides = [
+			...extraSides,
+			{ key: nextSideKey++, accountId: null, direction: 'out', amount: '' }
+		];
+	}
+
+	function removeSide(key: number) {
+		extraSides = extraSides.filter((side) => side.key !== key);
+	}
+
+	/**
+	 * Whether either named side is a shared owed account.
+	 *
+	 * Choosing "Money we owe" as the paying side is how somebody records that
+	 * another person paid for this, and choosing "Money owed to us" is how a sale
+	 * not yet settled is recorded. Either way the record is owed to or by
+	 * somebody, and saving it without saying who would leave a balance owed to
+	 * nobody — so the same sentence the server refuses with is shown here first
+	 * (FR-008, FR-011).
+	 */
+	const needsContact = $derived.by(() => {
+		for (const id of [fromAccountId, toAccountId]) {
+			if (id === null) continue;
+			const role = roleOf(id);
+			if (role !== undefined && isSharedOwedRole(role)) return true;
+		}
+		return false;
+	});
 
 	/** The body the records API expects, in the everyday terms of this screen. */
 	function payload() {
@@ -299,66 +403,43 @@
 			remark,
 			contactId
 		};
-		if (kind === 'income') {
-			return {
-				...base,
-				kind: 'income',
-				categoryAccountId,
-				receivedIntoAccountId: moneyAccountId
-			};
-		}
-		if (kind === 'transfer') {
-			return {
-				...base,
-				kind: 'transfer',
-				fromAccountId: moneyAccountId,
-				toAccountId
-			};
-		}
+		// Two accounts and no kind. The server derives which of the seven shapes
+		// this is from the two accounts named, and refuses with a plain sentence
+		// if they do not make one (D-01, FR-009).
 		return {
 			...base,
-			kind: 'expense',
-			categoryAccountId,
-			paidFromAccountId: someoneElsePaid ? null : moneyAccountId
+			fromAccountId,
+			toAccountId,
+			...(extraSides.length > 0
+				? {
+						extraSides: extraSides.map((side) => ({
+							accountId: side.accountId,
+							amountMinor: sideMinor(side)
+						}))
+					}
+				: {})
 		};
 	}
 
 	/** The fields a patch may carry: everything on a free record, the rest on a locked one. */
 	function patchPayload() {
 		const everyday = { description, reference, remark, contactId };
-		// A payment is described by the payment drawer, which is where its
-		// direction and what it covers are decided. This drawer only reads one
-		// back, so it never tries to restate its sides.
-		if (locked || kind === 'payment') return everyday;
+		// A locked record refuses its amount, date and accounts, and a payment is
+		// described by the payment drawer, which is where its direction and what
+		// it covers are decided. This drawer only reads one back, so it never
+		// tries to restate its sides (FR-012).
+		if (locked || isPayment) return everyday;
 
-		// Built from the same locals `payload()` reads, branching on `kind` — the
-		// prop, whose type is narrow. Picking the fields back out of what
-		// `payload()` returned instead would mean narrowing a union whose `kind`
-		// has already widened to `string`, which is not something the compiler can
-		// do and not something a reader should have to.
-		const money = {
+		return {
+			...everyday,
 			date,
 			amount: isForeign ? parseFloat(foreignAmount || '0') : parseFloat(amount || '0'),
 			currency: isForeign ? entryCurrency : mainCurrency(),
-			exchangeRate: isForeign ? parseFloat(rate) : 1
-		};
-
-		if (kind === 'income') {
-			return {
-				...everyday,
-				...money,
-				categoryAccountId,
-				receivedIntoAccountId: moneyAccountId
-			};
-		}
-		if (kind === 'transfer') {
-			return { ...everyday, ...money, fromAccountId: moneyAccountId, toAccountId };
-		}
-		return {
-			...everyday,
-			...money,
-			categoryAccountId,
-			paidFromAccountId: someoneElsePaid ? null : moneyAccountId
+			exchangeRate: isForeign ? parseFloat(rate) : 1,
+			// Both accounts, so the server re-derives the kind: an expense whose
+			// paying side becomes another bank account really is a transfer now.
+			fromAccountId,
+			toAccountId
 		};
 	}
 
@@ -444,7 +525,15 @@
 						{/if}
 					{/if}
 
-					{#if locked}
+					{#if fromInvoice}
+						<!-- A record with no everyday name of its own: it was created by
+						     issuing an invoice, and it changes when that invoice does
+						     (FR-013). -->
+						<p class="locked-note">
+							This record was created by issuing an invoice. Change it on the invoice
+							instead.
+						</p>
+					{:else if locked}
 						<p class="locked-note">{lockedReason}</p>
 					{/if}
 
@@ -492,7 +581,7 @@
 							<div class="currency-row">
 								<select
 									bind:value={entryCurrency}
-									disabled={locked || (!canChange && !isNew)}
+									disabled={readOnly}
 									class="plain-select"
 									aria-label="Currency"
 								>
@@ -506,7 +595,7 @@
 									step="0.01"
 									bind:value={foreignAmount}
 									required
-									disabled={locked || (!canChange && !isNew)}
+									disabled={readOnly}
 									class="w-full"
 								/>
 							</div>
@@ -517,7 +606,7 @@
 								step="0.01"
 								bind:value={amount}
 								required
-								disabled={locked || (!canChange && !isNew)}
+								disabled={readOnly}
 								class="w-full"
 							/>
 						{/if}
@@ -534,10 +623,10 @@
 								step="0.000001"
 								bind:value={rate}
 								required
-								disabled={locked || (!canChange && !isNew)}
+								disabled={readOnly}
 								class="w-full"
 							/>
-							<p class="hint">
+							<p class="field-hint">
 								{#if rateFetching}
 									Looking up the rate for {date}…
 								{:else if rateError}
@@ -560,80 +649,70 @@
 							type="date"
 							bind:value={date}
 							required
-							disabled={locked || (!canChange && !isNew)}
+							disabled={readOnly}
 							class="w-full"
 						/>
 					</div>
 
-					{#if kind === 'expense' || kind === 'income'}
-						<div class="field">
-							<label class="field-label" for="rec-category">Category *</label>
-							<select
-								id="rec-category"
-								bind:value={categoryAccountId}
-								required
-								disabled={locked || (!canChange && !isNew)}
-								class="plain-select"
-							>
-								<option value={null} disabled>Choose a category</option>
-								{#each categories as category (category.id)}
-									<option value={category.id}>{category.name}</option>
-								{/each}
-							</select>
-						</div>
-					{/if}
+					<!-- The two everyday questions, and the only two asked about accounts.
+					     Which kind of record this is follows from the answers; nobody is
+					     asked to classify their own bookkeeping (D-01, FR-006). -->
+					<AccountSelect
+						accounts={sideChoices}
+						{allAccounts}
+						{canAdjust}
+						bind:value={fromAccountId}
+						name="fromAccount"
+						label="Money came from"
+						{defaultAccountId}
+						disabled={readOnly}
+					/>
 
-					{#if kind === 'expense'}
-						<label class="checkline">
-							<input
-								type="checkbox"
-								bind:checked={someoneElsePaid}
-								disabled={locked || (!canChange && !isNew)}
-							/>
-							Someone else paid for this
-						</label>
-					{/if}
-
-					{#if !(kind === 'expense' && someoneElsePaid)}
+					{#if toAccountChoices.length === 0}
+						<p class="locked-note">
+							There is only one account to choose from, so there is nowhere for money to
+							move to. Add another account first.
+						</p>
+					{:else}
 						<AccountSelect
-							{accounts}
-							bind:value={moneyAccountId}
-							name="moneyAccount"
-							label={moneyLabel}
+							accounts={toAccountChoices}
+							{allAccounts}
+							{canAdjust}
+							bind:value={toAccountId}
+							name="toAccount"
+							label="Money went to"
 							{defaultAccountId}
-							disabled={locked || (!canChange && !isNew)}
+							disabled={readOnly}
 						/>
 					{/if}
 
-					{#if kind === 'transfer'}
-						{#if toAccountChoices.length === 0}
-							<p class="locked-note">
-								Money can only be moved between two accounts you hold, and there is only one to
-								move it from. Add another account first.
-							</p>
-						{:else}
-							<AccountSelect
-								accounts={toAccountChoices}
-								bind:value={toAccountId}
-								name="toAccount"
-								label="Moved into"
-								{defaultAccountId}
-								disabled={locked || (!canChange && !isNew)}
-							/>
-						{/if}
-					{/if}
-
-					<!-- A transfer is money moving between two places you hold, so there is
-					     nobody on the other side of it to name (FR-007). -->
-					{#if contacts.length > 0 && kind !== 'transfer'}
+					{#if needsContact}
+						<!-- A side on a shared owed account is meaningless without saying
+						     whose it is — the balance would be owed to nobody (FR-008). -->
 						<div class="field">
-							<label class="field-label" for="rec-contact">
-								{kind === 'expense' && someoneElsePaid ? 'Who paid for it? *' : 'Who was it with?'}
-							</label>
+							<label class="field-label" for="rec-contact">Who is it owed to, or by? *</label>
 							<select
 								id="rec-contact"
 								bind:value={contactId}
-								required={kind === 'expense' && someoneElsePaid}
+								required
+								disabled={!canChange && !isNew}
+								class="plain-select"
+							>
+								<option value={null}>—</option>
+								{#each contacts as contact (contact.id)}
+									<option value={contact.id}>{contact.legalName}</option>
+								{/each}
+							</select>
+							{#if contactId === null}
+								<p class="hint">Say who this is owed to or by.</p>
+							{/if}
+						</div>
+					{:else if contacts.length > 0}
+						<div class="field">
+							<label class="field-label" for="rec-contact">Who was it with?</label>
+							<select
+								id="rec-contact"
+								bind:value={contactId}
 								disabled={!canChange && !isNew}
 								class="plain-select"
 							>
@@ -643,6 +722,55 @@
 								{/each}
 							</select>
 						</div>
+					{/if}
+
+					<!-- More than two sides. Only with `adjustments`, and the server
+					     refuses it regardless of what this hides (FR-010, FR-031c). -->
+					{#if canAdjust && !readOnly}
+						{#if extraSides.length > 0}
+							<div class="sides">
+								<div class="sides-head">
+									<span>Other sides</span>
+									<span class="sides-diff" class:sides-diff-off={differenceLive !== 0}>
+										{differenceLive === 0
+											? 'Balanced'
+											: `${(Math.abs(differenceLive) / 100).toFixed(2)} out`}
+									</span>
+								</div>
+								{#each extraSides as side (side.key)}
+									<div class="side-row">
+										<select bind:value={side.accountId} class="plain-select side-account">
+											<option value={null} disabled>Choose an account</option>
+											{#each allAccounts as account (account.id)}
+												<option value={account.id}>{account.name}</option>
+											{/each}
+										</select>
+										<select bind:value={side.direction} class="plain-select side-dir">
+											<option value="out">out of</option>
+											<option value="in">into</option>
+										</select>
+										<Input
+											type="text"
+											inputmode="decimal"
+											bind:value={side.amount}
+											placeholder="0.00"
+											class="side-amount"
+										/>
+										<button
+											type="button"
+											class="side-remove"
+											onclick={() => removeSide(side.key)}
+											aria-label="Remove this side"
+										>
+											<X size={14} />
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+						<button type="button" class="add-side" onclick={addSide}>
+							+ Add another side
+						</button>
 					{/if}
 
 					<div class="field">
@@ -667,19 +795,19 @@
 						/>
 					</div>
 
-					{#if record && (kind === 'expense' || kind === 'income')}
+					{#if record}
 						<!--
-							Whether a bank line has been matched to this record. The old
-							screens showed this and it went missing when the two became views
-							of one store; `locked` alone could not say it, because it stays
-							quiet until the record is actually locked and says nothing about
-							one that is simply not cleared yet.
+							Whether a bank line has been matched to this record. `locked`
+							alone cannot say it: it stays quiet until the record is actually
+							locked, and says nothing about one that is simply not cleared yet.
+
+							Stated, not linked. Reconciling is reached from the account it
+							belongs to, and a record touches two of them — there is no single
+							account this could send the reader to, and the generic
+							`/reconciliation` address it used to open no longer exists
+							(FR-048, D-06).
 						-->
-						<button
-							type="button"
-							class="related-link ob-card"
-							onclick={() => goto(resolve('/(app)/reconciliation'))}
-						>
+						<div class="ob-card ob-card-static">
 							<span class="ob-icon" class:cleared={record.reconciled}>
 								<Scale size={15} />
 							</span>
@@ -692,6 +820,20 @@
 										? 'A line on a bank statement has been matched to this.'
 										: 'No bank statement line has been matched to this yet.'}
 								</span>
+							</span>
+						</div>
+					{/if}
+
+					{#if record && fromInvoice}
+						<button
+							type="button"
+							class="related-link ob-card"
+							onclick={() => goto(resolve('/(app)/invoices'))}
+						>
+							<span class="ob-icon"><Scale size={15} /></span>
+							<span class="ob-main">
+								<span class="ob-title">The invoice this came from</span>
+								<span class="ob-sub">Issued invoices are changed on the invoice itself.</span>
 							</span>
 							<ChevronRight size={14} color="var(--muted-foreground)" />
 						</button>
@@ -712,6 +854,9 @@
 				</div>
 
 				<div class="sheet-foot">
+					{#if blockedReason}
+						<div class="sheet-foot-note">{blockedReason}</div>
+					{/if}
 					{#if record && !record.paid && record.outstandingMinor > 0}
 						<div class="sheet-foot-note">
 							{formatMinor(record.outstandingMinor)} of this is still owed.
@@ -731,11 +876,12 @@
 							</button>
 						{/if}
 						<button type="button" class="sheet-btn" onclick={onclose}>Cancel</button>
-						{#if canChange || isNew}
+						{#if (canChange || isNew) && !fromInvoice}
 							<button
 								type="submit"
 								class="sheet-btn sheet-btn-primary"
-								disabled={saving || rateMissing}
+								disabled={saving || rateMissing || blockedReason !== null}
+								title={blockedReason ?? undefined}
 							>
 								{saving ? 'Saving…' : record ? 'Save changes' : 'Save'}
 							</button>
@@ -757,6 +903,87 @@
 />
 
 <style>
+	/* More than two sides — shown only with `adjustments`. */
+	.sides {
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 10px;
+		margin-bottom: 10px;
+	}
+	.sides-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 8px;
+		font-size: 11.5px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--muted-foreground);
+	}
+	/* The running difference, live: the rule becomes something to watch rather
+	   than something that rejects you at the end (FR-010). */
+	.sides-diff {
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--green);
+	}
+	.sides-diff-off {
+		color: var(--red);
+	}
+	.side-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-bottom: 6px;
+	}
+	.side-account {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.side-dir {
+		flex: 0 0 84px;
+	}
+	.side-remove {
+		flex: 0 0 auto;
+		display: grid;
+		place-items: center;
+		width: 28px;
+		height: 28px;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--card);
+		color: var(--muted-foreground);
+		cursor: pointer;
+	}
+	.side-remove:hover {
+		border-color: var(--red);
+		color: var(--red);
+	}
+	.add-side {
+		margin-bottom: 12px;
+		padding: 0;
+		border: none;
+		background: none;
+		color: var(--primary);
+		font-family: inherit;
+		font-size: 12.5px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.add-side:hover {
+		text-decoration: underline;
+	}
+	/* Relation-card shape lives in layout.css; only the spacing and the cleared
+	   tint are this drawer's own. */
+	.ob-card {
+		margin-bottom: 16px;
+	}
+	/* Says what is true without pretending to be a way through to somewhere. */
+	.ob-card-static {
+		cursor: default;
+	}
+
 	.form-error {
 		background: var(--red-soft);
 		color: var(--red);
@@ -793,48 +1020,9 @@
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
-	.ob-card {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		width: 100%;
-		padding: 10px 12px;
-		margin-bottom: 16px;
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		font-family: inherit;
-		text-align: left;
-	}
-	.ob-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 34px;
-		height: 34px;
-		border-radius: 7px;
-		background: var(--accent);
-		color: var(--muted-foreground);
-		flex: 0 0 auto;
-	}
 	.ob-icon.cleared {
 		background: var(--green-soft);
 		color: var(--green);
-	}
-	.ob-main {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		flex: 1;
-		min-width: 0;
-	}
-	.ob-title {
-		font-size: 13.5px;
-		font-weight: 500;
-	}
-	.ob-sub {
-		font-size: 11.5px;
-		color: var(--muted-foreground);
 	}
 	.amount-head {
 		display: flex;
@@ -849,13 +1037,5 @@
 	.currency-row .plain-select {
 		width: auto;
 		flex: 0 0 auto;
-	}
-	.checkline {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 13px;
-		margin-bottom: 16px;
-		cursor: pointer;
 	}
 </style>

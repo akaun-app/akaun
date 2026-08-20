@@ -22,7 +22,7 @@
 	const collapsed = $derived(appState.sidebarCollapsed);
 
 	function badgeFor(item: SerializableNavItem): number | undefined {
-		return item.id === 'expenses' ? unpaidCount : undefined;
+		return item.id === 'records' ? unpaidCount : undefined;
 	}
 
 	function isActive(href: string) {

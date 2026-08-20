@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { formatMinor } from '$lib/format.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
@@ -11,7 +12,9 @@
 		Merge,
 		SlidersHorizontal,
 		Building2,
-		Trash2
+		Trash2,
+		ChevronRight,
+		Scale
 	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
@@ -214,6 +217,18 @@
 		fRoles = [];
 		showForm = true;
 	}
+	/**
+	 * This contact's statement: the Records list narrowed to them.
+	 *
+	 * `resolve()` builds the route and the contact is appended as a query
+	 * parameter — a value, not part of the route — so the lint rule below cannot
+	 * see through the template string.
+	 */
+	function openStatement(contactId: number): void {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the route comes from resolve(); only the query string is appended.
+		void goto(`${resolve('/(app)/records')}?contact=${contactId}`);
+	}
+
 	function openEdit(c: Contact, { push = true } = {}) {
 		editing = c;
 		fEntityType = c.entityType;
@@ -293,7 +308,13 @@
 	<header class="topbar">
 		<div class="topbar-left">
 			<h1 class="page-title">Contacts</h1>
-			<p class="page-sub">{contacts.length} total</p>
+			<p class="page-sub">
+				{contacts.length} total
+				{#if data.perms.records && (data.totals.weOweMinor > 0 || data.totals.owedToUsMinor > 0)}
+					· you owe <span class="num">{formatMinor(data.totals.weOweMinor)}</span>
+					· owed to you <span class="num">{formatMinor(data.totals.owedToUsMinor)}</span>
+				{/if}
+			</p>
 		</div>
 		<div class="topbar-right">
 			<div class="search-box">
@@ -426,6 +447,7 @@
 							<th>Type</th>
 							<th>Roles</th>
 							<th>Email</th>
+							{#if data.perms.records}<th class="ta-right">Balance</th>{/if}
 						</tr>
 					</thead>
 					<tbody>
@@ -454,10 +476,32 @@
 									{/if}
 								</td>
 								<td data-label="Email" style="color:var(--muted-foreground); font-size:13px;">{c.email ?? '—'}</td>
+								{#if data.perms.records}
+									<!--
+										The purchase and sales ledger, per contact. Positive when they
+										owe us, negative when we owe them; a contact on both sides nets
+										out. Derived from movements, never stored (FR-008).
+									-->
+									<td class="td-amount" data-label="Balance">
+										{#if (data.balances[c.id] ?? 0) === 0}
+											<span class="ct-settled">—</span>
+										{:else}
+											<span
+												class="amount-num"
+												class:ct-owed-to-us={(data.balances[c.id] ?? 0) > 0}
+											>
+												{formatMinor(Math.abs(data.balances[c.id] ?? 0))}
+											</span>
+											<span class="ct-owed-label">
+												{(data.balances[c.id] ?? 0) > 0 ? 'owed to you' : 'you owe'}
+											</span>
+										{/if}
+									</td>
+								{/if}
 							</tr>
 						{:else}
 							<tr class="empty-row">
-								<td colspan="5">
+								<td colspan="6">
 									<EmptyState
 										title={activeFilterCount > 0 ? 'No contacts match your filters' : 'No contacts yet'}
 										sub={activeFilterCount > 0 ? 'Try adjusting your search or filters.' : 'Your contacts will appear here.'}
@@ -627,6 +671,37 @@
 						<label class="field-label" for="remark">Remark</label>
 						<Textarea id="remark" name="remark" rows={2} value={editing?.remark ?? ''} class="leading-relaxed" />
 					</div>
+					{#if editingLive && data.perms.records}
+						<!--
+							Everything this contact was involved in, and what is still owed
+							either way — the purchase and sales ledger for one contact.
+
+							The relation-card contract's single-action shape: the whole row is
+							one button, and the trailing chevron says it goes somewhere before
+							you hover (CLAUDE.md § Cross-Feature Relation Cards).
+						-->
+						<button
+							type="button"
+							class="related-link ob-card"
+							onclick={() => openStatement(editingLive.id)}
+						>
+							<span class="ob-icon"><Scale size={15} /></span>
+							<span class="ob-main">
+								<span class="ob-title">See everything with this contact</span>
+								<span class="ob-sub">
+									{#if (data.balances[editingLive.id] ?? 0) === 0}
+										Nothing outstanding either way
+									{:else if (data.balances[editingLive.id] ?? 0) > 0}
+										{formatMinor(data.balances[editingLive.id] ?? 0)} still owed to you
+									{:else}
+										You still owe {formatMinor(Math.abs(data.balances[editingLive.id] ?? 0))}
+									{/if}
+								</span>
+							</span>
+							<ChevronRight size={14} color="var(--muted-foreground)" />
+						</button>
+					{/if}
+
 					{#if editing}
 						<AuditTrail bind:this={auditTrailRef} recordType="contact" recordId={editing.id} />
 					{/if}
@@ -728,6 +803,19 @@
 </Sheet.Root>
 
 <style>
+	/* The purchase and sales ledger, shown per contact. */
+	.ct-owed-label {
+		display: block;
+		font-size: 11px;
+		color: var(--muted-foreground);
+	}
+	.ct-owed-to-us {
+		color: var(--green);
+	}
+	.ct-settled {
+		color: var(--muted-foreground);
+	}
+
 	.badge-warn { display: inline-flex; align-items: center; font-size: 11.5px; background: var(--amber-soft); color: var(--amber); padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
 	.cluster { margin-bottom: 16px; }
 	.cluster-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }

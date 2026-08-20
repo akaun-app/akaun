@@ -15,6 +15,11 @@ export const load: LayoutServerLoad = async ({ locals }) => {
   // side on the shared owed account (FR-012) — so this asks the store the
   // question rather than reading a status column. `limit: 1` because only
   // `total` is wanted; the count is its own aggregate either way.
+  //
+  // Still expenses only, deliberately: FR-024 moves the count that was shown
+  // against Expenses onto Records rather than redefining it. Widening it to
+  // every kind would also count what customers owe the business, which is a
+  // different question from what the business has not paid.
   const unpaidCount = listRecords(db, {
     kind: LedgerRecordKind.Expense,
     paid: false,

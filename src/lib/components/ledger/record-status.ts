@@ -14,3 +14,19 @@ export function statusLabelFor(record: RecordView): string {
 	if (record.paid) return 'paid';
 	return record.outstandingMinor < Math.abs(record.amountMinor) ? 'part-paid' : 'owed';
 }
+
+/**
+ * Whether bank lines account for the whole of this record.
+ *
+ * A separate question from `statusLabelFor` above, and from `locked`: settled
+ * is about whether the money has moved, cleared is about whether the bank
+ * agrees it has. A record can be paid and not yet cleared, or cleared and still
+ * partly owed.
+ *
+ * No arithmetic here either. `cleared` is computed by
+ * src/lib/server/ledger/coverage.ts and travels with the record, so this only
+ * names what the server already worked out (FR-056).
+ */
+export function clearedLabelFor(record: RecordView): string {
+	return record.cleared ? 'cleared' : 'not cleared';
+}

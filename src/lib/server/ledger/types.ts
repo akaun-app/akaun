@@ -155,8 +155,23 @@ export type RecordView = LedgerRecordRow & {
    * answer and only speaks up once the record is locked. A screen needs to say
    * "cleared" or "not cleared yet" about a record that is neither, which is what
    * the expenses list showed before the one store existed.
+   *
+   * Also separate from `cleared` below, and the difference is load-bearing.
+   * `reconciled` is existence — one allocation row is enough — and that is the
+   * right answer for locking: if any bank line points at a record its amount
+   * must not change, covered or not. `cleared` is coverage, which is the right
+   * answer for a worklist (research.md R-08). `locked` continues to read
+   * `reconciled`, never `cleared`.
+   *
+   * Any bank line points at this record. Drives `locked`. Existence only.
    */
   reconciled: boolean;
+  /** Fully covered by bank lines. Drives the "not yet cleared" filter and the row label. */
+  cleared: boolean;
+  /** How much of this record bank lines account for, in cents. */
+  clearedMinor: Minor;
+  /** How many sides this record has — a row shows the count instead of two accounts when > 2. */
+  sideCount: number;
   attachmentCount: number;
 };
 
@@ -205,9 +220,45 @@ export type RecordCreateSides =
     }
   | { kind: "opening-balance"; accountId: number }
   | { kind: "invoice-issue"; incomeAccountId: number }
-  | { kind: "journal"; movements: { accountId: number; amountMinor: Minor }[] };
+  | {
+      kind: "journal";
+      movements: { accountId: number; amountMinor: Minor }[];
+      /**
+       * What this record really was, when its sides are an everyday purchase or
+       * sale that happens to span several categories.
+       *
+       * One supplier bill can cover fuel and paper: three sides, two of them
+       * categories. Structurally that is the `journal` shape, because the
+       * `expense` variant above holds exactly one `categoryAccountId` — but it
+       * is a purchase, and filing it as an adjustment would put ordinary
+       * spending under the heading reserved for corrections.
+       *
+       * Set only by `sides-from-accounts.ts`, and only for the shapes it
+       * recognises as everyday. Absent on a real adjustment.
+       */
+      storedKind?: LedgerRecordKindCode;
+    };
 
 export type PaymentDirection = "we-pay" | "we-receive";
+
+/**
+ * What the one form sends. The kind is derived, never stated (D-01, research.md
+ * R-02).
+ *
+ * `RecordCreateSides` above keeps all seven of its variants and the API keeps
+ * accepting them — Invoices, Auto Import and reconciliation's transfer action
+ * construct them in-process today and FR-036 leaves those untouched. The form
+ * sends this eighth shape instead, and `ledger/sides-from-accounts.ts` derives
+ * which of the seven it means.
+ */
+export type RecordCreateFromSides = {
+  /** The account money left. */
+  fromAccountId: number;
+  /** The account money went to. */
+  toAccountId: number;
+  /** Third and later sides. Requires the `adjustments` ability (FR-031). */
+  extraSides?: { accountId: number; amountMinor: Minor }[];
+};
 
 /** Only the fields a `PATCH /api/records/[id]` may carry. */
 export type RecordPatch = {
@@ -237,6 +288,10 @@ export type RecordListFilters = {
   amountMin?: number;
   amountMax?: number;
   paid?: boolean;
+  /** FR-056 — every account, not just those with a statement. */
+  cleared?: boolean;
+  /** FR-043 — which sort is in force, because the running balance depends on date order. */
+  sort?: "date" | "amount";
   search?: string;
   limit?: number;
   offset?: number;

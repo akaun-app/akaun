@@ -4,12 +4,11 @@ import { db } from "$lib/server/db/client.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
 import { getRecord, listRecords } from "$lib/server/queries/ledger.js";
+import { getAccount } from "$lib/server/queries/accounts.js";
+import { sidesFromAccounts } from "$lib/server/ledger/sides-from-accounts.js";
+import { toMinor } from "$lib/server/ledger/money.js";
 import { createRecord, removeRecord } from "$lib/server/services/ledger.js";
 import { createSettlements } from "$lib/server/services/settlements.js";
-import {
-  resourceForKind,
-  resourceForKindName,
-} from "$lib/server/ledger/record-permissions.js";
 import { isSharedOwedRole } from "$lib/server/ledger/account-type.js";
 import { isValidDate } from "$lib/server/date.js";
 import { mainCurrencyCode } from "$lib/server/currency/form.js";
@@ -94,59 +93,164 @@ const createSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/**
+ * What the one form sends: two accounts and no kind.
+ *
+ * The five variants above stay exactly as they are. Auto Import posts
+ * `expense` and `income`, and `services/invoices.ts`, `services/accounts.ts`
+ * and reconciliation's transfer action construct `RecordCreateSides` in
+ * process, so removing any of them would break a caller this feature does not
+ * touch (FR-036).
+ *
+ * This shape carries no `kind` at all, which is what tells the two apart: the
+ * union above is discriminated on `kind` and cannot match a body without one.
+ */
+const fromSidesSchema = z.object({
+  ...common,
+  fromAccountId: accountId,
+  toAccountId: accountId,
+  /** Third and later sides. Requires `adjustments` (FR-031). */
+  extraSides: z
+    .array(z.object({ accountId, amountMinor: z.number().int() }))
+    .optional(),
+});
+
+const bodySchema = z.union([createSchema, fromSidesSchema]);
+
+/** A number that arrived as a query-string value. */
+const numeric = z.coerce.number().finite().optional();
+
+/** `true` / `false` as a query-string value. */
+const flag = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true")
+  .optional();
+
+/**
+ * Every filter the list accepts, in one place.
+ *
+ * `kind` takes a single value or a comma-separated list, because the Records
+ * screen filters by more than one kind at a time and one store means one query
+ * (FR-002).
+ */
+const querySchema = z.object({
+  kind: z
+    .string()
+    .transform((raw) =>
+      raw
+        .split(",")
+        .map((part) => Number(part.trim()))
+        .filter((value) => Number.isInteger(value)),
+    )
+    .pipe(z.array(z.number().int()).min(1))
+    .optional(),
+  accountId: numeric,
+  contactId: numeric,
+  categoryId: numeric,
+  categoryAccountId: numeric,
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  amountMin: numeric,
+  amountMax: numeric,
+  paid: flag,
+  /** FR-056 — every account, not just those with a statement. */
+  cleared: flag,
+  /** FR-043 — the running balance is only offered in date order. */
+  sort: z.enum(["date", "amount"]).optional(),
+  search: z.string().optional(),
+  limit: numeric,
+  offset: numeric,
+});
+
 export const GET: RequestHandler = async ({ locals, url }) => {
-  const p = url.searchParams;
+  // One store, one ability, asked once whether or not a kind is named.
+  //
+  // This used to check `expenses` and `income` when no kind was asked for, and
+  // that was a live hole: a record entered by hand is a `journal` kind, so it
+  // was never covered by either check, and anyone with expense view read it
+  // (research.md R-11).
+  if (!hasPermission(locals, "records", "view")) return forbidden();
 
-  const kindRaw = p.get("kind");
-  const kind = kindRaw ? (Number(kindRaw) as LedgerRecordKindCode) : undefined;
+  const parsed = querySchema.safeParse(
+    Object.fromEntries(url.searchParams.entries()),
+  );
+  if (!parsed.success) return badRequest(parsed.error);
+  const q = parsed.data;
 
-  // With no kind asked for, the caller is asking across the store, so it needs
-  // to be allowed to see every screen the store feeds.
-  const resources = kind
-    ? [resourceForKind(kind)]
-    : (["expenses", "income"] as const);
-  for (const resource of resources) {
-    if (!hasPermission(locals, resource, "view")) return forbidden();
-  }
-
-  const num = (key: string): number | undefined => {
-    const raw = p.get(key);
-    if (raw === null) return undefined;
-    const value = Number(raw);
-    return Number.isFinite(value) ? value : undefined;
-  };
-
-  const paidRaw = p.get("paid");
+  const kind = q.kind as LedgerRecordKindCode[] | undefined;
 
   return Response.json(
     listRecords(db, {
-      kind,
-      accountId: num("accountId"),
-      contactId: num("contactId"),
-      categoryAccountId: num("categoryId") ?? num("categoryAccountId"),
-      dateFrom: p.get("dateFrom") ?? undefined,
-      dateTo: p.get("dateTo") ?? undefined,
-      amountMin: num("amountMin"),
-      amountMax: num("amountMax"),
-      paid: paidRaw === null ? undefined : paidRaw === "true",
-      search: p.get("search") ?? undefined,
-      limit: num("limit"),
-      offset: num("offset"),
+      // One value stays one value, so an existing caller asking for a single
+      // kind is unchanged.
+      kind: kind && kind.length === 1 ? kind[0] : kind,
+      accountId: q.accountId,
+      contactId: q.contactId,
+      categoryAccountId: q.categoryId ?? q.categoryAccountId,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
+      amountMin: q.amountMin,
+      amountMax: q.amountMax,
+      paid: q.paid,
+      cleared: q.cleared,
+      sort: q.sort,
+      search: q.search,
+      limit: q.limit,
+      offset: q.offset,
     }),
   );
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error);
 
-  const body = parsed.data;
-  if (!hasPermission(locals, resourceForKindName(body.kind), "add")) {
-    return forbidden();
+  const raw = parsed.data;
+  if (!hasPermission(locals, "records", "add")) return forbidden();
+
+  // A body with no `kind` came from the one form: two accounts, and the kind
+  // derived from them rather than asked for (D-01).
+  let body: RecordCreate;
+  if ("kind" in raw) {
+    body = raw as RecordCreate;
+  } else {
+    const canAdjust = hasPermission(locals, "adjustments", "add");
+    const sides = sidesFromAccounts(
+      {
+        fromAccountId: raw.fromAccountId,
+        toAccountId: raw.toAccountId,
+        amountMinor: toMinor(raw.amount, raw.exchangeRate),
+        contactId: raw.contactId ?? null,
+        extraSides: raw.extraSides,
+      },
+      {
+        accountById: (id) => {
+          const account = getAccount(db, id);
+          return account
+            ? {
+                id: account.id,
+                role: account.role,
+                archived: account.archivedAt !== null,
+              }
+            : null;
+        },
+        // The gate is applied inside the derivation, after it knows what the
+        // two accounts mean — whether a record needs the ability is a fact
+        // about the accounts it names, not about what the client sent
+        // (FR-031c). Enforced here on the server, never by hiding a control.
+        canAdjust,
+      },
+    );
+    if (!sides.ok) return refused(sides.reason);
+
+    // Handed to the builder unchanged. `entry-builder.ts` stays the only place
+    // movements are constructed, and the only thing that refuses a set of sides
+    // that does not cancel — stating by how much it is out (FR-009).
+    body = { ...raw, ...sides.value } as RecordCreate;
   }
 
   const userId = locals.user!.id;
-  const result = createRecord(db, userId, body as RecordCreate);
+  const result = createRecord(db, userId, body);
   if (!result.ok) return refused(result.reason);
 
   // Remember the foreign currency, so someone buying from the same supplier
@@ -166,7 +270,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // A payment that says what it covers is one action for the user, so the
   // settlements are written in the same request rather than leaving the payment
   // recorded but unapplied if a second call never comes (FR-015).
-  if (body.kind === "payment" && body.settlements.length > 0) {
+  // A derived payment carries no settlements — the form records the payment,
+  // and what it covers is chosen from the record it settles.
+  if (body.kind === "payment" && (body.settlements?.length ?? 0) > 0) {
     // The settling side is the one on the shared owed account — the side that
     // clears the debt, whichever direction the money went.
     const paymentMovement = result.value.movements.find((m) =>
@@ -174,7 +280,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     );
 
     const settled = paymentMovement
-      ? createSettlements(db, userId, paymentMovement.id, body.settlements)
+      ? createSettlements(
+          db,
+          userId,
+          paymentMovement.id,
+          body.settlements ?? [],
+        )
       : ({
           ok: false,
           reason: "This payment does not touch anything that is owed.",

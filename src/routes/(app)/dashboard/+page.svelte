@@ -196,7 +196,7 @@
 			<div class="panel">
 				<div class="panel-head">
 					<div class="panel-title">Recent activity</div>
-					<a href="/expenses" class="link-btn" style="font-size:12.5px;">View all</a>
+					<a href="/records" class="link-btn" style="font-size:12.5px;">View all</a>
 				</div>
 				<div class="activity">
 					{#each data.recent as item}

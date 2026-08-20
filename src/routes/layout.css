@@ -246,6 +246,14 @@ body {
 .topbar-right { display: flex; align-items: center; gap: 9px; }
 .search-box { width: 280px; }
 
+/* Body of a page whose content is a simple vertical stack (Accounts, Journal),
+   rather than a filterable table — those use .work / .work-main and let
+   .table-card do the scrolling. The scroller is full width so the scrollbar
+   sits at the edge of the screen; the 28px gutter shared with .topbar goes on
+   the inner element. */
+.page-scroll { flex: 1; overflow-y: auto; min-width: 0; }
+.page-inner { padding: 16px 28px 40px; }
+
 /* ---------- Stat strip ---------- */
 .stat-strip { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; padding: 18px 28px 4px; }
 .stat-card {
@@ -608,6 +616,27 @@ th.sortable:hover .th-idle { opacity: .5; }
 .related-link { cursor: pointer; transition: border-color .12s, background .12s; }
 .related-link:hover { border-color: var(--primary); background: var(--accent); }
 
+/* Single-record reference card — the shape a record-detail sheet uses to point
+   at one other record (CLAUDE.md § Cross-Feature Relation Cards). Defined ONCE
+   here, beside .related-link, because a Svelte <style> block is scoped to its
+   own component: a copy per feature means the next component to use the shape
+   renders with no styling at all. Set margins locally, not here — each context
+   spaces it differently. */
+.ob-card { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; font-family: inherit; text-align: left; }
+.ob-icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 7px; background: var(--accent); color: var(--muted-foreground); flex: 0 0 auto; }
+.ob-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ob-title { font-size: 13.5px; font-weight: 500; }
+.ob-sub { font-size: 11.5px; color: var(--muted-foreground); }
+
+/* Chart-of-accounts rows. The Accounts and Categories screens use the shared
+   .exp-table like every other list screen; these are the two states those rows
+   need that the table itself does not provide. */
+.exp-row.archived { opacity: 0.55; }
+.amount-num.below-zero { color: var(--amber); }
+
+/* Grey explanatory line under a field. */
+.hint { font-size: 12px; color: var(--muted-foreground); margin: 6px 0 0; line-height: 1.5; }
+
 /* ===================== Claims ===================== */
 .claim-exp-list { display: flex; flex-direction: column; gap: 8px; }
 .claim-exp { display: flex; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; width: 100%; background: var(--card); font-family: inherit; text-align: left; }
@@ -827,6 +856,16 @@ th.sortable:hover .th-idle { opacity: .5; }
     flex: none;
     padding: 12px 16px calc(20px);
     gap: 12px;
+  }
+
+  /* Standard page body: hand scrolling back to .main, like every other
+     scroll area above, and narrow the gutter to match .work-main. */
+  .page-scroll {
+    overflow: visible;
+    flex: none;
+  }
+  .page-inner {
+    padding: 12px 16px 24px;
   }
 
   /* Table card: no inner scroll, no rounded border on mobile. Keeps

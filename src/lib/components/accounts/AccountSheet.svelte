@@ -20,13 +20,18 @@
 	import { AccountRole } from '$lib/enums.js';
 	import type { AccountView } from '$lib/server/ledger/types.js';
 	import { CREATABLE_ROLES, roleLabel } from './account-roles.js';
-	import { isCategoryRole } from './display-sign.js';
+	import type { AccountRoleCode } from '$lib/enums.js';
+	import { isCategoryRole, isMoneyPotRole } from './display-sign.js';
 
 	let {
 		open = $bindable(false),
 		account = null,
 		canDelete = false,
 		canChange = false,
+		canReconcile = false,
+		unfinishedStatements = 0,
+		creatableRoles = CREATABLE_ROLES,
+		nounSingular = 'account',
 		error = '',
 		onclose,
 		onOpeningBalance
@@ -35,10 +40,48 @@
 		account?: AccountView | null;
 		canDelete?: boolean;
 		canChange?: boolean;
+		/** Whether to offer the way in to reconciling at all (FR-049). */
+		canReconcile?: boolean;
+		/** Statements on this account that are not finished yet (FR-053). */
+		unfinishedStatements?: number;
+		/**
+		 * Which kinds this drawer offers when creating. Each screen passes its
+		 * own half: the Accounts screen offers what holds money, the Categories
+		 * screen offers the two category kinds.
+		 */
+		creatableRoles?: AccountRoleCode[];
+		/** The word this screen uses for the thing — "account" or "category". */
+		nounSingular?: string;
 		error?: string;
 		onclose: () => void;
 		onOpeningBalance: (account: AccountView) => void;
 	} = $props();
+
+	/**
+	 * Checking this account against the statement its bank sends (FR-048).
+	 *
+	 * Offered only on an account that actually holds money: a statement is a
+	 * bank's account of where money sat, and a spending category never held any
+	 * (FR-049, FR-055).
+	 */
+	const isMoneyPot = $derived(account !== null && isMoneyPotRole(account.role));
+
+	function openReconcile(accountId: number): void {
+		void goto(resolve('/(app)/accounts/[id]/reconcile', { id: String(accountId) }));
+	}
+
+	/**
+	 * This account's statement: the Records list narrowed to it (D-05, FR-022).
+	 *
+	 * `resolve()` builds the route, and the account is carried as a query
+	 * parameter — which is a value, not part of the route, so it is appended
+	 * afterwards. The lint rule below only recognises a bare `resolve()` call as
+	 * its argument and cannot see through the template string.
+	 */
+	function openStatement(accountId: number): void {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the route comes from resolve(); only the query string is appended.
+		void goto(`${resolve('/(app)/records')}?account=${accountId}`);
+	}
 
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -125,9 +168,9 @@
 
 					{#if !account}
 						<div class="field">
-							<span class="field-label">What kind of account is this? *</span>
+							<span class="field-label">What kind of {nounSingular} is this? *</span>
 							<div style="display:flex; gap:8px; flex-wrap:wrap;">
-								{#each CREATABLE_ROLES as option (option)}
+								{#each creatableRoles as option (option)}
 									<label
 										style="display:inline-flex; align-items:center; gap:6px; border:1px solid {role ===
 										option
@@ -161,17 +204,19 @@
 
 					{#if account && account.movementCount > 0}
 						<!--
-							The account's own history is a full page rather than a drawer —
-							it is a report read across and exported, which is the named
-							exception in CLAUDE.md. This is the relation-card contract's
-							single-action shape: the whole row is one button, and the
-							trailing chevron says it goes somewhere before you hover.
+							The account's statement: the Records list narrowed to this
+							account, with a running balance. It is the same rows read the
+							same way, so it is the same screen with one filter on it rather
+							than a page of its own (D-05, FR-022).
+
+							The relation-card contract's single-action shape: the whole row
+							is one button, and the trailing chevron says it goes somewhere
+							before you hover.
 						-->
 						<button
 							type="button"
 							class="related-link ob-card"
-							onclick={() =>
-								goto(resolve('/(app)/accounts/[id]/history', { id: String(account.id) }))}
+							onclick={() => openStatement(account.id)}
 						>
 							<span class="ob-icon"><History size={15} /></span>
 							<span class="ob-main">
@@ -179,6 +224,39 @@
 								<span class="ob-sub">
 									{account.movementCount}
 									{account.movementCount === 1 ? 'record' : 'records'}, with a running balance
+								</span>
+							</span>
+							<ChevronRight size={14} color="var(--muted-foreground)" />
+						</button>
+					{/if}
+
+					{#if account && isMoneyPot && canReconcile}
+						<!--
+							Checking this account against the statement its bank sends
+							(FR-048). The only way in: there is no top-level Reconciliation
+							screen any more, because a statement always belonged to exactly
+							one account and reaching it from anywhere else meant naming that
+							account again.
+
+							The second line says whether anything is part-way through,
+							because there is no longer a list where an unfinished statement
+							would be noticed (FR-053).
+						-->
+						<button
+							type="button"
+							class="related-link ob-card"
+							onclick={() => openReconcile(account.id)}
+						>
+							<span class="ob-icon"><Scale size={15} /></span>
+							<span class="ob-main">
+								<span class="ob-title">Check against the bank</span>
+								<span class="ob-sub">
+									{#if unfinishedStatements > 0}
+										{unfinishedStatements}
+										{unfinishedStatements === 1 ? 'statement' : 'statements'} still to finish
+									{:else}
+										Match this account against a statement from your bank
+									{/if}
 								</span>
 							</span>
 							<ChevronRight size={14} color="var(--muted-foreground)" />
@@ -258,6 +336,11 @@
 />
 
 <style>
+	/* Relation-card shape lives in layout.css (used by four screens). Only the
+	   spacing is this drawer's own. */
+	.ob-card {
+		margin-top: 4px;
+	}
 	.account-kind {
 		display: inline-flex;
 		align-items: center;
@@ -283,44 +366,5 @@
 		color: var(--muted-foreground);
 		margin: 0 0 16px;
 		line-height: 1.5;
-	}
-	.ob-card {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		width: 100%;
-		padding: 10px 12px;
-		margin-top: 4px;
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		font-family: inherit;
-		text-align: left;
-	}
-	.ob-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 34px;
-		height: 34px;
-		border-radius: 7px;
-		background: var(--accent);
-		color: var(--muted-foreground);
-		flex: 0 0 auto;
-	}
-	.ob-main {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		flex: 1;
-		min-width: 0;
-	}
-	.ob-title {
-		font-size: 13.5px;
-		font-weight: 500;
-	}
-	.ob-sub {
-		font-size: 11.5px;
-		color: var(--muted-foreground);
 	}
 </style>

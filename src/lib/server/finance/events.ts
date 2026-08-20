@@ -4,9 +4,10 @@ import { EventEmitter } from "events";
 // records means one emitter — `ledgerEvents` in $lib/server/ledger/events.ts —
 // which carries the record's kind, so the service layer never has to remember
 // which of several to fire. Forgetting one was silent, and silence is exactly
-// the failure FR-042 is written against (D-21). The `/api/expenses/stream` and
-// `/api/income/stream` URLs are unchanged; each filters `ledgerEvents` down to
-// its own kind.
+// the failure FR-042 is written against (D-21). One list of every kind means one
+// stream too: `/api/records/stream` forwards everything `ledgerEvents` carries
+// with no kind filter, and the per-kind stream URLs are retired with the screens
+// they fed (contracts/events.md).
 export const contactEvents = new EventEmitter();
 export const quotationEvents = new EventEmitter();
 export const invoiceEvents = new EventEmitter();

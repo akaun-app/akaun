@@ -593,7 +593,7 @@ export function mergeContacts(
 /**
  * Programmatic create helper: resolve a name string to a contact id among the
  * role-appropriate set (exact-then-normalized), else auto-create a Business
- * contact with that role. Used by POST /api/expenses & /api/income.
+ * contact with that role. Used by POST /api/records and Auto Import.
  */
 export function resolveOrCreateContact(
   db: Db,

@@ -8,13 +8,21 @@
 		ChevronRight,
 		Landmark,
 		Plus,
-		Scale,
-		Wallet
+		Search,
+		Tag,
 	} from '@lucide/svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import { Input } from '$lib/components/ui/input/index.js';
 	import { formatMinor } from '$lib/format.js';
+	import { AccountRole } from '$lib/enums.js';
 	import { displaySignFor, isMoneyPotRole } from './display-sign.js';
-	import { ROLE_GROUPS, roleLabel } from './account-roles.js';
+	import {
+		ROLE_FILTERS,
+		ACCOUNT_ROLES,
+		CATEGORY_ROLES,
+		MONEY_POT_FILTER_ROLES,
+		roleLabel
+	} from './account-roles.js';
 	import AccountSheet from './AccountSheet.svelte';
 	import OpeningBalanceSheet from './OpeningBalanceSheet.svelte';
 	import RecordSheet from '$lib/components/ledger/RecordSheet.svelte';
@@ -32,19 +40,67 @@
 	let accounts = $derived(data.accounts);
 
 	let showArchived = $state(false);
+	// Both filters run over the already-loaded list. The loader fetches every
+	// account with `includeArchived: true`, and a hundred rows cost nothing to
+	// filter in the browser — a round trip per keystroke would cost more
+	// (research.md R-12).
+	let search = $state('');
+	let roleFilter = $state<string | null>(null);
+
 
 	const visible = $derived(showArchived ? accounts : accounts.filter((a) => !a.archivedAt));
 	const archivedCount = $derived(accounts.filter((a) => a.archivedAt != null).length);
 
-	/** The groups that actually have something in them, in the documented order. */
-	const groups = $derived(
-		ROLE_GROUPS.map((group) => ({
-			...group,
-			rows: visible
-				.filter((a) => (group.roles as number[]).includes(a.role))
-				.sort((a, b) => a.role - b.role || a.rank.localeCompare(b.rank))
-		})).filter((group) => group.rows.length > 0)
+	/**
+	 * One flat list, in the query's existing stable order.
+	 *
+	 * No headings. Two accounts named "Fuel" in different roles are told apart by
+	 * the sort of account each one is, shown on its own row, rather than by which
+	 * section they were filed under (FR-015, FR-016).
+	 */
+	/**
+	 * What this screen lists: the balance-sheet half only.
+	 *
+	 * Categories live on their own screen. They are still accounts underneath —
+	 * a category is one side of a record (002 FR-006a) — but a list of 22
+	 * categories and 4 accounts read as nothing but categories, which is not
+	 * what a person opening "Accounts" is looking for.
+	 */
+	const listed = $derived(visible.filter((a) => (ACCOUNT_ROLES as number[]).includes(a.role)));
+
+	/** How many categories are waiting on the other screen, for the card below. */
+	const categoryCounts = $derived({
+		spending: visible.filter((a) => a.role === AccountRole.ExpenseCategory).length,
+		earning: visible.filter((a) => a.role === AccountRole.IncomeCategory).length,
+		total: visible.filter((a) => (CATEGORY_ROLES as number[]).includes(a.role)).length
+	});
+
+	/** Only the chips that apply to what this screen lists, and are non-empty. */
+	const availableFilters = $derived(
+		ROLE_FILTERS.filter(
+			(f) =>
+				f.roles.some((r) => (ACCOUNT_ROLES as number[]).includes(r)) &&
+				listed.some((a) => (f.roles as number[]).includes(a.role))
+		)
 	);
+
+	const rows = $derived.by(() => {
+		let out = listed;
+
+		if (roleFilter !== null) {
+			const roles = ROLE_FILTERS.find((f) => f.title === roleFilter)?.roles ?? [];
+			out = out.filter((a) => (roles as number[]).includes(a.role));
+		}
+
+		const q = search.trim().toLowerCase();
+		if (q) out = out.filter((a) => a.name.toLowerCase().includes(q));
+
+		return out
+			.slice()
+			.sort((a, b) => a.role - b.role || a.rank.localeCompare(b.rank));
+	});
+
+
 
 	/**
 	 * A place money sits should never hold less than nothing. When it does, it is
@@ -72,7 +128,7 @@
 	 */
 	const heldMinor = $derived(
 		accounts
-			.filter((a) => (ROLE_GROUPS[0].roles as number[]).includes(a.role))
+			.filter((a) => (MONEY_POT_FILTER_ROLES as number[]).includes(a.role))
 			.reduce((sum, a) => sum + a.balanceMinor, 0)
 	);
 
@@ -101,6 +157,11 @@
 	function openCreate() {
 		editing = null;
 		sheetOpen = true;
+	}
+
+	/** The other half of the chart: what money was earned and spent on. */
+	function openCategories(): void {
+		void goto(resolve('/(app)/categories'));
 	}
 
 	function openDetail(account: AccountView, { push = true } = {}) {
@@ -179,6 +240,23 @@
 			</p>
 		</div>
 		<div class="topbar-right">
+			{#if accounts.length > 0}
+				<div class="search-box">
+					<div style="position:relative; display:flex; align-items:center;">
+						<span
+							style="position:absolute; left:10px; color:var(--muted-foreground); display:flex; pointer-events:none;"
+						>
+							<Search size={15} />
+						</span>
+						<Input
+							type="search"
+							placeholder="Search accounts by name…"
+							bind:value={search}
+							class="h-[34px] pl-8 text-[13px]"
+						/>
+					</div>
+				</div>
+			{/if}
 			{#if archivedCount > 0}
 				<button
 					type="button"
@@ -201,8 +279,8 @@
 		</div>
 	</header>
 
-	<div class="content">
-		<div class="content-inner">
+	<div class="page-scroll">
+		<div class="page-inner">
 			{#if form?.error && !sheetOpen && !openingBalanceOpen}
 				<div class="page-error">{form.error}</div>
 			{/if}
@@ -217,7 +295,7 @@
 				</div>
 			{/if}
 
-			{#if groups.length === 0}
+			{#if accounts.length === 0}
 				<EmptyState
 					title="No accounts yet"
 					sub="Accounts are the places your money sits and the categories you spend it on."
@@ -231,50 +309,128 @@
 				</EmptyState>
 			{/if}
 
-			{#each groups as group (group.title)}
-				<section class="acct-group">
-					<div class="acct-group-head">
-						<h2 class="acct-group-title">{group.title}</h2>
-						<p class="acct-group-sub">{group.sub}</p>
-					</div>
-					<div class="table-card">
-						{#each group.rows as account (account.id)}
+			{#if accounts.length > 0}
+				<div class="toolbar">
+					<div class="status-tabs">
+						<button
+							type="button"
+							class="status-tab"
+							class:active={roleFilter === null}
+							onclick={() => (roleFilter = null)}
+						>
+							All<span class="tab-count">{listed.length}</span>
+						</button>
+						{#each availableFilters as filter (filter.title)}
 							<button
 								type="button"
-								class="acct-row related-link"
-								class:archived={account.archivedAt != null}
-								onclick={() => openDetail(account)}
+								class="status-tab"
+								class:active={roleFilter === filter.title}
+								onclick={() =>
+									(roleFilter = roleFilter === filter.title ? null : filter.title)}
 							>
-								<span class="acct-icon">
-									{#if (ROLE_GROUPS[0].roles as number[]).includes(account.role)}
-										<Wallet size={15} />
-									{:else}
-										<Scale size={15} />
-									{/if}
-								</span>
-								<span class="acct-main">
-									<span class="acct-name">{account.name}</span>
-									<span class="acct-sub">
-										{roleLabel(account.role)}
-										{#if account.archivedAt}· Archived{/if}
-										{#if account.id === data.defaultAccountId}· Used by default{/if}
-										· {account.movementCount}
-										{account.movementCount === 1 ? 'record' : 'records'}
-									</span>
-								</span>
-								<span
-									class="acct-balance"
-									class:below-zero={isBelowZero(account)}
-									title={isBelowZero(account) ? BELOW_ZERO_HINT : undefined}
+								{filter.title}<span class="tab-count"
+									>{listed.filter((a) => (filter.roles as number[]).includes(a.role))
+										.length}</span
 								>
-									{formatMinor(account.balanceMinor * displaySignFor(account.role))}
-								</span>
-								<ChevronRight size={14} color="var(--muted-foreground)" />
 							</button>
 						{/each}
 					</div>
-				</section>
-			{/each}
+				</div>
+			{/if}
+
+			<!-- The same table every other list screen uses, so a reader moving
+			     between them meets one shape. Rows become ordered cards on mobile
+			     through the shared `.exp-table` rules. -->
+			<div class="table-card">
+				<table class="exp-table">
+					<thead>
+						<tr>
+							<th>Account</th>
+							<th>Kind</th>
+							<th>Records</th>
+							<th class="ta-right">Balance</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each rows as account (account.id)}
+							<tr
+								class="exp-row"
+								class:archived={account.archivedAt != null}
+								tabindex="0"
+								onclick={() => openDetail(account)}
+								onkeydown={(event) => {
+									if (event.key === 'Enter' || event.key === ' ') {
+										event.preventDefault();
+										openDetail(account);
+									}
+								}}
+							>
+								<td class="td-primary" data-label="Account">
+									<div class="cell-item">
+										<span class="cell-itemname">{account.name}</span>
+										<span class="cell-itemnum">
+											{#if account.archivedAt}Archived{/if}
+											{#if account.id === data.defaultAccountId}{account.archivedAt
+													? ' · '
+													: ''}Used by default{/if}
+										</span>
+									</div>
+								</td>
+								<td data-label="Kind">{roleLabel(account.role)}</td>
+								<td data-label="Records">
+									{account.movementCount}
+									{account.movementCount === 1 ? 'record' : 'records'}
+								</td>
+								<td class="td-amount" data-label="Balance">
+									<span
+										class="amount-num"
+										class:below-zero={isBelowZero(account)}
+										title={isBelowZero(account) ? BELOW_ZERO_HINT : undefined}
+									>
+										{formatMinor(account.balanceMinor * displaySignFor(account.role))}
+									</span>
+								</td>
+							</tr>
+						{/each}
+						{#if rows.length === 0 && accounts.length > 0}
+							<tr class="empty-row">
+								<td colspan="4">
+									<EmptyState
+										title="Nothing to show"
+										sub={search.trim() && roleFilter !== null
+											? `No account named “${search.trim()}” under ${roleFilter}.`
+											: search.trim()
+												? `No account named “${search.trim()}”.`
+												: roleFilter !== null
+													? `Nothing under ${roleFilter}.`
+													: 'No accounts match the current filters.'}
+									>
+										{#snippet icon()}<Search size={20} />{/snippet}
+									</EmptyState>
+								</td>
+							</tr>
+						{/if}
+					</tbody>
+				</table>
+			</div>
+
+			<!--
+				Categories are accounts underneath, and a category is one side of a
+				record — but they are not what a person opening "Accounts" is looking
+				for, so they have their own screen. Relation-card contract: the whole
+				element is one button, with a trailing chevron (CLAUDE.md).
+			-->
+			<button type="button" class="related-link ob-card acct-catcard" onclick={openCategories}>
+				<span class="ob-icon"><Tag size={15} /></span>
+				<span class="ob-main">
+					<span class="ob-title">Categories</span>
+					<span class="ob-sub">
+						What money is earned and spent on ·
+						{categoryCounts.spending} spending, {categoryCounts.earning} earning
+					</span>
+				</span>
+				<ChevronRight size={14} color="var(--muted-foreground)" />
+			</button>
 		</div>
 	</div>
 </div>
@@ -284,6 +440,10 @@
 	account={editingLive}
 	canDelete={data.perms.delete}
 	canChange={data.perms.change}
+	canReconcile={data.perms.reconcile}
+	unfinishedStatements={editingLive
+		? (data.unfinishedStatements[editingLive.id] ?? 0)
+		: 0}
 	error={form?.error ?? ''}
 	onclose={closeDetail}
 	onOpeningBalance={(account) => {
@@ -302,7 +462,6 @@
 -->
 <RecordSheet
 	bind:open={transferOpen}
-	kind="transfer"
 	accounts={moneyPots}
 	categories={[]}
 	defaultAccountId={data.defaultAccountId}
@@ -322,77 +481,13 @@
 />
 
 <style>
-	.acct-group {
-		margin-bottom: 28px;
-	}
-	.acct-group-head {
-		margin-bottom: 10px;
-	}
-	.acct-group-title {
-		font-size: 14px;
-		font-weight: 600;
-		margin: 0;
-	}
-	.acct-group-sub {
-		font-size: 12px;
-		color: var(--muted-foreground);
-		margin: 2px 0 0;
-	}
-	.acct-row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
+	/* Account-row shape lives in layout.css (shared with Categories). */
+	.acct-catcard {
 		width: 100%;
-		padding: 12px 14px;
-		background: var(--card);
-		border: none;
-		border-bottom: 1px solid var(--border);
-		font-family: inherit;
-		text-align: left;
+		margin-top: 12px;
 	}
-	.acct-row:last-child {
-		border-bottom: none;
-	}
-	.acct-row.archived {
-		opacity: 0.55;
-	}
-	.acct-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 34px;
-		height: 34px;
-		border-radius: 7px;
-		background: var(--accent);
-		color: var(--muted-foreground);
-		flex: 0 0 auto;
-	}
-	.acct-main {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-		flex: 1;
-	}
-	.acct-name {
-		font-size: 13.5px;
-		font-weight: 500;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.acct-sub {
-		font-size: 11.5px;
-		color: var(--muted-foreground);
-	}
-	.acct-balance {
-		font-size: 13.5px;
-		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
-	}
-	.acct-balance.below-zero {
-		color: var(--amber);
-	}
+
+
 	.page-note {
 		background: var(--amber-soft);
 		color: var(--amber);

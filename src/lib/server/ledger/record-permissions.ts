@@ -3,23 +3,29 @@ import type { ActionName, ResourceName } from "../permissions.js";
 import type { RecordCreate } from "./types.js";
 
 /**
- * Which resource a record of a given kind is checked against.
+ * Which resource a record of a given kind is checked against: `records`, for
+ * every kind.
  *
- * There is one store, but the existing screens keep their existing access
- * rules, so the permission follows the kind rather than the table. Transfers,
- * payments and opening balances are checked against `expenses` because that is
- * the screen they are recorded from — money going out. A journal entry has its
- * own resource, granted to no seeded group (FR-040).
+ * What this used to say, and why it stopped being true: the permission followed
+ * the kind rather than the table, so income was checked against `income`, a
+ * journal entry against `journal`, and transfers, payments and opening balances
+ * against `expenses` — "because that is the screen they are recorded from".
+ * That screen is gone. There is one list of everything that happened, so there
+ * is one ability to see and write it (FR-028).
+ *
+ * Both functions are kept, and every call site keeps calling them. The answer
+ * is now the same for every kind, but the call sites are where a future kind
+ * would need a different one, and deleting them would scatter the string
+ * "records" across every route instead.
+ *
+ * Free choice of account and a third side are a separate question, answered by
+ * the `adjustments` ability at the point of derivation — not here, because
+ * whether a record needs that ability is a fact about the accounts it names,
+ * not about its kind (FR-031c).
  */
-export function resourceForKind(kind: LedgerRecordKindCode): ResourceName {
-  switch (kind) {
-    case LedgerRecordKind.Income:
-      return "income";
-    case LedgerRecordKind.Journal:
-      return "journal";
-    default:
-      return "expenses";
-  }
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the parameter is kept so every call site stays unchanged; see the note above.
+export function resourceForKind(_kind: LedgerRecordKindCode): ResourceName {
+  return "records";
 }
 
 const KIND_BY_NAME: Record<RecordCreate["kind"], LedgerRecordKindCode> = {
