@@ -9,4 +9,4 @@
 	<title>Contacts - Akaun</title>
 </svelte:head>
 
-<ContactsPage {data} {form} openId={null} />
+<ContactsPage {data} {form} />

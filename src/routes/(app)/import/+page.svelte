@@ -802,7 +802,7 @@
 									accounts={data.accounts}
 									bind:value={accountByJob[job.id]}
 									name="account-{job.id}"
-									label={isIncome ? 'Received into' : 'Paid from'}
+									label={isIncome ? 'Receipt account' : 'Payment account'}
 									defaultAccountId={data.defaultAccountId}
 								/>
 

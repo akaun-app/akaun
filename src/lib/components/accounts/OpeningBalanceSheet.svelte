@@ -10,11 +10,14 @@
 	let {
 		open = $bindable(false),
 		account = null,
+		existing = null,
 		error = '',
 		onclose
 	}: {
 		open?: boolean;
 		account?: AccountView | null;
+		/** The starting balance already set, so the form opens on it rather than blank. */
+		existing?: { date: string; amountMinor: number } | null;
 		error?: string;
 		onclose: () => void;
 	} = $props();
@@ -24,6 +27,10 @@
 	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	const today = new Date().toISOString().slice(0, 10);
+	const startDate = $derived(existing?.date ?? today);
+	const startAmount = $derived(
+		existing ? (existing.amountMinor / 100).toFixed(2) : '0'
+	);
 </script>
 
 <Sheet.Root
@@ -32,8 +39,6 @@
 		if (!o) onclose();
 	}}
 >
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content
 			side={panelSide}
 			style={isMobile
@@ -74,7 +79,7 @@
 
 					<div class="field">
 						<label class="field-label" for="ob-date">On this date *</label>
-						<Input id="ob-date" name="date" type="date" required value={today} class="w-full" />
+						<Input id="ob-date" name="date" type="date" required value={startDate} class="w-full" />
 					</div>
 
 					<div class="field">
@@ -87,7 +92,7 @@
 							type="number"
 							step="0.01"
 							required
-							value="0"
+							value={startAmount}
 							class="w-full"
 						/>
 						<p class="hint">
@@ -109,7 +114,6 @@
 				</div>
 			</form>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <style>

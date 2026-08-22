@@ -4,7 +4,6 @@ import { hasPermission } from "$lib/server/permissions.js";
 import { workspace } from "$lib/server/services/reconciliation.js";
 import { suggestLinesForMovement } from "$lib/server/reconciliation/suggestions.js";
 import { getAccount } from "$lib/server/queries/accounts.js";
-import { MONEY_POT_ROLES } from "$lib/server/ledger/account-type.js";
 
 /**
  * What each of the two reconciliation surfaces loads.
@@ -32,15 +31,13 @@ function permissionsOf(locals: App.Locals) {
 }
 
 /** The account whose statements these are, or a refusal (FR-049). */
-function moneyHoldingAccountOr404(accountId: number) {
+function postingAccountOr404(accountId: number) {
   const account = getAccount(db, accountId);
   if (!account) throw error(404, "That account no longer exists.");
-  // A statement is a bank's account of where money sat. A spending category
-  // never held any, so there is nothing to check it against (FR-049, FR-055).
-  if (!MONEY_POT_ROLES.includes(account.role)) {
+  if (!account.active || !account.postingEligible) {
     throw error(
       400,
-      "Only an account that holds money can be checked against a bank statement.",
+      "Only an active account without children can be checked against a statement.",
     );
   }
   return account;
@@ -51,7 +48,7 @@ export function loadAccountStatements(locals: App.Locals, accountId: number) {
   if (!hasPermission(locals, "reconciliation", "view"))
     throw redirect(302, "/dashboard");
 
-  const account = moneyHoldingAccountOr404(accountId);
+  const account = postingAccountOr404(accountId);
   const result = workspace(db, locals);
 
   return {
@@ -75,7 +72,7 @@ export function loadStatementMatch(
   if (!hasPermission(locals, "reconciliation", "view"))
     throw redirect(302, "/dashboard");
 
-  const account = moneyHoldingAccountOr404(accountId);
+  const account = postingAccountOr404(accountId);
   const result = workspace(db, locals, from, to);
 
   const statement = result.statements.find((s) => s.id === statementId);

@@ -1,4 +1,4 @@
-import { MONEY_POT_ROLES } from "$lib/server/ledger/account-type.js";
+import { AccountType } from "$lib/enums.js";
 import type { PageServerLoad } from "./$types.js";
 import { db } from "$lib/server/db/client.js";
 import { importQueue } from "$lib/server/db/schema.js";
@@ -9,6 +9,7 @@ import {
 } from "$lib/server/queries/accounts.js";
 import { desc } from "drizzle-orm";
 import { redirect } from "@sveltejs/kit";
+import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -31,7 +32,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     jobs,
     expenseCategories,
     incomeCategories,
-    accounts: listAccounts(db, { role: MONEY_POT_ROLES }),
+    accounts: listAccounts(db, { type: AccountType.Asset }).filter(
+      isMoneyPotAccount,
+    ),
     defaultAccountId: defaultAccountId(db),
   };
 };

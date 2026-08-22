@@ -1,6 +1,7 @@
 import type { Actions } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import {
+  getContact,
   listContacts,
   getContactUsageCounts,
 } from "$lib/server/queries/contacts.js";
@@ -15,10 +16,7 @@ import {
 import { fail, redirect } from "@sveltejs/kit";
 import { hasPermission } from "$lib/server/permissions.js";
 
-export function loadContactsPage(
-  locals: App.Locals,
-  openContactId: number | null,
-) {
+export function loadContactsPage(locals: App.Locals) {
   if (!hasPermission(locals, "contacts", "view"))
     throw redirect(302, "/dashboard");
 
@@ -27,10 +25,6 @@ export function loadContactsPage(
     db,
     contacts.map((c) => c.id),
   );
-
-  if (openContactId !== null && !contacts.some((c) => c.id === openContactId)) {
-    throw redirect(302, "/contacts");
-  }
 
   /**
    * What each contact owes, or is owed — the purchase and sales ledger.
@@ -72,9 +66,52 @@ export function loadContactsPage(
       owedToUsMinor: owedToUs.reduce((sum, r) => sum + r.outstandingMinor, 0),
       weOweMinor: weOwe.reduce((sum, r) => sum + r.outstandingMinor, 0),
     },
-    openContactId,
     perms: {
       add: hasPermission(locals, "contacts", "add"),
+      change: hasPermission(locals, "contacts", "change"),
+      delete: hasPermission(locals, "contacts", "delete"),
+      /** Whether to offer the statement link at all. */
+      records: canSeeRecords,
+    },
+  };
+}
+
+/**
+ * One contact, for `/contacts/[id]`.
+ *
+ * Contacts had no read view at all: the edit form *was* the detail, so a
+ * contact's balance — the purchase and sales ledger `contactBalances()` has
+ * computed correctly since the double-entry release — had nowhere to appear.
+ */
+export function loadContactDetail(locals: App.Locals, id: number) {
+  if (!hasPermission(locals, "contacts", "view"))
+    throw redirect(302, "/dashboard");
+
+  const contact = getContact(db, id);
+  if (!contact) throw redirect(302, "/contacts");
+
+  const usage = getContactUsageCounts(db, [id]);
+
+  // Gated on `records.view`, not on `contacts.view`: it is derived from
+  // records, so seeing it means being allowed to see them.
+  const canSeeRecords = hasPermission(locals, "records", "view");
+  const owedToUs = canSeeRecords
+    ? (contactBalances(db, "owed-to-us").find((r) => r.contactId === id)
+        ?.outstandingMinor ?? 0)
+    : 0;
+  const weOwe = canSeeRecords
+    ? (contactBalances(db, "we-owe").find((r) => r.contactId === id)
+        ?.outstandingMinor ?? 0)
+    : 0;
+
+  return {
+    contact,
+    usage: usage[id] ?? { records: 0, quotations: 0, invoices: 0 },
+    // Positive when they owe us, negative when we owe them. A contact on both
+    // sides nets out, which is the answer a person wants when they buy from a
+    // customer.
+    balanceMinor: owedToUs - weOwe,
+    perms: {
       change: hasPermission(locals, "contacts", "change"),
       delete: hasPermission(locals, "contacts", "delete"),
       /** Whether to offer the statement link at all. */

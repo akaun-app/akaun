@@ -10,6 +10,7 @@ import {
 } from "$lib/server/api-response.js";
 import { getAccount } from "$lib/server/queries/accounts.js";
 import { patchAccount, removeAccount } from "$lib/server/services/accounts.js";
+import { AccountType, type AccountTypeCode } from "$lib/enums.js";
 
 // A role is deliberately absent: an account that has been a bank account cannot
 // become an expense category without rewriting what every movement against it
@@ -17,8 +18,9 @@ import { patchAccount, removeAccount } from "$lib/server/services/accounts.js";
 const patchSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
-    rank: z.string().trim().min(1).optional(),
-    archived: z.boolean().optional(),
+    type: z.number().int().refine((value): value is AccountTypeCode => Object.values(AccountType).includes(value as AccountTypeCode)).optional(),
+    parentId: z.number().int().positive().nullable().optional(),
+    active: z.boolean().optional(),
   })
   .strict();
 

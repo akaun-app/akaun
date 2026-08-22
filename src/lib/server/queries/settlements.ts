@@ -1,13 +1,17 @@
 import { and, asc, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import {
   accounts,
+  accountDefaults,
   contacts,
   invoices,
   ledgerMovements,
   ledgerRecords,
   settlements,
 } from "../db/schema.js";
-import { AccountRole, type LedgerRecordKindCode } from "$lib/enums.js";
+import {
+  DefaultAccountPurpose,
+  type LedgerRecordKindCode,
+} from "$lib/enums.js";
 import { outstandingOf } from "../ledger/settlement-rules.js";
 import type {
   LedgerDb,
@@ -27,10 +31,20 @@ import type {
  * arithmetic over the same rows (FR-012, FR-014).
  */
 
-const ROLE_FOR: Record<OutstandingDirection, number> = {
-  "owed-to-us": AccountRole.Receivable,
-  "we-owe": AccountRole.Payable,
+const PURPOSE_FOR = {
+  "owed-to-us": DefaultAccountPurpose.Receivable,
+  "we-owe": DefaultAccountPurpose.Payable,
 };
+
+function savedAccountId(db: LedgerDb, purpose: number): number | null {
+  return (
+    db
+      .select({ accountId: accountDefaults.accountId })
+      .from(accountDefaults)
+      .where(eq(accountDefaults.purpose, purpose))
+      .get()?.accountId ?? null
+  );
+}
 
 /** How much of each movement settlements already cover, from either side. */
 export function settledMinorFor(
@@ -110,7 +124,8 @@ function collectOutstanding(
   const asOf = filters.asOf ?? new Date().toISOString().slice(0, 10);
   const openOnly = filters.openOnly ?? true;
 
-  const conditions: SQL[] = [eq(accounts.role, ROLE_FOR[filters.direction])];
+  const defaultId = savedAccountId(db, PURPOSE_FOR[filters.direction]);
+  const conditions: SQL[] = [eq(ledgerMovements.accountId, defaultId ?? -1)];
   if (filters.contactId !== undefined) {
     conditions.push(eq(ledgerRecords.contactId, filters.contactId));
   }
@@ -425,6 +440,11 @@ export function recordIdsForSettlement(
 
 /** Records with no contact but money on a shared owed account — the upgrade flags these. */
 export function owedWithNoContact(db: LedgerDb): number[] {
+  const owedAccountIds = [
+    savedAccountId(db, DefaultAccountPurpose.Receivable),
+    savedAccountId(db, DefaultAccountPurpose.Payable),
+  ].filter((id): id is number => id !== null);
+  if (owedAccountIds.length === 0) return [];
   return db
     .selectDistinct({ recordId: ledgerRecords.id })
     .from(ledgerMovements)
@@ -432,7 +452,7 @@ export function owedWithNoContact(db: LedgerDb): number[] {
     .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
     .where(
       and(
-        inArray(accounts.role, [AccountRole.Receivable, AccountRole.Payable]),
+        inArray(ledgerMovements.accountId, owedAccountIds),
         isNull(ledgerRecords.contactId),
       ),
     )

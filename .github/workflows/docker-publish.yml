@@ -31,6 +31,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # git describe needs the tags and history
+
+      # Computed here rather than from github.ref_name: on a tag push describe returns the
+      # tag, and on a manual dispatch off main it returns e.g. 0.1.7-10-gb26465b instead of
+      # the useless string "main". The Docker build cannot run git itself — .git is
+      # dockerignored and the bun-alpine image has no git binary.
+      - id: version
+        run: echo "value=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v4
 
@@ -60,5 +69,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

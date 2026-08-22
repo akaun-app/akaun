@@ -1,5 +1,3 @@
-import { isSharedOwedRole } from "$lib/components/accounts/display-sign.js";
-
 /**
  * What the direct-entry screen checks while the entry is still being typed.
  *
@@ -80,11 +78,11 @@ function plainAmount(minor: number): string {
  */
 export function whyNotSaveable(
   sides: SideDraft[],
-  roleOf: (accountId: number) => number | undefined,
+  requiresContact: (accountId: number) => boolean,
   contactId: number | null,
 ): string | null {
   if (sides.length < 2) {
-    return "A record needs at least two sides — where the money came from, and where it went.";
+    return "A record needs at least two lines — one account to post from, and one to post to.";
   }
 
   // The server never sees a side with no account on it: the request would be
@@ -103,8 +101,7 @@ export function whyNotSaveable(
   }
 
   const touchesSharedOwed = sides.some((side) => {
-    const role = side.accountId === null ? undefined : roleOf(side.accountId);
-    return role !== undefined && isSharedOwedRole(role);
+    return side.accountId !== null && requiresContact(side.accountId);
   });
   if (touchesSharedOwed && contactId === null) {
     return "Say who this money is owed to, or owed by, before saving it.";

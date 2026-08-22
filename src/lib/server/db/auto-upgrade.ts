@@ -1,0 +1,297 @@
+import { Database } from "bun:sqlite";
+import { createHash } from "crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "fs";
+import { dirname, isAbsolute, join, resolve } from "path";
+import { readMigrationFiles } from "drizzle-orm/migrator";
+import {
+  CHART_MIGRATION_VERSION,
+  migrateAccountChart,
+} from "../services/account-migration.js";
+import { convertLegacyLedger } from "../services/legacy-ledger-migration.js";
+
+/**
+ * The conversion an installation runs on itself, with no command and no setting.
+ *
+ * 002 FR-037: "The update MUST complete with no manual step for a self-hosting
+ * user, and MUST be safe to run more than once." This was a command for one
+ * release — `scripts/migrate-chart-of-accounts.ts` — and a command is a manual
+ * step. Worse, the two states it existed for are the two an installation cannot
+ * recover from by itself: a book still on migration 0005 cannot start the server
+ * at all, because `legacy-drop-guard` refuses rather than let 0015 destroy the
+ * records; and a book already converted to double-entry but never standardized
+ * starts happily with every `accounts.type` and `accounts.code` null and no
+ * saved defaults, and nothing says so.
+ *
+ * **Nothing here mutates the supplied database.** The whole conversion runs
+ * against a consolidated copy in a temporary directory beside it, and the copy is
+ * moved into place only after the legacy conversion, the chart standardization,
+ * the foreign-key check and the invariant comparison have all passed. The
+ * original family is moved aside into a timestamped directory rather than
+ * deleted, so the previous data stays recoverable (002 FR-038). A failure at any
+ * point removes the temporary copy and leaves the original byte-identical.
+ */
+
+type MigrationFile = {
+  sql: string[];
+  folderMillis: number;
+  hash: string;
+};
+
+/** What state the file on disk is in, and therefore what has to happen to it. */
+export type DatabaseState =
+  /** No file yet. A fresh installation seeds itself and needs no conversion. */
+  | "fresh"
+  /** The verified legacy schema: records still in `expenses`/`incomes`/`claims`. */
+  | "legacy_0005"
+  /** Double-entry, but the chart is not standardized yet. */
+  | "ledger"
+  /** Converted and standardized. Nothing to do. */
+  | "completed"
+  /** A partial schema no conversion path accepts. */
+  | "unsupported";
+
+export type UpgradeResult = {
+  status: "completed" | "dry_run" | "already_completed";
+  inputState: Exclude<DatabaseState, "fresh" | "unsupported">;
+  legacy: ReturnType<typeof convertLegacyLedger> | null;
+  chart: ReturnType<typeof migrateAccountChart>;
+  foreignKeyViolations: number;
+  backupPath: string | null;
+};
+
+/**
+ * Read lazily, not at module load: `db/client.ts` imports this module on every
+ * server boot, and an installation with nothing to convert must not read the
+ * whole `drizzle/` folder to find that out.
+ */
+function migrationFiles(): MigrationFile[] {
+  return readMigrationFiles({
+    migrationsFolder: resolve("drizzle"),
+  }) as MigrationFile[];
+}
+
+function tableExists(db: Database, table: string): boolean {
+  return Boolean(
+    db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table),
+  );
+}
+
+function appliedIndex(db: Database, migrations: MigrationFile[]): number {
+  if (!tableExists(db, "__drizzle_migrations")) return -1;
+  const last = db
+    .query(
+      "SELECT created_at FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1",
+    )
+    .get() as { created_at: number } | null;
+  if (!last) return -1;
+  return migrations.findIndex(
+    (migration) => migration.folderMillis === Number(last.created_at),
+  );
+}
+
+export function applyMigrationRange(
+  db: Database,
+  firstIndex: number,
+  lastIndex: number,
+): void {
+  const migrations = migrationFiles();
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC)",
+  );
+  const current = appliedIndex(db, migrations);
+  if (current > lastIndex) return;
+  if (current < firstIndex - 1) {
+    throw new Error(
+      `Refusing partial schema: expected migration ${firstIndex - 1}, found ${current}.`,
+    );
+  }
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (
+      let index = Math.max(firstIndex, current + 1);
+      index <= lastIndex;
+      index += 1
+    ) {
+      const migration = migrations[index];
+      for (const statement of migration.sql) {
+        if (statement.trim()) db.exec(statement);
+      }
+      db.query(
+        "INSERT INTO __drizzle_migrations(hash, created_at) VALUES (?, ?)",
+      ).run(migration.hash, migration.folderMillis);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function consolidate(source: string, destination: string): void {
+  const sourceDb = new Database(source, { readonly: true });
+  try {
+    sourceDb.query("VACUUM INTO ?").run(destination);
+  } finally {
+    sourceDb.close();
+  }
+}
+
+function classify(db: Database): DatabaseState {
+  const index = appliedIndex(db, migrationFiles());
+  if (
+    index === 5 &&
+    tableExists(db, "expenses") &&
+    !tableExists(db, "accounts")
+  ) {
+    return "legacy_0005";
+  }
+  if (
+    index >= 14 &&
+    tableExists(db, "accounts") &&
+    tableExists(db, "ledger_records")
+  ) {
+    return index >= 16 && chartStandardized(db) ? "completed" : "ledger";
+  }
+  return "unsupported";
+}
+
+/** Has the composed chart conversion actually finished on this database? */
+function chartStandardized(db: Database): boolean {
+  if (!tableExists(db, "account_migration_runs")) return false;
+  return Boolean(
+    db
+      .query(
+        "SELECT 1 FROM account_migration_runs WHERE version = ? AND status = 'completed'",
+      )
+      .get(CHART_MIGRATION_VERSION),
+  );
+}
+
+/**
+ * What has to happen to the file at `databasePath`, read without writing to it.
+ *
+ * Its own read-only connection, for the same reason `readLegacyDropStateAt` has
+ * one: a read-write handle sets `journal_mode` and checkpoints the WAL back into
+ * the main file on close, so it rewrites the database before any decision about
+ * it has been made.
+ */
+export function classifyDatabaseFile(databasePath: string): DatabaseState {
+  if (!existsSync(databasePath)) return "fresh";
+  const raw = new Database(databasePath, { readonly: true });
+  try {
+    return classify(raw);
+  } finally {
+    raw.close();
+  }
+}
+
+function databaseFamilyChecksum(path: string): string {
+  const digest = createHash("sha256");
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const member = `${path}${suffix}`;
+    digest.update(suffix);
+    digest.update(existsSync(member) ? readFileSync(member) : "<absent>");
+  }
+  return digest.digest("hex");
+}
+
+function installResult(source: string, working: string): string {
+  const stamp = new Date().toISOString().replaceAll(":", "-");
+  const backupDir = join(dirname(source), `pre-chart-${stamp}`);
+  mkdirSync(backupDir);
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const original = `${source}${suffix}`;
+    if (existsSync(original)) {
+      renameSync(original, join(backupDir, `akaun.db${suffix}`));
+    }
+  }
+  try {
+    renameSync(working, source);
+  } catch (error) {
+    const backup = join(backupDir, "akaun.db");
+    if (!existsSync(source) && existsSync(backup)) renameSync(backup, source);
+    throw error;
+  }
+  return backupDir;
+}
+
+export function upgradeDatabaseFile(options: {
+  databasePath: string;
+  dryRun?: boolean;
+}): UpgradeResult {
+  const source = resolve(options.databasePath);
+  if (!isAbsolute(source) || !existsSync(source)) {
+    throw new Error("The database to upgrade must be an existing SQLite path.");
+  }
+  const temporaryDir = mkdtempSync(join(dirname(source), ".akaun-chart-"));
+  const working = join(temporaryDir, "working.db");
+  consolidate(source, working);
+  const originalChecksum = databaseFamilyChecksum(source);
+  let backupPath: string | null = null;
+  try {
+    const db = new Database(working);
+    db.exec("PRAGMA foreign_keys = ON");
+    const inputState = classify(db);
+    if (inputState === "unsupported" || inputState === "fresh") {
+      throw new Error(
+        "Unsupported partial database state. Restore the original backup and retry from migration 0005 or a completed ledger conversion.",
+      );
+    }
+    let legacy: ReturnType<typeof convertLegacyLedger> | null = null;
+
+    if (inputState === "legacy_0005") {
+      applyMigrationRange(db, 6, 14);
+      legacy = db.transaction(() => convertLegacyLedger(db))();
+      applyMigrationRange(db, 15, 16);
+    } else if (inputState === "ledger") {
+      applyMigrationRange(db, appliedIndex(db, migrationFiles()) + 1, 16);
+    }
+
+    const chart = migrateAccountChart(db);
+    const foreignKeyViolations = db
+      .query("PRAGMA foreign_key_check")
+      .all().length;
+    if (foreignKeyViolations !== 0) {
+      throw new Error(
+        `Conversion produced ${foreignKeyViolations} foreign-key violations.`,
+      );
+    }
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    db.close();
+
+    if (databaseFamilyChecksum(source) !== originalChecksum) {
+      throw new Error(
+        "The source database changed while conversion was running.",
+      );
+    }
+    if (!options.dryRun && chart.status !== "already_completed") {
+      backupPath = installResult(source, working);
+    }
+    return {
+      status: options.dryRun
+        ? "dry_run"
+        : chart.status === "already_completed"
+          ? "already_completed"
+          : "completed",
+      inputState,
+      legacy,
+      chart,
+      foreignKeyViolations,
+      backupPath,
+    };
+  } finally {
+    rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}

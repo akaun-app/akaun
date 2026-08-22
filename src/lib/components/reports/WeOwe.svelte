@@ -46,7 +46,7 @@
 <div class="rep-scroll">
 	<div class="rep-result">
 		<div>
-			<div class="rep-result-label">Money we owe</div>
+			<div class="rep-result-label">Accounts payable</div>
 			<div class="rep-result-sub">
 				Everything the business still has to pay, as at {formatDate(report.asOf)}
 			</div>
@@ -58,8 +58,8 @@
 		<div class="rep-block">
 			<div class="rep-block-head">
 				<div>
-					<div class="rep-block-title">How far behind</div>
-					<div class="rep-block-sub">What is owed, by how overdue it is</div>
+					<div class="rep-block-title">Ageing</div>
+					<div class="rep-block-sub">Outstanding by days overdue</div>
 				</div>
 			</div>
 			<table class="rep-table">

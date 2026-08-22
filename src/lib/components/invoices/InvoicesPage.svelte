@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
@@ -9,45 +8,33 @@
 		Calendar,
 		SlidersHorizontal,
 		X,
-		FileText,
-		Trash2,
-		Printer,
-		ChevronRight,
-		Send
+		FileText
 	} from '@lucide/svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
-	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
-	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import LineItemEditor from '$lib/components/ui/LineItemEditor.svelte';
-	import SettlementList from '$lib/components/ledger/SettlementList.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import { formatMoney, formatMoneyRM, formatMinor, formatDate, formatDateShort } from '$lib/format.js';
+	import { formatMoney, formatMoneyRM, formatMinor, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
 	import { InvoiceStatus, Role, EntityType } from '$lib/enums.js';
-	import { goto, pushState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
-	import { onMount } from 'svelte';
 	import type { loadInvoicesPage } from '$lib/server/loaders/invoices.js';
 
 	type PageData = ReturnType<typeof loadInvoicesPage>;
-	type ActionData = { error?: string; success?: boolean } | null;
 
 	let {
 		data,
-		form,
-		openId
-	}: { data: PageData; form: ActionData; openId: number | null } = $props();
+	}: { data: PageData } = $props();
 
 	// Local reactive list — updated by SSE events and re-synced on SvelteKit data reload
 	// svelte-ignore state_referenced_locally
@@ -72,62 +59,9 @@
 	});
 
 	// Detail state
-	type InvoiceLine = {
-		id: number;
-		invoiceId: number;
-		description: string;
-		quantity: number;
-		unitPrice: number;
-		lineTotal: number;
-		sortOrder: number;
-	};
 	// What has been paid against this invoice — one row per payment (FR-018a).
-	type SettlementLink = {
-		settlementId: number;
-		amountMinor: number;
-		createdAt: string;
-		otherRecordId: number;
-		otherRecordNumber: string | null;
-		otherDate: string;
-		otherDescription: string;
-		otherKind: number;
-	};
-	type FullInvoice = (typeof data.invoices)[0] & {
-		lines: InvoiceLine[];
-		settlements: SettlementLink[];
-	};
 
-	let detailInvoice = $state<FullInvoice | null>(null);
-	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
-	let isEditing = $state(false);
-	let deleteDialogOpen = $state(false);
-	let deleteFormEl = $state<HTMLFormElement | null>(null);
-	let saving = $state(false);
-	let saveError = $state('');
-	let issuing = $state(false);
-	let issueConfirmOpen = $state(false);
-	let issueError = $state('');
-
-	// Edit form state
 	type LineInput = { description: string; quantity: number; unitPrice: number };
-	let editIssueDate = $state('');
-	let editDueDate = $state('');
-	let editContactId = $state<number | null>(null);
-	let editContactName = $state<string | null>(null);
-	let editCurrency = $state(mainCurrency());
-	let editExchangeRate = $state('1');
-	let editNotes = $state('');
-	let editTerms = $state('');
-	let editReference = $state('');
-	let editLines = $state<LineInput[]>([]);
-
-	// Switching the edit-currency select back to the main currency hides the rate field but
-	// left editExchangeRate holding the stale foreign rate, so a later amount edit was still
-	// converted using that stale rate. Keep it pinned to 1 whenever the selected currency is
-	// the main currency.
-	$effect(() => {
-		if (editCurrency === mainCurrency()) editExchangeRate = '1';
-	});
 
 	// Create form state
 	const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -322,111 +256,19 @@
 		return 'sent';
 	}
 
-	// Mirrors the rule in src/routes/api/invoices/[id]/+server.ts: once an invoice
-	// has been sent its amount is in the books and the customer has a copy, so the
-	// money side is fixed. A cancelled invoice is finished with entirely.
-	function canEdit(inv: { status: number; ledgerRecordId: number | null }): boolean {
-		return inv.status !== InvoiceStatus.Cancelled && inv.ledgerRecordId === null;
-	}
 
 	/** Only a draft can be sent, and only once — sending it twice would owe it twice. */
-	function canIssue(inv: Invoice): boolean {
-		return isDraft(inv) && inv.ledgerRecordId === null;
-	}
 
 	/** A sent invoice is cancelled, never deleted — its amount is already in the books. */
-	function deleteBlockedReason(inv: { ledgerRecordId: number | null }): string | null {
-		return inv.ledgerRecordId === null
-			? null
-			: 'This invoice has been sent, so it cannot be deleted. Cancel it instead.';
-	}
 
 	// Deep-link: open an invoice detail sheet
-	async function openInvoice(inv: Invoice, { push = true } = {}) {
-		detailInvoice = { ...inv, lines: [], settlements: [] };
-		isEditing = false;
-		issueError = '';
-		if (push) {
-			pushState(resolve('/(app)/invoices/[id]', { id: String(inv.id) }), { viaPush: true });
-		}
-		const res = await fetch(`/api/invoices/${inv.id}`);
-		if (res.ok) detailInvoice = await res.json();
+	function invoiceHref(id: number): string {
+		return resolve('/(app)/invoices/[id]', { id: String(id) });
 	}
 
-	function closeInvoice() {
-		detailInvoice = null;
-		isEditing = false;
-		if (page.state.viaPush) {
-			history.back();
-		} else {
-			goto(resolve('/invoices'), { replaceState: true, noScroll: true });
-		}
-	}
-
-	// Enter edit mode — populate edit fields from current detail
-	function startEdit() {
-		if (!detailInvoice) return;
-		editIssueDate = detailInvoice.issueDate;
-		editDueDate = detailInvoice.dueDate ?? '';
-		editContactId = detailInvoice.contactId;
-		editContactName = null;
-		editCurrency = detailInvoice.currency;
-		editExchangeRate = String(detailInvoice.exchangeRate);
-		editNotes = detailInvoice.notes ?? '';
-		editTerms = detailInvoice.terms ?? '';
-		editReference = detailInvoice.reference ?? '';
-		editLines = detailInvoice.lines.map((l) => ({
-			description: l.description,
-			quantity: l.quantity,
-			unitPrice: l.unitPrice
-		}));
-		saveError = '';
-		isEditing = true;
-	}
-
-	async function saveEdit() {
-		if (!detailInvoice) return;
-		saving = true;
-		saveError = '';
-		try {
-			let resolvedContactId = editContactId;
-			if (!resolvedContactId && editContactName) {
-				const cr = await fetch('/api/contacts', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ entityType: EntityType.Business, legalName: editContactName, roles: [Role.Customer] })
-				});
-				if (!cr.ok) { saveError = 'Failed to create contact — try again'; saving = false; return; }
-				resolvedContactId = (await cr.json()).id;
-			}
-			const res = await fetch(`/api/invoices/${detailInvoice.id}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					issueDate: editIssueDate,
-					dueDate: editDueDate || null,
-					contactId: resolvedContactId,
-					currency: editCurrency,
-					exchangeRate: parseFloat(editExchangeRate) || 1,
-					notes: editNotes || null,
-					terms: editTerms || null,
-					reference: editReference || null,
-					lines: editLines
-				})
-			});
-			if (!res.ok) {
-				const err = await res.json();
-				saveError = err.error ?? 'Save failed';
-			} else {
-				detailInvoice = await res.json();
-				isEditing = false;
-				auditTrailRef?.refresh();
-			}
-		} catch {
-			saveError = 'Network error — try again';
-		} finally {
-			saving = false;
-		}
+	function openInvoice(inv: Invoice) {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call.
+		void goto(invoiceHref(inv.id));
 	}
 
 	// Create a new invoice via JSON API (line items can't be FormData)
@@ -481,41 +323,12 @@
 		}
 	}
 
-	// Send the invoice: from here on the customer owes this amount, and any payment
-	// they make settles it like any other debt (FR-018a).
-	async function issue(id: number) {
-		issuing = true;
-		issueError = '';
-		try {
-			const res = await fetch(`/api/invoices/${id}/issue`, { method: 'POST' });
-			if (!res.ok) {
-				issueError = (await res.json().catch(() => ({}))).error ?? 'Could not send the invoice.';
-				return;
-			}
-			// SSE updates the row; the detail needs the lines and payments back too.
-			const updated = await fetch(`/api/invoices/${id}`).then((r) => r.json());
-			if (updated) detailInvoice = updated;
-			auditTrailRef?.refresh();
-		} catch {
-			issueError = 'Network error — try again';
-		} finally {
-			issuing = false;
-		}
-	}
-
 	createResourceStream<InvoiceStreamMsg>('/api/invoices/stream', (msg) => {
 		if (msg.type === 'invoice-update') invoices = mergeById(invoices, [msg.item]);
 		else if (msg.type === 'invoice-delete')
 			invoices = invoices.filter((inv) => inv.id !== msg.id);
 	});
 
-	onMount(() => {
-		// Deep-link: open the invoice if openId was passed via direct navigation
-		if (openId) {
-			const found = invoices.find((inv) => inv.id === openId);
-			if (found) openInvoice(found, { push: false });
-		}
-	});
 </script>
 
 <div class="screen" style="position:relative;">
@@ -763,12 +576,20 @@
 					</thead>
 					<tbody>
 						{#each filtered as inv}
-							<tr class="exp-row" onclick={() => openInvoice(inv)}>
+							<tr
+								class="exp-row"
+								onclick={(ev) => {
+									// The name cell is a real anchor; this is the rest of the row.
+									if ((ev.target as HTMLElement).closest('a')) return;
+									openInvoice(inv);
+								}}
+							>
 								<td class="td-primary">
-									<div class="cell-item">
+									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+									<a class="cell-item row-link" href={invoiceHref(inv.id)}>
 										<span class="cell-itemname">{inv.contactName || '—'}</span>
 										<span class="cell-itemnum">{inv.invoiceNumber}</span>
-									</div>
+									</a>
 								</td>
 								<td class="td-status" data-label="Status">
 									<StatusBadge status={getStatusLabel(inv)} />
@@ -795,7 +616,7 @@
 										>
 									{/if}
 									{#if inv.paidMinor > 0 && !inv.paid}
-										<span class="amount-orig">{formatMinor(inv.outstandingMinor)} still owed</span>
+										<span class="amount-orig">{formatMinor(inv.outstandingMinor)} outstanding</span>
 									{/if}
 								</td>
 							</tr>
@@ -839,8 +660,6 @@
 
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content
 			side="bottom"
 			style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + var(--safe-bottom));"
@@ -876,421 +695,10 @@
 			</div>
 			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>Show results</Button>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
-
-<!-- Detail sheet -->
-<Sheet.Root
-	open={!!detailInvoice}
-	onOpenChange={(o) => {
-		if (!o) closeInvoice();
-	}}
->
-	<Sheet.Portal>
-		<Sheet.Overlay />
-		<Sheet.Content
-			side={panelSide}
-			style={isMobile
-				? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;'
-				: 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}
-		>
-			{#if detailInvoice}
-				<!-- Header -->
-				<div
-					style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-				>
-					<div>
-						<div class="sheet-eyebrow">{detailInvoice.invoiceNumber}</div>
-						<div class="sheet-title-text">{detailInvoice.contactName || 'Invoice'}</div>
-					</div>
-					<Sheet.Close class="sheet-close">
-						<X size={16} />
-					</Sheet.Close>
-				</div>
-
-				{#if isEditing}
-					<!-- Edit mode -->
-					<div
-						style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-					>
-						{#if saveError}
-							<div
-								style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-							>
-								{saveError}
-							</div>
-						{/if}
-
-						<div class="field-grid field">
-							<div>
-								<label class="field-label" for="edit-issue-date">Issue Date *</label>
-								<DatePicker name="editIssueDate" bind:value={editIssueDate} />
-							</div>
-							<div>
-								<label class="field-label" for="edit-due-date">Due Date</label>
-								<DatePicker name="editDueDate" bind:value={editDueDate} placeholder="No due date" />
-							</div>
-						</div>
-
-						<div class="field">
-							<label class="field-label" for="edit-customer">Customer</label>
-							<ContactSelect
-								role={Role.Customer}
-								bind:value={editContactId}
-								bind:newName={editContactName}
-								placeholder="Select customer…"
-							/>
-						</div>
-
-						<div class="field-grid field">
-							<div>
-								<label class="field-label" for="editCurrency">Currency</label>
-								<Select.Root type="single" bind:value={editCurrency}>
-									<Select.Trigger id="editCurrency" class="w-full">{editCurrency}</Select.Trigger>
-									<Select.Content>
-										{#each CURRENCIES as c (c.code)}
-											<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							{#if editCurrency !== mainCurrency()}
-								<div>
-									<label class="field-label" for="editRate"
-										>Rate (1 {editCurrency} = ? {mainCurrency()})</label
-									>
-									<Input
-										id="editRate"
-										type="text"
-										inputmode="decimal"
-										placeholder="1.0"
-										bind:value={editExchangeRate}
-									/>
-								</div>
-							{/if}
-						</div>
-
-						<div class="field">
-							<label class="field-label" for="editReference">Reference</label>
-							<Input
-								id="editReference"
-								type="text"
-								placeholder="Optional reference…"
-								bind:value={editReference}
-							/>
-						</div>
-
-						<div class="field">
-							<div class="field-label">Line Items *</div>
-							<LineItemEditor bind:lines={editLines} currency={editCurrency} />
-						</div>
-
-						<div class="field">
-							<label class="field-label" for="editNotes">Notes</label>
-							<Textarea
-								id="editNotes"
-								placeholder="Optional notes for the customer…"
-								class="leading-relaxed"
-								bind:value={editNotes}
-							/>
-						</div>
-
-						<div class="field">
-							<label class="field-label" for="editTerms">Terms &amp; Conditions</label>
-							<Textarea
-								id="editTerms"
-								placeholder="Optional terms…"
-								class="leading-relaxed"
-								bind:value={editTerms}
-							/>
-						</div>
-					</div>
-
-					<div class="sheet-foot">
-						<div class="sheet-foot-actions">
-							<button
-								type="button"
-								class="sheet-btn sheet-btn-delete"
-								disabled={!!deleteBlockedReason(detailInvoice)}
-								title={deleteBlockedReason(detailInvoice) ?? undefined}
-								onclick={() => (deleteDialogOpen = true)}
-							>
-								<Trash2 size={14} /> Delete
-							</button>
-							<button
-								type="button"
-								class="sheet-btn"
-								style="margin-left:auto;"
-								onclick={() => {
-									isEditing = false;
-								}}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								class="sheet-btn sheet-btn-primary"
-								onclick={saveEdit}
-								disabled={saving}
-							>
-								{saving ? 'Saving…' : 'Save'}
-							</button>
-						</div>
-					</div>
-				{:else}
-					<!-- View mode -->
-					<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-						<div class="detail-amount">
-							<span class="detail-amount-cur">{mainCurrencySymbol()}</span>
-							<span class="detail-amount-val">{formatMoney(detailInvoice.mainAmount)}</span>
-						</div>
-						{#if detailInvoice.currency !== mainCurrency()}
-							<div class="detail-orig">
-								Original: {detailInvoice.currency}
-								{formatCurrencyAmount(detailInvoice.total, detailInvoice.currency)} · rate {detailInvoice.exchangeRate}
-							</div>
-						{/if}
-						<div class="detail-statusrow">
-							<StatusBadge status={getStatusLabel(detailInvoice)} />
-						</div>
-
-						{#if issueError || form?.error}
-							<!--
-								`form.error` is the delete action's refusal. Deleting is the one
-								thing here that still goes through a form action, and the server
-								refuses it for a sent invoice — its amount is already in the
-								books, so it is cancelled rather than deleted. Without this the
-								refusal was posted and silently dropped, and the button just
-								appeared to do nothing.
-							-->
-							<div
-								style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin:12px 0 0;"
-							>
-								{issueError || form?.error}
-							</div>
-						{/if}
-
-						<!-- How much has come in, once the invoice has been sent (D-10) -->
-						{#if detailInvoice.ledgerRecordId !== null}
-							<div class="detail-list" style="margin-top:12px;">
-								<div class="detail-row">
-									<div class="detail-key">Paid so far</div>
-									<div class="detail-val num">{formatMinor(detailInvoice.paidMinor)}</div>
-								</div>
-								<div class="detail-row">
-									<div class="detail-key">Still owed</div>
-									<div
-										class="detail-val num"
-										style={detailInvoice.outstandingMinor > 0 ? 'font-weight:600;' : ''}
-									>
-										{formatMinor(detailInvoice.outstandingMinor)}
-									</div>
-								</div>
-							</div>
-						{/if}
-
-						<div class="detail-list">
-							{#if detailInvoice.contactName}
-								<div class="detail-row">
-									<div class="detail-key">Customer</div>
-									<div class="detail-val">{detailInvoice.contactName}</div>
-								</div>
-							{/if}
-							<div class="detail-row">
-								<div class="detail-key">Issue Date</div>
-								<div class="detail-val num">{formatDate(detailInvoice.issueDate)}</div>
-							</div>
-							{#if detailInvoice.dueDate}
-								<div class="detail-row">
-									<div class="detail-key">Due Date</div>
-									<div
-										class="detail-val num"
-										style={detailInvoice.isOverdue ? 'color:var(--red); font-weight:600;' : ''}
-									>
-										{formatDate(detailInvoice.dueDate)}
-										{#if detailInvoice.isOverdue}<span style="font-size:11px; margin-left:4px;">OVERDUE</span>{/if}
-									</div>
-								</div>
-							{/if}
-							{#if detailInvoice.reference}
-								<div class="detail-row">
-									<div class="detail-key">Reference</div>
-									<div class="detail-val num">{detailInvoice.reference}</div>
-								</div>
-							{/if}
-							{#if detailInvoice.currency !== mainCurrency()}
-								<div class="detail-row">
-									<div class="detail-key">Currency</div>
-									<div class="detail-val">
-										{detailInvoice.currency} (rate: {detailInvoice.exchangeRate})
-									</div>
-								</div>
-							{/if}
-						</div>
-
-						<!-- Source quotation link -->
-						{#if detailInvoice.sourceQuotationId}
-							<div style="margin-top:12px;">
-								<button
-									type="button"
-									class="linked-claim-card related-link"
-									onclick={() => goto(resolve('/(app)/quotations/[id]', { id: String(detailInvoice!.sourceQuotationId) }))}
-								>
-									<span class="rel-card-icon"><FileText size={16} /></span>
-									<span class="rel-card-body">
-										<span class="rel-card-title">Source Quotation</span>
-									</span>
-									<ChevronRight size={13} color="var(--muted-foreground)" />
-								</button>
-							</div>
-						{/if}
-
-						<!-- The payments that settled it (FR-018a) -->
-						{#if detailInvoice.settlements.length > 0}
-							<div class="detail-section-label">Payments</div>
-							<SettlementList links={detailInvoice.settlements} />
-						{/if}
-
-						<!-- Line items (read-only) -->
-						{#if detailInvoice.lines.length > 0}
-							<div class="detail-section-label">Line Items</div>
-							<div class="qt-lines">
-								{#each detailInvoice.lines as line}
-									<div class="qt-line">
-										<div class="qt-line-desc">{line.description}</div>
-										<div class="qt-line-meta">
-											{line.quantity} × {formatCurrencyAmount(line.unitPrice, detailInvoice.currency)}
-										</div>
-										<div class="qt-line-total">
-											{formatCurrencyAmount(line.lineTotal, detailInvoice.currency)}
-										</div>
-									</div>
-								{/each}
-								<div class="qt-lines-total">
-									<span class="qt-lines-total-label">Total</span>
-									<span class="qt-lines-total-val">
-										{detailInvoice.currency}
-										{formatCurrencyAmount(detailInvoice.total, detailInvoice.currency)}
-									</span>
-								</div>
-							</div>
-						{/if}
-
-						{#if detailInvoice.notes}
-							<div class="detail-list" style="margin-top:12px;">
-								<div class="detail-row">
-									<div class="detail-key">Notes</div>
-									<div class="detail-val" style="white-space:pre-wrap;">
-										{detailInvoice.notes}
-									</div>
-								</div>
-							</div>
-						{/if}
-						{#if detailInvoice.terms}
-							<div class="detail-list" style="margin-top:4px;">
-								<div class="detail-row">
-									<div class="detail-key">Terms</div>
-									<div class="detail-val" style="white-space:pre-wrap;">
-										{detailInvoice.terms}
-									</div>
-								</div>
-							</div>
-						{/if}
-						<AuditTrail bind:this={auditTrailRef} recordType="invoice" recordId={detailInvoice.id} />
-					</div>
-
-					<div class="sheet-foot">
-						<div class="sheet-foot-actions">
-							<button
-								type="button"
-								class="sheet-btn sheet-btn-delete"
-								disabled={!!deleteBlockedReason(detailInvoice)}
-								title={deleteBlockedReason(detailInvoice) ?? undefined}
-								onclick={() => (deleteDialogOpen = true)}
-							>
-								<Trash2 size={14} /> Delete
-							</button>
-							<a
-								href="/api/invoices/{detailInvoice.id}/pdf"
-								target="_blank"
-								class="sheet-btn"
-								style="text-decoration:none;"
-							>
-								<Printer size={14} /> Print
-							</a>
-							{#if canIssue(detailInvoice)}
-								<button
-									type="button"
-									class="sheet-btn"
-									onclick={() => (issueConfirmOpen = true)}
-									disabled={issuing}
-								>
-									<Send size={14} /> {issuing ? 'Sending…' : 'Send'}
-								</button>
-							{/if}
-							{#if canEdit(detailInvoice)}
-								<button
-									type="button"
-									class="sheet-btn sheet-btn-primary"
-									onclick={startEdit}
-								>
-									Edit
-								</button>
-							{:else}
-								<button
-									type="button"
-									class="sheet-btn"
-									onclick={closeInvoice}
-								>
-									Close
-								</button>
-							{/if}
-						</div>
-					</div>
-				{/if}
-			{/if}
-		</Sheet.Content>
-	</Sheet.Portal>
-</Sheet.Root>
-
-{#if detailInvoice}
-	<ConfirmDialog
-		bind:open={deleteDialogOpen}
-		title="Delete invoice?"
-		description={`This will permanently delete ${detailInvoice.invoiceNumber}. This can't be undone.`}
-		confirmLabel="Delete"
-		danger
-		onConfirm={() => deleteFormEl?.requestSubmit()}
-	/>
-	<ConfirmDialog
-		bind:open={issueConfirmOpen}
-		title="Send this invoice?"
-		description={`${detailInvoice.invoiceNumber} will be recorded as money ${detailInvoice.contactName ?? 'the customer'} owes you. After that its amount, date and customer can no longer be changed.`}
-		confirmLabel="Send"
-		onConfirm={() => issue(detailInvoice!.id)}
-	/>
-	<form
-		method="POST"
-		action="?/delete"
-		bind:this={deleteFormEl}
-		use:enhance={() =>
-			async ({ result, update }) => {
-				if (result.type === 'success') {
-					deleteDialogOpen = false;
-					closeInvoice();
-				}
-				await update();
-			}}
-		style="display:none"
-	>
-		<input type="hidden" name="id" value={detailInvoice.id} />
-	</form>
-{/if}
 
 <!-- Create sheet -->
 <Sheet.Root bind:open={showNew}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content
 			side={panelSide}
 			style={isMobile
@@ -1429,10 +837,21 @@
 				</div>
 			</div>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <style>
+	.row-link {
+		color: inherit;
+		text-decoration: none;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.row-link:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
 	.qt-lines {
 		border: 1px solid var(--border);
 		border-radius: 8px;

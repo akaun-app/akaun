@@ -8,7 +8,15 @@ function pad(n: number): string {
 	return String(n).padStart(2, '0');
 }
 
-function toISODate(d: Date): string {
+/**
+ * A date as the ledger stores it, in the **local** timezone.
+ *
+ * Local, not UTC: `ledger_records.date` is a plain calendar day the user typed,
+ * so a UTC `toISOString()` would put "today" a day behind for anyone east of
+ * Greenwich for part of every morning — and then the period figures and the
+ * as-at-today figures on the same screen would disagree.
+ */
+export function toISODate(d: Date): string {
 	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
@@ -41,7 +49,7 @@ export function periodDateRange(id: DashboardPeriod, now = new Date()): { start:
 	return { start: toISODate(monthStart), end: toISODate(monthEnd) };
 }
 
-/** 'YYYY-MM' keys to plot on the Cash Flow / Net Trend charts for this period. */
+/** 'YYYY-MM' keys to plot on the revenue-vs-expenses and profit-trend charts. */
 export function periodMonthKeys(id: DashboardPeriod, now = new Date()): string[] {
 	if (id === 'year') {
 		const keys: string[] = [];

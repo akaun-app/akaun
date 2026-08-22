@@ -1,5 +1,4 @@
 import type {
-  AccountRoleCode,
   LedgerRecordKindCode,
   StatementDirectionCode,
   StatementExtractionStateCode,
@@ -85,7 +84,6 @@ export type MovementCandidate = {
   contactName: string | null;
   kind?: LedgerRecordKindCode;
   accountName?: string;
-  accountRole?: AccountRoleCode;
   allocatedAmount?: number;
   remainingAmount?: number;
   allocationCount?: number;

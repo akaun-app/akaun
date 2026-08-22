@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  categoryAccountForImport,
   matchCategoryAccount,
   type CategoryChoice,
 } from "./category-accounts.js";
@@ -39,5 +40,31 @@ describe("the category an imported document is filed under", () => {
 
   it("says nothing matched when there is nothing to match against", () => {
     expect(matchCategoryAccount([], "Travel")).toBeNull();
+  });
+});
+
+describe("the saved fallback for imported categories", () => {
+  it("uses the saved uncategorised expense account when no expense name matches", () => {
+    expect(categoryAccountForImport("expense", CHOICES, "Unknown", 91)).toEqual(
+      {
+        ok: true,
+        value: { accountId: 91, uncategorised: true },
+      },
+    );
+  });
+
+  it("refuses an unmatched expense before writing when its saved default is invalid", () => {
+    const result = categoryAccountForImport(
+      "expense",
+      CHOICES,
+      "Unknown",
+      null,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("does not put unmatched income into an expense account", () => {
+    const result = categoryAccountForImport("income", CHOICES, "Unknown", 91);
+    expect(result.ok).toBe(false);
   });
 });

@@ -66,7 +66,7 @@ export const DEFAULT_NAV_ITEMS: NavItem[] = [
     resource: "import",
   },
   // Reconciliation is not a menu item any more: a statement always belonged to
-  // exactly one account, so reconciling is reached from that account's drawer
+  // exactly one account, so reconciling is reached from that account's page
   // at /accounts/[id]/reconcile (FR-023, FR-048).
   {
     id: "accounts",

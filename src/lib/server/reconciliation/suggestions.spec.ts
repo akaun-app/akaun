@@ -64,6 +64,10 @@ describe("reconciliation suggestions", () => {
     ).toEqual([]);
   });
 
+  it("scopes suggestions by account even when both accounts share a fixed type", () => {
+    expect(suggestLinesForMovement(movement(), [line(1, 100), line(2, 100, StatementDirection.Out, "2026-03-10", WALLET)])).toEqual([1]);
+  });
+
   it("drops a line an earlier movement already consumed", () => {
     expect(suggestLinesForMovement(movement(), [line(1, 100)])).toEqual([1]);
     // Same call once line 1 has been spent: nothing left that sums to 100.

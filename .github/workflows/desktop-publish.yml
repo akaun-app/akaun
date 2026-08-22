@@ -12,6 +12,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the version in the UI comes from git describe during `bun run build`
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -51,6 +53,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the version in the UI comes from git describe during `bun run build`
 
       - uses: oven-sh/setup-bun@v2
         with:

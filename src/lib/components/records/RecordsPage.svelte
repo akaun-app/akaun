@@ -41,8 +41,9 @@
   import { formatCurrencyAmount } from "$lib/currency.js";
   import { createResourceStream, mergeById } from "$lib/sse.js";
   import { SvelteSet, SvelteURLSearchParams } from "svelte/reactivity";
-  import { AccountRole, LedgerRecordKind } from "$lib/enums.js";
-  import { goto, pushState } from "$app/navigation";
+  import { AccountType, LedgerRecordKind } from "$lib/enums.js";
+  import { isCategorySide } from "$lib/components/ledger/account-kinds.js";
+  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import type {
@@ -77,11 +78,7 @@
     refusedReason?: string | null;
   } | null;
 
-  let {
-    data,
-    form,
-    openId,
-  }: { data: PageData; form: ActionData; openId: number | null } = $props();
+  let { data, form }: { data: PageData; form: ActionData } = $props();
 
   // The list the screen draws: what the server sent, until the stream says
   // otherwise. Writable, so an SSE event edits it in place; derived, so a real
@@ -89,22 +86,19 @@
   let records = $derived(data.records);
 
   // --- Reading one record -----------------------------------------------
-  // The two accounts a record names: where the money came from, and where it
-  // went. A record that someone else paid has "money we owe" on the paying side
-  // instead of an account (FR-008), which is what makes it read as owed.
+  // The two accounts a record names: the one it posts from, and the one it
+  // posts to. A record that someone else paid has Accounts Payable on the paying
+  // side instead of an account (FR-008), which is what makes it read as
+  // outstanding.
   //
   // Both directions live in one list now, so "category" is whichever side says
   // what the record was *for* — a spending category, an earning category, or
   // equipment — rather than the expense categories alone.
-  const CATEGORY_ROLES: number[] = [
-    AccountRole.ExpenseCategory,
-    AccountRole.IncomeCategory,
-    AccountRole.Equipment,
-  ];
-
+  // `isCategorySide` rather than a list of types, because equipment is an asset
+  // and still a category (002 FR-006b).
   function categoryOf(record: RecordView) {
     return (
-      record.movements.find((m) => CATEGORY_ROLES.includes(m.accountRole)) ??
+      record.movements.find(isCategorySide) ??
       record.movements.find((m) => m.amountMinor > 0) ??
       null
     );
@@ -127,11 +121,9 @@
    * they get no sign at all rather than a misleading one.
    */
   function directionOf(record: RecordView): "in" | "out" | "neither" {
-    const category = record.movements.find((m) =>
-      CATEGORY_ROLES.includes(m.accountRole),
-    );
+    const category = record.movements.find(isCategorySide);
     if (!category) return "neither";
-    if (category.accountRole === AccountRole.IncomeCategory) return "in";
+    if (category.accountType === AccountType.Revenue) return "in";
     return "out";
   }
 
@@ -213,13 +205,13 @@
    * person recognises.
    */
   const KIND_LABELS: Record<number, string> = {
-    [LedgerRecordKind.Expense]: "Purchase",
-    [LedgerRecordKind.Income]: "Sale",
+    [LedgerRecordKind.Expense]: "Expense",
+    [LedgerRecordKind.Income]: "Income",
     [LedgerRecordKind.Transfer]: "Transfer",
     [LedgerRecordKind.Payment]: "Payment",
-    [LedgerRecordKind.OpeningBalance]: "Starting balance",
+    [LedgerRecordKind.OpeningBalance]: "Opening balance",
     [LedgerRecordKind.InvoiceIssue]: "Invoice",
-    [LedgerRecordKind.Journal]: "Adjustment",
+    [LedgerRecordKind.Journal]: "Journal entry",
   };
 
   function kindLabel(kind: number): string {
@@ -233,7 +225,7 @@
 
   const STATUS_TABS = [
     ["all", "All"],
-    ["owed", "Owed"],
+    ["owed", "Outstanding"],
     ["part-paid", "Part paid"],
     ["paid", "Paid"],
   ] as const;
@@ -353,16 +345,24 @@
    * Expenses showed "Still owed / Paid / This month / All recorded" and Income
    * showed "This quarter" and "Largest payment". Neither set survives whole:
    * with both directions in one list, "Paid" and "This month" answer a question
-   * the reader has to guess the subject of. Money in and money out are the two
+   * the reader has to guess the subject of. Income and expenses are the two
    * figures that mean the same thing whatever the row is, so they lead, and the
    * screen says the same four things the Dashboard does (research.md R-01).
+   *
+   * Read over `filtered`, never `records`: the strip answers for the rows the
+   * table is showing. Summing everything while the table showed a subset made
+   * the two halves of one screen disagree — a search for one supplier left
+   * "Expenses" reading the whole book, which looks like the filter failed or,
+   * worse, gets copied down as that supplier's total. The card at the end says
+   * how much of the book is in view, so a filtered figure is never mistaken for
+   * the all-time one.
    */
   const stats = $derived.by(() => {
     let inTotal = 0;
     let inCount = 0;
     let outTotal = 0;
     let outCount = 0;
-    for (const r of records) {
+    for (const r of filtered) {
       const direction = directionOf(r);
       if (direction === "in") {
         inTotal += r.amountMinor;
@@ -372,7 +372,7 @@
         outCount++;
       }
     }
-    const unpaid = records.filter((r) => !r.paid);
+    const unpaid = filtered.filter((r) => !r.paid);
     return {
       inTotal,
       inCount,
@@ -380,9 +380,11 @@
       outCount,
       owedTotal: unpaid.reduce((sum, r) => sum + r.outstandingMinor, 0),
       owedCount: unpaid.length,
-      allTotal: records.reduce((sum, r) => sum + r.amountMinor, 0),
     };
   });
+
+  /** Whether anything at all narrows the list — the status tabs included. */
+  const isNarrowed = $derived(activeFilterCount > 0 || statusTab !== "all");
 
   // --- Selection ----------------------------------------------------------
   function toggleAll() {
@@ -490,36 +492,17 @@
       : [...selectedKinds, code];
   }
 
-  // --- Detail drawer ------------------------------------------------------
-  // The open record is looked up by id rather than copied, so a change arriving
-  // over the stream reaches the open drawer without a second fetch.
-  let openRecordId = $state<number | null>(null);
-  const detailRecord = $derived(
-    openRecordId === null
-      ? null
-      : (records.find((r) => r.id === openRecordId) ?? null),
-  );
-
-  function openRecord(record: RecordView, { push = true } = {}) {
-    openRecordId = record.id;
-    if (push) {
-      pushState(resolve("/(app)/records/[id]", { id: String(record.id) }), {
-        viaPush: true,
-      });
-    }
+  // --- Opening one record -------------------------------------------------
+  // A record has its own page. The row is a real link as well, so hovering
+  // preloads it and Cmd-click opens it in a tab; this is the keyboard and
+  // programmatic path to the same address.
+  function recordHref(id: number): string {
+    return resolve("/(app)/records/[id]", { id: String(id) });
   }
 
-  function closeDetail() {
-    openRecordId = null;
-    // `viaPush` means this drawer put an entry on the history stack, so going
-    // back returns to the list and the browser's own back button works for
-    // free. Without it the user arrived from a pasted link or a reload and
-    // there is no useful entry to return to.
-    if (page.state.viaPush) {
-      history.back();
-    } else {
-      goto(resolve("/records"), { replaceState: true, noScroll: true });
-    }
+  function openRecord(record: RecordView) {
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call.
+    void goto(recordHref(record.id));
   }
 
   // --- Who is owed, and how much is left ----------------------------------
@@ -569,9 +552,8 @@
   );
 
   function openOwedItem(item: OutstandingItem) {
-    const found = records.find((r) => r.id === item.recordId);
-    if (found) openRecord(found);
-    else goto(resolve("/(app)/records/[id]", { id: String(item.recordId) }));
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call.
+    void goto(recordHref(item.recordId));
   }
 
   function startPayment(group: OwedGroup) {
@@ -593,9 +575,6 @@
       records = mergeById(records, [msg.record]);
     } else if (msg.type === "record-deleted") {
       records = records.filter((r) => r.id !== msg.id);
-      // Somebody else deleted the record this drawer is showing. Close it
-      // rather than leave a drawer open over a row that is gone.
-      if (openRecordId === msg.id) closeDetail();
     }
     // The record list is patched in place from the event, but what is still
     // owed is derived across records — including payments this screen does not
@@ -773,12 +752,6 @@
     readFiltersFromUrl();
     urlReady = true;
     void loadOwed();
-    if (openId) {
-      // A real navigation to /records/[id] — the address is already right, so
-      // opening the drawer must not push a second entry.
-      const found = data.records.find((r) => r.id === openId);
-      if (found) openRecord(found, { push: false });
-    }
   });
 </script>
 
@@ -847,29 +820,31 @@
   <div class="stat-strip">
     <StatCard
       tone="green"
-      label="Money in"
+      label="Income"
       cur={mainCurrencySymbol()}
       value={formatMinorAmount(stats.inTotal)}
       sub="{stats.inCount} records"
     />
     <StatCard
       tone="red"
-      label="Money out"
+      label="Expenses"
       cur={mainCurrencySymbol()}
       value={formatMinorAmount(stats.outTotal)}
       sub="{stats.outCount} records"
     />
     <StatCard
-      label="Still owed"
+      label="Outstanding"
       cur={mainCurrencySymbol()}
       value={formatMinorAmount(stats.owedTotal)}
-      sub="{stats.owedCount} not fully paid"
+      sub="{stats.owedCount} not fully settled"
     />
+    <!-- A count, not money, so no currency prefix — the other three carry one. -->
     <StatCard
-      label="All records"
-      cur={mainCurrencySymbol()}
-      value={String(counts.all)}
-      sub="every kind, newest first"
+      label={isNarrowed ? "Records shown" : "All records"}
+      value={String(filtered.length)}
+      sub={isNarrowed
+        ? `of ${counts.all} · the three figures above cover these`
+        : "every kind, newest first"}
     />
   </div>
 
@@ -896,11 +871,11 @@
             onclick={() => (owedOpen = !owedOpen)}
           >
             <span class="owed-head-main">
-              <span class="owed-head-title">Still owed to people</span>
+              <span class="owed-head-title">Outstanding payables</span>
               <span class="owed-head-sub">
                 {owedGroups.length}
-                {owedGroups.length === 1 ? "person" : "people"} · paid for things
-                on your behalf
+                {owedGroups.length === 1 ? "contact" : "contacts"} · paid for
+                things on the business's behalf
               </span>
             </span>
             <span class="owed-head-total num">{formatMinor(owedTotal)}</span>
@@ -1254,8 +1229,8 @@
                 <thead>
                   <tr>
                     <th>Date</th>
-                    <th>What happened</th>
-                    <th class="ta-right">In or out</th>
+                    <th>Description</th>
+                    <th class="ta-right">Movement</th>
                     <th class="ta-right">Balance</th>
                   </tr>
                 </thead>
@@ -1358,7 +1333,7 @@
                 <span class="th-inner">Kind</span>
               </th>
               <th class="th-accounts">
-                <span class="th-inner">Money moved</span>
+                <span class="th-inner">Accounts</span>
               </th>
               <th
                 class="sortable"
@@ -1388,7 +1363,12 @@
               <tr
                 class="exp-row"
                 class:selected={selected.has(e.id)}
-                onclick={() => openRecord(e)}
+                onclick={(ev) => {
+                  // The primary cell's anchor handles its own click (and
+                  // Cmd-click); this is the rest of the row.
+                  if ((ev.target as HTMLElement).closest("a")) return;
+                  openRecord(e);
+                }}
               >
                 <td
                   class="td-check"
@@ -1419,7 +1399,12 @@
                   </button>
                 </td>
                 <td class="td-primary">
-                  <div class="cell-item">
+                  <!-- A real link, not just a row click: the browser can then
+                       preload it on hover (`data-sveltekit-preload-data` in
+                       app.html), and Cmd-click and middle-click open it in a
+                       tab the way every other address in the app does. -->
+                  <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+                  <a class="cell-item row-link" href={recordHref(e.id)}>
                     <span class="cell-itemname">
                       {e.description}
                       {#if e.locked}<span class="row-lock" title={e.lockedReason}
@@ -1427,7 +1412,7 @@
                         >{/if}
                     </span>
                     <span class="cell-itemnum">{e.recordNumber ?? ""}</span>
-                  </div>
+                  </a>
                 </td>
                 <td class="td-supplier" data-label="Kind">
                   <span class="kind-chip">{kindLabel(e.kind)}</span>
@@ -1435,7 +1420,7 @@
                       >{e.contactName}</span
                     >{/if}
                 </td>
-                <td data-label="Money moved">
+                <td data-label="Accounts">
                   {#if e.sideCount > 2}
                     <!-- A record made by hand can have five sides. There is no
                          pair of accounts to show, so it says how many it has
@@ -1485,7 +1470,7 @@
                 <td colspan="7">
                   <EmptyState
                     title="No records yet"
-                    sub="Everything that happens with money will appear here."
+                    sub="Every recorded transaction appears here."
                   >
                     {#snippet icon()}<Wallet size={20} />{/snippet}
                   </EmptyState>
@@ -1547,10 +1532,10 @@
 
 <ConfirmDialog
   bind:open={deleteDialogOpen}
-  title={selected.size === 1 ? "Delete this expense?" : "Delete these expenses?"}
+  title={selected.size === 1 ? "Delete this record?" : "Delete these records?"}
   description={lockedSelected > 0
     ? `${lockedSelected} of the ${selected.size} selected can't be deleted while a payment or a bank line still points at them — the rest will be removed. This can't be undone.`
-    : `This removes ${selected.size} ${selected.size === 1 ? "expense" : "expenses"} and both sides of each. It can't be undone.`}
+    : `This removes ${selected.size} ${selected.size === 1 ? "record" : "records"} and every side of each. It can't be undone.`}
   confirmLabel="Delete"
   danger
   onConfirm={() => deleteFormEl?.requestSubmit()}
@@ -1573,8 +1558,6 @@
 
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
-  <Sheet.Portal>
-    <Sheet.Overlay />
     <Sheet.Content
       side="bottom"
       style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + var(--safe-bottom));"
@@ -1671,24 +1654,7 @@
         Show results
       </Button>
     </Sheet.Content>
-  </Sheet.Portal>
 </Sheet.Root>
-
-<!-- Record detail -->
-<RecordSheet
-  open={detailRecord !== null}
-  record={detailRecord}
-  accounts={data.accounts}
-  categories={data.categories}
-  allAccounts={data.allAccounts}
-  contacts={data.contacts}
-  defaultAccountId={data.defaultAccountId}
-  lastForeignCurrency={data.lastForeignCurrencyExpense}
-  canChange={data.perms.change}
-  canDelete={data.perms.delete}
-  canAdjust={data.perms.adjustments}
-  onclose={closeDetail}
-/>
 
 <!-- Paying somebody back -->
 <PaymentSheet
@@ -1705,19 +1671,32 @@
 <!-- New record -->
 <RecordSheet
   open={showNew}
-  record={null}
   accounts={data.accounts}
   categories={data.categories}
   allAccounts={data.allAccounts}
   contacts={data.contacts}
   defaultAccountId={data.defaultAccountId}
   lastForeignCurrency={data.lastForeignCurrencyExpense}
-  canChange={data.perms.change}
   canAdjust={data.perms.adjustments}
   onclose={() => (showNew = false)}
 />
 
 <style>
+  /* The row's primary cell is the link. It fills the cell so the whole name
+     area is the target, and it never looks like a link — the row already reads
+     as clickable. */
+  .row-link {
+    color: inherit;
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .row-link:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
   .clearfilter {
     height: 30px;
     padding: 0 11px;
@@ -2063,7 +2042,7 @@
 
   @media (max-width: 767px) {
     /* Status leads, then the two accounts, then the kind, then date */
-    td[data-label="Money moved"] {
+    td[data-label="Accounts"] {
       order: 6 !important;
     }
     .td-supplier {

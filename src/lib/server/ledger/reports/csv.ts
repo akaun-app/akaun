@@ -1,5 +1,5 @@
 import { fromMinor } from "../money.js";
-import { displaySign } from "../account-type.js";
+import { AccountType } from "$lib/enums.js";
 import type {
   AccountHistoryReport,
   BalanceSheetReport,
@@ -73,8 +73,8 @@ export function toCsv(table: CsvTable): string {
 
 const SECTION_COLUMNS = ["Section", "Account", "Amount"];
 
-const MONEY_IN = "Money coming in";
-const MONEY_OUT = "Money going out";
+const REVENUE = "Revenue";
+const EXPENSES = "Expenses";
 
 function coveredPeriod(dateFrom: string, dateTo: string): string {
   return `Covers ${dateFrom} to ${dateTo}.`;
@@ -84,24 +84,20 @@ export function profitLossCsv(report: ProfitLossReport): CsvTable {
   const rows: (string | number | null)[][] = [];
 
   for (const line of report.income) {
-    rows.push([MONEY_IN, line.accountName, fromMinor(line.amountMinor)]);
+    rows.push([REVENUE, line.accountName, fromMinor(line.amountMinor)]);
   }
-  rows.push([
-    MONEY_IN,
-    "Total money coming in",
-    fromMinor(report.totalIncomeMinor),
-  ]);
+  rows.push([REVENUE, "Total revenue", fromMinor(report.totalIncomeMinor)]);
 
   for (const line of report.expenses) {
-    rows.push([MONEY_OUT, line.accountName, fromMinor(line.amountMinor)]);
+    rows.push([EXPENSES, line.accountName, fromMinor(line.amountMinor)]);
   }
-  rows.push([
-    MONEY_OUT,
-    "Total money going out",
-    fromMinor(report.totalExpensesMinor),
-  ]);
+  rows.push([EXPENSES, "Total expenses", fromMinor(report.totalExpensesMinor)]);
 
-  rows.push(["Result", "What is left", fromMinor(report.resultMinor)]);
+  rows.push([
+    "Result",
+    report.resultMinor < 0 ? "Net loss" : "Net profit",
+    fromMinor(report.resultMinor),
+  ]);
 
   return {
     columns: SECTION_COLUMNS,
@@ -128,14 +124,10 @@ export function balanceSheetCsv(report: BalanceSheetReport): CsvTable {
   return {
     columns: SECTION_COLUMNS,
     rows: [
+      ...sectionRows("Assets", report.owned.lines, report.owned.totalMinor),
+      ...sectionRows("Liabilities", report.owed.lines, report.owed.totalMinor),
       ...sectionRows(
-        "What the business owns",
-        report.owned.lines,
-        report.owned.totalMinor,
-      ),
-      ...sectionRows("What it owes", report.owed.lines, report.owed.totalMinor),
-      ...sectionRows(
-        "What the owners have in it",
+        "Equity",
         report.ownersStake.lines,
         report.ownersStake.totalMinor,
       ),
@@ -148,10 +140,10 @@ export function partnerStatementCsv(report: PartnerStatementReport): CsvTable {
   return {
     columns: [
       "Partner",
-      "Money put in",
-      "Share of the result",
-      "Money taken out",
-      "What is left",
+      "Contributions",
+      "Share of profit",
+      "Drawings",
+      "Closing balance",
     ],
     rows: report.partners.map((partner) => [
       partner.contactName,
@@ -175,7 +167,11 @@ export function accountHistoryCsv(report: AccountHistoryReport): CsvTable {
   // flips them at render — so without this line the exported file disagreed
   // with the screen it was exported from, which is the one thing an export
   // must never do.
-  const sign = displaySign(report.account.role);
+  const sign =
+    report.account.type === AccountType.Asset ||
+    report.account.type === AccountType.Expense
+      ? 1
+      : -1;
 
   const rows: (string | number | null)[][] = [
     // What the account already held before the first line shown, so the running
@@ -203,7 +199,7 @@ export function accountHistoryCsv(report: AccountHistoryReport): CsvTable {
       "Date",
       "Reference",
       "Description",
-      "Who",
+      "Contact",
       "Amount",
       "Running balance",
     ],

@@ -25,6 +25,7 @@
 	import type { TemplateRow } from '$lib/pdf/template-types.js';
 	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
+	import AccountDefaults from '$lib/components/settings/AccountDefaults.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -1140,21 +1141,15 @@
 								</div>
 							{/if}
 
-							<!--
-								A link out, not a tab. Categories are managed on their own
-								screen and nowhere else (FR-019/FR-020) — this only says where
-								that screen is, because someone looking for them is as likely
-								to open Settings as Accounts.
-							-->
 							<div class="set-row">
 								<div>
-									<div class="set-row-label">Categories</div>
-									<div class="set-row-value" style="font-size:12px; margin-top:2px;">What money is earned and spent on. Managed on their own screen.</div>
+									<div class="set-row-label">Chart of Accounts</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">Manage every Asset, Liability, Equity, Revenue and Expense account together.</div>
 								</div>
 								<a
 										class="set-input-right"
-										href={resolve('/(app)/categories')}
-										style="color:var(--primary); text-decoration:none;">Open Categories →</a
+										href={resolve('/(app)/accounts')}
+										style="color:var(--primary); text-decoration:none;">Open accounts →</a
 									>
 							</div>
 						</div>
@@ -1325,12 +1320,17 @@
 				</div>
 
 			{:else if activeTab === 'books'}
+				<AccountDefaults
+					defaults={data.accountDefaults}
+					accounts={data.defaultAccountOptions}
+					disabled={!data.canManageAccounts}
+				/>
 				<div class="set-section">
 					<div class="set-section-head">
-						<h2 class="set-section-title">Check the books</h2>
+						<h2 class="set-section-title">Ledger integrity check</h2>
 						<p class="set-section-sub">
-							Every record has two sides that have to cancel each other out. This adds up every
-							side of every record and tells you straight away if any of them don't.
+							Every record's debits and credits have to cancel each other out. This adds up
+							every side of every record and tells you straight away if any of them don't.
 						</p>
 					</div>
 					<div class="set-rows">
@@ -1391,7 +1391,7 @@
 				{#if hasUpgradeNotes && upgradeReport}
 					<div class="set-section" style="margin-top:32px;">
 						<div class="set-section-head">
-							<h2 class="set-section-title">What the update worked out</h2>
+							<h2 class="set-section-title">Migration results</h2>
 							<p class="set-section-sub">
 								Moving your records to the new way of keeping them{#if data.upgrade?.finishedAt}, on
 									{formatDate(data.upgrade.finishedAt.slice(0, 10))}{/if}, meant making a few
@@ -1416,7 +1416,7 @@
 						{/if}
 
 						{#if upgradeReport.payerAttributions.length > 0}
-							<p class="set-subsection-label" style="margin-top:0;">Who each old reimbursement was owed to</p>
+							<p class="set-subsection-label" style="margin-top:0;">Reimbursement counterparties</p>
 							<p class="set-hint" style="margin-top:0;">
 								Old reimbursements only recorded the login that created them, not the person.
 								This is who each one was matched to, and how.
@@ -1438,7 +1438,7 @@
 						{/if}
 
 						{#if upgradeReport.bankFallbackRecordIds.length > 0}
-							<p class="set-subsection-label">Expenses with nobody to owe</p>
+							<p class="set-subsection-label">Expenses with no contact</p>
 							<p class="set-hint" style="margin-top:0;">
 								These were never marked paid and named nobody, so there was no one to owe them
 								to. They are recorded as paid from your bank account — if any of them were
@@ -1450,7 +1450,7 @@
 						{/if}
 
 						{#if upgradeReport.uncategorisedRecordIds.length > 0}
-							<p class="set-subsection-label">Records with no category</p>
+							<p class="set-subsection-label">Uncategorised records</p>
 							<p class="set-hint" style="margin-top:0;">
 								No category could be read for these, so they sit under Uncategorised until you
 								give them one.
@@ -1754,8 +1754,6 @@
 	open={sheetOpen}
 	onOpenChange={(o) => { if (!o) closeSheet(); }}
 >
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content
 			side={panelSide}
 			style={isMobile
@@ -1912,7 +1910,6 @@
 				</div>
 			</form>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 {#if deleteTarget}

@@ -11,33 +11,26 @@
 		Users,
 		Merge,
 		SlidersHorizontal,
-		Building2,
-		Trash2,
-		ChevronRight,
-		Scale
+		Building2
 	} from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
-	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
-	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import ContactMergeCompare from '$lib/components/ContactMergeCompare.svelte';
 	import { EntityType, Role, EntityTypeLabels, RoleLabels } from '$lib/enums.js';
-	import { goto, pushState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { page } from '$app/state';
-	import { onMount } from 'svelte';
 	import type { loadContactsPage } from '$lib/server/loaders/contacts.js';
 
 	type PageData = ReturnType<typeof loadContactsPage>;
 	type ActionData = { error?: string; success?: boolean; id?: number } | null;
 
-	let { data, form, openId }: { data: PageData; form: ActionData; openId: number | null } = $props();
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	type Contact = (typeof data.contacts)[0];
 	type Usage = PageData['usage'][number];
@@ -47,31 +40,9 @@
 	let contacts = $state<Contact[]>(data.contacts);
 	$effect(() => { contacts = data.contacts; });
 
-	// svelte-ignore state_referenced_locally
-	let usage = $state(data.usage);
-	$effect(() => { usage = data.usage; });
-
 	// Mirrors src/lib/server/queries/contacts.ts's cannotDeleteContactReason — a
-	// contact anything points at is archived, never deleted (FR-009a). The rule
-	// lives server-side and can't be imported into a component, so the sentence
-	// is kept in step by hand.
-	function deleteBlockedReason(id: number): string | null {
-		const u = usage[id];
-		if (!u) return null;
-		if (u.records === 0 && u.quotations === 0 && u.invoices === 0) return null;
-		return 'Records name this contact, so it cannot be deleted. Archive it instead — everything already recorded stays exactly as it is.';
-	}
-
-	let deleteTarget = $state<Contact | null>(null);
-	let deleteDialogOpen = $state(false);
-	let deleteFormEl = $state<HTMLFormElement | null>(null);
-
-	function requestDelete(c: Contact) {
-		deleteTarget = c;
-		deleteDialogOpen = true;
-	}
-
-	$effect(() => { if (form?.success) deleteDialogOpen = false; });
+	// (`deleteBlockedReason` moved to ContactDetail.svelte with the delete button
+	// itself — a contact is deleted from its own page.)
 
 	let searchRaw = $state('');
 	let search = $state('');
@@ -206,61 +177,31 @@
 
 	// --- Create / edit sheet ---
 	let showForm = $state(false);
-	let editing = $state<Contact | null>(null);
 	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 	let fEntityType = $state<number | 0>(0);
 	let fRoles = $state<number[]>([]);
 
 	function openCreate() {
-		editing = null;
 		fEntityType = 0;
 		fRoles = [];
 		showForm = true;
 	}
-	/**
-	 * This contact's statement: the Records list narrowed to them.
-	 *
-	 * `resolve()` builds the route and the contact is appended as a query
-	 * parameter — a value, not part of the route — so the lint rule below cannot
-	 * see through the template string.
-	 */
-	function openStatement(contactId: number): void {
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the route comes from resolve(); only the query string is appended.
-		void goto(`${resolve('/(app)/records')}?contact=${contactId}`);
+	function contactHref(id: number): string {
+		return resolve('/(app)/contacts/[id]', { id: String(id) });
 	}
 
-	function openEdit(c: Contact, { push = true } = {}) {
-		editing = c;
-		fEntityType = c.entityType;
-		fRoles = [...c.roles];
-		showForm = true;
-		if (push) {
-			pushState(resolve('/(app)/contacts/[id]', { id: String(c.id) }), { viaPush: true });
-		}
+	function openContact(c: Contact) {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- `contactHref` is resolve(); the rule cannot see through the call.
+		void goto(contactHref(c.id));
 	}
-	const editingLive = $derived(editing ? contacts.find((c) => c.id === editing!.id) ?? editing : null);
+
 	function toggleRole(r: number) {
 		fRoles = fRoles.includes(r) ? fRoles.filter((x) => x !== r) : [...fRoles, r];
 	}
 
 	function closeForm() {
-		const wasEditingExisting = editing !== null;
 		showForm = false;
-		editing = null;
-		if (!wasEditingExisting) return;
-		if (page.state.viaPush) {
-			history.back();
-		} else {
-			goto(resolve('/contacts'), { replaceState: true, noScroll: true });
-		}
 	}
-
-	onMount(() => {
-		if (openId) {
-			const found = contacts.find((c) => c.id === openId);
-			if (found) openEdit(found, { push: false });
-		}
-	});
 
 	$effect(() => { if (form?.success) closeForm(); });
 
@@ -452,16 +393,25 @@
 					</thead>
 					<tbody>
 						{#each filtered as c (c.id)}
-							<tr class="exp-row" class:selected={selected.has(c.id)} onclick={() => { if (data.perms.change) openEdit(c); }}>
+							<tr
+								class="exp-row"
+								class:selected={selected.has(c.id)}
+								onclick={(ev) => {
+									// The name cell is a real anchor; this is the rest of the row.
+									if ((ev.target as HTMLElement).closest('a')) return;
+									openContact(c);
+								}}
+							>
 								{#if data.perms.change && data.perms.delete}
 									<td class="td-check" onclick={(ev) => { ev.stopPropagation(); toggleOne(c.id); }}>
 										<Checkbox checked={selected.has(c.id)} aria-label="Select {c.legalName}" />
 									</td>
 								{/if}
 								<td class="td-primary" data-label="Name">
-									<div class="cell-item">
+									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- `contactHref` is resolve(); the rule cannot see through the call. -->
+									<a class="cell-item row-link" href={contactHref(c.id)}>
 										<span class="cell-itemname">{c.legalName}</span>
-									</div>
+									</a>
 								</td>
 								<td data-label="Type" style="font-size:13px; color:var(--muted-foreground);">
 									{EntityTypeLabels[c.entityType] ?? '—'}
@@ -537,24 +487,10 @@
 		</BulkActionBar>
 	{/if}
 
-	<!-- Hidden delete form, submitted after ConfirmDialog confirmation -->
-	<form method="POST" action="?/delete" use:enhance style="display:none" bind:this={deleteFormEl}>
-		<input type="hidden" name="id" value={deleteTarget?.id ?? ''} />
-	</form>
-	<ConfirmDialog
-		bind:open={deleteDialogOpen}
-		title="Delete {deleteTarget?.legalName ?? 'contact'}?"
-		description="This permanently removes the contact and can't be undone."
-		confirmLabel="Delete contact"
-		danger
-		onConfirm={() => deleteFormEl?.requestSubmit()}
-	/>
 </div>
 
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content side="bottom" style="border-radius:16px 16px 0 0; max-height:85vh; overflow-y:auto; padding:20px 20px calc(20px + var(--safe-bottom));">
 			<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
 				<div style="font-size:15px; font-weight:600;">Filters</div>
@@ -587,31 +523,27 @@
 				Show results
 			</Button>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <!-- Create / edit sheet -->
 <Sheet.Root open={showForm} onOpenChange={(o) => { if (!o) closeForm(); }}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
-					<div class="sheet-eyebrow">{editing ? 'Edit' : 'New'}</div>
-					<div class="sheet-title-text">{editing ? 'Edit contact' : 'Add contact'}</div>
+					<div class="sheet-eyebrow">New</div>
+					<div class="sheet-title-text">Add contact</div>
 				</div>
 				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
 			</div>
 			<form
 				method="POST"
-				action={editing ? '?/update' : '?/create'}
+				action="?/create"
 				use:enhance={() => async ({ update }) => {
 					await update();
 					auditTrailRef?.refresh();
 				}}
 				style="flex:1; display:flex; flex-direction:column; overflow:hidden;"
 			>
-				{#if editing}<input type="hidden" name="id" value={editing.id} />{/if}
 				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
 					{#if form?.error}<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>{/if}
 
@@ -629,7 +561,7 @@
 
 					<div class="field">
 						<label class="field-label" for="legalName">Legal name *</label>
-						<Input id="legalName" name="legalName" required value={editing?.legalName ?? ''} class="w-full" />
+						<Input id="legalName" name="legalName" required class="w-full" />
 					</div>
 
 					<div class="field">
@@ -653,90 +585,39 @@
 
 					<div class="field">
 						<label class="field-label" for="registrationNo">Registration no.</label>
-						<Input id="registrationNo" name="registrationNo" value={editing?.registrationNo ?? ''} class="w-full" />
+						<Input id="registrationNo" name="registrationNo" class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="email">Email</label>
-						<Input id="email" name="email" type="email" value={editing?.email ?? ''} class="w-full" />
+						<Input id="email" name="email" type="email" class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="phone">Phone</label>
-						<Input id="phone" name="phone" value={editing?.phone ?? ''} class="w-full" />
+						<Input id="phone" name="phone" class="w-full" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="address">Address</label>
-						<Textarea id="address" name="address" rows={2} value={editing?.address ?? ''} class="leading-relaxed" />
+						<Textarea id="address" name="address" rows={2} class="leading-relaxed" />
 					</div>
 					<div class="field">
 						<label class="field-label" for="remark">Remark</label>
-						<Textarea id="remark" name="remark" rows={2} value={editing?.remark ?? ''} class="leading-relaxed" />
+						<Textarea id="remark" name="remark" rows={2} class="leading-relaxed" />
 					</div>
-					{#if editingLive && data.perms.records}
-						<!--
-							Everything this contact was involved in, and what is still owed
-							either way — the purchase and sales ledger for one contact.
-
-							The relation-card contract's single-action shape: the whole row is
-							one button, and the trailing chevron says it goes somewhere before
-							you hover (CLAUDE.md § Cross-Feature Relation Cards).
-						-->
-						<button
-							type="button"
-							class="related-link ob-card"
-							onclick={() => openStatement(editingLive.id)}
-						>
-							<span class="ob-icon"><Scale size={15} /></span>
-							<span class="ob-main">
-								<span class="ob-title">See everything with this contact</span>
-								<span class="ob-sub">
-									{#if (data.balances[editingLive.id] ?? 0) === 0}
-										Nothing outstanding either way
-									{:else if (data.balances[editingLive.id] ?? 0) > 0}
-										{formatMinor(data.balances[editingLive.id] ?? 0)} still owed to you
-									{:else}
-										You still owe {formatMinor(Math.abs(data.balances[editingLive.id] ?? 0))}
-									{/if}
-								</span>
-							</span>
-							<ChevronRight size={14} color="var(--muted-foreground)" />
-						</button>
-					{/if}
-
-					{#if editing}
-						<AuditTrail bind:this={auditTrailRef} recordType="contact" recordId={editing.id} />
-					{/if}
 				</div>
 				<div class="sheet-foot">
 					<div class="sheet-foot-actions">
-						{#if editingLive && data.perms.delete}
-							<button
-								type="button"
-								class="sheet-btn sheet-btn-delete"
-								style="margin-right:auto;"
-								disabled={!!deleteBlockedReason(editingLive.id)}
-								title={deleteBlockedReason(editingLive.id) ?? undefined}
-								onclick={() => requestDelete(editingLive)}
-							>
-								<Trash2 size={14} /> Delete
-							</button>
-						{/if}
-						<button type="button" class="sheet-btn" onclick={closeForm}>
-							Cancel
-						</button>
+						<button type="button" class="sheet-btn" onclick={closeForm}>Cancel</button>
 						<button type="submit" class="sheet-btn sheet-btn-primary" disabled={!fEntityType}>
-							{editing ? 'Save changes' : 'Create contact'}
+							Create contact
 						</button>
 					</div>
 				</div>
 			</form>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <!-- Find duplicates / merge sheet -->
 <Sheet.Root open={showMerge} onOpenChange={(o) => (showMerge = o)}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
@@ -771,13 +652,10 @@
 				{/each}
 			</div>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <!-- Manual multi-select merge sheet -->
 <Sheet.Root open={showManualMerge} onOpenChange={(o) => (showManualMerge = o)}>
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;' : 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}>
 			<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
 				<div>
@@ -799,10 +677,21 @@
 				{/if}
 			</div>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <style>
+	.row-link {
+		color: inherit;
+		text-decoration: none;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.row-link:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
 	/* The purchase and sales ledger, shown per contact. */
 	.ct-owed-label {
 		display: block;

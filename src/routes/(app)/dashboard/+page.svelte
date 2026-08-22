@@ -7,9 +7,12 @@
 		ArrowUpRight,
 		FileText,
 		TrendingDown,
+		Landmark,
+		Scale,
 		ChevronDown
 	} from '@lucide/svelte';
 	import LazyChart from '$lib/components/ui/LazyChart.svelte';
+	import FundsFlow from '$lib/components/dashboard/FundsFlow.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import { formatMoney, formatDateShort } from '$lib/format.js';
 	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
@@ -103,23 +106,17 @@
 	<div class="dash-scroll">
 		<!-- KPI Cards -->
 		<div class="kpi-grid">
-			<div class="kpi tone-green">
+			<div class="kpi tone-primary">
 				<div class="kpi-top">
-					<span class="kpi-icon"><TrendingUp size={16} /></span>
-					<span class="kpi-label">Income</span>
+					<span class="kpi-icon"><Landmark size={16} /></span>
+					<span class="kpi-label">Current assets</span>
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.incTotal)}</div>
-				<div class="kpi-sub">{data.incCount} records · {periodLabel}</div>
-			</div>
-			<div class="kpi">
-				<div class="kpi-top">
-					<span class="kpi-icon"><Wallet size={16} /></span>
-					<span class="kpi-label">Expenses</span>
+				<div class="kpi-value">
+					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.currentAssets)}
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.expTotal)}</div>
-				<div class="kpi-sub">{data.expCount} records · {periodLabel}</div>
+				<div class="kpi-sub">Cash, bank and receivables · today</div>
 			</div>
-			<div class="kpi" class:tone-primary={data.net >= 0} class:tone-red={data.net < 0}>
+			<div class="kpi" class:tone-green={data.net >= 0} class:tone-red={data.net < 0}>
 				<div class="kpi-top">
 					<span class="kpi-icon">
 						{#if data.net >= 0}
@@ -128,35 +125,61 @@
 							<TrendingDown size={16} />
 						{/if}
 					</span>
-					<span class="kpi-label">Net</span>
+					<span class="kpi-label">Net profit</span>
 				</div>
 				<div class="kpi-value">
 					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(Math.abs(data.net))}
-					{#if data.net < 0}<span style="font-size:14px; color:var(--red)"> deficit</span>{/if}
+					{#if data.net < 0}<span style="font-size:14px; color:var(--red)"> loss</span>{/if}
 				</div>
-				<div class="kpi-sub">Income − expenses</div>
+				<div class="kpi-sub">
+					Revenue {formatMoney(data.incTotal)} · expenses {formatMoney(data.expTotal)} · {periodLabel}
+				</div>
+			</div>
+			<div class="kpi">
+				<div class="kpi-top">
+					<span class="kpi-icon"><Scale size={16} /></span>
+					<span class="kpi-label">Owner's equity</span>
+				</div>
+				<div class="kpi-value">
+					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.position.equityTotal)}
+				</div>
+				<div class="kpi-sub">
+					{#if data.position.balances}
+						Assets {formatMoney(data.position.assetsTotal)} · liabilities {formatMoney(
+							data.position.liabilitiesTotal
+						)}
+					{:else}
+						The books do not balance — check Reports
+					{/if}
+				</div>
 			</div>
 			<div class="kpi tone-red">
 				<div class="kpi-top">
 					<span class="kpi-icon"><FileText size={16} /></span>
-					<span class="kpi-label">Outstanding</span>
+					<span class="kpi-label">Accounts payable</span>
 				</div>
-				<div class="kpi-value"><span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}</div>
+				<div class="kpi-value">
+					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}
+				</div>
 				<div class="kpi-sub">Unpaid · all time</div>
 			</div>
 		</div>
+
+		<!-- Where the period's funds came from and went. The one place on this
+		     screen that capitalised equipment is visible. -->
+		<FundsFlow report={data.fundsFlow} {periodLabel} />
 
 		<!-- Charts row 1 -->
 		<div class="panel-row">
 			<div class="panel">
 				<div class="panel-head">
 					<div>
-						<div class="panel-title">Cash flow</div>
-						<div class="panel-sub">Income vs expenses · {periodLabel}</div>
+						<div class="panel-title">Revenue vs expenses</div>
+						<div class="panel-sub">Profit and loss · {periodLabel}</div>
 					</div>
 					<div class="chart-legend">
 						<span class="lg"
-							><span class="lg-dot" style="background:oklch(0.6 0.13 156);"></span> Income</span
+							><span class="lg-dot" style="background:oklch(0.6 0.13 156);"></span> Revenue</span
 						>
 						<span class="lg"
 							><span class="lg-dot" style="background:oklch(0.585 0.205 27.3);"></span> Expense</span
@@ -186,8 +209,8 @@
 			<div class="panel">
 				<div class="panel-head">
 					<div>
-						<div class="panel-title">Net trend</div>
-						<div class="panel-sub">Monthly surplus / deficit · {periodLabel}</div>
+						<div class="panel-title">Profit trend</div>
+						<div class="panel-sub">Monthly profit / loss · {periodLabel}</div>
 					</div>
 				</div>
 				<LazyChart load={() => import('$lib/components/charts/TrendBars.svelte')} data={data.trendData} />

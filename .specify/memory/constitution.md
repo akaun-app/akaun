@@ -1,10 +1,15 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.1.0 → 1.2.0
-Bump rationale: MINOR — a new principle (VII. Plain Language for a Non-Expert Reader) was added.
-No existing principle was removed or redefined incompatibly. Principle IV's "names state intent"
-clean-code rule is unaffected: VII governs prose written for a human reader, not code identifiers.
+Version change: 1.2.0 → 2.0.0
+Bump rationale: MAJOR — Principle VII is redefined incompatibly for one class of prose. It used
+to require the everyday word everywhere, UI labels included ("What the business owes" over
+"liabilities"). It now splits: documents keep the plain word, and **UI labels take the standard
+accounting term**. Screens written to the old rule read "Money in and out" for Profit & Loss and
+"What it is worth" for the Balance Sheet, which cannot be checked against a bank statement, an
+invoice or an accountant's question. `004-standardize-chart-accounts` FR-004 already fixed the
+vocabulary for the chart and the reports; this generalises it to every screen. Principle IV is
+unaffected — identifiers were never in scope.
 
 Added sections:
   - Core Principles → VII. Plain Language for a Non-Expert Reader
@@ -14,8 +19,12 @@ Modified principles: none
 Removed sections: none
 
 Templates requiring updates:
-  ✅ .specify/templates/spec-template.md — reviewed, already instructs "describe this user journey
-     in plain language"; consistent, no change needed
+  ✅ .specify/templates/spec-template.md — reviewed, "describe this user journey in plain
+     language" is prose guidance and stays correct under the split; no change needed
+  ⚠️ CLAUDE.md — its own prose stays plain and is unaffected, but its § Ledger sections still
+     name screens and labels that `004-standardize-chart-accounts` retired (Accounts ›
+     Categories, /categories, the money-pot vocabulary). Stale for a different reason than this
+     amendment; fix with the rest of the 004 documentation pass.
   ✅ .specify/templates/plan-template.md — reviewed, no prose-style guidance to correct
   ✅ .specify/templates/tasks-template.md — reviewed, task lines are imperative and already plain
   ✅ .specify/templates/checklist-template.md — reviewed, consistent
@@ -210,11 +219,28 @@ someone who does not know the domain. The maintainer is not an accountant and is
 domain alongside the product; a document he cannot check is a document that cannot be reviewed,
 and an unreviewed specification silently encodes whatever the author assumed.
 
-- **Prefer the everyday word.** "What the business owes" over "liabilities". "Money a partner
-  takes out" over "drawings". "Add up from the movements" over "derive from the ledger".
-- **A formal term is allowed only when it is the term that must appear** — on a statutory
-  filing, in a regulation, or in an established product convention. Pair it with its plain
-  meaning once, at first use, and then use it consistently.
+- **In prose, prefer the everyday word.** "What the business owes" over "liabilities". "Money a
+  partner takes out" over "drawings". "Add up from the movements" over "derive from the ledger".
+  Name the accounting term once beside it, because that is the word the screen uses.
+- **A UI label is the exception, and it takes the accounting term.** Every label, column
+  heading, tab, report title, field name, status chip and record-kind name in the product MUST
+  use the standard accounting word — Revenue, Expenses, Assets, Liabilities, Equity, Accounts
+  receivable, Accounts payable, Contributions, Drawings, Net profit, Journal entry, Opening
+  balance, Outstanding. Invented plain-language substitutes MUST NOT be used, however much
+  easier they read: not "Money in and out" for Profit & Loss, not "What it is worth" for the
+  Balance Sheet, not "Still owed to people" for outstanding payables, not "money in" / "money
+  out" / "earned" anywhere. `004-standardize-chart-accounts` FR-004 fixes this for the chart and
+  the reports; the same rule holds on every screen.
+  - **The teaching moves to the sub-line, not the heading.** "Liabilities" as the heading with
+    "What the business owes" as its sub-line — never the sub-line promoted to the heading.
+  - **An exported file MUST carry the same words as the screen it came from.** A CSV header and
+    its column on screen are one label in two places.
+  - **Where the accounting term is genuinely ambiguous to a reader, take the plainer
+    *accounting* term, not an invented one** — "From account" / "To account" on the transaction
+    form rather than "Debit" / "Credit", which a bank statement labels the opposite way round.
+- **A formal term in prose is allowed only when it is the term that must appear** — on a
+  statutory filing, in a regulation, or in an established product convention. Pair it with its
+  plain meaning once, at first use, and then use it consistently.
 - **A document that needs more than a handful of domain terms MUST carry a short glossary
   table near the top**, giving each term's plain meaning in one line. `spec.md` for
   `002-double-entry-ledger` is the reference example.
@@ -232,6 +258,12 @@ and an unreviewed specification silently encodes whatever the author assumed.
 **Rationale**: A specification is a shared agreement, and an agreement only one party can read
 is not shared. The cost of jargon here is not style — it is decisions approved without being
 understood, and rework when the misunderstanding surfaces during implementation.
+
+A screen is not a specification, and the cost runs the other way. Its figures are read next to a
+bank statement, an invoice, a tax return and an accountant's question, all of which use the
+accounting word. A product that renames the concepts makes the reader translate twice, and gives
+them a number they cannot check against anything outside the app. The plain word teaches the
+term once, in the sub-line; the label carries the term itself.
 
 ## Technology & Platform Constraints
 
@@ -305,7 +337,9 @@ it was rejected — an unjustified violation blocks the plan. Reviewers verify t
 obligations (permission, validation, audit, SSE) and adherence to the Principle VI patterns on
 every change that touches a route or a detail sheet. On any change presented as a bug fix,
 reviewers verify the accompanying failing-then-passing test required by Principle V. On any
-specification, plan, or change to user-facing copy, reviewers verify Principle VII: no
-unexplained domain term, and a glossary where the document needs more than a few.
+specification, plan, or change to user-facing copy, reviewers verify Principle VII: in a
+document, no unexplained domain term and a glossary where it needs more than a few; on a screen,
+the standard accounting label with the plain wording beneath it, and the same words in any export
+of that screen.
 
-**Version**: 1.2.0 | **Ratified**: 2026-08-10 | **Last Amended**: 2026-08-15
+**Version**: 2.0.0 | **Ratified**: 2026-08-10 | **Last Amended**: 2026-08-22

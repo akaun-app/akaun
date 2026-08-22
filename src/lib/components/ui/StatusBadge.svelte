@@ -16,9 +16,11 @@
     paid: { label: "Paid", tone: "green" },
     received: { label: "Received", tone: "green" },
     // Ledger records: a record with no side on a shared owed account is paid the
-    // moment it exists; one that owes somebody reads owed until settlements
-    // cover it, and part-paid while they cover only some of it (FR-012–FR-014).
-    owed: { label: "Owed", tone: "red" },
+    // moment it exists; one that owes somebody reads outstanding until
+    // settlements cover it, and part-paid while they cover only some of it
+    // (FR-012–FR-014). The key stays `owed` — it is the status code the server
+    // and `record-status.ts` agree on, not a label.
+    owed: { label: "Outstanding", tone: "red" },
     "part-paid": { label: "Part paid", tone: "amber" },
     settled: { label: "Settled", tone: "green" },
     // Whether the bank agrees the money moved — a different question from

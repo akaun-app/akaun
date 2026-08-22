@@ -10,12 +10,16 @@ import {
   expenseCategoryBreakdown,
   recentExpenses,
   recentIncomes,
+  currentAssetsAsAt,
+  positionAsAt,
+  fundsFlowStatement,
 } from "$lib/server/queries/dashboard.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
   periodDateRange,
   periodMonthKeys,
   isDashboardPeriod,
+  toISODate,
 } from "$lib/dashboard-periods.js";
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -31,6 +35,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const exp = expenseTotals(db, periodStart, periodEnd);
   const inc = incomeTotals(db, periodStart, periodEnd);
   const outstanding = outstandingTotal(db);
+
+  // Position as at today, not as at the period end: "what am I worth" is a
+  // question about now, and a balance sheet dated last month would read as a
+  // stale bank balance. The period selector governs the period figures only.
+  const today = toISODate(now);
+  const currentAssets = currentAssetsAsAt(db, today);
+  const position = positionAsAt(db, today);
+
+  // What moved the funds over the selected period, split by activity. This is
+  // the one place capitalised equipment is visible on the dashboard.
+  const fundsFlow = fundsFlowStatement(db, periodStart, periodEnd);
 
   // Month-series scoped to the selected period — one GROUP BY per table, looked up by month key.
   const months = periodMonthKeys(period, now);
@@ -95,6 +110,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     incTotal: inc.total,
     net: inc.total - exp.total,
     outstanding,
+    currentAssets,
+    position,
+    fundsFlow,
     expCount: exp.count,
     incCount: inc.count,
     cashFlow,

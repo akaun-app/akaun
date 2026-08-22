@@ -1,4 +1,4 @@
-import { LedgerRecordKind } from "$lib/enums.js";
+import { DefaultAccountPurpose, LedgerRecordKind } from "$lib/enums.js";
 import { diffRecords, recordAudit } from "../audit.js";
 import { buildMovements } from "../ledger/entry-builder.js";
 import { ledgerEvents } from "../ledger/events.js";
@@ -6,6 +6,7 @@ import { canDeleteRecord, canEditField } from "../ledger/locking.js";
 import { toMinor } from "../ledger/money.js";
 import type {
   BuildInput,
+  BuildContext,
   LedgerDb,
   MovementDraft,
   RecordCreate,
@@ -13,11 +14,7 @@ import type {
   RecordView,
   Refusable,
 } from "../ledger/types.js";
-import {
-  accountRefs,
-  getAccount,
-  systemAccounts,
-} from "../queries/accounts.js";
+import { accountRefs, getAccount } from "../queries/accounts.js";
 import { sidesFromAccounts } from "../ledger/sides-from-accounts.js";
 import {
   deleteRecord,
@@ -30,6 +27,7 @@ import {
   updateRecord,
 } from "../queries/ledger.js";
 import { touchAccounts } from "./accounts.js";
+import { requireAccountDefault } from "./account-defaults.js";
 
 /**
  * Creating, changing and removing a record.
@@ -62,18 +60,48 @@ function accountIdsIn(sides: RecordCreate | BuildInput): number[] {
 }
 
 /** Gathers everything `buildMovements` needs, in one place. */
-function contextFor(db: LedgerDb, sides: RecordCreate | BuildInput) {
-  const system = systemAccounts(db);
+function contextFor(
+  db: LedgerDb,
+  sides: RecordCreate | BuildInput,
+): Refusable<BuildContext> {
+  const needsReceivable =
+    sides.kind === "invoice-issue" ||
+    (sides.kind === "payment" && sides.direction === "we-receive");
+  const needsPayable =
+    (sides.kind === "expense" && sides.paidFromAccountId == null) ||
+    (sides.kind === "payment" && sides.direction === "we-pay");
+  const needsOpening = sides.kind === "opening-balance";
+
+  const resolve = (
+    needed: boolean,
+    purpose: Parameters<typeof requireAccountDefault>[1],
+  ) =>
+    needed
+      ? requireAccountDefault(db, purpose)
+      : ({ ok: true, value: 0 } as const);
+  const receivable = resolve(needsReceivable, DefaultAccountPurpose.Receivable);
+  if (!receivable.ok) return receivable;
+  const payable = resolve(needsPayable, DefaultAccountPurpose.Payable);
+  if (!payable.ok) return payable;
+  const openingBalances = resolve(
+    needsOpening,
+    DefaultAccountPurpose.OpeningBalances,
+  );
+  if (!openingBalances.ok) return openingBalances;
+
   return {
-    accounts: accountRefs(db, [
-      ...accountIdsIn(sides),
-      system.receivableAccountId,
-      system.payableAccountId,
-      system.openingBalancesAccountId,
-    ]),
-    receivableAccountId: system.receivableAccountId,
-    payableAccountId: system.payableAccountId,
-    openingBalancesAccountId: system.openingBalancesAccountId,
+    ok: true,
+    value: {
+      accounts: accountRefs(db, [
+        ...accountIdsIn(sides),
+        ...(needsReceivable ? [receivable.value] : []),
+        ...(needsPayable ? [payable.value] : []),
+        ...(needsOpening ? [openingBalances.value] : []),
+      ]),
+      receivableAccountId: receivable.value,
+      payableAccountId: payable.value,
+      openingBalancesAccountId: openingBalances.value,
+    },
   };
 }
 
@@ -103,9 +131,11 @@ export function createRecord(
 ): Refusable<RecordView> {
   const amountMinor = toMinor(data.amount, data.exchangeRate);
 
+  const context = contextFor(db, data);
+  if (!context.ok) return context;
   const built = buildMovements(
     { ...data, amountMinor } as BuildInput,
-    contextFor(db, data),
+    context.value,
   );
   if (!built.ok) return built;
 
@@ -188,6 +218,8 @@ export function patchRecord(
     if (!sides.ok) return sides;
     const amount = patch.amount ?? existing.amount;
     const exchangeRate = patch.exchangeRate ?? existing.exchangeRate;
+    const context = contextFor(db, sides.value);
+    if (!context.ok) return context;
     const built = buildMovements(
       {
         ...sides.value,
@@ -195,7 +227,7 @@ export function patchRecord(
         contactId:
           patch.contactId !== undefined ? patch.contactId : existing.contactId,
       } as BuildInput,
-      contextFor(db, sides.value),
+      context.value,
     );
     if (!built.ok) return built;
     movements = built.value;
@@ -278,6 +310,18 @@ function sidesFor(
   // The `adjustments` gate is applied by the route before this runs; the
   // derivation is pure, so asking it twice gives the same answer.
   if (patch.fromAccountId !== undefined && patch.toAccountId !== undefined) {
+    const receivable = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.Receivable,
+    );
+    if (!receivable.ok) return receivable;
+    const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
+    if (!payable.ok) return payable;
+    const opening = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.OpeningBalances,
+    );
+    if (!opening.ok) return opening;
     const derived = sidesFromAccounts(
       {
         fromAccountId: patch.fromAccountId,
@@ -292,12 +336,16 @@ function sidesFor(
           return account
             ? {
                 id: account.id,
+                type: account.type,
                 role: account.role,
                 archived: account.archivedAt !== null,
               }
             : null;
         },
         canAdjust: true,
+        receivableAccountId: receivable.value,
+        payableAccountId: payable.value,
+        openingBalancesAccountId: opening.value,
       },
     );
     if (!derived.ok) return derived;

@@ -35,6 +35,8 @@ export type LegacyDropState = {
   legacyRowCount: number;
   /** `settings.ledger_upgrade_state` → phase, or null if never recorded. */
   upgradePhase: string | null;
+  /** Explicit composed chart-conversion completion marker, when schema exists. */
+  chartMigrationCompleted: boolean;
 };
 
 const REFUSAL = `This release removes the old expense, income and claim tables, and this installation still has records in them that have not been converted. Install version ${PREVIOUS_RELEASE} first, let it start once so it can convert them, then install this version. Your database has not been changed.`;
@@ -50,7 +52,9 @@ export function legacyDropAllowed(state: LegacyDropState): Allowed {
 
   // 3. Rows, and the conversion finished: what is left are the old copies of
   //    records that now live in `ledger_records`. Safe to drop.
-  if (state.upgradePhase === "done") return { ok: true };
+  if (state.upgradePhase === "done" || state.chartMigrationCompleted) {
+    return { ok: true };
+  }
 
   // 4. Rows, and the conversion did not finish. The only refusal there is.
   return { ok: false, reason: REFUSAL };
@@ -76,6 +80,7 @@ export function readLegacyDropStateAt(databasePath: string): LegacyDropState {
       legacyTablesPresent: false,
       legacyRowCount: 0,
       upgradePhase: null,
+      chartMigrationCompleted: false,
     };
   }
 
@@ -100,6 +105,7 @@ export function readLegacyDropStateFrom(raw: Database): LegacyDropState {
       legacyTablesPresent: false,
       legacyRowCount: 0,
       upgradePhase: null,
+      chartMigrationCompleted: false,
     };
   }
 
@@ -134,5 +140,25 @@ export function readLegacyDropStateFrom(raw: Database): LegacyDropState {
     }
   }
 
-  return { legacyTablesPresent: true, legacyRowCount, upgradePhase };
+  const migrationRunsTable = raw
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_migration_runs'",
+    )
+    .get();
+  const chartMigrationCompleted = migrationRunsTable
+    ? Boolean(
+        raw
+          .query(
+            "SELECT 1 FROM account_migration_runs WHERE version = ? AND status = 'completed'",
+          )
+          .get("004-standardize-chart-accounts-v1"),
+      )
+    : false;
+
+  return {
+    legacyTablesPresent: true,
+    legacyRowCount,
+    upgradePhase,
+    chartMigrationCompleted,
+  };
 }

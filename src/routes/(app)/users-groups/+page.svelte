@@ -52,17 +52,17 @@
 	// Quotations and invoices are deliberately absent here as they were before —
 	// this screen has never offered them.
 	const RESOURCES = [
-		{ id: 'dashboard', label: 'Dashboard', description: 'The opening summary of money in, money out and what is still owed.' },
+		{ id: 'dashboard', label: 'Dashboard', description: 'The opening summary of income, expenses and outstanding balances.' },
 		{
 			id: 'records',
 			label: 'Records',
 			description:
-				'Everything that happened with money — purchases, sales, transfers, payments.'
+				'Every transaction — income, expenses, transfers, payments and journal entries.'
 		},
 		{ id: 'import', label: 'Auto Import', description: 'Reading receipts and statements and turning them into records.' },
 		{ id: 'contacts', label: 'Contacts', description: 'The people and businesses records are attached to.' },
 		{ id: 'reconciliation', label: 'Reconciliation', description: 'Checking an account against the statement its bank sends.' },
-		{ id: 'accounts', label: 'Accounts', description: 'The list of accounts money moves between, including spending categories.' },
+		{ id: 'accounts', label: 'Accounts', description: 'The chart of accounts: every asset, liability, equity, revenue and expense account.' },
 		{ id: 'reports', label: 'Reports', description: 'Profit and loss, balance sheet and partner statements. Viewing only — a report is never edited.' },
 		// Off for everyone by default: a record written this way can make the
 		// books say anything and still add up (FR-031a).
@@ -598,8 +598,6 @@
 
 		<!-- User edit sheet -->
 		<Sheet.Root open={userSheetOpen} onOpenChange={(o) => { if (!o) closeUserSheet(); }}>
-			<Sheet.Portal>
-				<Sheet.Overlay />
 				<Sheet.Content side={panelSide} style={isMobile ? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;' : 'width:440px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden;'}>
 					{#if editingUser}
 						<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);">
@@ -794,7 +792,6 @@
 						</div>
 					{/if}
 				</Sheet.Content>
-			</Sheet.Portal>
 		</Sheet.Root>
 
 	{:else}
@@ -901,8 +898,8 @@
 					</div>
 
 					<p class="ax-permnote">
-						<Lock size={12} /> Claims always show a minimal summary (item, amount, date) for attached expenses,
-						so <b>Claims · View</b> never leaks full expense detail.
+						<Lock size={12} /> Reports is view-only: a report shows figures and never changes
+						them, so <b>Add</b>, <b>Change</b> and <b>Delete</b> have no effect there.
 					</p>
 				{/if}
 			</div>
@@ -989,8 +986,6 @@
 		<!-- Mobile: bottom sheet for group detail -->
 		{#if isMobile}
 		<Sheet.Root bind:open={groupSheetOpen}>
-			<Sheet.Portal>
-				<Sheet.Overlay />
 				<Sheet.Content side="bottom" style="height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden;">
 					{#if selectedGroup}
 						<div style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border); flex-shrink:0;">
@@ -1039,7 +1034,6 @@
 						{/if}
 					{/if}
 				</Sheet.Content>
-			</Sheet.Portal>
 		</Sheet.Root>
 		{/if}
 	{/if}

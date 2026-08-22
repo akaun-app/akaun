@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
@@ -18,6 +19,24 @@ const httpsOptions = hasCustomCert
 			cert: fs.readFileSync(process.env.SSL_CERT_PATH!)
 		}
 	: undefined;
+
+// The version the UI shows, handed to SvelteKit as kit.version.name below. Git is the source of
+// truth: `describe` gives the tag on a tagged build, the upstream tag plus its distance on a local
+// build past it, and appends -dirty when a file is uncommitted. AKAUN_VERSION wins so a build with
+// no .git can still be stamped — the Docker build dockerignores .git and the bun-alpine image has
+// no git binary, so CI computes this on the runner and passes it in.
+function resolveAppVersion(): string {
+	if (process.env.AKAUN_VERSION) return process.env.AKAUN_VERSION;
+	try {
+		return execSync('git describe --tags --always --dirty', {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'] // swallow git's stderr when there is no repo
+		}).trim();
+	} catch {
+		return 'unknown';
+	}
+}
+const appVersion = resolveAppVersion();
 
 export default defineConfig({
 	plugins: [
@@ -64,6 +83,10 @@ export default defineConfig({
 			// would block third-party API-token requests with non-JSON bodies (e.g. file uploads).
 			// hooks.server.ts implements the real CSRF check, scoped to cookie-session requests only.
 			csrf: { trustedOrigins: ['*'] },
+
+			// Surfaces as `version` from $app/environment, which $lib/version.ts formats for the
+			// sidebar. Default is Date.now(); a git-derived name is what makes it meaningful.
+			version: { name: appVersion },
 
 			adapter: adapter()
 		})
@@ -167,7 +190,7 @@ export default defineConfig({
 				test: {
 					name: 'server',
 					environment: 'node',
-					include: ['src/**/*.{test,spec}.{js,ts}'],
+					include: ['src/**/*.{test,spec}.{js,ts}', 'scripts/**/*.{test,spec}.{js,ts}'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			}

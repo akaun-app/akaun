@@ -24,7 +24,7 @@ import {
   insertAllocation,
   insertStatement,
   listAllocations,
-  listMoneyHoldingAccounts,
+  listReconciliableAccounts,
   listLines,
   listMovementAllocations,
   listMovementCandidates,
@@ -123,13 +123,13 @@ export function getStatementDetail(
 }
 
 /** Refuse an account that is not somewhere money actually sits (FR-021). */
-function requireMoneyHoldingAccount(db: ReconciliationDb, accountId: number) {
-  const account = listMoneyHoldingAccounts(db).find(
+function requirePostingAccount(db: ReconciliationDb, accountId: number) {
+  const account = listReconciliableAccounts(db).find(
     (candidate) => candidate.id === accountId,
   );
   if (!account)
     throw new ReconciliationError(
-      "Choose a bank, wallet, cash or card account for this statement.",
+      "Choose an active account without children for this statement.",
       409,
     );
   return account;
@@ -145,7 +145,7 @@ export function createStatement(
   },
 ) {
   const userId = authorize(locals, "add");
-  requireMoneyHoldingAccount(db, input.accountId);
+  requirePostingAccount(db, input.accountId);
   const s = insertStatement(db, {
     ...input,
     extractionState: StatementExtractionState.Extracting,
@@ -180,7 +180,7 @@ export function setStatementAccount(
   const userId = authorize(locals, "change");
   const before = getStatement(db, id);
   if (!before) throw new ReconciliationError("Bank statement not found", 404);
-  requireMoneyHoldingAccount(db, accountId);
+  requirePostingAccount(db, accountId);
   if (before.accountId === accountId) return statementSummary(db, before);
 
   const lineIds = new Set(listLines(db, id).map((line) => line.id));
@@ -355,7 +355,7 @@ export function workspace(
     lines: lineRemainders(db),
     statements,
     allocations: listAllocations(db),
-    accounts: listMoneyHoldingAccounts(db),
+    accounts: listReconciliableAccounts(db),
   };
 }
 
@@ -590,7 +590,7 @@ export function createTransferForLine(
       "A transfer needs two different accounts.",
       409,
     );
-  requireMoneyHoldingAccount(db, input.otherAccountId);
+  requirePostingAccount(db, input.otherAccountId);
   if (listAllocations(db).some((a) => a.lineId === lineId))
     throw new ReconciliationError(
       "This transaction is already matched. Undo the match before recording it as a transfer.",

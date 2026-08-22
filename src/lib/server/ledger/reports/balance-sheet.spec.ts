@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, type AccountRoleCode } from "$lib/enums.js";
+import { AccountRole, AccountType, type AccountRoleCode } from "$lib/enums.js";
 import { balanceSheet } from "./balance-sheet.js";
 import { profitLoss } from "./profit-loss.js";
+import { accountTypeFor } from "../account-type.js";
 import type { AccountTotal, BalanceSheetSection, Minor } from "../types.js";
 
 /** A dated side of a record, so a test can ask "what did it look like then?". */
@@ -31,7 +32,10 @@ function totalsIn(
     else
       byAccount.set(m.accountId, {
         accountId: m.accountId,
+        code: m.accountId,
         accountName: m.accountName,
+        type: accountTypeFor(m.role),
+        parentId: null,
         role: m.role,
         contactId: null,
         amountMinor: m.amountMinor,
@@ -160,6 +164,102 @@ describe("what the business owns, owes, and what the owners have in it", () => {
 
   it("echoes the date it was drawn up at", () => {
     expect(sheet.asAt).toBe("2026-02-28");
+  });
+});
+
+describe("fixed types and hierarchy", () => {
+  it("classifies direct fixed types and uses their normal display signs", () => {
+    const sheet = balanceSheet({
+      asAt: "2026-03-31",
+      totals: [
+        {
+          ...totalsIn(
+            [m("2026-03-01", 81, "Custom asset", AccountRole.Bank, 900)],
+            null,
+            "2026-03-31",
+          )[0],
+          type: AccountType.Asset,
+        },
+        {
+          ...totalsIn(
+            [m("2026-03-01", 82, "Custom liability", AccountRole.Bank, -400)],
+            null,
+            "2026-03-31",
+          )[0],
+          type: AccountType.Liability,
+        },
+        {
+          ...totalsIn(
+            [m("2026-03-01", 83, "Custom equity", AccountRole.Bank, -500)],
+            null,
+            "2026-03-31",
+          )[0],
+          type: AccountType.Equity,
+        },
+      ],
+    });
+    expect(
+      sheet.owned.lines.find((line) => line.accountId === 81)?.amountMinor,
+    ).toBe(900);
+    expect(
+      sheet.owed.lines.find((line) => line.accountId === 82)?.amountMinor,
+    ).toBe(400);
+    expect(
+      sheet.ownersStake.lines.find((line) => line.accountId === 83)
+        ?.amountMinor,
+    ).toBe(500);
+  });
+
+  it("shows parent subtotals but counts each leaf only once in section totals", () => {
+    const sheet = balanceSheet({
+      asAt: "2026-03-31",
+      totals: [
+        {
+          accountId: 90,
+          code: 1000,
+          accountName: "Current assets",
+          type: AccountType.Asset,
+          parentId: null,
+          role: AccountRole.Bank,
+          contactId: null,
+          amountMinor: 0,
+        },
+        {
+          accountId: 91,
+          code: 1010,
+          accountName: "Bank",
+          type: AccountType.Asset,
+          parentId: 90,
+          role: AccountRole.Bank,
+          contactId: null,
+          amountMinor: 700,
+        },
+        {
+          accountId: 92,
+          code: 1020,
+          accountName: "Cash",
+          type: AccountType.Asset,
+          parentId: 90,
+          role: AccountRole.Bank,
+          contactId: null,
+          amountMinor: 300,
+        },
+        {
+          accountId: 93,
+          code: 2000,
+          accountName: "Payable",
+          type: AccountType.Liability,
+          parentId: null,
+          role: AccountRole.Payable,
+          contactId: null,
+          amountMinor: -1_000,
+        },
+      ],
+    });
+    expect(
+      sheet.owned.lines.find((line) => line.accountId === 90),
+    ).toMatchObject({ amountMinor: 1_000, isSubtotal: true });
+    expect(sheet.owned.totalMinor).toBe(1_000);
   });
 });
 

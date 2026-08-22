@@ -1,10 +1,10 @@
 import {
-  AccountRole,
+  AccountType,
   LedgerRecordKind,
-  type AccountRoleCode,
+  type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
-import { MONEY_POT_ROLES } from "./account-type.js";
+import { isEquipmentAccount, isMoneyPotAccount } from "./account-type.js";
 import type { Minor, RecordCreateSides, Refusable } from "./types.js";
 
 /**
@@ -28,7 +28,12 @@ import type { Minor, RecordCreateSides, Refusable } from "./types.js";
 /** The little a derivation needs to know about an account. */
 export type SidesAccount = {
   id: number;
-  role: AccountRoleCode;
+  type: AccountTypeCode;
+  /**
+   * Needed because `type` alone cannot tell a bank account from equipment: both
+   * are assets, and only one of them holds money. See `isMoneyPotAccount`.
+   */
+  role: number;
   archived: boolean;
 };
 
@@ -56,6 +61,9 @@ export type SidesContext = {
   accountById: (id: number) => SidesAccount | null;
   /** Whether the caller may write a record between any two accounts (FR-031c). */
   canAdjust: boolean;
+  receivableAccountId: number;
+  payableAccountId: number;
+  openingBalancesAccountId: number;
 };
 
 const SAME_ACCOUNT =
@@ -64,17 +72,20 @@ const NEEDS_CONTACT = "Say who this is owed to or by.";
 const NEEDS_ADJUSTMENTS =
   "These two accounts need the Adjustments ability. Ask an administrator for it, or choose an everyday account on each side.";
 
-function isMoneyPot(role: AccountRoleCode): boolean {
-  return MONEY_POT_ROLES.includes(role);
+function isMoneyPot(account: SidesAccount): boolean {
+  return isMoneyPotAccount(account);
 }
 
 /** What a record is "for": a spending category, an earning category, equipment. */
-function isSpendingCategory(role: AccountRoleCode): boolean {
-  return role === AccountRole.ExpenseCategory || role === AccountRole.Equipment;
+function isSpendingCategory(account: SidesAccount): boolean {
+  return account.type === AccountType.Expense || isEquipmentAccount(account);
 }
 
-function isOwedRole(role: AccountRoleCode): boolean {
-  return role === AccountRole.Receivable || role === AccountRole.Payable;
+function isOwedAccount(account: SidesAccount, ctx: SidesContext): boolean {
+  return (
+    account.id === ctx.receivableAccountId ||
+    account.id === ctx.payableAccountId
+  );
 }
 
 /**
@@ -94,9 +105,12 @@ function isOwedRole(role: AccountRoleCode): boolean {
  *
  * Returns the kind to file it under, or null when it is a real adjustment.
  */
-function everydayKindFor(sides: SidesAccount[]): LedgerRecordKindCode | null {
+function everydayKindFor(
+  sides: SidesAccount[],
+  ctx: SidesContext,
+): LedgerRecordKindCode | null {
   const holdsMoney = sides.filter(
-    (account) => isMoneyPot(account.role) || isOwedRole(account.role),
+    (account) => isMoneyPot(account) || isOwedAccount(account, ctx),
   );
   if (holdsMoney.length !== 1) return null;
 
@@ -104,11 +118,11 @@ function everydayKindFor(sides: SidesAccount[]): LedgerRecordKindCode | null {
   if (rest.length === 0) return null;
 
   // Every other side must say what the money was for.
-  const allSpending = rest.every((account) => isSpendingCategory(account.role));
+  const allSpending = rest.every(isSpendingCategory);
   if (allSpending) return LedgerRecordKind.Expense;
 
   const allEarning = rest.every(
-    (account) => account.role === AccountRole.IncomeCategory,
+    (account) => account.type === AccountType.Revenue,
   );
   if (allEarning) return LedgerRecordKind.Income;
 
@@ -155,11 +169,11 @@ export function sidesFromAccounts(
   // A side on a shared owed account is meaningless without saying whose it is
   // (FR-008) — the balance would be owed to nobody.
   const hasContact = input.contactId !== null && input.contactId !== undefined;
-  if ((isOwedRole(from.role) || isOwedRole(to.role)) && !hasContact) {
+  if ((isOwedAccount(from, ctx) || isOwedAccount(to, ctx)) && !hasContact) {
     return { ok: false, reason: NEEDS_CONTACT };
   }
 
-  const sides = derive(from, to, input);
+  const sides = derive(from, to, input, ctx);
 
   // Checked after the derivation, never before: whether a record needs the
   // ability is a fact about the accounts it names, not about what the client
@@ -188,11 +202,11 @@ export function sidesFromAccounts(
 
     // A shared owed side is meaningless without saying whose it is, on an
     // extra side exactly as on a named one (FR-008).
-    if (named.some((account) => isOwedRole(account.role)) && !hasContact) {
+    if (named.some((account) => isOwedAccount(account, ctx)) && !hasContact) {
       return { ok: false, reason: NEEDS_CONTACT };
     }
 
-    const everyday = everydayKindFor(named);
+    const everyday = everydayKindFor(named, ctx);
     if (everyday === null && !ctx.canAdjust) {
       return { ok: false, reason: NEEDS_ADJUSTMENTS };
     }
@@ -207,31 +221,42 @@ function derive(
   from: SidesAccount,
   to: SidesAccount,
   input: SidesInput,
+  ctx: SidesContext,
 ): RecordCreateSides {
   // A third side is never an everyday record, whatever the first two are.
   const hasExtraSides = (input.extraSides?.length ?? 0) > 0;
   if (hasExtraSides) return journalOf(from, to, input);
 
   // Starting balances are their own kind whatever they face.
-  if (from.role === AccountRole.OpeningBalances) {
+  if (from.id === ctx.openingBalancesAccountId) {
     return { kind: "opening-balance", accountId: to.id };
   }
-  if (to.role === AccountRole.OpeningBalances) {
+  if (to.id === ctx.openingBalancesAccountId) {
     return { kind: "opening-balance", accountId: from.id };
   }
 
-  if (isMoneyPot(from.role)) {
-    if (isSpendingCategory(to.role)) {
+  // Receivable is itself an Asset, so its saved identity must be checked
+  // before the general Asset-to-Asset transfer rule.
+  if (from.id === ctx.receivableAccountId && isMoneyPot(to)) {
+    return {
+      kind: "payment",
+      paidFromAccountId: to.id,
+      direction: "we-receive",
+    };
+  }
+
+  if (isMoneyPot(from)) {
+    if (isSpendingCategory(to)) {
       return {
         kind: "expense",
         categoryAccountId: to.id,
         paidFromAccountId: from.id,
       };
     }
-    if (isMoneyPot(to.role)) {
+    if (isMoneyPot(to)) {
       return { kind: "transfer", fromAccountId: from.id, toAccountId: to.id };
     }
-    if (to.role === AccountRole.Payable) {
+    if (to.id === ctx.payableAccountId) {
       // Money leaving an account to settle what the business owes.
       return {
         kind: "payment",
@@ -241,7 +266,7 @@ function derive(
     }
   }
 
-  if (from.role === AccountRole.IncomeCategory && isMoneyPot(to.role)) {
+  if (from.type === AccountType.Revenue && isMoneyPot(to)) {
     return {
       kind: "income",
       categoryAccountId: from.id,
@@ -249,16 +274,7 @@ function derive(
     };
   }
 
-  if (from.role === AccountRole.Receivable && isMoneyPot(to.role)) {
-    // Somebody paying the business what they owed it.
-    return {
-      kind: "payment",
-      paidFromAccountId: to.id,
-      direction: "we-receive",
-    };
-  }
-
-  if (from.role === AccountRole.Payable && isSpendingCategory(to.role)) {
+  if (from.id === ctx.payableAccountId && isSpendingCategory(to)) {
     // Somebody else paid for this. A null paying side is what makes it read as
     // owed to that person rather than as already paid (FR-008, FR-011).
     return {

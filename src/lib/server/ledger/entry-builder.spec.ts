@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole } from "$lib/enums.js";
+import { AccountType } from "$lib/enums.js";
 import { buildMovements } from "./entry-builder.js";
 import type { AccountRef, BuildContext, BuildInput, MovementDraft } from "./types.js";
 
-// A small chart of accounts to build against. Ids are arbitrary; only the roles
-// matter to the rules.
+// A small chart of accounts to build against. Special-purpose accounts are
+// identified by the saved IDs in CTX, not by retired account roles.
 const BANK = 1;
 const WALLET = 2;
 const GROCERIES = 3;
@@ -15,14 +15,14 @@ const OPENING = 7;
 const LAPTOP = 8;
 
 const REFS: AccountRef[] = [
-  { id: BANK, role: AccountRole.Bank },
-  { id: WALLET, role: AccountRole.Wallet },
-  { id: GROCERIES, role: AccountRole.ExpenseCategory },
-  { id: SALES, role: AccountRole.IncomeCategory },
-  { id: RECEIVABLE, role: AccountRole.Receivable },
-  { id: PAYABLE, role: AccountRole.Payable },
-  { id: OPENING, role: AccountRole.OpeningBalances },
-  { id: LAPTOP, role: AccountRole.Equipment },
+  { id: BANK, type: AccountType.Asset },
+  { id: WALLET, type: AccountType.Asset },
+  { id: GROCERIES, type: AccountType.Expense },
+  { id: SALES, type: AccountType.Revenue },
+  { id: RECEIVABLE, type: AccountType.Asset },
+  { id: PAYABLE, type: AccountType.Liability },
+  { id: OPENING, type: AccountType.Equity },
+  { id: LAPTOP, type: AccountType.Asset },
 ];
 
 const CTX: BuildContext = {

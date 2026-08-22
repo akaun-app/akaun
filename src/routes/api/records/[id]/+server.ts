@@ -17,6 +17,8 @@ import {
 import { isValidDate } from "$lib/server/date.js";
 import { getAccount } from "$lib/server/queries/accounts.js";
 import { sidesFromAccounts } from "$lib/server/ledger/sides-from-accounts.js";
+import { DefaultAccountPurpose } from "$lib/enums.js";
+import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { toMinor } from "$lib/server/ledger/money.js";
 
 const accountId = z.number().int().positive();
@@ -90,6 +92,12 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
   // (FR-031c). The derivation is pure, so the service asking it again below
   // gets the same answer.
   if (patch.fromAccountId !== undefined && patch.toAccountId !== undefined) {
+    const receivable = requireAccountDefault(db, DefaultAccountPurpose.Receivable);
+    if (!receivable.ok) return refused(receivable.reason);
+    const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
+    if (!payable.ok) return refused(payable.reason);
+    const opening = requireAccountDefault(db, DefaultAccountPurpose.OpeningBalances);
+    if (!opening.ok) return refused(opening.reason);
     const derived = sidesFromAccounts(
       {
         fromAccountId: patch.fromAccountId,
@@ -107,12 +115,16 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
           return account
             ? {
                 id: account.id,
+                type: account.type,
                 role: account.role,
                 archived: account.archivedAt !== null,
               }
             : null;
         },
         canAdjust: hasPermission(locals, "adjustments", "change"),
+        receivableAccountId: receivable.value,
+        payableAccountId: payable.value,
+        openingBalancesAccountId: opening.value,
       },
     );
     if (!derived.ok) return refused(derived.reason);

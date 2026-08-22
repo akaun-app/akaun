@@ -25,6 +25,7 @@ export const GET: RequestHandler = ({ locals }) => {
       events: {
         "account-update": "account-update",
         "account-deleted": "account-deleted",
+        "accounts-refresh": "accounts-refresh",
       },
     },
   ]);

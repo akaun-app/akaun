@@ -31,6 +31,7 @@ function state(overrides: Partial<LegacyDropState> = {}): LegacyDropState {
     legacyTablesPresent: true,
     legacyRowCount: 0,
     upgradePhase: "done",
+    chartMigrationCompleted: false,
     ...overrides,
   };
 }
@@ -60,6 +61,17 @@ describe("legacyDropAllowed", () => {
   it("allows when the tables hold rows and the conversion finished", () => {
     const result = legacyDropAllowed(
       state({ legacyRowCount: 412, upgradePhase: "done" }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows legacy cleanup after the composed chart conversion completed", () => {
+    const result = legacyDropAllowed(
+      state({
+        legacyRowCount: 412,
+        upgradePhase: null,
+        chartMigrationCompleted: true,
+      }),
     );
     expect(result.ok).toBe(true);
   });

@@ -7,9 +7,11 @@ declare global {
 			permissions: EffectivePermissions | null;
 			isSuperuser: boolean;
 		}
-		interface PageState {
-			viaPush?: boolean;
-		}
+		// `PageState.viaPush` was here. Detail views were drawers opened with
+		// shallow routing, and it recorded whether the drawer had pushed the
+		// history entry it would later pop. Detail views are pages now, so the
+		// navigation is real and the browser keeps the entry itself.
+		interface PageState {}
 	}
 }
 

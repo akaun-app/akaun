@@ -52,17 +52,28 @@ export type Allowed = { ok: true } | { ok: false; reason: string };
 
 export type AccountRow = {
   id: number;
-  role: AccountRoleCode;
+  /** Legacy storage value retained only until the conversion release drops the column. */
+  role: number;
+  code?: number;
+  type: AccountTypeCode;
   name: string;
+  parentId?: number | null;
+  mergedIntoAccountId?: number | null;
   contactId: number | null;
   isSystem: boolean;
   rank: string;
   archivedAt: string | null;
 };
 
-/** What `GET /api/accounts` returns for one account. `type` is derived, never stored. */
+/** Account query view. Legacy fields remain until every UI consumer is migrated. */
 export type AccountView = AccountRow & {
-  type: AccountTypeCode;
+  active?: boolean;
+  hasChildren?: boolean;
+  postingEligible?: boolean;
+  owedContactRequired?: boolean;
+  directBalanceMinor?: Minor;
+  rolledUpBalanceMinor?: Minor;
+  path?: string[];
   balanceMinor: Minor;
   movementCount: number;
   canDelete: boolean;
@@ -71,14 +82,19 @@ export type AccountView = AccountRow & {
 };
 
 /** The minimum an `entry-builder` rule needs to know about an account. */
-export type AccountRef = { id: number; role: AccountRoleCode };
+export type AccountRef = { id: number; type: AccountTypeCode };
 
 export type AccountCreate = {
-  role: AccountRoleCode;
   name: string;
-  rank?: string;
+  type: AccountTypeCode;
+  parentId?: number | null;
 };
-export type AccountPatch = { name?: string; rank?: string; archived?: boolean };
+export type AccountPatch = {
+  name?: string;
+  type?: AccountTypeCode;
+  parentId?: number | null;
+  active?: boolean;
+};
 
 /** The system accounts the upgrade seeds, resolved once per request. */
 export type SystemAccountIds = {
@@ -132,7 +148,15 @@ export type MovementView = {
   id: number;
   accountId: number;
   accountName: string;
-  accountRole: AccountRoleCode;
+  accountType: AccountTypeCode;
+  /**
+   * Carried beside the type because the two together are what say whether this
+   * side is a place money sits or a statement of what it was for: equipment is
+   * an asset that belongs with the categories (002 FR-006b), and the type alone
+   * cannot tell it from a bank account. `isCategoryMovement` in
+   * `components/accounts/display-sign.ts` is the client's copy of that rule.
+   */
+  accountRole: number;
   amountMinor: Minor;
 };
 
@@ -451,6 +475,9 @@ export type ReportLine = {
   accountId: number;
   accountName: string;
   amountMinor: Minor;
+  parentId?: number | null;
+  depth?: number;
+  isSubtotal?: boolean;
 };
 
 export type ProfitLossReport = {
@@ -537,7 +564,10 @@ export type CsvTable = {
 /** One account's total over a date range, or up to a date. */
 export type AccountTotal = {
   accountId: number;
+  code: number;
   accountName: string;
+  type: AccountTypeCode;
+  parentId: number | null;
   role: AccountRoleCode;
   contactId: number | null;
   amountMinor: Minor;

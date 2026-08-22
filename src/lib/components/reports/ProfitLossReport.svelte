@@ -25,17 +25,17 @@
 
 	const sections = $derived([
 		{
-			title: 'Money coming in',
-			sub: 'What the business earned, by where it came from',
+			title: 'Revenue',
+			sub: 'What the business earned, by revenue account',
 			lines: report.income,
-			totalLabel: 'Total money coming in',
+			totalLabel: 'Total revenue',
 			totalMinor: report.totalIncomeMinor
 		},
 		{
-			title: 'Money going out',
-			sub: 'What the business spent, by what it was spent on',
+			title: 'Expenses',
+			sub: 'What the business spent, by expense account',
 			lines: report.expenses,
-			totalLabel: 'Total money going out',
+			totalLabel: 'Total expenses',
 			totalMinor: report.totalExpensesMinor
 		}
 	]);
@@ -44,9 +44,9 @@
 <div class="rep-scroll">
 	<div class="rep-result">
 		<div>
-			<div class="rep-result-label">What is left</div>
+			<div class="rep-result-label">{report.resultMinor < 0 ? 'Net loss' : 'Net profit'}</div>
 			<div class="rep-result-sub">
-				Money coming in less money going out, {formatDate(report.dateFrom)} to {formatDate(
+				Revenue less expenses, {formatDate(report.dateFrom)} to {formatDate(
 					report.dateTo
 				)}
 			</div>
@@ -79,7 +79,7 @@
 											class="rep-open related-link"
 											onclick={() => openCategory(line.accountId)}
 										>
-											<span>{line.accountName}</span>
+											<span style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`} class:font-semibold={line.isSubtotal}>{line.accountName}</span>
 											<ChevronRight size={13} />
 										</button>
 									</td>

@@ -24,15 +24,19 @@ export const init = async () => {
   // `records` ability for a fresh install, and this rewrites the two abilities it
   // replaces for an existing one (FR-029).
   applyRecordsPermission();
-  // The chart of accounts a new installation starts with. This is what the
-  // ledger upgrade's account seeding did on a fresh install; the upgrade itself
-  // is gone with the tables it converted (research.md R-06).
+  // The chart of accounts a new installation starts with. An installation that
+  // had books already has every seeded code by now — `db/auto-upgrade.ts` runs
+  // before this, at module load in `createDb()`, and `migrateAccountChart` either
+  // renames a legacy account onto each seeded name or creates the seed — so this
+  // is a no-op there and only does work on a fresh install (research.md R-06).
   seedAccounts(db);
   ensureDefaultTemplate();
-  // `ensureLedgerUpgrade()` was called here. The conversion it ran is finished
-  // for every installation this release can start against — `legacy-drop-guard`
-  // refuses to start one where it is not — and the tables it read are gone, so
-  // the module went with them (FR-037, research.md R-06).
+  // `ensureLedgerUpgrade()` was called here, and the conversion is self-running
+  // again — but it cannot run from `init()`. `migrate()` applies 0015, which drops
+  // the tables the conversion reads, and that happens at module load in
+  // `createDb()`, long before this. So it moved *earlier* rather than away:
+  // `db/auto-upgrade.ts`, called before the database is even opened for writing
+  // (002 FR-037, research.md R-06).
   startImportWorker();
 };
 

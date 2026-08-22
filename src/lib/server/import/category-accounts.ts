@@ -1,4 +1,5 @@
-import { AccountRole, type AccountRoleCode } from "$lib/enums.js";
+import { AccountType, type AccountTypeCode } from "$lib/enums.js";
+import { isEquipmentAccount } from "../ledger/account-type.js";
 import { listAccounts } from "../queries/accounts.js";
 import type { LedgerDb } from "../ledger/types.js";
 
@@ -17,12 +18,9 @@ export type DocumentKind = "expense" | "income";
 export type CategoryChoice = { id: number; name: string };
 
 /** What each kind of document calls a category — the same lists the two screens offer. */
-const CATEGORY_ROLES: Record<DocumentKind, AccountRoleCode[]> = {
-  // Equipment is on the expense list for the same reason it is on the expenses
-  // screen: buying something the business keeps is still an expense document
-  // (FR-006b). It is absent from income — equipment is bought, never earned.
-  expense: [AccountRole.ExpenseCategory, AccountRole.Equipment],
-  income: [AccountRole.IncomeCategory],
+const CATEGORY_TYPES: Record<DocumentKind, AccountTypeCode> = {
+  expense: AccountType.Expense,
+  income: AccountType.Revenue,
 };
 
 /** The categories a document of this kind can be filed under. */
@@ -30,10 +28,48 @@ export function categoryChoices(
   db: LedgerDb,
   kind: DocumentKind,
 ): CategoryChoice[] {
-  return listAccounts(db, { role: CATEGORY_ROLES[kind] }).map((a) => ({
-    id: a.id,
-    name: a.name,
-  }));
+  return listAccounts(db, {})
+    .filter(
+      (a) =>
+        a.postingEligible &&
+        // Equipment is on the expense list for the same reason it is on the
+        // record form: buying something the business keeps is still an expense
+        // document (002 FR-006b). It is an asset, so a type filter alone misses
+        // it. It is absent from income — equipment is bought, never earned.
+        (a.type === CATEGORY_TYPES[kind] ||
+          (kind === "expense" && isEquipmentAccount(a))),
+    )
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+    }));
+}
+
+export function categoryAccountForImport(
+  kind: DocumentKind,
+  choices: CategoryChoice[],
+  name: string | null | undefined,
+  uncategorisedExpenseAccountId: number | null,
+):
+  | { ok: true; value: { accountId: number; uncategorised: boolean } }
+  | { ok: false; reason: string } {
+  const matched = matchCategoryAccount(choices, name);
+  if (matched !== null) {
+    return { ok: true, value: { accountId: matched, uncategorised: false } };
+  }
+  if (kind === "expense" && uncategorisedExpenseAccountId !== null) {
+    return {
+      ok: true,
+      value: { accountId: uncategorisedExpenseAccountId, uncategorised: true },
+    };
+  }
+  return {
+    ok: false,
+    reason:
+      kind === "income"
+        ? "Choose a revenue account before importing this income."
+        : "Choose a valid saved account for expenses whose category is not known.",
+  };
 }
 
 /**

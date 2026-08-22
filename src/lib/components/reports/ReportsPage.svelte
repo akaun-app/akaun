@@ -28,17 +28,17 @@
 	const isMobile = $derived(screen.current);
 
 	const TABS: { view: ReportView; label: string }[] = [
-		{ view: 'profit-loss', label: 'Money in and out' },
-		{ view: 'balance-sheet', label: 'What it is worth' },
-		{ view: 'partners', label: 'The partners' },
-		{ view: 'owed-to-us', label: 'Owed to us' },
-		{ view: 'we-owe', label: 'We owe' }
+		{ view: 'profit-loss', label: 'Profit & Loss' },
+		{ view: 'balance-sheet', label: 'Balance Sheet' },
+		{ view: 'partners', label: "Partners' Equity" },
+		{ view: 'owed-to-us', label: 'Receivables' },
+		{ view: 'we-owe', label: 'Payables' }
 	];
 
 	const DESCRIPTIONS: Record<ReportView, string> = {
-		'profit-loss': 'What the business earned and spent over a period',
-		'balance-sheet': 'What it owns, what it owes, and what the owners have in it',
-		partners: 'What each partner put in, is owed of the result, and took out',
+		'profit-loss': 'Revenue and expenses for the period',
+		'balance-sheet': 'Assets, liabilities and equity as at a date',
+		partners: "Each partner's contributions, share of profit and drawings",
 		'owed-to-us': 'What customers still owe, and how overdue each one is',
 		'we-owe': 'What the business still has to pay, and when it falls due'
 	};

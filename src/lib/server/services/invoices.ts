@@ -7,18 +7,15 @@ import {
   type InvoiceCreate,
   type InvoicePatch,
 } from "$lib/server/queries/invoices.js";
-import { listAccounts } from "$lib/server/queries/accounts.js";
 import { createRecord } from "$lib/server/services/ledger.js";
+import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { invoiceEvents } from "$lib/server/finance/events.js";
-import { AccountRole, InvoiceStatus } from "$lib/enums.js";
+import { DefaultAccountPurpose, InvoiceStatus } from "$lib/enums.js";
 import type { LedgerDb, Refusable } from "$lib/server/ledger/types.js";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<any>;
-
-/** The income account an invoice earns into unless the user picks another (FR-018a). */
-const DEFAULT_INCOME_ACCOUNT_NAME = "Sales";
 
 export function createInvoice(
   db: Db,
@@ -46,17 +43,6 @@ export function removeInvoice(db: Db, id: number, actingUserId: number) {
   const result = _delete(db, id, actingUserId);
   if (result.ok) invoiceEvents.emit("invoice-delete", { id });
   return result;
-}
-
-/** The seeded Sales account, or null on books that somehow have no income categories. */
-function defaultIncomeAccountId(db: Db): number | null {
-  const incomeAccounts = listAccounts(db as LedgerDb, {
-    role: AccountRole.IncomeCategory,
-  });
-  const sales = incomeAccounts.find(
-    (a) => a.name === DEFAULT_INCOME_ACCOUNT_NAME,
-  );
-  return sales?.id ?? null;
 }
 
 /**
@@ -91,14 +77,15 @@ export function issueInvoice(
     };
   }
 
-  const incomeAccountId = options.incomeAccountId ?? defaultIncomeAccountId(db);
-  if (incomeAccountId === null) {
-    return {
-      ok: false,
-      reason:
-        "There is no income category to earn this into. Add one, then send the invoice.",
-    };
-  }
+  const savedIncome =
+    options.incomeAccountId === undefined
+      ? requireAccountDefault(
+          db as LedgerDb,
+          DefaultAccountPurpose.SalesRevenue,
+        )
+      : ({ ok: true, value: options.incomeAccountId } as const);
+  if (!savedIncome.ok) return savedIncome;
+  const incomeAccountId = savedIncome.value;
 
   const record = createRecord(db as LedgerDb, actingUserId, {
     kind: "invoice-issue",

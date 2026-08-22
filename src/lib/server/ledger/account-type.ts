@@ -1,78 +1,143 @@
 import { AccountRole, AccountType } from "$lib/enums.js";
 import type { AccountRoleCode, AccountTypeCode } from "$lib/enums.js";
 
-/**
- * What kind of thing an account is, and which way round a report shows it.
- *
- * An account's type is NEVER stored. It is looked up from the role by the one
- * map below, so the two can never disagree — storing both is exactly the drift
- * FR-006a exists to prevent (D-05).
- */
+export type NormalBalance = "debit" | "credit";
+export type FinancialStatement = "balance_sheet" | "income_statement";
 
-const TYPE_BY_ROLE: Record<AccountRoleCode, AccountTypeCode> = {
-  // Places money sits, and things the business owns and keeps.
+const TYPE_RULES: Record<
+  AccountTypeCode,
+  { normalBalance: NormalBalance; financialStatement: FinancialStatement }
+> = {
+  [AccountType.Asset]: {
+    normalBalance: "debit",
+    financialStatement: "balance_sheet",
+  },
+  [AccountType.Liability]: {
+    normalBalance: "credit",
+    financialStatement: "balance_sheet",
+  },
+  [AccountType.Equity]: {
+    normalBalance: "credit",
+    financialStatement: "balance_sheet",
+  },
+  [AccountType.Revenue]: {
+    normalBalance: "credit",
+    financialStatement: "income_statement",
+  },
+  [AccountType.Expense]: {
+    normalBalance: "debit",
+    financialStatement: "income_statement",
+  },
+};
+
+const TYPE_BY_LEGACY_ROLE: Record<AccountRoleCode, AccountTypeCode> = {
   [AccountRole.Bank]: AccountType.Asset,
   [AccountRole.Wallet]: AccountType.Asset,
   [AccountRole.Cash]: AccountType.Asset,
   [AccountRole.Card]: AccountType.Asset,
   [AccountRole.Equipment]: AccountType.Asset,
-  // Money owed to us is something the business owns — a promise of cash.
   [AccountRole.Receivable]: AccountType.Asset,
-  // Money we owe is the one thing the business owes.
   [AccountRole.Payable]: AccountType.Liability,
-  // What the owners have in it.
   [AccountRole.OpeningBalances]: AccountType.Equity,
   [AccountRole.PartnerCapital]: AccountType.Equity,
   [AccountRole.PartnerDrawings]: AccountType.Equity,
-  // What everyday screens call a category — the profit and loss is made of these.
-  [AccountRole.IncomeCategory]: AccountType.Income,
+  [AccountRole.IncomeCategory]: AccountType.Revenue,
   [AccountRole.ExpenseCategory]: AccountType.Expense,
 };
 
-export function accountTypeFor(role: AccountRoleCode): AccountTypeCode {
-  return TYPE_BY_ROLE[role];
+export function normalBalanceFor(type: AccountTypeCode): NormalBalance {
+  return TYPE_RULES[type].normalBalance;
 }
 
-/**
- * What a report multiplies a balance by before showing it.
- *
- * Under the one sign convention — positive when value goes in — money we owe,
- * income earned and owner capital all accumulate at a negative balance. A
- * reader expects to see "we owe 1,200", not "-1,200", so every report flips
- * those in this one place rather than each report inventing its own rule (D-03).
- *
- * Money a partner takes out is the exception among the owners' accounts: it
- * accumulates positive and reads positive.
- */
-const NEGATIVE_BY_NATURE = new Set<AccountRoleCode>([
-  AccountRole.Payable,
-  AccountRole.IncomeCategory,
-  AccountRole.OpeningBalances,
-  AccountRole.PartnerCapital,
-]);
+export function financialStatementFor(
+  type: AccountTypeCode,
+): FinancialStatement {
+  return TYPE_RULES[type].financialStatement;
+}
 
+export function displaySignForAccountType(type: AccountTypeCode): 1 | -1 {
+  return normalBalanceFor(type) === "credit" ? -1 : 1;
+}
+
+export function accountTypeForLegacyRole(
+  role: AccountRoleCode,
+): AccountTypeCode {
+  return TYPE_BY_LEGACY_ROLE[role];
+}
+
+/** Storage compatibility for the conversion release while `accounts.role` is retained. */
+export function legacyRoleForAccountType(
+  type: AccountTypeCode,
+): AccountRoleCode {
+  return (
+    {
+      [AccountType.Asset]: AccountRole.Bank,
+      [AccountType.Liability]: AccountRole.Payable,
+      [AccountType.Equity]: AccountRole.OpeningBalances,
+      [AccountType.Revenue]: AccountRole.IncomeCategory,
+      [AccountType.Expense]: AccountRole.ExpenseCategory,
+    } as Record<AccountTypeCode, AccountRoleCode>
+  )[type];
+}
+
+/** @deprecated Conversion-only alias; new accounting behavior reads account.type. */
+export const accountTypeFor = accountTypeForLegacyRole;
+
+/** @deprecated Role-based compatibility helper until report consumers migrate. */
 export function displaySign(role: AccountRoleCode): 1 | -1 {
-  return NEGATIVE_BY_NATURE.has(role) ? -1 : 1;
+  if (role === AccountRole.PartnerDrawings) return 1;
+  return displaySignForAccountType(accountTypeForLegacyRole(role));
 }
 
 /**
- * The two accounts everybody's owed money runs through. A record touching one
- * of them must name who it is owed to or by (FR-008), which is the rule
- * `entry-builder.ts` enforces and `integrity.ts` sweeps for.
+ * The two sides of every everyday record: a place money sits, and a statement of
+ * what the money was for.
+ *
+ * For four of the five types these are the same question as the type. Assets are
+ * the exception, and equipment is why: something the business buys and keeps is
+ * an asset on the balance sheet (002 FR-006b), but on the everyday form it is
+ * still what the money was *for* — it is offered beside the categories, not
+ * beside the bank accounts. Reading `type === Asset` as "holds money" therefore
+ * makes buying a laptop look like moving cash between two pots, which is how it
+ * ends up needing the `adjustments` ability that no seeded group grants.
+ *
+ * `role` is the only column that tells the two apart, which is why it outlived
+ * the move to fixed types. Everything that splits the chart into pots and
+ * categories must go through these two, so the split cannot drift between the
+ * record form, the records list, the dashboard and the importer.
  */
+export type RoleAndType = {
+  type: AccountTypeCode;
+  /** Plain `number`, matching `AccountRow.role` in the frozen `types.ts`. */
+  role: number;
+};
+
+/** Something the business keeps, recorded as an asset but chosen as a category. */
+export function isEquipmentAccount(account: RoleAndType): boolean {
+  return (
+    account.type === AccountType.Asset && account.role === AccountRole.Equipment
+  );
+}
+
+/** A place money actually sits or is owed. */
+export function isMoneyPotAccount(account: RoleAndType): boolean {
+  return account.type === AccountType.Asset && !isEquipmentAccount(account);
+}
+
+/** What a record is "for": a spending or earning category, or equipment. */
+export function isCategoryAccount(account: RoleAndType): boolean {
+  return (
+    account.type === AccountType.Expense ||
+    account.type === AccountType.Revenue ||
+    isEquipmentAccount(account)
+  );
+}
+
+/** Conversion-era compatibility predicates. */
 export function isSharedOwedRole(role: AccountRoleCode): boolean {
   return role === AccountRole.Receivable || role === AccountRole.Payable;
 }
 
-/**
- * Everywhere money actually sits — what "paid from" / "received into" offers,
- * and what "how much do we hold?" adds up.
- *
- * Lives here, beside the other role groupings, because three screens need the
- * same list: the expense/income loader, the settings default-account picker and
- * the import review screen. Three concrete uses is where Principle III says the
- * abstraction is earned.
- */
 export const MONEY_POT_ROLES: AccountRoleCode[] = [
   AccountRole.Bank,
   AccountRole.Wallet,
@@ -80,23 +145,20 @@ export const MONEY_POT_ROLES: AccountRoleCode[] = [
   AccountRole.Card,
 ];
 
-/** What the everyday screens call a category. */
 export function isCategoryRole(role: AccountRoleCode): boolean {
   return (
     role === AccountRole.ExpenseCategory || role === AccountRole.IncomeCategory
   );
 }
 
-/**
- * Whether an account belongs on the profit and loss. Only the category roles
- * do, which is precisely why a transfer — two accounts, neither a category —
- * can never show up as income or an expense (FR-007, FR-025).
- */
 export function isProfitAndLossRole(role: AccountRoleCode): boolean {
-  return isCategoryRole(role);
+  return (
+    financialStatementFor(accountTypeForLegacyRole(role)) === "income_statement"
+  );
 }
 
-/** Whether an account belongs on the balance sheet: everything that is not a category. */
 export function isBalanceSheetRole(role: AccountRoleCode): boolean {
-  return !isCategoryRole(role);
+  return (
+    financialStatementFor(accountTypeForLegacyRole(role)) === "balance_sheet"
+  );
 }

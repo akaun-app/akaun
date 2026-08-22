@@ -4,4 +4,6 @@
   let { data } = $props();
 </script>
 
-<AccountStatements {data} />
+{#if data.account.active && data.account.postingEligible}
+  <AccountStatements {data} />
+{/if}

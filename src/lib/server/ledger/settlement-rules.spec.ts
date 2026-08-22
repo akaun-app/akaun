@@ -5,11 +5,16 @@ import {
   isFullySettled,
   outstandingOf,
   recordSettlementState,
+  settlementDirectionForAccount,
 } from "./settlement-rules.js";
 import type { SettlementSide } from "./types.js";
 
 /** An item owed to someone: a negative movement on the shared "money we owe" account. */
-function owed(movementId: number, amountMinor: number, settledMinor = 0): SettlementSide {
+function owed(
+  movementId: number,
+  amountMinor: number,
+  settledMinor = 0,
+): SettlementSide {
   return { movementId, amountMinor: -amountMinor, settledMinor };
 }
 
@@ -31,13 +36,28 @@ describe("how much is still outstanding", () => {
   it("reads the same whichever way the movement faces", () => {
     // Money owed TO us is a positive movement on the receivable account; the
     // arithmetic is the same.
-    expect(outstandingOf({ movementId: 1, amountMinor: 5000, settledMinor: 2000 })).toBe(3000);
+    expect(
+      outstandingOf({ movementId: 1, amountMinor: 5000, settledMinor: 2000 }),
+    ).toBe(3000);
+  });
+});
+
+describe("saved receivable and payable classification", () => {
+  const defaults = { receivableAccountId: 20, payableAccountId: 30 };
+
+  it("classifies only the two saved account IDs", () => {
+    expect(settlementDirectionForAccount(20, defaults)).toBe("owed-to-us");
+    expect(settlementDirectionForAccount(30, defaults)).toBe("we-owe");
+    expect(settlementDirectionForAccount(31, defaults)).toBeNull();
   });
 });
 
 describe("whether a record reads paid", () => {
   it("reads paid when it never owed anyone — it was paid straight from an account", () => {
-    expect(recordSettlementState([])).toEqual({ paid: true, outstandingMinor: 0 });
+    expect(recordSettlementState([])).toEqual({
+      paid: true,
+      outstandingMinor: 0,
+    });
   });
 
   it("reads owed while its outstanding side is uncovered", () => {
@@ -82,13 +102,21 @@ describe("allocating a payment across what it covers", () => {
   });
 
   it("accepts a part payment, leaving the rest owed", () => {
-    const result = checkAllocations([{ owedMovementId: 1, amountMinor: 2000 }], items, 2000);
+    const result = checkAllocations(
+      [{ owedMovementId: 1, amountMinor: 2000 }],
+      items,
+      2000,
+    );
     expect(result.ok).toBe(true);
     expect(outstandingOf({ ...owed(1, 5000), settledMinor: 2000 })).toBe(3000);
   });
 
   it("refuses an allocation larger than what is left, and says what is left", () => {
-    const result = checkAllocations([{ owedMovementId: 3, amountMinor: 2000 }], items, 2000);
+    const result = checkAllocations(
+      [{ owedMovementId: 3, amountMinor: 2000 }],
+      items,
+      2000,
+    );
     expect(result.ok).toBe(false);
     // 20.00 owed, 5.00 already covered — 15.00 is still available.
     if (!result.ok) expect(result.reason).toContain("15.00");
@@ -108,16 +136,24 @@ describe("allocating a payment across what it covers", () => {
   });
 
   it("refuses an allocation of nothing, or of a negative amount", () => {
-    expect(checkAllocations([{ owedMovementId: 1, amountMinor: 0 }], items, 5000).ok).toBe(false);
-    expect(checkAllocations([{ owedMovementId: 1, amountMinor: -100 }], items, 5000).ok).toBe(
-      false,
-    );
+    expect(
+      checkAllocations([{ owedMovementId: 1, amountMinor: 0 }], items, 5000).ok,
+    ).toBe(false);
+    expect(
+      checkAllocations([{ owedMovementId: 1, amountMinor: -100 }], items, 5000)
+        .ok,
+    ).toBe(false);
   });
 
   it("refuses an allocation against an item it was not given", () => {
-    const result = checkAllocations([{ owedMovementId: 99, amountMinor: 100 }], items, 5000);
+    const result = checkAllocations(
+      [{ owedMovementId: 99, amountMinor: 100 }],
+      items,
+      5000,
+    );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/cannot be found|no longer|not found/i);
+    if (!result.ok)
+      expect(result.reason).toMatch(/cannot be found|no longer|not found/i);
   });
 
   it("refuses the same item twice in one payment", () => {
@@ -137,7 +173,11 @@ describe("allocating a payment across what it covers", () => {
 describe("two payments settling one item", () => {
   it("lets a second payment cover what the first left", () => {
     const item = owed(1, 5000);
-    const first = checkAllocations([{ owedMovementId: 1, amountMinor: 2000 }], new Map([[1, item]]), 2000);
+    const first = checkAllocations(
+      [{ owedMovementId: 1, amountMinor: 2000 }],
+      new Map([[1, item]]),
+      2000,
+    );
     expect(first.ok).toBe(true);
 
     const afterFirst = { ...item, settledMinor: 2000 };
@@ -165,7 +205,11 @@ describe("two payments settling one item", () => {
 describe("undoing a settlement", () => {
   it("returns both sides to outstanding", () => {
     const item = owed(1, 5000, 5000);
-    const payment: SettlementSide = { movementId: 9, amountMinor: 5000, settledMinor: 5000 };
+    const payment: SettlementSide = {
+      movementId: 9,
+      amountMinor: 5000,
+      settledMinor: 5000,
+    };
 
     const itemAfter = afterUndo(item, 5000);
     const paymentAfter = afterUndo(payment, 5000);

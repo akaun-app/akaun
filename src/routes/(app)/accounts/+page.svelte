@@ -5,8 +5,6 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 </script>
 
-<svelte:head>
-	<title>Accounts - Akaun</title>
-</svelte:head>
+<svelte:head><title>Accounts - Akaun</title></svelte:head>
 
-<AccountsPage {data} {form} openId={null} />
+<AccountsPage {data} {form} />

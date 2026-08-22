@@ -65,11 +65,11 @@
 	const KIND_LABEL: Record<number, string> = {
 		[LedgerRecordKind.Expense]: 'Expense',
 		[LedgerRecordKind.Income]: 'Income',
-		[LedgerRecordKind.Transfer]: 'Money moved',
+		[LedgerRecordKind.Transfer]: 'Transfer',
 		[LedgerRecordKind.Payment]: 'Payment',
-		[LedgerRecordKind.OpeningBalance]: 'Starting balance',
+		[LedgerRecordKind.OpeningBalance]: 'Opening balance',
 		[LedgerRecordKind.InvoiceIssue]: 'Invoice',
-		[LedgerRecordKind.Journal]: 'Adjustment'
+		[LedgerRecordKind.Journal]: 'Journal entry'
 	};
 
 	function titleOf(link: SettlementLink): string {

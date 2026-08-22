@@ -9,7 +9,8 @@ import { sidesFromAccounts } from "$lib/server/ledger/sides-from-accounts.js";
 import { toMinor } from "$lib/server/ledger/money.js";
 import { createRecord, removeRecord } from "$lib/server/services/ledger.js";
 import { createSettlements } from "$lib/server/services/settlements.js";
-import { isSharedOwedRole } from "$lib/server/ledger/account-type.js";
+import { DefaultAccountPurpose } from "$lib/enums.js";
+import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { isValidDate } from "$lib/server/date.js";
 import { mainCurrencyCode } from "$lib/server/currency/form.js";
 import {
@@ -214,6 +215,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if ("kind" in raw) {
     body = raw as RecordCreate;
   } else {
+    const receivable = requireAccountDefault(db, DefaultAccountPurpose.Receivable);
+    if (!receivable.ok) return refused(receivable.reason);
+    const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
+    if (!payable.ok) return refused(payable.reason);
+    const opening = requireAccountDefault(db, DefaultAccountPurpose.OpeningBalances);
+    if (!opening.ok) return refused(opening.reason);
     const canAdjust = hasPermission(locals, "adjustments", "add");
     const sides = sidesFromAccounts(
       {
@@ -229,6 +236,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
           return account
             ? {
                 id: account.id,
+                type: account.type,
                 role: account.role,
                 archived: account.archivedAt !== null,
               }
@@ -239,6 +247,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
         // about the accounts it names, not about what the client sent
         // (FR-031c). Enforced here on the server, never by hiding a control.
         canAdjust,
+        receivableAccountId: receivable.value,
+        payableAccountId: payable.value,
+        openingBalancesAccountId: opening.value,
       },
     );
     if (!sides.ok) return refused(sides.reason);
@@ -275,9 +286,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (body.kind === "payment" && (body.settlements?.length ?? 0) > 0) {
     // The settling side is the one on the shared owed account — the side that
     // clears the debt, whichever direction the money went.
-    const paymentMovement = result.value.movements.find((m) =>
-      isSharedOwedRole(m.accountRole),
+    const owedDefault = requireAccountDefault(
+      db,
+      body.direction === "we-pay"
+        ? DefaultAccountPurpose.Payable
+        : DefaultAccountPurpose.Receivable,
     );
+    const paymentMovement = owedDefault.ok
+      ? result.value.movements.find((m) => m.accountId === owedDefault.value)
+      : undefined;
 
     const settled = paymentMovement
       ? createSettlements(

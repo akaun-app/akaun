@@ -23,7 +23,7 @@ describe("the shape of the document", () => {
   it("puts the columns first, in the order they were given", () => {
     const csv = toCsv({
       columns: ["Section", "Account", "Amount"],
-      rows: [["Money coming in", "Consulting", 1500]],
+      rows: [["Revenue", "Consulting", 1500]],
     });
     expect(lines(csv)[0]).toBe("Section,Account,Amount");
   });
@@ -153,17 +153,17 @@ describe("the profit and loss as a table", () => {
 
   it("puts money coming in first, then money going out, then what is left", () => {
     expect(table.rows.map((r) => r[0])).toEqual([
-      "Money coming in",
-      "Money coming in",
-      "Money going out",
-      "Money going out",
+      "Revenue",
+      "Revenue",
+      "Expenses",
+      "Expenses",
       "Result",
     ]);
   });
 
   it("writes amounts as ordinary decimals a spreadsheet can add", () => {
-    expect(table.rows[0]).toEqual(["Money coming in", "Consulting", 1500]);
-    expect(table.rows[4]).toEqual(["Result", "What is left", 1455]);
+    expect(table.rows[0]).toEqual(["Revenue", "Consulting", 1500]);
+    expect(table.rows[4]).toEqual(["Result", "Net profit", 1455]);
   });
 
   it("says what period it covers, and carries the report's own notes", () => {
@@ -198,7 +198,7 @@ const BALANCE_SHEET: BalanceSheetReport = {
       },
       {
         accountId: 0,
-        accountName: "What the business has made and kept",
+        accountName: "Current earnings",
         amountMinor: 145_000,
       },
     ],
@@ -219,16 +219,16 @@ describe("the balance sheet as a table", () => {
 
   it("runs owns, then owes, then what the owners have in it, each with a total", () => {
     expect(table.rows.map((r) => r[0])).toEqual([
-      "What the business owns",
-      "What the business owns",
-      "What it owes",
-      "What it owes",
-      "What the owners have in it",
-      "What the owners have in it",
-      "What the owners have in it",
-      "What the owners have in it",
+      "Assets",
+      "Assets",
+      "Liabilities",
+      "Liabilities",
+      "Equity",
+      "Equity",
+      "Equity",
+      "Equity",
     ]);
-    expect(table.rows[1]).toEqual(["What the business owns", "Total", 3400]);
+    expect(table.rows[1]).toEqual(["Assets", "Total", 3400]);
   });
 
   it("says the date it was drawn up at", () => {
@@ -258,10 +258,10 @@ describe("the partner statement as a table", () => {
   it("names its columns in plain words, in a fixed order", () => {
     expect(table.columns).toEqual([
       "Partner",
-      "Money put in",
-      "Share of the result",
-      "Money taken out",
-      "What is left",
+      "Contributions",
+      "Share of profit",
+      "Drawings",
+      "Closing balance",
     ]);
   });
 
@@ -318,7 +318,7 @@ describe("an account's history as a table", () => {
       "Date",
       "Reference",
       "Description",
-      "Who",
+      "Contact",
       "Amount",
       "Running balance",
     ]);

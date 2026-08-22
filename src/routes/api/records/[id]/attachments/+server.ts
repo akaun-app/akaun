@@ -26,7 +26,7 @@ import {
  * supporting document, not accounting data, and adding a missing one cannot
  * make any other record wrong (FR-017a).
  */
-/** What is already attached, so an open drawer shows the receipts on the record
+/** What is already attached, so the record's page shows the receipts on it
  *  rather than an empty box until something new is uploaded. */
 export const GET: RequestHandler = async ({ locals, params }) => {
   const id = Number((params as { id: string }).id);

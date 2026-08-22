@@ -19,6 +19,7 @@
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
   import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
   import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
+  import BackLink from "$lib/components/ui/BackLink.svelte";
   import { StatementExtractionState } from "$lib/enums.js";
   import { formatDate, formatMoney } from "$lib/format.js";
   import { useIsMobile } from "$lib/hooks/useIsMobile.svelte.js";
@@ -46,6 +47,9 @@
   type StatementStatus = "active" | "completed";
 
   let { data }: { data: Data } = $props();
+  const canAddStatement = $derived(
+    data.permissions.add && data.account.active && data.account.postingEligible,
+  );
 
   const screen = useIsMobile();
   const isMobile = $derived(screen.current);
@@ -288,12 +292,18 @@
   }
 </script>
 
-<svelte:head><title>{data.account.name} · Check against the bank</title></svelte:head>
+<svelte:head><title>{data.account.name} · Bank reconciliation</title></svelte:head>
 
 <div class="screen reconciliation-screen">
   <header class="topbar">
     <div class="topbar-left">
-      <h1 class="page-title">Check against the bank</h1>
+      <!-- The account is a real page now, so this workspace can say where it
+           came from the way every other detail surface does. -->
+      <BackLink
+        href={resolve("/(app)/accounts/[id]", { id: String(data.account.id) })}
+        label={data.account.name}
+      />
+      <h1 class="page-title">Bank reconciliation</h1>
       <p class="page-sub">
         {data.account.name} ·
         {#if bankRemaining > 0}
@@ -320,7 +330,7 @@
           />
         </div>
       </div>
-      {#if data.permissions.add}
+      {#if canAddStatement}
         <button class="primary-action" type="button" onclick={openUpload}>
           <Plus size={15} /><span class="btn-text">Upload Statement</span>
         </button>
@@ -466,7 +476,7 @@
                     >
                       {#snippet icon()}<FileText size={20} />{/snippet}
                       {#snippet action()}
-                        {#if singleStatementStatus !== "completed" && data.permissions.add}
+                        {#if singleStatementStatus !== "completed" && canAddStatement}
                           <button
                             class="sheet-btn-primary compact"
                             type="button"

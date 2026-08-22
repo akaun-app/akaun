@@ -22,6 +22,15 @@ function money(minor: Minor): string {
   return Math.abs(fromMinor(minor)).toFixed(2);
 }
 
+export function settlementDirectionForAccount(
+  accountId: number,
+  defaults: { receivableAccountId: number; payableAccountId: number },
+): "owed-to-us" | "we-owe" | null {
+  if (accountId === defaults.receivableAccountId) return "owed-to-us";
+  if (accountId === defaults.payableAccountId) return "we-owe";
+  return null;
+}
+
 /**
  * How much of one side is still uncovered. A movement's amount is signed, but
  * the question "how much is left" is about size, not direction — money owed to
@@ -121,7 +130,10 @@ export function checkAllocations(
  * One side after a settlement against it is undone: it returns to outstanding
  * by exactly what that settlement covered, and never by more (FR-017).
  */
-export function afterUndo(side: SettlementSide, amountMinor: Minor): SettlementSide {
+export function afterUndo(
+  side: SettlementSide,
+  amountMinor: Minor,
+): SettlementSide {
   return {
     ...side,
     settledMinor: Math.max(0, side.settledMinor - Math.abs(amountMinor)),

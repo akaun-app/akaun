@@ -48,7 +48,7 @@
 <div class="rep-scroll">
 	<div class="rep-result">
 		<div>
-			<div class="rep-result-label">Money owed to us</div>
+			<div class="rep-result-label">Accounts receivable</div>
 			<div class="rep-result-sub">
 				Everything customers have not paid yet, as at {formatDate(report.asOf)}
 			</div>

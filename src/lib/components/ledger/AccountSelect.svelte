@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { roleLabel } from '$lib/components/accounts/account-roles.js';
+	import { AccountTypeDisplayLabels } from '$lib/enums.js';
 	import type { AccountView } from '$lib/server/ledger/types.js';
 
 	/**
@@ -22,11 +22,12 @@
 		canAdjust = false,
 		value = $bindable<number | null>(null),
 		name,
-		label = 'Paid from',
+		label = 'Account',
 		defaultAccountId = null,
 		required = true,
 		disabled = false,
-		disabledReason = ''
+		disabledReason = '',
+		bare = false
 	}: {
 		/** The shortlist: the accounts this side would sensibly be. */
 		accounts: AccountView[];
@@ -40,6 +41,13 @@
 		required?: boolean;
 		disabled?: boolean;
 		disabledReason?: string;
+		/**
+		 * Drop the `.field` wrapper and the label: the caller has already said
+		 * what this side is. `EntryBlock` uses it, where the row's own columns
+		 * name the direction and a second label would only break the alignment.
+		 * Every rule about *what* is offered stays here — there is one picker.
+		 */
+		bare?: boolean;
 	} = $props();
 
 	/**
@@ -66,8 +74,8 @@
 	// Archived accounts stay out of the picker but never disappear from history.
 	const choices = $derived(
 		offered
-			.filter((a) => a.archivedAt == null || a.id === value)
-			.sort((a, b) => a.role - b.role || a.rank.localeCompare(b.rank))
+			.filter((a) => ((a.active ?? a.archivedAt == null) && (a.postingEligible ?? true)) || a.id === value)
+			.sort((a, b) => a.type - b.type || (a.code ?? a.id) - (b.code ?? b.id))
 	);
 
 	// Pre-select once there is something to select. Guarded on `value` being
@@ -86,18 +94,33 @@
 </script>
 
 {#if onlyChoice}
-	<!-- One account means no question to ask. -->
+	<!-- One account means no question to ask. Bare mode still says which one it
+	     is, because there it is a line of the entry rather than a field the
+	     reader can skip. -->
 	<input type="hidden" {name} value={onlyChoice.id} />
+	{#if bare}
+		<span class="only-choice">{onlyChoice.name}</span>
+	{/if}
 {:else if choices.length > 0}
-	<div class="field">
-		<label class="field-label" for={id}>{label}{required ? ' *' : ''}</label>
-		<select {id} {name} bind:value {required} {disabled} class="account-select">
+	<div class={bare ? 'bare' : 'field'}>
+		{#if !bare}
+			<label class="field-label" for={id}>{label}{required ? ' *' : ''}</label>
+		{/if}
+		<select
+			{id}
+			{name}
+			bind:value
+			{required}
+			{disabled}
+			class="account-select"
+			aria-label={bare ? label : undefined}
+		>
 			{#if !required}
-				<option value={null}>Someone else paid</option>
+				<option value={null}>Paid by a third party</option>
 			{/if}
 			{#each choices as account (account.id)}
 				<option value={account.id}>
-					{account.name}{account.archivedAt ? ' (archived)' : ''} · {roleLabel(account.role)}
+					{account.code} · {(account.path ?? [account.name]).join(' › ')} · {AccountTypeDisplayLabels[account.type]}
 				</option>
 			{/each}
 		</select>
@@ -117,6 +140,12 @@
 {/if}
 
 <style>
+	.only-choice {
+		font-size: 13.5px;
+	}
+	.bare {
+		min-width: 0;
+	}
 	.account-select {
 		width: 100%;
 		height: 36px;

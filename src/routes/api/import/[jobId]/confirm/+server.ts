@@ -10,20 +10,19 @@ import { moveToRecordStorage, displayName } from "$lib/server/file-storage.js";
 import { normalizeDate } from "$lib/server/date.js";
 import { createRecord, emitRecordUpdate } from "$lib/server/services/ledger.js";
 import { addAttachment } from "$lib/server/queries/ledger.js";
+import { defaultAccountId } from "$lib/server/queries/accounts.js";
 import {
-  defaultAccountId,
-  systemAccounts,
-} from "$lib/server/queries/accounts.js";
-import {
+  categoryAccountForImport,
   categoryChoices,
-  matchCategoryAccount,
 } from "$lib/server/import/category-accounts.js";
+import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { resolveOrCreateContact } from "$lib/server/queries/contacts.js";
 import { getExchangeRate } from "$lib/server/currency/rates.js";
 import { mainCurrencyCode } from "$lib/server/currency/form.js";
 import {
   ImportState,
   DocumentType,
+  DefaultAccountPurpose,
   Role,
   documentTypeEnum,
 } from "$lib/enums.js";
@@ -153,13 +152,19 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   // same way the upgrade treats a record it could not place: a document that was
   // paid for is still a document that was paid for (spec edge case, FR-019).
   const kind = isIncome ? "income" : "expense";
-  const matchedCategoryId = matchCategoryAccount(
+  const uncategorisedDefault = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.UncategorisedExpense,
+  );
+  const selectedCategory = categoryAccountForImport(
+    kind,
     categoryChoices(db, kind),
     category,
+    uncategorisedDefault.ok ? uncategorisedDefault.value : null,
   );
-  const uncategorised = matchedCategoryId === null;
-  const categoryAccountId =
-    matchedCategoryId ?? systemAccounts(db).uncategorisedAccountId;
+  if (!selectedCategory.ok) return refused(selectedCategory.reason);
+  const { accountId: categoryAccountId, uncategorised } =
+    selectedCategory.value;
 
   // Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
   // Priority: explicit contactId → typed new name → confident match → raw extracted name.

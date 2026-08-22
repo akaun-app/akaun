@@ -1,4 +1,3 @@
-import { MONEY_POT_ROLES } from "$lib/server/ledger/account-type.js";
 import { fail, redirect, type Actions } from "@sveltejs/kit";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
@@ -8,14 +7,22 @@ import {
   listAccounts,
 } from "$lib/server/queries/accounts.js";
 import { listContacts } from "$lib/server/queries/contacts.js";
-import { getRecord, listRecords } from "$lib/server/queries/ledger.js";
+import {
+  getRecord,
+  listAttachments,
+  listRecords,
+} from "$lib/server/queries/ledger.js";
+import { settlementsForRecord } from "$lib/server/queries/settlements.js";
 import { removeRecord } from "$lib/server/services/ledger.js";
 import {
   getUserPreference,
   USER_PREF_KEYS,
 } from "$lib/server/userPreferences.js";
 import { mainCurrencyCode } from "$lib/server/currency/form.js";
-import { AccountRole } from "$lib/enums.js";
+import {
+  isCategoryAccount,
+  isMoneyPotAccount,
+} from "$lib/server/ledger/account-type.js";
 
 /**
  * The one load and one set of actions behind both `/records` and
@@ -33,15 +40,6 @@ import { AccountRole } from "$lib/enums.js";
  * columns stay on the record as provenance; only the lookup goes.
  */
 
-/** The everyday categories a record is "for", either direction. */
-const CATEGORY_ROLES = [
-  AccountRole.ExpenseCategory,
-  AccountRole.IncomeCategory,
-  // Equipment sits with the categories so buying something the business keeps
-  // is recorded from the same place as buying something it uses up (FR-006b).
-  AccountRole.Equipment,
-];
-
 const LIST_PATH = "/records";
 
 /**
@@ -51,7 +49,7 @@ const LIST_PATH = "/records";
  */
 const PAGE_LIMIT = 1000;
 
-export function loadRecordsPage(locals: App.Locals, openId: number | null) {
+export function loadRecordsPage(locals: App.Locals) {
   if (!hasPermission(locals, "records", "view"))
     throw redirect(302, "/dashboard");
 
@@ -59,20 +57,57 @@ export function loadRecordsPage(locals: App.Locals, openId: number | null) {
   // (FR-001).
   const { records, total } = listRecords(db, { limit: PAGE_LIMIT });
 
-  // A link to a record that has been deleted, that never existed, or that this
-  // user may not see lands on the list rather than on an empty drawer.
-  if (openId !== null && !records.some((r) => r.id === openId)) {
-    throw redirect(302, LIST_PATH);
-  }
+  return { records, total, ...recordFormOptions(locals) };
+}
+
+/**
+ * One record, for `/records/[id]`.
+ *
+ * Split from the list load rather than sharing it. The list load fetched a
+ * thousand records to show one, and then refused the ones it had not fetched:
+ * `!records.some((r) => r.id === openId)` sent every link to a record older
+ * than the newest thousand back to the list. A record has an address so it can
+ * be sent to somebody, and that address has to work for the old ones too.
+ *
+ * `getRecord` already carries the derived answers — `paid`, `outstandingMinor`,
+ * `locked`, `lockedReason`, `reconciled` — so nothing here recomputes them.
+ */
+export function loadRecordDetail(locals: App.Locals, id: number) {
+  if (!hasPermission(locals, "records", "view"))
+    throw redirect(302, "/dashboard");
+
+  const record = getRecord(db, id);
+  // Deleted, never existed, or a mistyped id. The list, not a bare error page:
+  // there is no `+error.svelte` in the app shell to land on.
+  if (!record) throw redirect(302, LIST_PATH);
 
   return {
-    records,
-    total,
-    accounts: listAccounts(db, { role: MONEY_POT_ROLES }),
-    categories: listAccounts(db, { role: CATEGORY_ROLES }),
+    record,
+    attachments: listAttachments(db, id),
+    settlements: settlementsForRecord(db, id),
+    ...recordFormOptions(locals),
+  };
+}
+
+/**
+ * Everything the record *form* needs, whichever surface is showing it.
+ *
+ * Shared deliberately: if the list's create drawer and the detail page's editor
+ * read their accounts from two places, they can offer two different charts and
+ * nothing would say so.
+ */
+function recordFormOptions(locals: App.Locals) {
+  const allAccounts = listAccounts(db, {});
+
+  return {
+    // One read, split three ways. The split is `isMoneyPotAccount` /
+    // `isCategoryAccount` rather than a type list, because equipment is an asset
+    // that belongs with the categories (002 FR-006b).
+    accounts: allAccounts.filter(isMoneyPotAccount),
+    categories: allAccounts.filter(isCategoryAccount),
     // Every account, for the full list a user with `adjustments` can reach in
     // one step from either side of the form (FR-008a, FR-031).
-    allAccounts: listAccounts(db, {}),
+    allAccounts,
     contacts: listContacts(db, { limit: 500 }).map((c) => ({
       id: c.id,
       legalName: c.legalName,
@@ -94,7 +129,6 @@ export function loadRecordsPage(locals: App.Locals, openId: number | null) {
         locals.user!.id,
         USER_PREF_KEYS.lastForeignCurrencyIncome,
       ) ?? null,
-    openId,
     perms: {
       add: hasPermission(locals, "records", "add"),
       change: hasPermission(locals, "records", "change"),

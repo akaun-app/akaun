@@ -1,5 +1,10 @@
 import { recordAudit } from "../audit.js";
-import { checkAllocations } from "../ledger/settlement-rules.js";
+import {
+  checkAllocations,
+  settlementDirectionForAccount,
+} from "../ledger/settlement-rules.js";
+import { DefaultAccountPurpose } from "$lib/enums.js";
+import { requireAccountDefault } from "./account-defaults.js";
 import type {
   AllocationRequest,
   LedgerDb,
@@ -43,6 +48,26 @@ export function createSettlements(
     return {
       ok: false,
       reason: "That payment no longer exists. Reload and try again.",
+    };
+  }
+
+  const receivable = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.Receivable,
+  );
+  if (!receivable.ok) return receivable;
+  const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
+  if (!payable.ok) return payable;
+  if (
+    settlementDirectionForAccount(payment.accountId, {
+      receivableAccountId: receivable.value,
+      payableAccountId: payable.value,
+    }) === null
+  ) {
+    return {
+      ok: false,
+      reason:
+        "That movement is not on the saved account for money owed to us or money we owe.",
     };
   }
 

@@ -1,7 +1,9 @@
 <script lang="ts">
-  import RecordsPage from "$lib/components/records/RecordsPage.svelte";
+	import RecordsPage from '$lib/components/records/RecordsPage.svelte';
 
-  let { data, form } = $props();
+	let { data, form } = $props();
 </script>
 
-<RecordsPage {data} {form} openId={null} />
+<svelte:head><title>Records - Akaun</title></svelte:head>
+
+<RecordsPage {data} {form} />

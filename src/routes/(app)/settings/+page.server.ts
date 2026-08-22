@@ -3,7 +3,7 @@ import type {
   UpgradeState,
   VerifyResult,
 } from "$lib/server/ledger/types.js";
-import { MONEY_POT_ROLES } from "$lib/server/ledger/account-type.js";
+import { AccountType } from "$lib/enums.js";
 import type { PageServerLoad, Actions } from "./$types.js";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
@@ -14,6 +14,7 @@ import {
   SETTING_KEYS,
   hasAnyDocuments,
 } from "$lib/server/settings.js";
+import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
   defaultAccountId,
@@ -38,6 +39,7 @@ import {
 } from "$lib/server/llmProviders.js";
 import type { ProviderType } from "$lib/server/import/providers/index.js";
 import { fail } from "@sveltejs/kit";
+import { getAccountDefaults } from "$lib/server/services/account-defaults.js";
 
 /**
  * A category IS an account (FR-006a) — the everyday word on screen, the chart of
@@ -53,13 +55,28 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   // Which account new records start with, and the accounts it may be (FR-011).
   // With one account there is nothing to ask, so the setting stays off screen.
-  const moneyAccounts = listAccounts(db, { role: MONEY_POT_ROLES }).map(
-    (a) => ({
+  // Money pots only: equipment is an asset but nothing is ever paid from it.
+  const moneyAccounts = listAccounts(db, { type: AccountType.Asset })
+    .filter(isMoneyPotAccount)
+    .map((a) => ({
       id: a.id,
       name: a.name,
-    }),
-  );
+    }));
   const ledgerDefaultAccountId = defaultAccountId(db);
+  const accountDefaults = getAccountDefaults(db);
+  const defaultAccountOptions = listAccounts(db).map((account) => ({
+    id: account.id,
+    code: account.code ?? account.id,
+    name: account.name,
+    type: account.type,
+    parentId: account.parentId ?? null,
+    active: account.active ?? false,
+    hasChildren: account.hasChildren ?? false,
+    postingEligible: account.postingEligible ?? false,
+    directBalanceMinor: account.directBalanceMinor ?? 0,
+    rolledUpBalanceMinor: account.rolledUpBalanceMinor ?? 0,
+    path: account.path ?? [account.name],
+  }));
 
   // What the one-off update to the new way of recording did, and whether the
   // books balance. Only the part meant to be read is sent — the before/after
@@ -139,6 +156,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     canManageAccounts,
     moneyAccounts,
     ledgerDefaultAccountId,
+    accountDefaults,
+    defaultAccountOptions,
     canSeeBooks,
     upgrade,
     sequenceTemplate,
@@ -180,8 +199,8 @@ export const actions: Actions = {
         .safeParse(chosenAccount);
       const known =
         parsed.success &&
-        listAccounts(db, { role: MONEY_POT_ROLES }).some(
-          (a) => a.id === parsed.data,
+        listAccounts(db, { type: AccountType.Asset }).some(
+          (a) => a.id === parsed.data && isMoneyPotAccount(a),
         );
       if (!known) {
         return fail(400, { error: "Choose one of your own accounts." });

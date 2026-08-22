@@ -7,7 +7,7 @@ import { hasPermission, type ResourceName } from "$lib/server/permissions.js";
 //
 // 'expense' and 'income' survive for entries written before the ledger upgrade;
 // every ledger write since is a 'record'. All three are gated on `records` view:
-// the audit trail is read from inside a drawer the user already had to be
+// the audit trail is read from a detail page the user already had to be
 // allowed to open, and there is now one ability for every kind of record.
 const RESOURCE_BY_RECORD_TYPE: Record<RecordType, ResourceName> = {
   expense: "records",

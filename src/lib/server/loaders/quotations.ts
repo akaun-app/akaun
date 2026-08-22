@@ -1,12 +1,12 @@
 import type { Actions } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
-import { listQuotations } from '$lib/server/queries/quotations.js';
+import { getQuotation, listQuotations } from '$lib/server/queries/quotations.js';
 import { removeQuotation } from '$lib/server/services/quotations.js';
 import { QuotationStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
 
-export function loadQuotationsPage(locals: App.Locals, openQuotationId: number | null) {
+export function loadQuotationsPage(locals: App.Locals) {
 	if (!hasPermission(locals, 'quotations', 'view')) throw redirect(302, '/dashboard');
 	const allQuotations = listQuotations(db, { limit: 1000 });
 
@@ -20,11 +20,28 @@ export function loadQuotationsPage(locals: App.Locals, openQuotationId: number |
 		else if (q.status === QuotationStatus.Converted) counts.converted++;
 	});
 
-	if (openQuotationId !== null && !allQuotations.some((q) => q.id === openQuotationId)) {
-		throw redirect(302, '/quotations');
-	}
+	return { quotations: allQuotations, counts };
+}
 
-	return { quotations: allQuotations, counts, openQuotationId };
+/**
+ * One quotation, for `/quotations/[id]`.
+ *
+ * Server-rendered with its line items, which the drawer used to fetch after
+ * opening — so the table a reader came for arrived a moment after the panel.
+ */
+export function loadQuotationDetail(locals: App.Locals, id: number) {
+	if (!hasPermission(locals, 'quotations', 'view')) throw redirect(302, '/dashboard');
+
+	const quotation = getQuotation(db, id);
+	if (!quotation) throw redirect(302, '/quotations');
+
+	return {
+		quotation,
+		perms: {
+			change: hasPermission(locals, 'quotations', 'change'),
+			delete: hasPermission(locals, 'quotations', 'delete')
+		}
+	};
 }
 
 export const quotationsActions: Actions = {

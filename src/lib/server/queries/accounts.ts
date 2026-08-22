@@ -1,28 +1,31 @@
 import {
   and,
   asc,
-  desc,
   eq,
   gte,
   inArray,
   isNull,
   lt,
   lte,
+  ne,
   sql,
   type SQL,
 } from "drizzle-orm";
 import {
   accounts,
+  accountDefaults,
   contacts,
   ledgerMovements,
   ledgerRecords,
 } from "../db/schema.js";
 import {
   AccountRole,
-  type AccountRoleCode,
+  AccountType,
+  DefaultAccountPurpose,
+  LedgerRecordKind,
+  type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
-import { accountTypeFor } from "../ledger/account-type.js";
 import type {
   AccountHistoryEntry,
   AccountHistoryReport,
@@ -31,9 +34,7 @@ import type {
   AccountView,
   LedgerDb,
   Minor,
-  SystemAccountIds,
 } from "../ledger/types.js";
-import { getSetting, SETTING_KEYS } from "../settings.js";
 
 /**
  * Reading the chart of accounts.
@@ -48,8 +49,12 @@ import { getSetting, SETTING_KEYS } from "../settings.js";
 function toAccountRow(row: typeof accounts.$inferSelect): AccountRow {
   return {
     id: row.id,
-    role: row.role as AccountRoleCode,
+    role: row.role,
+    type: row.type as AccountTypeCode,
+    code: row.code ?? row.id,
     name: row.name,
+    parentId: row.parentId,
+    mergedIntoAccountId: row.mergedIntoAccountId,
     contactId: row.contactId,
     isSystem: row.isSystem,
     rank: row.rank,
@@ -74,23 +79,23 @@ function cannotDeleteReason(
 }
 
 export type AccountFilters = {
-  role?: AccountRoleCode | AccountRoleCode[];
+  type?: AccountTypeCode | AccountTypeCode[];
+  search?: string;
   includeArchived?: boolean;
   contactId?: number;
 };
 
 function accountConditions(filters: AccountFilters): SQL[] {
   const conditions: SQL[] = [];
-  if (filters.role !== undefined) {
-    conditions.push(
-      Array.isArray(filters.role)
-        ? inArray(accounts.role, filters.role)
-        : eq(accounts.role, filters.role),
-    );
-  }
   if (filters.contactId !== undefined) {
     conditions.push(eq(accounts.contactId, filters.contactId));
   }
+  if (filters.type !== undefined)
+    conditions.push(
+      Array.isArray(filters.type)
+        ? inArray(accounts.type, filters.type)
+        : eq(accounts.type, filters.type),
+    );
   if (!filters.includeArchived) conditions.push(isNull(accounts.archivedAt));
   return conditions;
 }
@@ -111,7 +116,7 @@ export function listAccounts(
     .select()
     .from(accounts)
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(asc(accounts.role), asc(accounts.rank))
+    .orderBy(asc(accounts.type), asc(accounts.code), asc(accounts.rank))
     .all();
 
   if (rows.length === 0) return [];
@@ -132,48 +137,108 @@ export function listAccounts(
     .groupBy(ledgerMovements.accountId)
     .all();
 
-  const byId = new Map(totals.map((t) => [t.accountId, t]));
+  const totalsById = new Map(totals.map((t) => [t.accountId, t]));
+  const owedAccountIds = new Set(
+    db
+      .select({ accountId: accountDefaults.accountId })
+      .from(accountDefaults)
+      .where(
+        inArray(accountDefaults.purpose, [
+          DefaultAccountPurpose.Receivable,
+          DefaultAccountPurpose.Payable,
+        ]),
+      )
+      .all()
+      .map((row) => row.accountId),
+  );
+  const accountRows = rows.map(toAccountRow);
+  const rowById = new Map(accountRows.map((row) => [row.id, row]));
+  const childrenByParent = new Map<number, AccountRow[]>();
+  for (const row of accountRows) {
+    if (row.parentId == null) continue;
+    const children = childrenByParent.get(row.parentId) ?? [];
+    children.push(row);
+    childrenByParent.set(row.parentId, children);
+  }
+  const pathFor = (row: AccountRow): string[] => {
+    const path = [row.name];
+    const seen = new Set([row.id]);
+    let parentId = row.parentId ?? null;
+    while (parentId !== null) {
+      if (seen.has(parentId)) break;
+      seen.add(parentId);
+      const parent = rowById.get(parentId);
+      if (!parent) break;
+      path.unshift(parent.name);
+      parentId = parent.parentId ?? null;
+    }
+    return path;
+  };
+  const rolledUpFor = (id: number, seen = new Set<number>()): number => {
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const direct = totalsById.get(id)?.balanceMinor ?? 0;
+    return (
+      direct +
+      (childrenByParent.get(id) ?? []).reduce(
+        (sum, child) => sum + rolledUpFor(child.id, new Set(seen)),
+        0,
+      )
+    );
+  };
 
-  return rows.map((raw) => {
-    const row = toAccountRow(raw);
-    const totalsFor = byId.get(row.id);
+  const views = accountRows.map((row) => {
+    const totalsFor = totalsById.get(row.id);
     const movementCount = totalsFor?.movementCount ?? 0;
     const reason = cannotDeleteReason(row, movementCount);
+    const hasChildren = (childrenByParent.get(row.id)?.length ?? 0) > 0;
+    const directBalanceMinor = totalsFor?.balanceMinor ?? 0;
     return {
       ...row,
-      type: accountTypeFor(row.role),
-      balanceMinor: totalsFor?.balanceMinor ?? 0,
+      active: row.archivedAt === null && row.mergedIntoAccountId === null,
+      hasChildren,
+      postingEligible:
+        row.archivedAt === null &&
+        row.mergedIntoAccountId === null &&
+        !hasChildren,
+      owedContactRequired: owedAccountIds.has(row.id),
+      directBalanceMinor,
+      rolledUpBalanceMinor: rolledUpFor(row.id),
+      path: pathFor(row),
+      balanceMinor: directBalanceMinor,
       movementCount,
       canDelete: reason === null,
       cannotDeleteReason: reason,
     };
   });
+  const term = filters.search?.trim().toLocaleLowerCase();
+  if (!term) return views;
+  return views.filter(
+    (view) =>
+      String(view.code).includes(term) ||
+      view.name.toLocaleLowerCase().includes(term) ||
+      view.path.some((part) => part.toLocaleLowerCase().includes(term)),
+  );
 }
 
 export function getAccount(db: LedgerDb, id: number): AccountView | null {
   const raw = db.select().from(accounts).where(eq(accounts.id, id)).get();
   if (!raw) return null;
-  const row = toAccountRow(raw);
+  const canonicalId = raw.mergedIntoAccountId ?? id;
+  return (
+    listAccounts(db, { includeArchived: true }).find(
+      (row) => row.id === canonicalId,
+    ) ?? null
+  );
+}
 
-  const totals = db
-    .select({
-      balanceMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-      movementCount: sql<number>`count(*)`,
-    })
-    .from(ledgerMovements)
-    .where(eq(ledgerMovements.accountId, id))
+export function canonicalAccountId(db: LedgerDb, id: number): number | null {
+  const row = db
+    .select({ mergedIntoAccountId: accounts.mergedIntoAccountId })
+    .from(accounts)
+    .where(eq(accounts.id, id))
     .get();
-
-  const movementCount = totals?.movementCount ?? 0;
-  const reason = cannotDeleteReason(row, movementCount);
-  return {
-    ...row,
-    type: accountTypeFor(row.role),
-    balanceMinor: totals?.balanceMinor ?? 0,
-    movementCount,
-    canDelete: reason === null,
-    cannotDeleteReason: reason,
-  };
+  return row ? (row.mergedIntoAccountId ?? id) : null;
 }
 
 /** One account's balance, without the rest of the chart. */
@@ -222,66 +287,13 @@ export function accountRefs(
   const unique = [...new Set(ids.filter((id) => Number.isInteger(id)))];
   if (unique.length === 0) return new Map();
   const rows = db
-    .select({ id: accounts.id, role: accounts.role })
+    .select({ id: accounts.id, type: accounts.type })
     .from(accounts)
     .where(inArray(accounts.id, unique))
     .all();
   return new Map(
-    rows.map((r) => [r.id, { id: r.id, role: r.role as AccountRoleCode }]),
+    rows.map((r) => [r.id, { id: r.id, type: r.type as AccountTypeCode }]),
   );
-}
-
-/** The one account of a system role, or null before the upgrade has seeded it. */
-export function systemAccountId(
-  db: LedgerDb,
-  role: AccountRoleCode,
-): number | null {
-  const row = db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(eq(accounts.role, role), eq(accounts.isSystem, true)))
-    .orderBy(asc(accounts.id))
-    .get();
-  return row?.id ?? null;
-}
-
-/**
- * The system accounts every write path needs, resolved once per request.
- *
- * Throws rather than returning nulls: every one of these is seeded before the
- * first request is served, so a missing one is a broken installation and not a
- * case any caller can sensibly handle.
- */
-export function systemAccounts(db: LedgerDb): SystemAccountIds {
-  const receivableAccountId = systemAccountId(db, AccountRole.Receivable);
-  const payableAccountId = systemAccountId(db, AccountRole.Payable);
-  const openingBalancesAccountId = systemAccountId(
-    db,
-    AccountRole.OpeningBalances,
-  );
-  const uncategorisedAccountId = systemAccountId(
-    db,
-    AccountRole.ExpenseCategory,
-  );
-
-  if (
-    receivableAccountId === null ||
-    payableAccountId === null ||
-    openingBalancesAccountId === null ||
-    uncategorisedAccountId === null
-  ) {
-    throw new Error(
-      "The chart of accounts is missing one of the accounts the app needs. Restart the app so it can finish setting itself up.",
-    );
-  }
-
-  return {
-    defaultAccountId: defaultAccountId(db) ?? 0,
-    receivableAccountId,
-    payableAccountId,
-    openingBalancesAccountId,
-    uncategorisedAccountId,
-  };
 }
 
 /**
@@ -289,32 +301,33 @@ export function systemAccounts(db: LedgerDb): SystemAccountIds {
  * account so a database whose setting was cleared by hand still works.
  */
 export function defaultAccountId(db: LedgerDb): number | null {
-  const stored = getSetting(db, SETTING_KEYS.ledgerDefaultAccountId);
-  if (stored) {
-    const id = Number(stored);
-    const exists = db
+  const saved = db
+    .select({ id: accounts.id })
+    .from(accountDefaults)
+    .innerJoin(accounts, eq(accounts.id, accountDefaults.accountId))
+    .where(
+      eq(accountDefaults.purpose, DefaultAccountPurpose.EverydayTransaction),
+    )
+    .get();
+  if (saved) return saved.id;
+
+  // Conversion seeds the default, but retaining a type-based fallback keeps a
+  // damaged/pre-conversion database usable without reviving role semantics.
+  return (
+    db
       .select({ id: accounts.id })
       .from(accounts)
-      .where(eq(accounts.id, id))
-      .get();
-    if (exists) return exists.id;
-  }
-  return systemAccountId(db, AccountRole.Bank);
-}
-
-/** The last rank in a role's list, so a new account sorts after it. */
-export function lastRankFor(
-  db: LedgerDb,
-  role: AccountRoleCode,
-): string | null {
-  const row = db
-    .select({ rank: accounts.rank })
-    .from(accounts)
-    .where(eq(accounts.role, role))
-    .orderBy(desc(accounts.rank))
-    .limit(1)
-    .get();
-  return row?.rank ?? null;
+      .where(
+        and(
+          eq(accounts.type, AccountType.Asset),
+          // Equipment is an asset that nothing is ever paid from.
+          ne(accounts.role, AccountRole.Equipment),
+          isNull(accounts.archivedAt),
+        ),
+      )
+      .orderBy(asc(accounts.code), asc(accounts.id))
+      .get()?.id ?? null
+  );
 }
 
 /**
@@ -424,17 +437,61 @@ export function accountHistory(
   };
 }
 
-/** Whether an account of this role and name already exists (the unique index). */
-export function accountNameTaken(
+/** One account's opening balance, as the account page and its editor both need it. */
+export type OpeningBalanceView = {
+  recordId: number;
+  date: string;
+  /** Signed cents on *this* account — the same convention as any movement. */
+  amountMinor: Minor;
+};
+
+/**
+ * The account's one opening-balance record, or null when it has none.
+ *
+ * An opening balance is the one record whose two sides are this account and the
+ * account chosen as the opening-balances default, so both are matched here — an
+ * account can appear on other records of the same kind (it is the other side of
+ * somebody else's opening balance), and those are not its own.
+ *
+ * `setOpeningBalance` in `services/accounts.ts` reads the same answer through
+ * this function, so the figure the page shows and the record the save replaces
+ * can never be two different records.
+ */
+export function openingBalanceFor(
   db: LedgerDb,
-  role: AccountRoleCode,
-  name: string,
-  exceptId?: number,
-): boolean {
-  const row = db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(and(eq(accounts.role, role), eq(accounts.name, name)))
-    .get();
-  return row !== undefined && row.id !== exceptId;
+  accountId: number,
+): OpeningBalanceView | null {
+  const openingAccountId = db
+    .select({ accountId: accountDefaults.accountId })
+    .from(accountDefaults)
+    .where(eq(accountDefaults.purpose, DefaultAccountPurpose.OpeningBalances))
+    .get()?.accountId;
+  if (openingAccountId == null) return null;
+
+  const other = db
+    .select({ recordId: ledgerMovements.recordId })
+    .from(ledgerMovements)
+    .where(eq(ledgerMovements.accountId, openingAccountId));
+
+  return (
+    db
+      .select({
+        recordId: ledgerRecords.id,
+        date: ledgerRecords.date,
+        amountMinor: ledgerMovements.amountMinor,
+      })
+      .from(ledgerRecords)
+      .innerJoin(
+        ledgerMovements,
+        eq(ledgerMovements.recordId, ledgerRecords.id),
+      )
+      .where(
+        and(
+          eq(ledgerRecords.kind, LedgerRecordKind.OpeningBalance),
+          eq(ledgerMovements.accountId, accountId),
+          inArray(ledgerRecords.id, other),
+        ),
+      )
+      .get() ?? null
+  );
 }

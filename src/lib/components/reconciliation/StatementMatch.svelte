@@ -26,6 +26,7 @@
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
   import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
   import StatusBadge from "$lib/components/ui/StatusBadge.svelte";
+  import BackLink from "$lib/components/ui/BackLink.svelte";
   import {
     LedgerRecordKindLabels,
     StatementDirection,
@@ -296,11 +297,6 @@
     });
     // eslint-disable-next-line svelte/no-navigation-without-resolve -- route is resolved; only query state is appended.
     replaceState(`${path}?${params}`, page.state);
-  }
-  function backToStatements() {
-    void goto(
-      resolve("/(app)/accounts/[id]/reconcile", { id: String(data.account.id) }),
-    );
   }
   function clearFilters() {
     from = "";
@@ -584,9 +580,10 @@
 <div class="screen reconciliation-screen">
   <header class="topbar">
     <div class="topbar-left">
-      <button type="button" class="back-link" onclick={backToStatements}>
-        ← {data.account.name}
-      </button>
+      <BackLink
+        href={resolve("/(app)/accounts/[id]/reconcile", { id: String(data.account.id) })}
+        label={data.account.name}
+      />
       <h1 class="page-title filename" title={data.statement.originalFilename}>
         {data.statement.originalFilename}
       </h1>
@@ -865,8 +862,8 @@
                       disabled={!data.permissions.change}
                       onchange={(event) =>
                         editLine(line, "direction", event.currentTarget.value)}
-                      ><option value={StatementDirection.In}>Money In</option
-                      ><option value={StatementDirection.Out}>Money Out</option
+                      ><option value={StatementDirection.In}>Debit</option
+                      ><option value={StatementDirection.Out}>Credit</option
                       ></select
                     ></label
                   ><label class="wide"
@@ -1055,7 +1052,7 @@
           <div>
             <h3>Compatible Statement Lines</h3>
             <p>
-              {movesIn ? "Money In" : "Money Out"} transactions on
+              {movesIn ? "Debit" : "Credit"} transactions on
               {selectedMovement.accountName ?? "this account"}
             </p>
           </div>
@@ -1107,7 +1104,7 @@
               </div>
             </div>{/each}{#if availableLines.length === 0}<EmptyState
               title="No compatible transactions"
-              sub={`Upload a statement for ${selectedMovement.accountName ?? "this account"} containing ${movesIn ? "money in" : "money out"} transactions with an available balance.`}
+              sub={`Upload a statement for ${selectedMovement.accountName ?? "this account"} containing ${movesIn ? "debit" : "credit"} transactions with an available balance.`}
               >{#snippet icon()}<Banknote size={20} />{/snippet}</EmptyState
             >{/if}
         </div>
@@ -1161,7 +1158,7 @@
     ><div class="sheet-head">
       <div>
         <span class="sheet-eyebrow"
-          ><ArrowLeftRight size={13} />Money You Moved</span
+          ><ArrowLeftRight size={13} />Transfer</span
         >
         <h2 class="sheet-title-text">Record as a transfer</h2>
       </div>
@@ -1176,15 +1173,15 @@
           >
         </div>
         <p class="transfer-explain">
-          Nothing was earned or spent here — money moved between two of your own
-          accounts, so no record was ever created for it. Saving this creates
-          that record and matches this transaction to it.
+          This line moves funds between two of your own accounts, so it is
+          neither revenue nor an expense and no record exists for it yet. Saving
+          this creates that record and matches this transaction to it.
         </p>
         <div class="field">
           <span class="field-label"
             >{transferLine.direction === StatementDirection.In
-              ? "Money came from"
-              : "Money went to"}</span
+              ? "From account"
+              : "To account"}</span
           >
           <select
             name="transfer-account"
@@ -1255,23 +1252,6 @@
 />
 
 <style>
-  /* Back to the account's statements — this page is reached from there. */
-  .back-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-bottom: 2px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--muted-foreground);
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .back-link:hover {
-    color: var(--foreground);
-  }
   /* The bank's own lines, now a panel on the page rather than a drawer. */
   .statement-lines-panel {
     margin-top: 14px;

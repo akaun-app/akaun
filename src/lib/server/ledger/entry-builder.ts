@@ -1,4 +1,3 @@
-import { isSharedOwedRole } from "./account-type.js";
 import { fromMinor } from "./money.js";
 import type {
   BuildContext,
@@ -59,7 +58,7 @@ function validate(
 ): Refusable<MovementDraft[]> {
   if (movements.length < 2) {
     return refuse(
-      "A record needs at least two sides — where the money came from, and where it went.",
+      "A record needs at least two lines — one account to post from, and one to post to.",
     );
   }
 
@@ -82,10 +81,11 @@ function validate(
     );
   }
 
-  const touchesSharedOwed = movements.some((m) => {
-    const account = ctx.accounts.get(m.accountId);
-    return account !== undefined && isSharedOwedRole(account.role);
-  });
+  const touchesSharedOwed = movements.some(
+    (m) =>
+      m.accountId === ctx.receivableAccountId ||
+      m.accountId === ctx.payableAccountId,
+  );
   if (touchesSharedOwed && contactId === null) {
     return refuse(
       "Say who this money is owed to, or owed by, before saving it.",

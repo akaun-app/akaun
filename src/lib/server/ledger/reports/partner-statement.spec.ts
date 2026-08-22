@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, type AccountRoleCode } from "$lib/enums.js";
+import { AccountRole, AccountType, type AccountRoleCode } from "$lib/enums.js";
 import { partnerStatement } from "./partner-statement.js";
+import { accountTypeFor } from "../account-type.js";
 import type { AccountTotal, Minor } from "../types.js";
 
 function total(
@@ -10,7 +11,16 @@ function total(
   contactId: number | null,
   amountMinor: Minor,
 ): AccountTotal {
-  return { accountId, accountName, role, contactId, amountMinor };
+  return {
+    accountId,
+    code: accountId,
+    accountName,
+    type: accountTypeFor(role),
+    parentId: null,
+    role,
+    contactId,
+    amountMinor,
+  };
 }
 
 const ALEX = 1;
@@ -96,6 +106,34 @@ describe("one block per contact holding the Partner role", () => {
 
   it("says in plain words how the result was split", () => {
     expect(report.notes.some((n) => /equal/i.test(n))).toBe(true);
+  });
+});
+
+describe("contact-scoped Equity movements", () => {
+  it("treats credit-direction Equity as money put in and debit-direction Equity as money taken out", () => {
+    const report = partnerStatement({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-12-31",
+      partners: [{ contactId: ALEX, contactName: "Alex Tan" }],
+      totals: [
+        {
+          ...total(800, "Alex equity credit", AccountRole.Bank, ALEX, -5_000),
+          type: AccountType.Equity,
+        },
+        {
+          ...total(801, "Alex equity debit", AccountRole.Bank, ALEX, 1_200),
+          type: AccountType.Equity,
+        },
+        {
+          ...total(802, "Alex asset", AccountRole.PartnerCapital, ALEX, -9_000),
+          type: AccountType.Asset,
+        },
+      ],
+      resultMinor: 0,
+    });
+    expect(report.partners[0].contributionsMinor).toBe(5_000);
+    expect(report.partners[0].drawingsMinor).toBe(1_200);
+    expect(report.partners[0].netMinor).toBe(3_800);
   });
 });
 

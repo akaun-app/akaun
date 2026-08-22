@@ -6,6 +6,7 @@ import {
   primaryKey,
   uniqueIndex,
   index,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
@@ -630,16 +631,29 @@ export const reconciliationAllocations = sqliteTable(
 // movements are constructed. See data-model.md.
 // ---------------------------------------------------------------------------
 
-// A named pot with a balance. Also what everyday screens call a category
-// (FR-006a). `AccountType` is NOT stored — it is looked up from `role` by a pure
-// map, because storing both is exactly the drift FR-006a forbids (D-05).
+// One line in the Chart of Accounts. Type and code become required after the
+// explicit conversion has populated every legacy row; parent and merge links
+// preserve hierarchy and old deep links.
 export const accounts = sqliteTable(
   "accounts",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     // AccountRole code. See $lib/enums.ts.
     role: integer("role").notNull(),
+    // Fixed accounting type and system-owned number. `role` remains during the
+    // conversion release only, so migration 0016 can map old installations in
+    // one transaction before later readers stop depending on it.
+    type: integer("type"),
+    code: integer("code"),
     name: text("name").notNull(),
+    parentId: integer("parent_id").references(
+      (): AnySQLiteColumn => accounts.id,
+      { onDelete: "restrict" },
+    ),
+    mergedIntoAccountId: integer("merged_into_account_id").references(
+      (): AnySQLiteColumn => accounts.id,
+      { onDelete: "restrict" },
+    ),
     // Only partner capital/drawings accounts set this (FR-008b). SET NULL so
     // retiring a contact never destroys the account's history.
     contactId: integer("contact_id").references(() => contacts.id, {
@@ -663,13 +677,73 @@ export const accounts = sqliteTable(
       .default(sql`(datetime('now'))`),
   },
   (t) => [
-    // Every picker query is "accounts of this role, in order".
+    // Transitional index used only while migration readers still classify old rows.
     index("accounts_role_rank_idx").on(t.role, t.rank),
     // The partner statement's lookup.
     index("accounts_contact_idx").on(t.contactId),
-    // Replaces categories_type_name_idx: an expense category and an income
-    // category may share a name exactly as they do today.
-    uniqueIndex("accounts_role_name_idx").on(t.role, t.name),
+    // Names are intentionally not unique: code is the stable identity.
+    index("accounts_role_name_idx").on(t.role, t.name),
+    uniqueIndex("accounts_code_idx").on(t.code),
+    index("accounts_type_parent_code_idx").on(t.type, t.parentId, t.code),
+    index("accounts_parent_idx").on(t.parentId),
+    index("accounts_merged_into_idx").on(t.mergedIntoAccountId),
+  ],
+);
+
+// Six workflow choices replace role/name lookup. Purpose and required type are
+// fixed in $lib/enums.ts; services validate that each target is an active leaf.
+export const accountDefaults = sqliteTable(
+  "account_defaults",
+  {
+    purpose: integer("purpose").primaryKey(),
+    accountId: integer("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "restrict" }),
+    updatedBy: integer("updated_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [index("account_defaults_account_idx").on(t.accountId)],
+);
+
+export const accountMigrationRuns = sqliteTable("account_migration_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  version: text("version").notNull().unique(),
+  status: text("status").notNull(),
+  startedAt: text("started_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  completedAt: text("completed_at"),
+  summaryJson: text("summary_json").notNull().default("{}"),
+  beforeSnapshotJson: text("before_snapshot_json").notNull().default("{}"),
+  afterSnapshotJson: text("after_snapshot_json").notNull().default("{}"),
+});
+
+export const accountMergeAudits = sqliteTable(
+  "account_merge_audits",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sourceAccountId: integer("source_account_id").notNull(),
+    survivorAccountId: integer("survivor_account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "restrict" }),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => accountMigrationRuns.id, { onDelete: "restrict" }),
+    normalizedName: text("normalized_name").notNull(),
+    outcome: text("outcome").notNull(),
+    reason: text("reason"),
+    referenceCountsJson: text("reference_counts_json").notNull().default("{}"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    uniqueIndex("account_merge_audits_source_idx").on(t.sourceAccountId),
+    index("account_merge_audits_run_idx").on(t.runId),
   ],
 );
 

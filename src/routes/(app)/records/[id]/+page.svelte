@@ -1,7 +1,8 @@
 <script lang="ts">
-  import RecordsPage from "$lib/components/records/RecordsPage.svelte";
+	import RecordDetail from '$lib/components/records/RecordDetail.svelte';
+	import type { PageData } from './$types.js';
 
-  let { data, form } = $props();
+	let { data }: { data: PageData } = $props();
 </script>
 
-<RecordsPage {data} {form} openId={data.openRecordId} />
+<RecordDetail {data} />

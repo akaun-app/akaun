@@ -220,9 +220,7 @@ export const statementExtractionStateEnum = makeEnum(
 );
 
 // --- ledger ---
-// A role belongs to a *pot* and is set once when the account is created,
-// outliving thousands of records. It is what the account is for, and it is what
-// `AccountType` is derived from (never stored — see ledger/account-type.ts).
+// Retired account roles remain append-only while existing books are converted.
 export const AccountRole = {
   Bank: 1,
   Wallet: 2,
@@ -238,12 +236,40 @@ export const AccountRole = {
   IncomeCategory: 12, // what everyday screens call a category
 } as const;
 
-export const AccountType = {
+const FixedAccountType = {
   Asset: 1,
   Liability: 2,
   Equity: 3,
-  Income: 4,
+  Revenue: 4,
   Expense: 5,
+} as const;
+
+// Income was the old name for numeric code 4. Keep a non-enumerable source
+// compatibility alias while all consumers migrate; labels and enumeration
+// expose Revenue as the sole fixed type name.
+export const AccountType = FixedAccountType as typeof FixedAccountType & {
+  readonly Income: typeof FixedAccountType.Revenue;
+};
+Object.defineProperty(AccountType, "Income", {
+  value: FixedAccountType.Revenue,
+  enumerable: false,
+});
+
+export const AccountCodeRanges = {
+  [AccountType.Asset]: { start: 1000, end: 1999 },
+  [AccountType.Liability]: { start: 2000, end: 2999 },
+  [AccountType.Equity]: { start: 3000, end: 3999 },
+  [AccountType.Revenue]: { start: 4000, end: 4999 },
+  [AccountType.Expense]: { start: 5000, end: 5999 },
+} as const;
+
+export const DefaultAccountPurpose = {
+  Receivable: 1,
+  Payable: 2,
+  OpeningBalances: 3,
+  SalesRevenue: 4,
+  UncategorisedExpense: 5,
+  EverydayTransaction: 6,
 } as const;
 
 // A kind belongs to one *event* on one date. It carries intent the movements
@@ -261,6 +287,8 @@ export const LedgerRecordKind = {
 
 export type AccountRoleCode = (typeof AccountRole)[keyof typeof AccountRole];
 export type AccountTypeCode = (typeof AccountType)[keyof typeof AccountType];
+export type DefaultAccountPurposeCode =
+  (typeof DefaultAccountPurpose)[keyof typeof DefaultAccountPurpose];
 export type LedgerRecordKindCode =
   (typeof LedgerRecordKind)[keyof typeof LedgerRecordKind];
 
@@ -283,8 +311,45 @@ export const AccountTypeLabels: Record<number, string> = {
   [AccountType.Asset]: "asset",
   [AccountType.Liability]: "liability",
   [AccountType.Equity]: "equity",
-  [AccountType.Income]: "income",
+  [AccountType.Revenue]: "revenue",
   [AccountType.Expense]: "expense",
+};
+
+/**
+ * The same five types as a reader sees them.
+ *
+ * `AccountTypeLabels` above are wire values — they go into URLs, API payloads
+ * and the zod enum, so they stay lowercase. A screen that rendered them
+ * directly showed an account-type picker reading "asset", "liability",
+ * "revenue"; these are the names for a label, an option or a column.
+ */
+export const AccountTypeDisplayLabels: Record<number, string> = {
+  [AccountType.Asset]: "Asset",
+  [AccountType.Liability]: "Liability",
+  [AccountType.Equity]: "Equity",
+  [AccountType.Revenue]: "Revenue",
+  [AccountType.Expense]: "Expense",
+};
+
+export const DefaultAccountPurposeLabels: Record<number, string> = {
+  [DefaultAccountPurpose.Receivable]: "receivable",
+  [DefaultAccountPurpose.Payable]: "payable",
+  [DefaultAccountPurpose.OpeningBalances]: "opening_balances",
+  [DefaultAccountPurpose.SalesRevenue]: "sales_revenue",
+  [DefaultAccountPurpose.UncategorisedExpense]: "uncategorised_expense",
+  [DefaultAccountPurpose.EverydayTransaction]: "everyday_transaction",
+};
+
+export const DefaultAccountPurposeTypes: Record<
+  DefaultAccountPurposeCode,
+  AccountTypeCode
+> = {
+  [DefaultAccountPurpose.Receivable]: AccountType.Asset,
+  [DefaultAccountPurpose.Payable]: AccountType.Liability,
+  [DefaultAccountPurpose.OpeningBalances]: AccountType.Equity,
+  [DefaultAccountPurpose.SalesRevenue]: AccountType.Revenue,
+  [DefaultAccountPurpose.UncategorisedExpense]: AccountType.Expense,
+  [DefaultAccountPurpose.EverydayTransaction]: AccountType.Asset,
 };
 
 export const LedgerRecordKindLabels: Record<number, string> = {
@@ -299,6 +364,7 @@ export const LedgerRecordKindLabels: Record<number, string> = {
 
 export const accountRoleEnum = makeEnum(AccountRoleLabels);
 export const accountTypeEnum = makeEnum(AccountTypeLabels);
+export const defaultAccountPurposeEnum = makeEnum(DefaultAccountPurposeLabels);
 export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
 
 export const TemplateFont = {

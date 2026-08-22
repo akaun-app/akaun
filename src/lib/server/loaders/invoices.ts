@@ -1,15 +1,12 @@
 import type { Actions } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
-import { listInvoices } from "$lib/server/queries/invoices.js";
+import { getInvoice, listInvoices } from "$lib/server/queries/invoices.js";
 import { removeInvoice, issueInvoice } from "$lib/server/services/invoices.js";
 import { InvoiceStatus } from "$lib/enums.js";
 import { fail, redirect } from "@sveltejs/kit";
 import { hasPermission } from "$lib/server/permissions.js";
 
-export function loadInvoicesPage(
-  locals: App.Locals,
-  openInvoiceId: number | null,
-) {
+export function loadInvoicesPage(locals: App.Locals) {
   if (!hasPermission(locals, "invoices", "view"))
     throw redirect(302, "/dashboard");
   const allInvoices = listInvoices(db, { limit: 1000 });
@@ -25,14 +22,30 @@ export function loadInvoicesPage(
     else counts.sent++;
   });
 
-  if (
-    openInvoiceId !== null &&
-    !allInvoices.some((inv) => inv.id === openInvoiceId)
-  ) {
-    throw redirect(302, "/invoices");
-  }
+  return { invoices: allInvoices, counts };
+}
 
-  return { invoices: allInvoices, counts, openInvoiceId };
+/**
+ * One invoice, for `/invoices/[id]`.
+ *
+ * The list carries a summary row; the page needs the lines and the payments
+ * that settled it, which the drawer used to fetch after opening — so the
+ * numbers a reader came to check arrived a moment after the panel did.
+ */
+export function loadInvoiceDetail(locals: App.Locals, id: number) {
+  if (!hasPermission(locals, "invoices", "view"))
+    throw redirect(302, "/dashboard");
+
+  const invoice = getInvoice(db, id);
+  if (!invoice) throw redirect(302, "/invoices");
+
+  return {
+    invoice,
+    perms: {
+      change: hasPermission(locals, "invoices", "change"),
+      delete: hasPermission(locals, "invoices", "delete"),
+    },
+  };
 }
 
 export const invoicesActions: Actions = {

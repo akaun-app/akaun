@@ -21,10 +21,10 @@
 	} = $props();
 
 	const COLUMNS = [
-		{ key: 'contributionsMinor', label: 'Money put in' },
-		{ key: 'shareOfResultMinor', label: 'Share of the result' },
-		{ key: 'drawingsMinor', label: 'Money taken out' },
-		{ key: 'netMinor', label: 'What is left' }
+		{ key: 'contributionsMinor', label: 'Contributions' },
+		{ key: 'shareOfResultMinor', label: 'Share of profit' },
+		{ key: 'drawingsMinor', label: 'Drawings' },
+		{ key: 'netMinor', label: 'Closing balance' }
 	] as const;
 
 	const totals = $derived({
@@ -43,7 +43,7 @@
 	<div class="rep-block">
 		<div class="rep-block-head">
 			<div>
-				<div class="rep-block-title">What each partner has in the business</div>
+				<div class="rep-block-title">Partners' equity</div>
 				<div class="rep-block-sub">
 					{formatDate(report.dateFrom)} to {formatDate(report.dateTo)}
 				</div>

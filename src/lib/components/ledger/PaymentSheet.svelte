@@ -37,7 +37,7 @@
 		open?: boolean;
 		/** we-pay: we are paying someone. we-receive: someone is paying us. */
 		direction?: Direction;
-		/** Every place money sits — what "paid from" / "received into" offers. */
+		/** The asset and liability accounts the payment or receipt account offers. */
 		accounts: AccountView[];
 		contacts?: { id: number; legalName: string }[];
 		defaultAccountId?: number | null;
@@ -152,9 +152,9 @@
 	);
 	const unallocatedMinor = $derived(amountMinor - allocatedMinor);
 
-	const title = $derived(direction === 'we-pay' ? 'Record a payment' : 'Record money received');
+	const title = $derived(direction === 'we-pay' ? 'Record a payment' : 'Record a receipt');
 	const contactLabel = $derived(direction === 'we-pay' ? 'Who was paid? *' : 'Who paid you? *');
-	const moneyLabel = $derived(direction === 'we-pay' ? 'Paid from' : 'Received into');
+	const moneyLabel = $derived(direction === 'we-pay' ? 'Payment account' : 'Receipt account');
 
 	function isPicked(item: OutstandingItem): boolean {
 		return item.movementId in picked;
@@ -217,8 +217,6 @@
 		if (!o) onclose();
 	}}
 >
-	<Sheet.Portal>
-		<Sheet.Overlay />
 		<Sheet.Content
 			side={panelSide}
 			style={isMobile
@@ -252,7 +250,7 @@
 					</div>
 
 					<div class="field">
-						<label class="field-label" for="pay-description">What was it for? *</label>
+						<label class="field-label" for="pay-description">Description *</label>
 						<Input
 							id="pay-description"
 							bind:value={description}
@@ -288,9 +286,9 @@
 						{defaultAccountId}
 					/>
 
-					<div class="detail-section-label">What this covers</div>
+					<div class="detail-section-label">Allocation</div>
 					{#if contactId === null}
-						<p class="covers-note">Choose a person to see what is still owed.</p>
+						<p class="covers-note">Choose a contact to see what is outstanding.</p>
 					{:else if loading}
 						<p class="covers-note">Looking…</p>
 					{:else if items.length === 0}
@@ -310,7 +308,7 @@
 											<span class="covers-sub">
 												{formatDate(item.date)}{item.recordNumber
 													? ` · ${item.recordNumber}`
-													: ''} · {formatMinor(item.outstandingMinor)} still owed
+													: ''} · {formatMinor(item.outstandingMinor)} outstanding
 												{#if item.daysOverdue > 0}
 													· {item.daysOverdue} days late
 												{/if}
@@ -361,7 +359,6 @@
 				</div>
 			</form>
 		</Sheet.Content>
-	</Sheet.Portal>
 </Sheet.Root>
 
 <style>
@@ -372,17 +369,6 @@
 		padding: 10px 14px;
 		font-size: 13px;
 		margin-bottom: 16px;
-	}
-	.plain-select {
-		width: 100%;
-		height: 36px;
-		padding: 0 10px;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		background: var(--card);
-		color: var(--foreground);
-		font-family: inherit;
-		font-size: 13.5px;
 	}
 	.covers-note {
 		font-size: 12.5px;

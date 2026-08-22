@@ -1,5 +1,4 @@
-import { AccountRole } from "$lib/enums.js";
-import { displaySign } from "../account-type.js";
+import { AccountType } from "$lib/enums.js";
 import { allocateMinor } from "../money.js";
 import type {
   AccountTotal,
@@ -58,16 +57,16 @@ export function partnerStatement(
     // they are the only accounts this statement is made of.
     if (total.contactId === null) continue;
 
-    const readable = total.amountMinor * displaySign(total.role);
-    if (total.role === AccountRole.PartnerCapital) {
+    if (total.type !== AccountType.Equity) continue;
+    if (total.amountMinor < 0) {
       contributionsByContact.set(
         total.contactId,
-        (contributionsByContact.get(total.contactId) ?? 0) + readable,
+        (contributionsByContact.get(total.contactId) ?? 0) - total.amountMinor,
       );
-    } else if (total.role === AccountRole.PartnerDrawings) {
+    } else if (total.amountMinor > 0) {
       drawingsByContact.set(
         total.contactId,
-        (drawingsByContact.get(total.contactId) ?? 0) + readable,
+        (drawingsByContact.get(total.contactId) ?? 0) + total.amountMinor,
       );
     }
   }

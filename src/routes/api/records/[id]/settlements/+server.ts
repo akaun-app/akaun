@@ -12,7 +12,7 @@ import { resourceForKind } from "$lib/server/ledger/record-permissions.js";
  * `GET /api/settlements` answers "what is still outstanding", which is the
  * question a payment screen asks before it writes anything. This answers the
  * other one: what has already been put against this particular record, so its
- * drawer can list the payments and offer to take one back (FR-018).
+ * page can list the payments and offer to take one back (FR-018).
  *
  * A read, so it is gated on `view` for whichever screen the record belongs to.
  */

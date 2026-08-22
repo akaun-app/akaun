@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm";
 import {
   accounts,
+  accountDefaults,
   contacts,
   ledgerMovements,
   ledgerRecords,
@@ -21,12 +22,11 @@ import {
   settlements,
 } from "../db/schema.js";
 import {
-  AccountRole,
+  DefaultAccountPurpose,
   LedgerRecordKind,
-  type AccountRoleCode,
+  type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
-import { isSharedOwedRole } from "../ledger/account-type.js";
 import { lockStateOf } from "../ledger/locking.js";
 import { toMinor } from "../ledger/money.js";
 import { coverageFor } from "../ledger/coverage.js";
@@ -329,6 +329,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       amountMinor: ledgerMovements.amountMinor,
       sortOrder: ledgerMovements.sortOrder,
       accountName: accounts.name,
+      accountType: accounts.type,
       accountRole: accounts.role,
     })
     .from(ledgerMovements)
@@ -338,6 +339,19 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
     .all();
 
   const movementIds = movementRows.map((m) => m.id);
+  const owedAccountIds = new Set(
+    db
+      .select({ id: accountDefaults.accountId })
+      .from(accountDefaults)
+      .where(
+        inArray(accountDefaults.purpose, [
+          DefaultAccountPurpose.Receivable,
+          DefaultAccountPurpose.Payable,
+        ]),
+      )
+      .all()
+      .map((row) => row.id),
+  );
   const settled = settledByMovement(db, movementIds);
   const matched = matchedMovements(db, movementIds);
   const allocated = allocatedByMovement(db, movementIds);
@@ -353,16 +367,16 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
   }
 
   for (const m of movementRows) {
-    const role = m.accountRole as AccountRoleCode;
     movements.get(m.recordId)?.push({
       id: m.id,
       accountId: m.accountId,
       accountName: m.accountName,
-      accountRole: role,
+      accountType: m.accountType as AccountTypeCode,
+      accountRole: m.accountRole,
       amountMinor: m.amountMinor,
     });
 
-    if (isSharedOwedRole(role)) {
+    if (owedAccountIds.has(m.accountId)) {
       owedSides.get(m.recordId)?.push({
         movementId: m.id,
         amountMinor: m.amountMinor,
@@ -535,7 +549,13 @@ function recordConditions(filters: RecordListFilters): SQL[] {
       SELECT 1 FROM ${ledgerMovements}
       INNER JOIN ${accounts} ON ${accounts.id} = ${ledgerMovements.accountId}
       WHERE ${ledgerMovements.recordId} = ${ledgerRecords.id}
-        AND ${accounts.role} IN (${AccountRole.Receivable}, ${AccountRole.Payable})
+        AND ${accounts.id} IN (
+          SELECT ${accountDefaults.accountId} FROM ${accountDefaults}
+          WHERE ${accountDefaults.purpose} IN (
+            ${DefaultAccountPurpose.Receivable},
+            ${DefaultAccountPurpose.Payable}
+          )
+        )
         AND abs(${ledgerMovements.amountMinor}) > coalesce((
           SELECT sum(${settlements.amountMinor}) FROM ${settlements}
           WHERE ${settlements.owedMovementId} = ${ledgerMovements.id}
@@ -822,7 +842,13 @@ export function integrityInputs(db: LedgerDb): {
       movementSumMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
       positiveSumMinor: sql<number>`coalesce(sum(case when ${ledgerMovements.amountMinor} > 0 then ${ledgerMovements.amountMinor} else 0 end), 0)`,
       zeroMovements: sql<number>`coalesce(sum(case when ${ledgerMovements.amountMinor} = 0 then 1 else 0 end), 0)`,
-      touchesSharedOwed: sql<number>`coalesce(max(case when ${accounts.role} in (${AccountRole.Receivable}, ${AccountRole.Payable}) then 1 else 0 end), 0)`,
+      touchesSharedOwed: sql<number>`coalesce(max(case when ${accounts.id} in (
+        select ${accountDefaults.accountId} from ${accountDefaults}
+        where ${accountDefaults.purpose} in (
+          ${DefaultAccountPurpose.Receivable},
+          ${DefaultAccountPurpose.Payable}
+        )
+      ) then 1 else 0 end), 0)`,
     })
     .from(ledgerRecords)
     .leftJoin(ledgerMovements, eq(ledgerMovements.recordId, ledgerRecords.id))

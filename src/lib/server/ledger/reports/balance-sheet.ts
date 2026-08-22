@@ -1,5 +1,4 @@
 import { AccountType } from "$lib/enums.js";
-import { accountTypeFor, displaySign } from "../account-type.js";
 import type {
   AccountTotal,
   BalanceSheetReport,
@@ -34,19 +33,86 @@ export type BalanceSheetInput = {
 };
 
 /**
- * The one line that is not an account: everything the business has earned and
- * kept, from the first record up to this date. Id 0 marks it as having nothing
- * to open — no account holds it, it is the categories' running total brought
+ * The one line that is not an account: revenue less expenses, from the first
+ * record up to this date. Id 0 marks it as having nothing to open — no account
+ * holds it, it is the revenue and expense accounts' running total brought
  * across.
+ *
+ * "Current earnings", not "Retained earnings": the seeded chart has a real
+ * Retained Earnings account (code 3100) for results that have been closed off,
+ * and two lines with one name on the same statement would be read as a
+ * duplicate.
  */
 const ACCUMULATED_RESULT_ACCOUNT_ID = 0;
-const ACCUMULATED_RESULT_LABEL = "What the business has made and kept";
+const ACCUMULATED_RESULT_LABEL = "Current earnings";
 
 function sectionFrom(lines: ReportLine[]): BalanceSheetSection {
   return {
     lines,
-    totalMinor: lines.reduce((running, line) => running + line.amountMinor, 0),
+    totalMinor: lines
+      .filter((line) => !line.isSubtotal)
+      .reduce((running, line) => running + line.amountMinor, 0),
   };
+}
+
+function reportLines(totals: AccountTotal[], type: number): ReportLine[] {
+  const typed = totals.filter((total) => total.type === type);
+  const byId = new Map(typed.map((total) => [total.accountId, total]));
+  const children = new Map<number, AccountTotal[]>();
+  for (const total of typed) {
+    if (total.parentId === null || !byId.has(total.parentId)) continue;
+    const siblings = children.get(total.parentId) ?? [];
+    siblings.push(total);
+    children.set(total.parentId, siblings);
+  }
+  const rolled = (id: number, seen = new Set<number>()): Minor => {
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    return (
+      (byId.get(id)?.amountMinor ?? 0) +
+      (children.get(id) ?? []).reduce(
+        (sum, child) => sum + rolled(child.accountId, new Set(seen)),
+        0,
+      )
+    );
+  };
+  const depth = (total: AccountTotal): number => {
+    let value = 0;
+    let parentId = total.parentId;
+    const seen = new Set([total.accountId]);
+    while (parentId !== null && byId.has(parentId) && !seen.has(parentId)) {
+      seen.add(parentId);
+      value += 1;
+      parentId = byId.get(parentId)!.parentId;
+    }
+    return value;
+  };
+  const subtreeHasActivity = (id: number, seen = new Set<number>()): boolean => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return (
+      (byId.get(id)?.amountMinor ?? 0) !== 0 ||
+      (children.get(id) ?? []).some((child) =>
+        subtreeHasActivity(child.accountId, new Set(seen)),
+      )
+    );
+  };
+  const sign = type === AccountType.Asset ? 1 : -1;
+  return typed.flatMap((total) => {
+    const signedAmount = rolled(total.accountId) * sign;
+    const amountMinor = signedAmount === 0 ? 0 : signedAmount;
+    if (!subtreeHasActivity(total.accountId)) return [];
+    return [
+      {
+        accountId: total.accountId,
+        accountName: total.accountName,
+        amountMinor,
+        parentId: total.parentId,
+        depth: depth(total),
+        isSubtotal: (children.get(total.accountId)?.length ?? 0) > 0,
+      },
+    ];
+  });
 }
 
 export function balanceSheet(input: BalanceSheetInput): BalanceSheetReport {
@@ -56,50 +122,22 @@ export function balanceSheet(input: BalanceSheetInput): BalanceSheetReport {
   let categoriesMinor: Minor = 0;
 
   for (const total of input.totals) {
-    const type = accountTypeFor(total.role);
+    const type = total.type;
 
     // The categories never get a line of their own here. Their running total is
     // the accumulated result, which the owners' stake carries as one figure.
-    if (type === AccountType.Income || type === AccountType.Expense) {
+    if (type === AccountType.Revenue || type === AccountType.Expense) {
       categoriesMinor += total.amountMinor;
       continue;
     }
 
     // An account holding nothing at this date is not worth a line.
     if (total.amountMinor === 0) continue;
-
-    if (type === AccountType.Asset) {
-      owned.push({
-        accountId: total.accountId,
-        accountName: total.accountName,
-        amountMinor: total.amountMinor * displaySign(total.role),
-      });
-      continue;
-    }
-
-    if (type === AccountType.Liability) {
-      owed.push({
-        accountId: total.accountId,
-        accountName: total.accountName,
-        amountMinor: total.amountMinor * displaySign(total.role),
-      });
-      continue;
-    }
-
-    // What the owners have in it. This section negates every raw balance rather
-    // than asking `displaySign`, and the difference matters for exactly one
-    // role. `displaySign` answers "which way round does this account read on
-    // its own", and a partner's drawings account genuinely reads positive —
-    // 300 taken out is 300. This section asks a different question: what does
-    // this add to what the owners have in it? Money taken out subtracts. Every
-    // other equity role gives the same answer either way; negating uniformly is
-    // what makes each section's total the sum of the lines printed above it.
-    ownersStake.push({
-      accountId: total.accountId,
-      accountName: total.accountName,
-      amountMinor: -total.amountMinor,
-    });
   }
+
+  owned.push(...reportLines(input.totals, AccountType.Asset));
+  owed.push(...reportLines(input.totals, AccountType.Liability));
+  ownersStake.push(...reportLines(input.totals, AccountType.Equity));
 
   const accumulatedResultMinor = -categoriesMinor;
   ownersStake.push({

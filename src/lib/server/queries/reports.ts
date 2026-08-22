@@ -6,7 +6,11 @@ import {
   ledgerMovements,
   ledgerRecords,
 } from "../db/schema.js";
-import { Role, type AccountRoleCode } from "$lib/enums.js";
+import {
+  Role,
+  type AccountRoleCode,
+  type AccountTypeCode,
+} from "$lib/enums.js";
 import { balanceSheet } from "../ledger/reports/balance-sheet.js";
 import type { PartnerContact } from "../ledger/reports/partner-statement.js";
 import { partnerStatement } from "../ledger/reports/partner-statement.js";
@@ -51,14 +55,22 @@ function accountTotals(
   const window: SQL[] = [lte(ledgerRecords.date, dateTo)];
   if (dateFrom !== null) window.push(gte(ledgerRecords.date, dateFrom));
 
-  // Ordered by role and then by the rank the user put their categories in, so a
-  // report reads the same way round as every picker in the app.
-  return db
+  const chart = db
     .select({
       accountId: accounts.id,
+      code: accounts.code,
       accountName: accounts.name,
+      type: accounts.type,
+      parentId: accounts.parentId,
       role: accounts.role,
       contactId: accounts.contactId,
+    })
+    .from(accounts)
+    .orderBy(asc(accounts.type), asc(accounts.code))
+    .all();
+  const totals = db
+    .select({
+      accountId: accounts.id,
       amountMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
     })
     .from(ledgerMovements)
@@ -66,9 +78,17 @@ function accountTotals(
     .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
     .where(and(...window))
     .groupBy(accounts.id)
-    .orderBy(asc(accounts.role), asc(accounts.rank))
-    .all()
-    .map((row) => ({ ...row, role: row.role as AccountRoleCode }));
+    .all();
+  const amountByAccount = new Map(
+    totals.map((row) => [row.accountId, row.amountMinor]),
+  );
+  return chart.map((row) => ({
+    ...row,
+    code: row.code ?? row.accountId,
+    type: row.type as AccountTypeCode,
+    role: row.role as AccountRoleCode,
+    amountMinor: amountByAccount.get(row.accountId) ?? 0,
+  }));
 }
 
 /** Every account's total over a date range, both ends included. */

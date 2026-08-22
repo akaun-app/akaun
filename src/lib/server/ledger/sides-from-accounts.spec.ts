@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, LedgerRecordKind } from "$lib/enums.js";
+import { AccountRole, AccountType, LedgerRecordKind } from "$lib/enums.js";
 import {
   sidesFromAccounts,
   type SidesInput,
@@ -10,7 +10,7 @@ import {
  * Principle V: a wrong kind is silent. Nothing on screen says "this was filed
  * as a transfer" — it simply appears in the wrong place on a report months
  * later, which is why every row of the derivation table (data-model.md §5) is
- * pinned here, over plain role codes with no database.
+ * pinned here, over fixed type codes and saved default IDs with no database.
  *
  * The module builds **no movements**. It answers "which of the seven shapes did
  * the user just describe?" and hands that to `entry-builder.ts`, which stays
@@ -18,16 +18,79 @@ import {
  */
 
 const ACCOUNTS = {
-  bank: { id: 1, role: AccountRole.Bank, archived: false },
-  cash: { id: 2, role: AccountRole.Cash, archived: false },
-  fuel: { id: 3, role: AccountRole.ExpenseCategory, archived: false },
-  sales: { id: 4, role: AccountRole.IncomeCategory, archived: false },
-  laptop: { id: 5, role: AccountRole.Equipment, archived: false },
-  payable: { id: 6, role: AccountRole.Payable, archived: false },
-  receivable: { id: 7, role: AccountRole.Receivable, archived: false },
-  opening: { id: 8, role: AccountRole.OpeningBalances, archived: false },
-  capital: { id: 9, role: AccountRole.PartnerCapital, archived: false },
-  archived: { id: 10, role: AccountRole.ExpenseCategory, archived: true },
+  bank: {
+    id: 1,
+    type: AccountType.Asset,
+    role: AccountRole.Bank,
+    archived: false,
+  },
+  cash: {
+    id: 2,
+    type: AccountType.Asset,
+    role: AccountRole.Cash,
+    archived: false,
+  },
+  fuel: {
+    id: 3,
+    type: AccountType.Expense,
+    role: AccountRole.ExpenseCategory,
+    archived: false,
+  },
+  sales: {
+    id: 4,
+    type: AccountType.Revenue,
+    role: AccountRole.IncomeCategory,
+    archived: false,
+  },
+  savings: {
+    id: 5,
+    type: AccountType.Asset,
+    role: AccountRole.Bank,
+    archived: false,
+  },
+  payable: {
+    id: 6,
+    type: AccountType.Liability,
+    role: AccountRole.Payable,
+    archived: false,
+  },
+  receivable: {
+    id: 7,
+    type: AccountType.Asset,
+    role: AccountRole.Receivable,
+    archived: false,
+  },
+  opening: {
+    id: 8,
+    type: AccountType.Equity,
+    role: AccountRole.OpeningBalances,
+    archived: false,
+  },
+  capital: {
+    id: 9,
+    type: AccountType.Equity,
+    role: AccountRole.PartnerCapital,
+    archived: false,
+  },
+  archived: {
+    id: 10,
+    type: AccountType.Expense,
+    role: AccountRole.ExpenseCategory,
+    archived: true,
+  },
+  paper: {
+    id: 11,
+    type: AccountType.Expense,
+    role: AccountRole.ExpenseCategory,
+    archived: false,
+  },
+  // An asset the business keeps, chosen on the form beside the categories.
+  equipment: {
+    id: 12,
+    type: AccountType.Asset,
+    role: AccountRole.Equipment,
+    archived: false,
+  },
 };
 
 function ctx(overrides: Partial<SidesContext> = {}): SidesContext {
@@ -35,6 +98,9 @@ function ctx(overrides: Partial<SidesContext> = {}): SidesContext {
     accountById: (id: number) =>
       Object.values(ACCOUNTS).find((a) => a.id === id) ?? null,
     canAdjust: true,
+    receivableAccountId: ACCOUNTS.receivable.id,
+    payableAccountId: ACCOUNTS.payable.id,
+    openingBalancesAccountId: ACCOUNTS.opening.id,
     ...overrides,
   };
 }
@@ -67,12 +133,44 @@ describe("sidesFromAccounts — the derivation table", () => {
     });
   });
 
-  it("money pot → equipment is an expense", () => {
+  // Buying something the business keeps is an ordinary purchase, not a
+  // rearrangement of the books: equipment is an asset, so reading `type === Asset`
+  // as "holds money" made a laptop look like moving cash between two pots and
+  // demanded the Adjustments ability nobody is granted (002 FR-006b, FR-031c).
+  it("bank → equipment is an everyday purchase, with no Adjustments ability", () => {
     const result = sidesFromAccounts(
-      input(ACCOUNTS.cash.id, ACCOUNTS.laptop.id),
+      input(ACCOUNTS.bank.id, ACCOUNTS.equipment.id),
+      ctx({ canAdjust: false }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toMatchObject({
+      kind: "expense",
+      categoryAccountId: ACCOUNTS.equipment.id,
+      paidFromAccountId: ACCOUNTS.bank.id,
+    });
+  });
+
+  it("owed → equipment is an everyday purchase somebody else paid for", () => {
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.payable.id, ACCOUNTS.equipment.id, { contactId: 42 }),
+      ctx({ canAdjust: false }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toMatchObject({
+      kind: "expense",
+      categoryAccountId: ACCOUNTS.equipment.id,
+      paidFromAccountId: null,
+    });
+  });
+
+  it("asset → asset is a transfer", () => {
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.cash.id, ACCOUNTS.savings.id),
       ctx(),
     );
-    expect(result.ok && result.value.kind).toBe("expense");
+    expect(result.ok && result.value.kind).toBe("transfer");
   });
 
   it("income category → money pot is income", () => {
@@ -284,7 +382,7 @@ describe("a bill spanning several categories", () => {
   const petronasBill = () =>
     input(ACCOUNTS.payable.id, ACCOUNTS.fuel.id, {
       contactId: 42,
-      extraSides: [{ accountId: ACCOUNTS.laptop.id, amountMinor: 3_000 }],
+      extraSides: [{ accountId: ACCOUNTS.paper.id, amountMinor: 3_000 }],
     });
 
   it("is allowed without the adjustments ability", () => {
@@ -355,7 +453,7 @@ describe("a bill spanning several categories", () => {
   it("still needs a contact when a side is owed", () => {
     const result = sidesFromAccounts(
       input(ACCOUNTS.payable.id, ACCOUNTS.fuel.id, {
-        extraSides: [{ accountId: ACCOUNTS.laptop.id, amountMinor: 3_000 }],
+        extraSides: [{ accountId: ACCOUNTS.savings.id, amountMinor: 3_000 }],
       }),
       ctx({ canAdjust: false }),
     );

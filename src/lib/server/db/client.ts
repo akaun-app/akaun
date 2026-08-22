@@ -8,6 +8,7 @@ import { dirname } from "path";
 import { DATABASE_PATH } from "../env.js";
 import { createLogger } from "../logger.js";
 import * as schema from "./schema.js";
+import { classifyDatabaseFile, upgradeDatabaseFile } from "./auto-upgrade.js";
 import {
   legacyDropAllowed,
   readLegacyDropStateAt,
@@ -34,7 +35,49 @@ const DEFAULT_ADMIN_PASSWORD = "akaun-admin";
 
 function createDb() {
   mkdirSync(dirname(DATABASE_PATH), { recursive: true });
+
+  // The installation upgrades itself, with no command and no setting (002
+  // FR-037). Both states below are ones it cannot get out of on its own: a book
+  // still on migration 0005 cannot start at all, because the guard below refuses
+  // rather than let 0015 drop the tables its records are still in; and a book
+  // converted to double-entry by an earlier release but never standardized starts
+  // with every type and code null, no saved defaults, and the 18 seed accounts
+  // inserted beside its own.
+  //
+  // The conversion runs against a copy and installs it only once every check has
+  // passed, so a failure leaves this file byte-identical and the server does not
+  // start — a half-standardized chart is worse than a refusal.
+  const fileState = classifyDatabaseFile(DATABASE_PATH);
+  if (fileState === "legacy_0005" || fileState === "ledger") {
+    try {
+      const result = upgradeDatabaseFile({ databasePath: DATABASE_PATH });
+      log.info(
+        {
+          inputState: result.inputState,
+          status: result.status,
+          backupPath: result.backupPath,
+          legacy: result.legacy,
+          chart: result.chart,
+        },
+        "Converted the books to the standardized chart of accounts",
+      );
+      for (const item of result.chart.attentionItems) log.warn(item);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log.error({ err: error }, "Automatic conversion failed");
+      console.error(
+        `\nThis installation's books could not be converted, so the server has not started. Your database has not been changed.\n\n${reason}\n`,
+      );
+      process.exit(1);
+    }
+  }
+
   // Before the database is opened for writing at all, and deliberately so.
+  //
+  // Kept as the last line of defence now that the conversion above runs by
+  // itself: after a successful conversion this passes, and if the conversion was
+  // skipped — an unsupported partial schema — it still refuses. Two independent
+  // gates on the one invariant that cannot be undone from inside the app.
   //
   // This release's migration drops the tables an unconverted installation still
   // keeps its records in. If the conversion has not run, the server does not

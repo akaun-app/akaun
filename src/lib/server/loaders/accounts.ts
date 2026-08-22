@@ -2,9 +2,12 @@ import { fail, redirect, type Actions } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
+  canonicalAccountId,
   listAccounts,
   defaultAccountId,
+  openingBalanceFor,
 } from "$lib/server/queries/accounts.js";
+import { listRecords } from "$lib/server/queries/ledger.js";
 import {
   createAccount,
   patchAccount,
@@ -14,99 +17,119 @@ import {
 import { toMinor } from "$lib/server/ledger/money.js";
 import { listStatementSummaries } from "$lib/server/services/reconciliation.js";
 import { isValidDate } from "$lib/server/date.js";
-import type { AccountRoleCode } from "$lib/enums.js";
+import { AccountType, type AccountTypeCode } from "$lib/enums.js";
+import type { AccountView as AccountApiView } from "$lib/components/accounts/account-types.js";
 
-/**
- * The chart of accounts, shared by `/accounts` and `/accounts/[id]` so the two
- * routes stay thin wrappers over one load and one set of actions.
- */
-export function loadAccountsPage(
-  locals: App.Locals,
-  openAccountId: number | null,
-) {
+function toRoleFreeAccount(account: ReturnType<typeof listAccounts>[number]): AccountApiView {
+  return {
+    id: account.id,
+    code: account.code!,
+    name: account.name,
+    type: account.type,
+    parentId: account.parentId ?? null,
+    active: account.active!,
+    hasChildren: account.hasChildren!,
+    postingEligible: account.postingEligible!,
+    directBalanceMinor: account.directBalanceMinor!,
+    rolledUpBalanceMinor: account.rolledUpBalanceMinor!,
+    path: account.path!,
+  };
+}
+
+const LIST_PATH = "/accounts";
+
+/** The four abilities both the chart and one account's page ask about. */
+function accountPerms(locals: App.Locals) {
+  return {
+    add: hasPermission(locals, "accounts", "add"),
+    change: hasPermission(locals, "accounts", "change"),
+    delete: hasPermission(locals, "accounts", "delete"),
+    // Whether to offer the way in to reconciling at all (FR-049).
+    reconcile: hasPermission(locals, "reconciliation", "view"),
+  };
+}
+
+/** The chart of accounts — all five types on one page (FR-022). */
+export function loadAccountsPage(locals: App.Locals) {
   if (!hasPermission(locals, "accounts", "view"))
     throw redirect(302, "/dashboard");
 
   const accounts = listAccounts(db, { includeArchived: true });
 
+  return {
+    accounts,
+    // Canonical role-free contract. `accounts` remains during the UI migration
+    // so the current chart can render while the new unified page is wired.
+    accountViews: accounts.map(toRoleFreeAccount),
+    defaultAccountId: defaultAccountId(db),
+    perms: accountPerms(locals),
+  };
+}
+
+/**
+ * One account, for `/accounts/[id]`.
+ *
+ * An account is the entity with the most around it and the least in it — three
+ * fields name it, but its balance, its children, what it still has to reconcile
+ * and what has moved through it are the reasons anyone opens it. A 500px drawer
+ * could hold the three fields, so for a while that is all the app showed.
+ *
+ * The merged-account redirect lives here rather than in the route, so there is
+ * one place that decides which id is the real one.
+ */
+export function loadAccountDetail(locals: App.Locals, requestedId: number) {
+  if (!hasPermission(locals, "accounts", "view"))
+    throw redirect(302, "/dashboard");
+
+  const canonical = canonicalAccountId(db, requestedId);
+  if (canonical === null) throw redirect(302, LIST_PATH);
+  if (canonical !== requestedId) throw redirect(302, `/accounts/${canonical}`);
+
+  // One read of the chart: the account, its children and the parent picker all
+  // come out of it.
+  const chart = listAccounts(db, { includeArchived: true });
+  const account = chart.find((a) => a.id === canonical);
+  if (!account) throw redirect(302, LIST_PATH);
+
   /**
-   * How many statements each account has still to finish (FR-053).
+   * How many statements this account has still to finish (FR-053).
    *
-   * The drawer's "Check against the bank" card needs this because there is no
-   * longer a top-level Reconciliation list where a half-done statement would be
-   * noticed — if the only way in is through the account, the account has to say
-   * whether there is anything waiting.
+   * There is no top-level Reconciliation list any more where a half-done
+   * statement would be noticed. If the only way in is through the account, the
+   * account has to say whether there is anything waiting.
    *
    * Only read when the user may reconcile at all; there is nothing to tell
    * somebody who cannot open the surface it points at.
    */
-  const unfinishedStatements = new Map<number, number>();
-  if (hasPermission(locals, "reconciliation", "view")) {
-    for (const statement of listStatementSummaries(db, locals)) {
-      if (statement.completed || statement.accountId == null) continue;
-      unfinishedStatements.set(
-        statement.accountId,
-        (unfinishedStatements.get(statement.accountId) ?? 0) + 1,
-      );
-    }
-  }
+  const unfinishedStatements = hasPermission(locals, "reconciliation", "view")
+    ? listStatementSummaries(db, locals).filter(
+        (s) => !s.completed && s.accountId === canonical,
+      ).length
+    : 0;
 
-  // A link to an account that has been deleted, or that never existed, lands on
-  // the list rather than an empty drawer.
-  if (openAccountId !== null && !accounts.some((a) => a.id === openAccountId)) {
-    throw redirect(302, "/accounts");
-  }
+  // Newest first, the same order and the same rows as the Records list. Not
+  // `accountHistory`, which orders oldest-first by design so its running
+  // balance can accumulate — the statement with the running balance lives at
+  // `/records?account=<id>` (D-05) and this page links to it rather than
+  // computing a second one.
+  const recent = listRecords(db, { accountId: canonical, limit: RECENT_LIMIT });
 
   return {
-    accounts,
-    openAccountId,
+    account,
+    children: chart.filter((a) => a.parentId === canonical),
+    // The parent picker needs the chart; the page shows only this account.
+    accounts: chart,
+    openingBalance: openingBalanceFor(db, canonical),
+    unfinishedStatements,
+    recent: recent.records,
+    recentTotal: recent.total,
     defaultAccountId: defaultAccountId(db),
-    // Plain object, because a Map does not survive the trip to the browser.
-    unfinishedStatements: Object.fromEntries(unfinishedStatements),
-    perms: {
-      add: hasPermission(locals, "accounts", "add"),
-      change: hasPermission(locals, "accounts", "change"),
-      delete: hasPermission(locals, "accounts", "delete"),
-      // Whether to offer the way in to reconciling at all (FR-049).
-      reconcile: hasPermission(locals, "reconciliation", "view"),
-    },
+    perms: accountPerms(locals),
   };
 }
 
-/**
- * The other half of the chart: what money was earned and spent on.
- *
- * Same table, same service, same actions as `loadAccountsPage` — a category is
- * an account underneath (002 FR-006a). What differs is only which rows the
- * screen lists, because a list of 22 categories beside 4 accounts read as
- * nothing but categories.
- */
-export function loadCategoriesPage(
-  locals: App.Locals,
-  openAccountId: number | null,
-) {
-  if (!hasPermission(locals, "accounts", "view"))
-    throw redirect(302, "/dashboard");
-
-  const accounts = listAccounts(db, { includeArchived: true });
-
-  // A link to a category that has been deleted, or that never existed, lands on
-  // the list rather than on an empty drawer.
-  if (openAccountId !== null && !accounts.some((a) => a.id === openAccountId)) {
-    throw redirect(302, "/categories");
-  }
-
-  return {
-    accounts,
-    openAccountId,
-    defaultAccountId: defaultAccountId(db),
-    perms: {
-      add: hasPermission(locals, "accounts", "add"),
-      change: hasPermission(locals, "accounts", "change"),
-      delete: hasPermission(locals, "accounts", "delete"),
-    },
-  };
-}
+/** How many movements the account page shows before sending you to the full list. */
+const RECENT_LIMIT = 25;
 
 export const accountsActions: Actions = {
   create: async ({ locals, request }) => {
@@ -114,15 +137,16 @@ export const accountsActions: Actions = {
       return fail(403, { error: "Forbidden" });
     const data = await request.formData();
 
-    const role = parseInt(String(data.get("role") ?? "0"));
+    const type = parseInt(String(data.get("type") ?? "0")) as AccountTypeCode;
     const name = String(data.get("name") ?? "").trim();
-    if (!role)
-      return fail(400, { error: "Choose what kind of account this is." });
+    if (!Object.values(AccountType).includes(type))
+      return fail(400, { error: "Choose one of the five account types." });
     if (!name) return fail(400, { error: "Give the account a name." });
 
     const result = createAccount(db, locals.user!.id, {
-      role: role as AccountRoleCode,
+      type,
       name,
+      parentId: data.get("parentId") ? parseInt(String(data.get("parentId"))) : null,
     });
     if (!result.ok) return fail(409, { error: result.reason });
     return { success: true, id: result.value.id };
@@ -135,12 +159,14 @@ export const accountsActions: Actions = {
     const id = parseInt(String(data.get("id") ?? "0"));
     if (!id) return fail(400, { error: "That account no longer exists." });
 
-    const archivedRaw = data.get("archived");
+    const activeRaw = data.get("active");
     const result = patchAccount(db, id, locals.user!.id, {
       name: data.has("name")
         ? String(data.get("name") ?? "").trim()
         : undefined,
-      archived: archivedRaw === null ? undefined : archivedRaw === "true",
+      type: data.has("type") ? parseInt(String(data.get("type"))) as AccountTypeCode : undefined,
+      parentId: data.has("parentId") ? (data.get("parentId") ? parseInt(String(data.get("parentId"))) : null) : undefined,
+      active: activeRaw === null ? undefined : activeRaw === "true",
     });
     if (!result.ok) return fail(409, { error: result.reason });
     return { success: true, id };
@@ -155,7 +181,10 @@ export const accountsActions: Actions = {
 
     const result = removeAccount(db, id, locals.user!.id);
     if (!result.ok) return fail(409, { error: result.reason });
-    return { success: true, deleted: true };
+    // The account's own page is now a real address. Returning success from
+    // there would leave the user looking at an account that no longer exists,
+    // so the server, which knows it is gone, says where to go instead.
+    throw redirect(303, LIST_PATH);
   },
 
   openingBalance: async ({ locals, request }) => {

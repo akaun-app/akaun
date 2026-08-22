@@ -4,6 +4,7 @@
 	import { appState } from '$lib/state/app.svelte.js';
 	import { mode, setMode } from 'mode-watcher';
 	import { NAV_ICONS_BY_ID, type SerializableNavItem } from '$lib/nav-config.js';
+	import { APP_VERSION_LABEL } from '$lib/version.js';
 
 	let {
 		user,
@@ -184,6 +185,10 @@
 		</button>
 	</div>
 
+	{#if !collapsed}
+		<div class="sb-version" title={APP_VERSION_LABEL}>{APP_VERSION_LABEL}</div>
+	{/if}
+
 	<!-- Popup menu — anchored to the aside, opens to the right -->
 	{#if menuOpen}
 		<div class="sb-user-menu" role="none" onclick={(e) => e.stopPropagation()}>
@@ -215,7 +220,9 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 9px 8px;
+		/* Asymmetric on purpose: the version line sits directly below, so the card only needs
+		   enough room under the email to clear it, not a full 9px. Collapsed overrides this. */
+		padding: 9px 8px 2px;
 		margin-top: 4px;
 		border-top: 1px solid var(--sidebar-border);
 	}
@@ -231,6 +238,27 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* Sits under the user card, inside the border-top .sb-user already draws, and one step
+	   quieter than the email above it. Hidden when collapsed — the rail is too narrow. */
+	.sb-version {
+		/* 2px card padding + the sidebar's 6px flex gap sit above; 3px here plus 3px on the
+		   container sit below. Roughly even, with the bottom still tight. */
+		padding: 0 8px 3px;
+		font-size: 10.5px;
+		color: var(--muted-foreground);
+		text-align: center;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* .sidebar in layout.css pads 14px all round, which is most of the gap under the version.
+	   Only trim it when the version is the last child — collapsed hides the version, so the
+	   avatar keeps the original breathing room. */
+	.sidebar:not(.collapsed) {
+		padding-bottom: 3px;
 	}
 
 	.sb-user-trigger {

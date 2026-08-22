@@ -12,7 +12,7 @@ import { resolve } from "$app/paths";
 /**
  * The account behind a report line.
  *
- * Opens its drawer, whose "see every movement" card leads on to
+ * Opens the account's page, whose "see every movement" card leads on to
  * `/records?account=` — the statement view that replaced the separate
  * account-history page (FR-047, D-05). The name is kept because that is still
  * what a reader clicking a report line is after.
@@ -22,15 +22,11 @@ export function openAccountHistory(accountId: number): Promise<void> {
 }
 
 /**
- * The category behind a profit-and-loss line.
- *
- * Every line of a P&L breakdown *is* a category account — `profitLoss()` drops
- * anything that is not — so those open on the Categories screen rather than on
- * Accounts, which no longer lists them. `/accounts/[id]` still opens any
- * account, categories included, so an older link never breaks.
+ * The Revenue or Expense account behind a profit-and-loss line.
+ * All account types now open in the unified Chart of Accounts.
  */
 export function openCategory(accountId: number): Promise<void> {
-  return goto(resolve("/(app)/categories/[id]", { id: String(accountId) }));
+  return goto(resolve("/(app)/accounts/[id]", { id: String(accountId) }));
 }
 
 /** What a debt is: the invoice that raised it, or the record that recorded it. */

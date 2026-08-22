@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, type AccountRoleCode } from "$lib/enums.js";
+import { AccountRole, AccountType, type AccountRoleCode } from "$lib/enums.js";
 import { profitLoss } from "./profit-loss.js";
+import { accountTypeFor } from "../account-type.js";
 import type { AccountTotal, Minor } from "../types.js";
 
 /**
@@ -13,7 +14,16 @@ function total(
   role: AccountRoleCode,
   amountMinor: Minor,
 ): AccountTotal {
-  return { accountId, accountName, role, contactId: null, amountMinor };
+  return {
+    accountId,
+    code: accountId,
+    accountName,
+    type: accountTypeFor(role),
+    parentId: null,
+    role,
+    contactId: null,
+    amountMinor,
+  };
 }
 
 /**
@@ -101,6 +111,114 @@ describe("lines grouped by category account", () => {
   it("echoes the period it covers", () => {
     expect(report.dateFrom).toBe("2026-01-01");
     expect(report.dateTo).toBe("2026-01-31");
+  });
+});
+
+describe("fixed types and hierarchy", () => {
+  it("classifies Revenue and Expense by fixed type even when a transitional role disagrees", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        {
+          ...total(70, "Custom revenue", AccountRole.Bank, -2_000),
+          type: AccountType.Revenue,
+        },
+        {
+          ...total(71, "Custom expense", AccountRole.Bank, 500),
+          type: AccountType.Expense,
+        },
+      ],
+    });
+    expect(report.income.map((line) => line.accountId)).toEqual([70]);
+    expect(report.expenses.map((line) => line.accountId)).toEqual([71]);
+    expect(report.resultMinor).toBe(1_500);
+  });
+
+  it("shows hierarchy subtotals while net profit counts each leaf once", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        {
+          accountId: 80,
+          code: 4000,
+          accountName: "Sales",
+          type: AccountType.Revenue,
+          parentId: null,
+          role: AccountRole.IncomeCategory,
+          contactId: null,
+          amountMinor: 0,
+        },
+        {
+          accountId: 81,
+          code: 4010,
+          accountName: "Online",
+          type: AccountType.Revenue,
+          parentId: 80,
+          role: AccountRole.IncomeCategory,
+          contactId: null,
+          amountMinor: -900,
+        },
+        {
+          accountId: 82,
+          code: 4020,
+          accountName: "Retail",
+          type: AccountType.Revenue,
+          parentId: 80,
+          role: AccountRole.IncomeCategory,
+          contactId: null,
+          amountMinor: -600,
+        },
+        {
+          accountId: 83,
+          code: 5000,
+          accountName: "Fees",
+          type: AccountType.Expense,
+          parentId: null,
+          role: AccountRole.ExpenseCategory,
+          contactId: null,
+          amountMinor: 200,
+        },
+      ],
+    });
+    expect(report.income.find((line) => line.accountId === 80)).toMatchObject({
+      amountMinor: 1_500,
+      isSubtotal: true,
+    });
+    expect(report.totalIncomeMinor).toBe(1_500);
+    expect(report.resultMinor).toBe(1_300);
+  });
+
+  it("keeps a zero parent subtotal visible when active children cancel out", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        {
+          ...total(90, "Other revenue", AccountRole.IncomeCategory, 0),
+          type: AccountType.Revenue,
+        },
+        {
+          ...total(91, "Gain", AccountRole.IncomeCategory, -500),
+          type: AccountType.Revenue,
+          parentId: 90,
+        },
+        {
+          ...total(92, "Refund", AccountRole.IncomeCategory, 500),
+          type: AccountType.Revenue,
+          parentId: 90,
+        },
+      ],
+    });
+
+    expect(report.income[0]).toMatchObject({
+      accountId: 90,
+      amountMinor: 0,
+      isSubtotal: true,
+    });
+    expect(report.income).toHaveLength(3);
+    expect(report.totalIncomeMinor).toBe(0);
   });
 });
 

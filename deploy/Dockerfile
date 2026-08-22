@@ -11,6 +11,11 @@ FROM base AS builder
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 COPY . .
+# The version the UI shows. .git is dockerignored and this image has no git binary, so the
+# value has to be passed in; CI computes `git describe` on the runner. Declared here rather
+# than at the top so the bun install layers above stay cached when only the version changes.
+ARG APP_VERSION=unknown
+ENV AKAUN_VERSION=$APP_VERSION
 RUN bun run build
 
 FROM oven/bun:1.2-alpine AS runtime

@@ -32,13 +32,13 @@
 
 	const owedAndOwners = $derived([
 		{
-			title: 'What it owes',
-			sub: 'Money the business still has to pay out',
+			title: 'Liabilities',
+			sub: 'What the business owes',
 			section: report.owed
 		},
 		{
-			title: 'What the owners have in it',
-			sub: 'Money put in, less money taken out, plus what the business has kept',
+			title: 'Equity',
+			sub: 'Contributions, less drawings, plus earnings kept in the business',
 			section: report.ownersStake
 		}
 	]);
@@ -51,13 +51,13 @@
 <div class="rep-scroll">
 	<div class="rep-result">
 		<div>
-			<div class="rep-result-label">What the business owns, as at {formatDate(report.asAt)}</div>
+			<div class="rep-result-label">Total assets, as at {formatDate(report.asAt)}</div>
 			<div class="rep-result-sub">
 				{#if report.balances}
-					This is the same figure as what it owes plus what the owners have in it, which is how you
-					know the books add up.
+					This is the same figure as liabilities plus equity, which is how you know the books add
+					up.
 				{:else}
-					This does not match what it owes plus what the owners have in it — the difference is {formatMinor(
+					This does not match liabilities plus equity — the difference is {formatMinor(
 						report.differenceMinor
 					)}.
 				{/if}
@@ -72,8 +72,8 @@
 		<div class="rep-block">
 			<div class="rep-block-head">
 				<div>
-					<div class="rep-block-title">What the business owns</div>
-					<div class="rep-block-sub">Money it holds, money owed to it, and things it has bought</div>
+					<div class="rep-block-title">Assets</div>
+					<div class="rep-block-sub">Cash, receivables and property the business owns</div>
 				</div>
 			</div>
 			{#if report.owned.lines.length === 0}
@@ -89,7 +89,10 @@
 										class="rep-open related-link"
 										onclick={() => openAccountHistory(line.accountId)}
 									>
-										<span>{line.accountName}</span>
+										<span
+											style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
+											class:font-semibold={line.isSubtotal}>{line.accountName}</span
+										>
 										<ChevronRight size={13} />
 									</button>
 								</td>
@@ -123,14 +126,20 @@
 									<tr>
 										<td>
 											{#if line.accountId === NOTHING_TO_OPEN}
-												{line.accountName}
+												<span
+													style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
+													class:font-semibold={line.isSubtotal}>{line.accountName}</span
+												>
 											{:else}
 												<button
 													type="button"
 													class="rep-open related-link"
 													onclick={() => openAccountHistory(line.accountId)}
 												>
-													<span>{line.accountName}</span>
+													<span
+														style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
+														class:font-semibold={line.isSubtotal}>{line.accountName}</span
+													>
 													<ChevronRight size={13} />
 												</button>
 											{/if}

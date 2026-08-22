@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { AccountRole } from "$lib/enums.js";
-import type { AccountRoleCode, LedgerRecordKindCode } from "$lib/enums.js";
+import type { AccountTypeCode, LedgerRecordKindCode } from "$lib/enums.js";
 import * as schema from "../db/schema.js";
 import {
   accounts,
@@ -29,13 +28,6 @@ export type ReconciliationDb = BunSQLiteDatabase<typeof schema>;
  * category or a "money we owe" account has no statement and no balance to move
  * between (FR-021, FR-023).
  */
-export const MONEY_HOLDING_ROLES: AccountRoleCode[] = [
-  AccountRole.Bank,
-  AccountRole.Wallet,
-  AccountRole.Cash,
-  AccountRole.Card,
-];
-
 // ---------------------------------------------------------------------------
 // Allocations — a bank line covering part or all of one movement
 // ---------------------------------------------------------------------------
@@ -235,13 +227,20 @@ export const deleteLine = (db: ReconciliationDb, id: number) =>
 // ---------------------------------------------------------------------------
 
 /** The accounts a statement can belong to, and the accounts a transfer can name. */
-export const listMoneyHoldingAccounts = (db: ReconciliationDb) =>
-  db
-    .select({ id: accounts.id, name: accounts.name, role: accounts.role })
-    .from(accounts)
-    .where(inArray(accounts.role, MONEY_HOLDING_ROLES))
-    .orderBy(asc(accounts.role), asc(accounts.rank))
-    .all() as { id: number; name: string; role: AccountRoleCode }[];
+export const listReconciliableAccounts = (db: ReconciliationDb) => {
+  const rows = db.select({
+    id: accounts.id, name: accounts.name,
+    type: accounts.type, code: accounts.code, archivedAt: accounts.archivedAt,
+    mergedIntoAccountId: accounts.mergedIntoAccountId,
+  }).from(accounts).orderBy(asc(accounts.type), asc(accounts.code)).all();
+  const parentIds = new Set(
+    db.select({ parentId: accounts.parentId }).from(accounts).all()
+      .flatMap((row) => row.parentId == null ? [] : [row.parentId]),
+  );
+  return rows.filter((row) => row.type != null && row.code != null && row.archivedAt == null && row.mergedIntoAccountId == null && !parentIds.has(row.id)) as {
+    id: number; name: string; type: AccountTypeCode; code: number;
+  }[];
+};
 
 const candidateColumns = {
   movementId: ledgerMovements.id,
@@ -249,7 +248,6 @@ const candidateColumns = {
   accountId: ledgerMovements.accountId,
   amountMinor: ledgerMovements.amountMinor,
   accountName: accounts.name,
-  accountRole: accounts.role,
   kind: ledgerRecords.kind,
   date: ledgerRecords.date,
   recordNumber: ledgerRecords.recordNumber,
@@ -263,7 +261,6 @@ type CandidateRow = {
   accountId: number;
   amountMinor: number;
   accountName: string;
-  accountRole: number;
   kind: number;
   date: string;
   recordNumber: string | null;
@@ -286,7 +283,6 @@ function toCandidate(row: CandidateRow): MovementCandidate {
     contactName: row.contactName,
     kind: row.kind as LedgerRecordKindCode,
     accountName: row.accountName,
-    accountRole: row.accountRole as AccountRoleCode,
   };
 }
 

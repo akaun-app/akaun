@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { mode, setMode } from 'mode-watcher';
 	import { MAX_MOBILE_NAV_ITEMS, NAV_ICONS_BY_ID, type SerializableNavItem } from '$lib/nav-config.js';
+	import { APP_VERSION_LABEL } from '$lib/version.js';
 
 	let {
 		open = $bindable(false),
@@ -163,6 +164,8 @@
 			</div>
 
 		</div>
+
+		<div class="drawer-version" title={APP_VERSION_LABEL}>{APP_VERSION_LABEL}</div>
 	</div>
 {/if}
 
@@ -280,6 +283,19 @@
 		padding: 8px 0 12px;
 	}
 
+	/* The drawer's user card is at the top under the brand, so the version reads as a footer
+	   at the bottom instead. .drawer-groups is flex:1, which pushes this down on its own. */
+	.drawer-version {
+		padding: 5px 16px;
+		border-top: 1px solid var(--sidebar-border);
+		font-size: 11px;
+		color: var(--muted-foreground);
+		text-align: center;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
 	.drawer-group {
 		padding: 4px 0;
 		display: flex;
@@ -352,5 +368,5 @@
 	   brand clears the status bar and the footer clears the home indicator only
 	   when installed. */
 	.drawer-brand { padding-top: calc(20px + var(--safe-top)); }
-	.drawer-groups { padding-bottom: calc(12px + var(--safe-bottom)); }
+	.drawer-version { padding-bottom: calc(5px + var(--safe-bottom)); }
 </style>

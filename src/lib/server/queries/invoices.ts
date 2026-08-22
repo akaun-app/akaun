@@ -14,6 +14,7 @@ import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import * as schema from "../db/schema.js";
 import {
   accounts,
+  accountDefaults,
   invoices,
   invoiceLines,
   invoiceSearchText,
@@ -21,7 +22,7 @@ import {
   ledgerMovements,
 } from "../db/schema.js";
 import { nextNumber } from "../running-number.js";
-import { AccountRole, InvoiceStatus } from "$lib/enums.js";
+import { DefaultAccountPurpose, InvoiceStatus } from "$lib/enums.js";
 import {
   upsertSearchText,
   searchTextExists,
@@ -186,11 +187,14 @@ function paymentStatesFor(
           amountMinor: ledgerMovements.amountMinor,
         })
         .from(ledgerMovements)
-        .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+        .innerJoin(
+          accountDefaults,
+          eq(accountDefaults.accountId, ledgerMovements.accountId),
+        )
         .where(
           and(
             inArray(ledgerMovements.recordId, recordIds),
-            eq(accounts.role, AccountRole.Receivable),
+            eq(accountDefaults.purpose, DefaultAccountPurpose.Receivable),
           ),
         )
         .all()
