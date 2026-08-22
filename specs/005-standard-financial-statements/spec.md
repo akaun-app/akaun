@@ -17,46 +17,46 @@
 | Cash Flow Statement | The statement of where actual cash came from and went over a period, grouped into operating, investing and financing activities. |
 | Statement of Changes in Equity | How each partner's stake changed over a period — contributions in, share of profit, drawings out. Shown today as the "Partners' Equity" report. |
 | Cash and cash equivalents | The accounts that are literally cash, a bank account, an e-wallet or a prepaid card — money the business can spend right now, as opposed to money it is merely owed. |
-| Account kind | A label on an asset account saying what it actually is — Cash, Bank, Wallet, Card, Accounts receivable, Inventory, Other current asset, or Equipment. Several accounts can share one kind (e.g. two different bank accounts are both "Bank"). |
-| Needs review | The state of an existing account that has not yet been given a kind. It is excluded from "cash and cash equivalents" until someone confirms it, so nothing is counted as cash by accident. |
+| Account sub-type | A label on an asset account saying what it actually is — Cash, Bank, Wallet, Card, Accounts receivable, Inventory, Other current asset, or Equipment. Several accounts can share one sub-type (e.g. two different bank accounts are both "Bank"). |
+| Needs review | The state of an existing account that has not yet been given a sub-type. It is excluded from "cash and cash equivalents" until someone confirms it, so nothing is counted as cash by accident. |
 | Indicator (dashboard) | A single headline figure on the dashboard (e.g. net profit for the month) that is read straight off one of the statements above, not calculated separately. |
 | Tally | Two screens showing the same figure for the same period agree to the cent, because they are computed the same way. |
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Every money-holding account has a real kind (Priority: P1)
+### User Story 1 - Every money-holding account has a real sub-type (Priority: P1)
 
 Today every asset account other than Equipment is treated the same internally, whether it is an
 actual bank account, physical cash, or money a customer merely owes. This makes an accurate Cash
 Flow Statement impossible: there is no way to add up "actual cash" separately from "what customers
 owe us" or "stock on hand". A user must be able to say, for each asset account, what it actually
 is — Cash, Bank, Wallet, Card, Accounts receivable, Inventory, Other current asset, or Equipment
-(Equipment already exists) — and any number of accounts can share the same kind, the way a
+(Equipment already exists) — and any number of accounts can share the same sub-type, the way a
 business might have three different bank accounts.
 
 **Why this priority**: Every other part of this feature depends on it. A Cash Flow Statement that
 still blends receivables into "cash" would be wrong on day one and would need redoing, which is
 the exact technical debt this feature exists to avoid.
 
-**Independent Test**: Open an asset account (new or existing), set its kind, save, and confirm a
-second account can be given the same kind. Can be verified on its own, before any report or
+**Independent Test**: Open an asset account (new or existing), set its sub-type, save, and confirm
+a second account can be given the same sub-type. Can be verified on its own, before any report or
 dashboard change exists.
 
 **Acceptance Scenarios**:
 
 1. **Given** a user is creating a new asset account, **When** they fill in the form, **Then**
-   they are asked which kind it is, from the fixed list above, and cannot save without choosing
-   one.
-2. **Given** two different asset accounts, **When** a user sets both to the kind "Bank", **Then**
-   both are saved successfully and both are treated as bank accounts for reporting.
-3. **Given** an asset account already has a kind, **When** a user opens it, **Then** they can
-   change the kind to a different one (correcting a past mistake), except where doing so is
+   they are asked which sub-type it is, from the fixed list above, and cannot save without
+   choosing one.
+2. **Given** two different asset accounts, **When** a user sets both to the sub-type "Bank",
+   **Then** both are saved successfully and both are treated as bank accounts for reporting.
+3. **Given** an asset account already has a sub-type, **When** a user opens it, **Then** they can
+   change the sub-type to a different one (correcting a past mistake), except where doing so is
    blocked by existing rules that already protect an account with history (e.g. a locked
    account).
 4. **Given** the feature has just shipped, **When** a user looks at their existing accounts,
    **Then** each of the small number of accounts the system can recognize with confidence (the
    default Cash, Bank, Accounts Receivable and Inventory accounts every book starts with) already
-   carries the matching kind, and every other existing asset account is visibly marked "needs
+   carries the matching sub-type, and every other existing asset account is visibly marked "needs
    review" rather than silently guessed.
 5. **Given** an account is marked "needs review", **When** any statement totals "cash and cash
    equivalents", **Then** that account's movements are left out of the cash total and shown
@@ -172,12 +172,12 @@ figure together (the SSE update already in place for both screens).
   rather than 404ing.
 - What happens if a user tries to reclassify an account that already has movements against it
   (e.g. change a "Bank" account to "Inventory")? The change is allowed unless an existing rule
-  already blocks editing that account (for example it is locked), because the kind describes what
-  the account is, not a permanent fact fixed at creation — the same way its name can already be
-  changed.
-- What happens to an account kind on an account that later becomes Equipment, or vice versa? Not
-  possible: Equipment is chosen on the everyday record form as what money was spent *on*, the same
-  way a category is today, not set as one of these seven kinds.
+  already blocks editing that account (for example it is locked), because the sub-type describes
+  what the account is, not a permanent fact fixed at creation — the same way its name can already
+  be changed.
+- What happens to an account sub-type on an account that later becomes Equipment, or vice versa?
+  Not possible: Equipment is chosen on the everyday record form as what money was spent *on*, the
+  same way a category is today, not set as one of these seven sub-types.
 
 ## Requirements *(mandatory)*
 
@@ -185,25 +185,25 @@ figure together (the SSE update already in place for both screens).
 
 **Account classification**
 
-- **FR-001**: System MUST let a user set a **kind** on every asset account, chosen from: Cash,
+- **FR-001**: System MUST let a user set a **sub-type** on every asset account, chosen from: Cash,
   Bank, Wallet, Card, Accounts receivable, Inventory, Other current asset, or Equipment (Equipment
   already exists as today's "bought and kept" choice).
-- **FR-002**: System MUST allow more than one account to share the same kind — a kind classifies a
-  group of accounts, never a single one.
-- **FR-003**: System MUST require a kind to be chosen when a new asset account is created, and
-  MUST let a user change an existing account's kind later, subject to whatever rules already block
-  editing that account (e.g. it is locked).
+- **FR-002**: System MUST allow more than one account to share the same sub-type — a sub-type
+  classifies a group of accounts, never a single one.
+- **FR-003**: System MUST require a sub-type to be chosen when a new asset account is created, and
+  MUST let a user change an existing account's sub-type later, subject to whatever rules already
+  block editing that account (e.g. it is locked).
 - **FR-004**: For the small number of default accounts every book starts with (Cash, Bank,
-  Accounts Receivable, Inventory), the system MUST carry over the matching kind automatically when
-  this feature ships. Every other existing asset account MUST be marked **needs review** rather
-  than guessed.
+  Accounts Receivable, Inventory), the system MUST carry over the matching sub-type automatically
+  when this feature ships. Every other existing asset account MUST be marked **needs review**
+  rather than guessed.
 - **FR-005**: An account marked "needs review" MUST be excluded from "cash and cash equivalents"
-  in every statement and indicator until a user gives it a kind, and MUST be shown as its own,
+  in every statement and indicator until a user gives it a sub-type, and MUST be shown as its own,
   clearly labelled line wherever it would otherwise have counted, so it is never mistaken for
   either real cash or a confirmed non-cash account.
-- **FR-006**: "Cash and cash equivalents" is defined as the combined accounts of kind Cash, Bank,
-  Wallet or Card. Accounts of kind Accounts receivable, Inventory or Other current asset are
-  current assets but are never part of "cash and cash equivalents".
+- **FR-006**: "Cash and cash equivalents" is defined as the combined accounts of sub-type Cash,
+  Bank, Wallet or Card. Accounts of sub-type Accounts receivable, Inventory or Other current asset
+  are current assets but are never part of "cash and cash equivalents".
 
 **Reports module**
 
@@ -287,10 +287,10 @@ figure together (the SSE update already in place for both screens).
 - The dashboard's existing period control continues to govern which period the Profit & Loss and
   Cash Flow indicators cover, and "as at today" continues to govern the Balance Sheet indicator —
   matching how the dashboard already behaves.
-- Classifying an asset account's kind is a one-time, low-friction choice on the existing account
-  form (not a new screen or workflow), and reclassifying later follows the same edit rules an
-  account already has today.
-- "Other current asset" is included as a catch-all kind so a user is never blocked from
+- Classifying an asset account's sub-type is a one-time, low-friction choice on the existing
+  account form (not a new screen or workflow), and reclassifying later follows the same edit rules
+  an account already has today.
+- "Other current asset" is included as a catch-all sub-type so a user is never blocked from
   classifying an account that is genuinely a current asset but not cash, a receivable, or
   inventory — it is deliberately chosen, unlike "needs review", which is a temporary,
   system-applied flag.

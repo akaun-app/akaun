@@ -14,18 +14,18 @@ confirm the feature behaves as specified; they map directly to spec.md's Indepen
 - A copy of a real book for manual checking, never the live `data/` — see CLAUDE.md's data-safety
   section for how to copy `.db`/`-wal`/`-shm` safely.
 
-## Scenario 1 — Account kind classification (User Story 1)
+## Scenario 1 — Account sub-type classification (User Story 1)
 
 1. Start the app against a fresh or copied database.
 2. Open an existing Asset account created before this feature shipped → it shows "needs review"
    and is excluded from any "cash and cash equivalents" total.
-3. Create a new Asset account → the form requires a kind before it can be saved.
-4. Set two different accounts to kind "Bank" → both save; both are treated as bank accounts.
+3. Create a new Asset account → the form requires a sub-type before it can be saved.
+4. Set two different accounts to sub-type "Bank" → both save; both are treated as bank accounts.
 5. Confirm the four recognizable defaults (Cash, Bank, Accounts Receivable, Inventory) already
-   carry their matching kind with no action taken.
+   carry their matching sub-type with no action taken.
 
 **Automated coverage**: a `db/auto-upgrade.spec.ts`-style test against a temporary SQLite fixture
-asserting the backfill table above (data-model.md); a unit test on the kind-change eligibility
+asserting the backfill table above (data-model.md); a unit test on the sub-type-change eligibility
 rule proving it is *not* blocked by movement history, only by the account's existing edit-lock
 state.
 
@@ -76,4 +76,5 @@ distinct to unit-test beyond confirming the load function calls `profitLossRepor
 - Grep for any remaining reference to `fundsFlowStatement`/`FundsFlow.svelte` after removal —
   none should remain outside of history.
 - Confirm every mutating account endpoint still round-trips permission check, Zod validation,
-  audit record, and SSE emit (Constitution IV) after the `kind` field is added to their schemas.
+  audit record, and SSE emit (Constitution IV) after the `subType` field is added to their
+  schemas.
