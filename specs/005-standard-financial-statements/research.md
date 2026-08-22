@@ -72,7 +72,16 @@ Equipment classification keeps its existing, separate path (chosen on the everyd
 what money was spent on, per CLAUDE.md and the spec's edge case), and an account already carrying
 the Equipment role is stored with `kind = Equipment` automatically wherever that existing path
 creates or confirms it — it is never asked for, and never offered as a choice alongside the seven
-everyday kinds.
+everyday kinds. Implementation must first locate that path (candidates: the Settings page's
+category-staging save handler, or wherever a new "category" that is really Equipment gets its
+account row created — CLAUDE.md's Settings Page Patterns section is the starting point). It may
+turn out there is currently **no live path that creates a brand-new Equipment account at all** —
+`createAccount` always stamps `role = Bank` for a new Asset account, so today only a
+legacy-migrated book can have `role = Equipment`, via `account-aliases.ts` during
+`db/auto-upgrade.ts`. If confirmed, that is a pre-existing gap this feature does not need to close
+(FR-019's scope guard) — but the backfill/migration step must still stamp `kind = Equipment` on
+every already-existing `role = Equipment` account, since Decision §12 below makes `kind` (not
+`role`) the thing `isEquipmentAccount` reads going forward.
 
 **Rationale**: The spec's edge case rules this out explicitly: *"Equipment is chosen on the
 everyday record form as what money was spent on, the same way a category is today, not set as one
@@ -210,6 +219,57 @@ statement-external figures FR-013 asks to remove, just not named as "charts."
 (not full third-party tiles) — left as an implementation-level layout choice for `/speckit-tasks`,
 not a structural decision this plan needs to fix.
 
+## 12. Retiring `role`'s last live Asset-account use
+
+A follow-up question — since `AccountKind` (Cash, Bank, Wallet, Card, Receivable, Inventory,
+OtherCurrentAsset, Equipment) shares 6 of its 8 values with the existing `AccountRole` enum, isn't
+this redundant? — was investigated directly (grepping every reader of `role`/`AccountRole` across
+`src`). The answer: merging `kind` into `role` is the wrong fix (it contradicts
+`004-standardize-chart-accounts`'s plan to retire `role`, its completed retirement tasks, and
+Decision §1 above — and it would not even save implementation work, since every write site
+(`createAccount`, `patchAccount`, `legacyRoleForAccountType`, `compatibilityRole`) needs the same
+rework whether the new data lives in `role` or in `kind`, because `role` is unconditionally
+stamped `Bank` for every Asset account today; the 6 overlapping values exist as labels, not as
+live, independently-set data). But the investigation also found the actual source of the
+redundancy-*feeling*: `role` still has exactly one live, per-Asset-account reader —
+`isEquipmentAccount`/`isMoneyPotAccount` (`src/lib/server/ledger/account-type.ts:116-125`), which
+distinguish Equipment from every other Asset account by checking `role === AccountRole.Equipment`.
+
+**Decision**: `isEquipmentAccount` and `isMoneyPotAccount` are changed to read `account.kind`
+instead of `account.role` (`account.type === Asset && account.kind === AccountKind.Equipment`,
+and `account.type === Asset && !isEquipmentAccount(account)`, respectively). `role` keeps being
+written exactly as today — `legacyRoleForAccountType` unconditionally stamps `Bank` on every new
+Asset account, purely to satisfy the column's `NOT NULL` constraint — but nothing reads it for
+Asset rows any more once this lands. The `RoleAndType` type and its doc comment
+(`account-type.ts:92-108`, which currently says "`role` is the only column that tells the two
+apart") are updated to name `kind` as that column for Asset accounts instead. The dead
+`MONEY_POT_ROLES` array (`account-type.ts:141-146`, confirmed unreferenced by any importer) is
+deleted rather than left beside the now-real `CASH_AND_EQUIVALENT_KINDS`/
+`OTHER_CURRENT_ASSET_KINDS` groupings (data-model.md).
+
+**Rationale**: This is the one remaining place `role` carries live, per-account meaning for
+Assets, and it currently only works for legacy-migrated books — a *new* Equipment account has no
+live creation path that sets `role = Equipment` today (Decision §4's revised text). Once `kind` is
+the authoritative source, leaving `isEquipmentAccount` on `role` would mean two different,
+sometimes-disagreeing answers to "is this equipment" existing side by side — exactly the drift
+Principle VI and User Story 4's tally guarantee exist to prevent. It also matches the schema's own
+stated intent for `role` (a column meant to last only "before later readers stop depending on
+it," `schema.ts:641-644`) rather than leaving it half-dependent-upon indefinitely. This is *not* a
+reopening of the merge idea rejected in Decision §1: `role` and its enum are untouched for every
+non-Asset type, and the column itself is not renamed, dropped, or dual-purposed — only its two
+Asset-facing readers are re-pointed onto the field that now actually answers their question.
+
+**Consequence**: `MovementView` (`ledger/types.ts:147-161`) gains an `accountKind` field beside
+its existing `accountRole`/`accountType`, and the client mirror
+`src/lib/components/ledger/account-kinds.ts` (`isEquipmentSide`/`isCategorySide`) is updated the
+same way, per the existing hand-duplication convention.
+
+**Alternatives considered**: Leaving `isEquipmentAccount` on `role` unchanged, since it already
+"happens to work" for migrated data — rejected: it would leave `role` partially load-bearing
+forever (blocking 004's planned removal) and would require whichever new-Equipment creation path
+this feature locates (Decision §4) to write to *both* `role` and `kind` to stay correct — the
+redundant-writes version of the same problem.
+
 ## Summary of resolved unknowns
 
 | Unknown | Resolution |
@@ -225,3 +285,4 @@ not a structural decision this plan needs to fix.
 | Dashboard/report tally | Net-profit tile calls `profitLossReport` directly; position tile already compliant; cash-flow tile calls new `cashFlowReport` |
 | Funds Flow panel | Retired, superseded by the new Cash Flow indicator; `historyGapNotes()` reused |
 | Current-assets / AP tiles | Folded into the single financial-position indicator |
+| `role` vs. `kind` overlap | Not merged (contradicts 004's retirement plan, saves no work); instead `isEquipmentAccount`/`isMoneyPotAccount` re-pointed onto `kind`, making `role` fully inert for Asset rows |

@@ -76,14 +76,27 @@ Equipment         = 8
 Append-only, same convention as every other enum in this file (`AccountRole`, `AccountType`) —
 values are never renumbered or reused.
 
-**Derived groupings** (pure functions, alongside `MONEY_POT_ROLES` etc. in
-`src/lib/server/ledger/account-type.ts`, mirrored client-side per the existing
-`ledger/account-kinds.ts` pattern where a screen needs it before a request to the server):
+**Derived groupings** (pure functions in `src/lib/server/ledger/account-type.ts`, mirrored
+client-side per the existing `ledger/account-kinds.ts` pattern where a screen needs it before a
+request to the server):
 
 - `CASH_AND_EQUIVALENT_KINDS = [Cash, Bank, Wallet, Card]` — FR-006's "cash and cash equivalents."
 - `OTHER_CURRENT_ASSET_KINDS = [Receivable, Inventory, OtherCurrentAsset]` — current assets that
   are never cash.
 - `isNeedsReview(account) = account.type === Asset && account.kind == null`.
+- `isEquipmentAccount(account) = account.type === Asset && account.kind === AccountKind.Equipment`
+  — **moved here from being `role`-based** (research.md §12). This supersedes the current
+  `account-type.ts` implementation, which checks `account.role === AccountRole.Equipment`; the
+  legacy `AccountRole` enum and the `role` column are otherwise untouched by this feature
+  (research.md §1, §12 — `role` is not merged with `kind`, only these two readers move off it).
+- `isMoneyPotAccount(account) = account.type === Asset && !isEquipmentAccount(account)` — same
+  logic as today, riding the corrected `isEquipmentAccount`.
+- The dead `MONEY_POT_ROLES` array (`account-type.ts:141-146`, unreferenced by any importer) is
+  deleted as part of this change rather than left beside the new, real groupings above.
+- `MovementView` (`ledger/types.ts:147-161`) gains `accountKind: AccountKindCode | null` beside its
+  existing `accountRole`/`accountType`, and `src/lib/components/ledger/account-kinds.ts`
+  (`isEquipmentSide`/`isCategorySide`) is updated to read it, per the existing hand-duplication
+  convention (`// Mirrors ...` comment).
 
 ## Extended type: `AccountRow` / `AccountView` / `AccountCreate` / `AccountPatch`
 

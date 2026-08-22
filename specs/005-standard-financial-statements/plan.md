@@ -16,7 +16,11 @@ Dashboard's ad hoc charts and KPI tiles with three indicators — net profit, fi
 cash flow — each one a direct call into the same report function Reports itself uses, so the two
 screens can never disagree (the existing `funds-flow.ts` module, and its own doc comment, already
 flag that a current-assets-based figure cannot honestly be called a cash flow statement — this is
-the fix). See `research.md` for the eleven technical decisions this depends on.
+the fix). This also finishes the last step of `role`'s planned retirement for asset accounts: its
+one remaining live reader (`isEquipmentAccount`/`isMoneyPotAccount`) moves onto `kind`, so the two
+enums are not meant to coexist as parallel classifications going forward — `role` becomes fully
+inert for Asset rows, kept only to satisfy the column's `NOT NULL` constraint until it is dropped
+in later, unrelated work. See `research.md` for the twelve technical decisions this depends on.
 
 ## Technical Context
 
@@ -98,13 +102,17 @@ drizzle/
 └── NNNN_account_kind.sql                           # generated via `bun run db:generate`
 
 src/lib/server/ledger/
-├── types.ts                                        # + AccountKind fields on Account*, + CashFlowReport
-├── account-type.ts                                 # + CASH_AND_EQUIVALENT_KINDS / needs-review helpers
+├── types.ts                                        # + AccountKind fields on Account*, + accountKind on MovementView, + CashFlowReport
+├── account-type.ts                                 # + CASH_AND_EQUIVALENT_KINDS / needs-review helpers;
+│                                                    #   isEquipmentAccount/isMoneyPotAccount re-pointed onto kind (Research §12);
+│                                                    #   MONEY_POT_ROLES deleted (dead code)
 ├── account-eligibility.ts                          # + kind-change eligibility (looser than type-change)
 └── reports/
     ├── cash-flow.ts                                 # NEW — pure cashFlow() calculation
     ├── csv.ts                                        # + cashFlowCsv()
     └── funds-flow.ts                                 # removed as a dashboard source (Research §10)
+
+src/lib/components/ledger/account-kinds.ts          # isEquipmentSide/isCategorySide re-pointed onto accountKind (client mirror, Research §12)
 
 src/lib/server/services/accounts.ts                 # createAccount/patchAccount handle kind
 src/lib/server/queries/
