@@ -12,6 +12,7 @@
 		ExternalLink
 	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import AccountSelect from '$lib/components/ledger/AccountSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
@@ -116,9 +117,7 @@
 	// user with one account is never asked (FR-011).
 	// svelte-ignore state_referenced_locally
 	let accountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(
-			data.jobs.filter((j) => j.accountId != null).map((j) => [j.id, j.accountId as number])
-		)
+		Object.fromEntries(data.jobs.map((j) => [j.id, j.accountId ?? null]))
 	);
 
 	// Store original file references for retry
@@ -134,6 +133,7 @@
 
 	let drag = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
+	let clearHistoryDialogOpen = $state(false);
 
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -224,7 +224,7 @@
 
 		// Never overwrite an account the reviewer has already picked here.
 		for (const j of incoming) {
-			if (!(j.id in accountByJob) && j.accountId != null) accountByJob[j.id] = j.accountId;
+			if (!(j.id in accountByJob)) accountByJob[j.id] = j.accountId ?? null;
 		}
 	}
 
@@ -284,7 +284,13 @@
 		// A record has to say which account paid for it or received it.
 		if (jobAccountMissing(job)) return;
 
-		const body = { ...(job._edits ?? {}), accountId: accountByJob[jobId] };
+		// No more manual toggle — the kind sent to the server always follows whichever
+		// category is currently selected (see jobIsIncome).
+		const body = {
+			...(job._edits ?? {}),
+			document_type: jobIsIncome(job) ? 'income' : 'expense',
+			accountId: accountByJob[jobId]
+		};
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -343,6 +349,12 @@
 		jobs = jobs.filter((j) => j.id !== jobId);
 	}
 
+	async function clearHistory() {
+		await fetch('/api/import/history', { method: 'DELETE', credentials: 'include' });
+		jobs = jobs.filter((j) => !['confirmed', 'imported', 'skipped'].includes(j.state));
+		clearHistoryDialogOpen = false;
+	}
+
 	function updateEdit(jobId: string, key: string, value: string | number) {
 		jobs = jobs.map((j) => {
 			if (j.id !== jobId) return j;
@@ -350,11 +362,14 @@
 		});
 	}
 
-	function setDocType(jobId: string, docType: string) {
-		jobs = jobs.map((j) => {
-			if (j.id !== jobId) return j;
-			return { ...j, documentType: docType, _edits: { ...(j._edits ?? {}), document_type: docType } };
-		});
+	// The record's kind now follows whichever category the reviewer picked (no more
+	// manual Expense/Income toggle) — mirrors how RecordForm derives contactRole from
+	// the chosen account's type with no upfront kind picker.
+	function jobIsIncome(job: Job): boolean {
+		const cat = String(editedValue(job, 'category') || '');
+		if (data.incomeCategories.includes(cat)) return true;
+		if (data.expenseCategories.includes(cat)) return false;
+		return job.documentType === 'income';
 	}
 
 	function editedValue(job: Job, key: string): string | number {
@@ -617,7 +632,7 @@
 			{:else}
 				<div class="review-list">
 					{#each review as job (job.id)}
-						{@const isIncome = job.documentType === 'income'}
+						{@const isIncome = jobIsIncome(job)}
 						{@const dup = !!job.duplicateOf}
 						{@const numEdits = editedCount(job)}
 						<div class="review-card" class:is-dup={dup}>
@@ -640,72 +655,41 @@
 											<AlertTriangle size={11} /> Duplicate · {job.duplicateConfidence}% · {dupReasonsLabel(job)}
 										</span>
 									{/if}
-									<div class="seg sm type-seg">
-										<button
-											class="seg-btn"
-											class:active={!isIncome}
-											onclick={() => setDocType(job.id, 'expense')}
-										>Expense</button>
-										<button
-											class="seg-btn"
-											class:active={isIncome}
-											onclick={() => setDocType(job.id, 'income')}
-										>Income</button>
-									</div>
 								</div>
 							</div>
 
 							<div class="review-detected">
 								<Upload size={12} />
-								AI classified this as {isIncome ? 'income' : 'an expense'} — switch the type or edit any field before importing
+								AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
 							</div>
 
 							<!-- Fields grid -->
 							<div class="review-grid">
-								<!-- Item (expense) / Customer combobox (income) -->
+								<!-- Description -->
 								<div class="rfield">
 									<span class="rfield-label">
-										{isIncome ? 'Customer' : 'Item'}
-										{#if !isIncome && isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
-										{#if isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
+										Description
+										{#if isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
 									</span>
-									{#if isIncome}
-										<ContactSelect
-											role={Role.Customer}
-											initialLabel={job.itemName}
-											suggestions={job.matchCandidates}
-											onChange={(v) => setContact(job.id, v)}
-										/>
-									{:else}
-										<input
-											class="form-input rinput"
-											value={editedValue(job, 'item_name')}
-											oninput={(e) => updateEdit(job.id, 'item_name', (e.target as HTMLInputElement).value)}
-										/>
-									{/if}
+									<input
+										class="form-input rinput"
+										value={editedValue(job, 'item_name')}
+										oninput={(e) => updateEdit(job.id, 'item_name', (e.target as HTMLInputElement).value)}
+									/>
 								</div>
 
-								<!-- Supplier combobox (expense) / Description (income) -->
+								<!-- Contact (role follows the chosen category) -->
 								<div class="rfield">
 									<span class="rfield-label">
-										{isIncome ? 'Description' : 'Supplier'}
-										{#if isIncome && isEdited(job, 'supplier')}<span class="edited-tag">edited</span>{/if}
-										{#if !isIncome && (isEdited(job, 'contactId') || isEdited(job, 'newContactName'))}<span class="edited-tag">edited</span>{/if}
+										Contact
+										{#if isEdited(job, 'contactId') || isEdited(job, 'newContactName')}<span class="edited-tag">edited</span>{/if}
 									</span>
-									{#if isIncome}
-										<input
-											class="form-input rinput"
-											value={editedValue(job, 'supplier')}
-											oninput={(e) => updateEdit(job.id, 'supplier', (e.target as HTMLInputElement).value)}
-										/>
-									{:else}
-										<ContactSelect
-											role={Role.Supplier}
-											initialLabel={job.supplier}
-											suggestions={job.matchCandidates}
-											onChange={(v) => setContact(job.id, v)}
-										/>
-									{/if}
+									<ContactSelect
+										role={isIncome ? Role.Customer : Role.Supplier}
+										initialLabel={job.supplier}
+										suggestions={job.matchCandidates}
+										onChange={(v) => setContact(job.id, v)}
+									/>
 								</div>
 
 								<!-- Amount (main currency; read-only & converted when foreign) -->
@@ -775,36 +759,93 @@
 									</div>
 								{/if}
 
-								<!-- Category -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Category
-										{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									<Select.Root
-										type="single"
-										value={String(editedValue(job, 'category'))}
-										onValueChange={(v) => updateEdit(job.id, 'category', v)}
-									>
-										<Select.Trigger class="rinput w-full">
-											{editedValue(job, 'category') || 'Select category'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each (isIncome ? data.incomeCategories : data.expenseCategories) as cat}
-												<Select.Item value={cat} label={cat} />
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
+								<!-- The two account sides always read Source, then Target, whichever
+								     kind this is (mirrors EntryBlock's from-then-to order) -->
+								{#if isIncome}
+									<!-- Source: the category account the earning is booked from.
+									     Both category lists are offered together — picking one from
+									     the other list re-derives isIncome and flips this layout. -->
+									<div class="rfield">
+										<span class="rfield-label">
+											Source account
+											{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
+										</span>
+										<Select.Root
+											type="single"
+											value={String(editedValue(job, 'category'))}
+											onValueChange={(v) => updateEdit(job.id, 'category', v)}
+										>
+											<Select.Trigger class="rinput w-full">
+												{editedValue(job, 'category') || 'Select category'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Group>
+													<Select.GroupHeading>Income</Select.GroupHeading>
+													{#each data.incomeCategories as cat}
+														<Select.Item value={cat} label={cat} />
+													{/each}
+												</Select.Group>
+												<Select.Group>
+													<Select.GroupHeading>Expense</Select.GroupHeading>
+													{#each data.expenseCategories as cat}
+														<Select.Item value={cat} label={cat} />
+													{/each}
+												</Select.Group>
+											</Select.Content>
+										</Select.Root>
+									</div>
 
-								<!-- Which account paid for this / received it -->
-								<AccountSelect
-									accounts={data.accounts}
-									bind:value={accountByJob[job.id]}
-									name="account-{job.id}"
-									label={isIncome ? 'Receipt account' : 'Payment account'}
-									defaultAccountId={data.defaultAccountId}
-								/>
+									<!-- Target: the account the money was received into -->
+									<AccountSelect
+										accounts={data.accounts}
+										bind:value={accountByJob[job.id]}
+										name="account-{job.id}"
+										label="Target account"
+										defaultAccountId={data.defaultAccountId}
+									/>
+								{:else}
+									<!-- Source: the account the money was paid from -->
+									<AccountSelect
+										accounts={data.expensePaymentAccounts}
+										bind:value={accountByJob[job.id]}
+										name="account-{job.id}"
+										label="Source account"
+										defaultAccountId={data.defaultAccountId}
+									/>
+
+									<!-- Target: the category account the expense is booked to.
+									     Both category lists are offered together — picking one from
+									     the other list re-derives isIncome and flips this layout. -->
+									<div class="rfield">
+										<span class="rfield-label">
+											Target account
+											{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
+										</span>
+										<Select.Root
+											type="single"
+											value={String(editedValue(job, 'category'))}
+											onValueChange={(v) => updateEdit(job.id, 'category', v)}
+										>
+											<Select.Trigger class="rinput w-full">
+												{editedValue(job, 'category') || 'Select category'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Group>
+													<Select.GroupHeading>Expense</Select.GroupHeading>
+													{#each data.expenseCategories as cat}
+														<Select.Item value={cat} label={cat} />
+													{/each}
+												</Select.Group>
+												<Select.Group>
+													<Select.GroupHeading>Income</Select.GroupHeading>
+													{#each data.incomeCategories as cat}
+														<Select.Item value={cat} label={cat} />
+													{/each}
+												</Select.Group>
+											</Select.Content>
+										</Select.Root>
+									</div>
+								{/if}
 
 								<!-- Date -->
 								<div class="rfield">
@@ -843,6 +884,8 @@
 										{confirmErrors[job.id]}
 									{:else if jobAccountMissing(job)}
 										Say which account {isIncome ? 'received this' : 'paid for this'} before importing it.
+									{:else if !isIncome && accountByJob[job.id] === data.payableAccountId}
+										Marked as paid personally — owed to the contact above until reimbursed.
 									{:else if numEdits > 0}
 										{numEdits} field{numEdits > 1 ? 's' : ''} edited — only these override the AI values
 									{:else}
@@ -869,8 +912,11 @@
 		<!-- History (this session) -->
 		{#if history.length > 0}
 			<div class="import-section">
-				<div class="import-section-head">
-					This session <span class="hbadge">{history.length}</span>
+				<div class="import-section-head between">
+					<span>This session <span class="hbadge">{history.length}</span></span>
+					<Button variant="ghost" size="sm" onclick={() => (clearHistoryDialogOpen = true)}>
+						Clear history
+					</Button>
 				</div>
 				<div class="proc-list">
 					{#each history as job (job.id)}
@@ -911,6 +957,15 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={clearHistoryDialogOpen}
+	title="Clear import history?"
+	description="Removes every skipped, confirmed and imported entry from this list. Records already brought into the ledger are not affected — this only clears the log."
+	confirmLabel="Clear history"
+	danger
+	onConfirm={clearHistory}
+/>
 
 {#if isMobile}
 	<button type="button" class="scan-fab" onclick={openScanCamera} aria-label="Scan a document">

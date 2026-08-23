@@ -8,7 +8,11 @@ import { dirname } from "path";
 import { DATABASE_PATH } from "../env.js";
 import { createLogger } from "../logger.js";
 import * as schema from "./schema.js";
-import { classifyDatabaseFile, upgradeDatabaseFile } from "./auto-upgrade.js";
+import {
+  applySubTypeBackfill,
+  classifyDatabaseFile,
+  upgradeDatabaseFile,
+} from "./auto-upgrade.js";
 import {
   legacyDropAllowed,
   readLegacyDropStateAt,
@@ -124,6 +128,11 @@ function createDb() {
       "Foreign key violations after migration",
     );
   }
+
+  // Every boot, not gated on the conversion above: most installations reading
+  // this are already past it, and the four seeded defaults still need their
+  // sub-type set the first time this schema version runs against them.
+  applySubTypeBackfill(raw);
 
   return { db, raw };
 }

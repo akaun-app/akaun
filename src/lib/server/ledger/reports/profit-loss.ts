@@ -1,4 +1,5 @@
 import { AccountType, type AccountTypeCode } from "$lib/enums.js";
+import { expenseBucket, revenueBucket } from "../account-type.js";
 import type {
   AccountTotal,
   Minor,
@@ -118,6 +119,27 @@ export function profitLoss(input: ProfitLossInput): ProfitLossReport {
   const totalIncomeMinor = sum(leafLines(income));
   const totalExpensesMinor = sum(leafLines(expenses));
 
+  const subTypeById = new Map(
+    input.totals.map((total) => [total.accountId, total.subType]),
+  );
+  const subTypeOf = (line: ReportLine) => subTypeById.get(line.accountId) ?? null;
+
+  const cogsMinor = sum(
+    leafLines(expenses).filter((line) => expenseBucket(subTypeOf(line)) === "cogs"),
+  );
+  const operatingExpenseMinor = sum(
+    leafLines(expenses).filter(
+      (line) => expenseBucket(subTypeOf(line)) === "operating",
+    ),
+  );
+  const operatingRevenueMinor = sum(
+    leafLines(income).filter(
+      (line) => revenueBucket(subTypeOf(line)) === "operating",
+    ),
+  );
+  const grossProfitMinor = operatingRevenueMinor - cogsMinor;
+  const operatingIncomeMinor = grossProfitMinor - operatingExpenseMinor;
+
   return {
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
@@ -126,6 +148,10 @@ export function profitLoss(input: ProfitLossInput): ProfitLossReport {
     expenses,
     totalExpensesMinor,
     resultMinor: totalIncomeMinor - totalExpensesMinor,
+    subtotals: [
+      { label: "Gross profit", amountMinor: grossProfitMinor },
+      { label: "Operating income", amountMinor: operatingIncomeMinor },
+    ],
     notes: historyGapNotes(input.dateFrom, input.trackingStartedOn),
   };
 }

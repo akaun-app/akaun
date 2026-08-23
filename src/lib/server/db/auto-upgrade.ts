@@ -11,6 +11,14 @@ import {
 import { dirname, isAbsolute, join, resolve } from "path";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  ExpenseSubType,
+  LiabilitySubType,
+  RevenueSubType,
+} from "$lib/enums.js";
+import {
   CHART_MIGRATION_VERSION,
   migrateAccountChart,
 } from "../services/account-migration.js";
@@ -137,6 +145,54 @@ export function applyMigrationRange(
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }
+}
+
+/**
+ * One-time classification of every Asset account's `sub_type`, run
+ * unconditionally on every boot (005 FR-004).
+ *
+ * Idempotent by construction rather than by a version marker: every `UPDATE`
+ * below is guarded by `sub_type IS NULL`, so an account already classified —
+ * by this function on an earlier boot, or by hand — is never touched again.
+ * `code` is the stable, unique key `seed-accounts.ts` uses (never the name),
+ * so this recognizes only the four everyday defaults; every other Asset
+ * account is deliberately left `NULL` ("needs review"), the state a user
+ * resolves by hand (data-model.md's backfill table).
+ */
+export function applySubTypeBackfill(db: Database): void {
+  // code -> [type, subType]. Same idempotent code-matched backfill as the
+  // original four Asset defaults, extended to the Liability/Expense/Revenue
+  // seed codes that are unambiguous from their name (`seed-accounts.ts`
+  // mirrors this exact table for a fresh install). "Loans" (2100) is
+  // deliberately absent — like "Marketplace Clearing" (1400), its name
+  // doesn't say which sub-type it is, so it is left needs-review.
+  const CODE_TO_SUB_TYPE: [code: number, type: number, subType: number][] = [
+    [1000, AccountType.Asset, AccountSubType.Cash],
+    [1100, AccountType.Asset, AccountSubType.Bank],
+    [1200, AccountType.Asset, AccountSubType.Receivable],
+    [1300, AccountType.Asset, AccountSubType.Inventory],
+    [2000, AccountType.Liability, LiabilitySubType.AccountsPayable],
+    [4000, AccountType.Revenue, RevenueSubType.OperatingRevenue],
+    [4100, AccountType.Revenue, RevenueSubType.OtherRevenue],
+    [5000, AccountType.Expense, ExpenseSubType.CostOfGoodsSold],
+    [5100, AccountType.Expense, ExpenseSubType.OperatingExpense],
+    [5200, AccountType.Expense, ExpenseSubType.OperatingExpense],
+    [5300, AccountType.Expense, ExpenseSubType.OperatingExpense],
+    [5400, AccountType.Expense, ExpenseSubType.OperatingExpense],
+    [5500, AccountType.Expense, ExpenseSubType.OperatingExpense],
+    [5900, AccountType.Expense, ExpenseSubType.OtherExpense],
+  ];
+  for (const [code, type, subType] of CODE_TO_SUB_TYPE) {
+    db.query(
+      "UPDATE accounts SET sub_type = ? WHERE type = ? AND sub_type IS NULL AND code = ?",
+    ).run(subType, type, code);
+  }
+  // An account already carrying the legacy Equipment role, from an earlier
+  // release's legacy conversion — `subType`, not `role`, is what every live
+  // reader checks going forward (005 research.md §12).
+  db.query(
+    "UPDATE accounts SET sub_type = ? WHERE type = ? AND sub_type IS NULL AND role = ?",
+  ).run(AccountSubType.Equipment, AccountType.Asset, AccountRole.Equipment);
 }
 
 function consolidate(source: string, destination: string): void {

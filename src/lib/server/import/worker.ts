@@ -5,7 +5,10 @@ import { STORAGE_PATH } from "../env.js";
 import { createLogger } from "../logger.js";
 import { getSetting, SETTING_KEYS } from "../settings.js";
 import { categoryChoices } from "./category-accounts.js";
-import { defaultAccountId } from "../queries/accounts.js";
+import {
+  defaultAccountId,
+  lastPaymentAccountForContact,
+} from "../queries/accounts.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
 import { extractText, inferMimeType } from "../extraction/document-text.js";
 import { callLLMWithProviders } from "./llm.js";
@@ -17,6 +20,7 @@ import { mainCurrencyCode } from "../currency/form.js";
 import {
   ImportState,
   DocumentType,
+  LedgerRecordKind,
   Role,
   documentTypeEnum,
 } from "$lib/enums.js";
@@ -251,12 +255,12 @@ async function processJob(job: typeof importQueue.$inferSelect) {
     });
 
     // Contact resolution — deterministic backend step (LLM is never given the
-    // contact list). For an expense the party is the supplier; for income the
-    // payer/customer is carried in item_name (supplier holds the description).
+    // contact list). `supplier` always carries the other party's name, whether
+    // it's who was paid (expense) or who paid (income) — only which contact
+    // bucket to search (Supplier vs Customer) depends on document_type.
     const role =
       docType === DocumentType.Income ? Role.Customer : Role.Supplier;
-    const partyName =
-      docType === DocumentType.Income ? result.item_name : result.supplier;
+    const partyName = result.supplier;
     const { matchedId, candidates } = resolveContactCandidates(
       db,
       partyName ?? "",
@@ -278,6 +282,24 @@ async function processJob(job: typeof importQueue.$inferSelect) {
       exchangeRate = rate.rate;
     }
 
+    // Which account paid or received it. A repeat contact pre-fills whatever
+    // account was actually used for them last time (FR-011, FR-019) — a
+    // vendor usually paid from the same wallet, a customer usually pays into
+    // the same bank account, and this is also how a reviewer's own choice of
+    // Accounts Payable ("I paid this personally") carries forward to the
+    // vendor's next receipt. Falls back to the one global default when the
+    // contact has no matching history yet.
+    const learnedAccountId =
+      matchedId != null
+        ? lastPaymentAccountForContact(
+            db,
+            matchedId,
+            docType === DocumentType.Income
+              ? LedgerRecordKind.Income
+              : LedgerRecordKind.Expense,
+          )
+        : null;
+
     const now = new Date().toISOString();
     db.update(importQueue)
       .set({
@@ -294,10 +316,7 @@ async function processJob(job: typeof importQueue.$inferSelect) {
         exchangeRate,
         reference: result.reference,
         category: result.category,
-        // Which account paid or received it. Pre-filled with the usual one so
-        // the reviewer only has to answer when it was a different one (FR-011,
-        // FR-019); the review screen asks for one before it will confirm.
-        accountId: defaultAccountId(db),
+        accountId: learnedAccountId ?? defaultAccountId(db),
         duplicateOf: dup?.duplicateOf ?? null,
         duplicateConfidence: dup?.confidence ?? null,
         duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,

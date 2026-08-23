@@ -5,20 +5,29 @@
 		TrendingUp,
 		Wallet,
 		ArrowUpRight,
-		FileText,
 		TrendingDown,
 		Landmark,
 		Scale,
-		ChevronDown
+		ChevronDown,
+		TriangleAlert
 	} from '@lucide/svelte';
-	import LazyChart from '$lib/components/ui/LazyChart.svelte';
-	import FundsFlow from '$lib/components/dashboard/FundsFlow.svelte';
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
-	import { formatMoney, formatDateShort } from '$lib/format.js';
+	import { formatMinor, formatMoney, formatDateShort } from '$lib/format.js';
 	import { mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { periodOptions } from '$lib/dashboard-periods.js';
+	import {
+		balanceSheetHref,
+		cashFlowHref,
+		profitLossHref
+	} from '$lib/components/reports/report-links.js';
 	import type { PageData } from './$types.js';
 
+	/**
+	 * Three indicators, each a direct read of the same report function Reports
+	 * itself calls (005 FR-013, FR-014) — no charts, no separately-computed
+	 * figure. Following an indicator lands on the matching Reports statement
+	 * already showing the same figure (FR-015).
+	 */
 	let { data }: { data: PageData } = $props();
 
 	const PERIODS = periodOptions();
@@ -35,6 +44,10 @@
 	});
 
 	const periodLabel = $derived(PERIODS.find((p) => p.id === period)?.label ?? '');
+
+	const netProfitHref = $derived(profitLossHref(data.netProfit.dateFrom, data.netProfit.dateTo));
+	const positionHref = $derived(balanceSheetHref(data.position.asAt));
+	const cashFlowIndicatorHref = $derived(cashFlowHref(data.cashFlow.dateFrom, data.cashFlow.dateTo));
 
 	// SSE — push-to-refresh: server signals when any financial data changes
 	let _es: EventSource | null = null;
@@ -104,22 +117,12 @@
 	</header>
 
 	<div class="dash-scroll">
-		<!-- KPI Cards -->
+		<!-- The three indicators: net profit, financial position, cash flow. -->
 		<div class="kpi-grid">
-			<div class="kpi tone-primary">
-				<div class="kpi-top">
-					<span class="kpi-icon"><Landmark size={16} /></span>
-					<span class="kpi-label">Current assets</span>
-				</div>
-				<div class="kpi-value">
-					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.currentAssets)}
-				</div>
-				<div class="kpi-sub">Cash, bank and receivables · today</div>
-			</div>
-			<div class="kpi" class:tone-green={data.net >= 0} class:tone-red={data.net < 0}>
+			<a class="kpi" class:tone-green={data.netProfit.amountMinor >= 0} class:tone-red={data.netProfit.amountMinor < 0} href={netProfitHref}>
 				<div class="kpi-top">
 					<span class="kpi-icon">
-						{#if data.net >= 0}
+						{#if data.netProfit.amountMinor >= 0}
 							<ArrowUpRight size={16} />
 						{:else}
 							<TrendingDown size={16} />
@@ -128,94 +131,49 @@
 					<span class="kpi-label">Net profit</span>
 				</div>
 				<div class="kpi-value">
-					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(Math.abs(data.net))}
-					{#if data.net < 0}<span style="font-size:14px; color:var(--red)"> loss</span>{/if}
+					{formatMinor(Math.abs(data.netProfit.amountMinor))}
+					{#if data.netProfit.amountMinor < 0}<span style="font-size:14px; color:var(--red)"> loss</span>{/if}
 				</div>
-				<div class="kpi-sub">
-					Revenue {formatMoney(data.incTotal)} · expenses {formatMoney(data.expTotal)} · {periodLabel}
-				</div>
-			</div>
-			<div class="kpi">
+				<div class="kpi-sub">Revenue less expenses · {periodLabel}</div>
+			</a>
+
+			<a class="kpi tone-primary" href={positionHref}>
 				<div class="kpi-top">
 					<span class="kpi-icon"><Scale size={16} /></span>
-					<span class="kpi-label">Owner's equity</span>
+					<span class="kpi-label">Financial position</span>
 				</div>
 				<div class="kpi-value">
-					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.position.equityTotal)}
+					{formatMinor(data.position.assetsTotalMinor)}
 				</div>
 				<div class="kpi-sub">
 					{#if data.position.balances}
-						Assets {formatMoney(data.position.assetsTotal)} · liabilities {formatMoney(
-							data.position.liabilitiesTotal
+						Assets. Liabilities {formatMinor(data.position.liabilitiesTotalMinor)} · equity {formatMinor(
+							data.position.equityTotalMinor
 						)}
 					{:else}
-						The books do not balance — check Reports
+						<span class="kpi-warn"><TriangleAlert size={12} /> The books do not balance — check Reports</span>
 					{/if}
 				</div>
-			</div>
-			<div class="kpi tone-red">
+			</a>
+
+			<a class="kpi" class:tone-green={data.cashFlow.netChangeMinor >= 0} class:tone-red={data.cashFlow.netChangeMinor < 0} href={cashFlowIndicatorHref}>
 				<div class="kpi-top">
-					<span class="kpi-icon"><FileText size={16} /></span>
-					<span class="kpi-label">Accounts payable</span>
+					<span class="kpi-icon"><Landmark size={16} /></span>
+					<span class="kpi-label">Cash flow</span>
 				</div>
 				<div class="kpi-value">
-					<span class="kpi-cur">{mainCurrencySymbol()}</span>{formatMoney(data.outstanding)}
+					{formatMinor(data.cashFlow.netChangeMinor)}
 				</div>
-				<div class="kpi-sub">Unpaid · all time</div>
-			</div>
+				<div class="kpi-sub">
+					Net change in cash · {periodLabel}
+					{#if data.cashFlow.needsReviewMinor !== 0}
+						· {formatMinor(data.cashFlow.needsReviewMinor)} needs review
+					{/if}
+				</div>
+			</a>
 		</div>
 
-		<!-- Where the period's funds came from and went. The one place on this
-		     screen that capitalised equipment is visible. -->
-		<FundsFlow report={data.fundsFlow} {periodLabel} />
-
-		<!-- Charts row 1 -->
 		<div class="panel-row">
-			<div class="panel">
-				<div class="panel-head">
-					<div>
-						<div class="panel-title">Revenue vs expenses</div>
-						<div class="panel-sub">Profit and loss · {periodLabel}</div>
-					</div>
-					<div class="chart-legend">
-						<span class="lg"
-							><span class="lg-dot" style="background:oklch(0.6 0.13 156);"></span> Revenue</span
-						>
-						<span class="lg"
-							><span class="lg-dot" style="background:oklch(0.585 0.205 27.3);"></span> Expense</span
-						>
-					</div>
-				</div>
-				<LazyChart load={() => import('$lib/components/charts/BarChart.svelte')} data={data.cashFlow} />
-			</div>
-
-			<div class="panel">
-				<div class="panel-head">
-					<div>
-						<div class="panel-title">Spending by category</div>
-						<div class="panel-sub">{periodLabel}</div>
-					</div>
-				</div>
-				{#if data.categoryData.length > 0}
-					<LazyChart load={() => import('$lib/components/charts/DonutChart.svelte')} data={data.categoryData} />
-				{:else}
-					<EmptyState title="No expense data yet" sub="Add expenses to see your spending breakdown." style="padding:20px;" />
-				{/if}
-			</div>
-		</div>
-
-		<!-- Charts row 2 -->
-		<div class="panel-row">
-			<div class="panel">
-				<div class="panel-head">
-					<div>
-						<div class="panel-title">Profit trend</div>
-						<div class="panel-sub">Monthly profit / loss · {periodLabel}</div>
-					</div>
-				</div>
-				<LazyChart load={() => import('$lib/components/charts/TrendBars.svelte')} data={data.trendData} />
-			</div>
-
 			<div class="panel">
 				<div class="panel-head">
 					<div class="panel-title">Recent activity</div>

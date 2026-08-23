@@ -11,9 +11,21 @@
 	import OpeningBalanceSheet from './OpeningBalanceSheet.svelte';
 	import { createResourceStream } from '$lib/sse.js';
 	import { formatDate, formatMinor } from '$lib/format.js';
-	import { AccountType, AccountTypeDisplayLabels, type AccountTypeCode } from '$lib/enums.js';
+	import {
+		AccountSubTypeDisplayLabels,
+		AccountSubTypesByType,
+		AccountType,
+		AccountTypeDisplayLabels,
+		type AccountSubTypeCode,
+		type AccountTypeCode
+	} from '$lib/enums.js';
 	import type { loadAccountDetail } from '$lib/server/loaders/accounts.js';
 	import type { AccountView } from '$lib/server/ledger/types.js';
+
+	// Mirrors src/lib/server/ledger/account-type.ts's NEEDS_REVIEW_TYPES — an
+	// account of one of these types has no safe default classification, so it
+	// shows "Needs review" rather than a silently-assumed sub-type.
+	const NEEDS_REVIEW_TYPES: AccountTypeCode[] = [AccountType.Asset, AccountType.Liability];
 
 	/**
 	 * One account, on its own page.
@@ -37,21 +49,25 @@
 		(v): v is AccountTypeCode => typeof v === 'number'
 	);
 
-	// --- The three fields that name it --------------------------------------
+	// --- The fields that name it ---------------------------------------------
 	let name = $state('');
 	let selectedType = $state<AccountTypeCode>(AccountType.Asset);
+	let subType = $state<AccountSubTypeCode | null>(null);
 	let parentId = $state<number | null>(null);
 	let snapshot = $state('');
 	let saving = $state(false);
 	let error = $state('');
 
+	const subTypes = $derived(AccountSubTypesByType[selectedType] ?? []);
+
 	function fingerprint(): string {
-		return JSON.stringify([name, selectedType, parentId]);
+		return JSON.stringify([name, selectedType, subType, parentId]);
 	}
 
 	function seed() {
 		name = account.name;
 		selectedType = account.type;
+		subType = account.subType ?? null;
 		parentId = account.parentId ?? null;
 		snapshot = fingerprint();
 		error = '';
@@ -76,10 +92,16 @@
 		if (saving) return;
 		saving = true;
 		error = '';
+		const body: Record<string, unknown> = { name, type: selectedType, parentId };
+		// `subType` stays absent (never `null`) until a "needs review" account is
+		// given one: the PATCH schema accepts a number or nothing, never null.
+		if (AccountSubTypesByType[selectedType] !== undefined && subType != null) {
+			body.subType = subType;
+		}
 		const res = await fetch(`/api/accounts/${account.id}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ name, type: selectedType, parentId })
+			body: JSON.stringify(body)
 		});
 		saving = false;
 		if (!res.ok) {
@@ -176,6 +198,15 @@
 			<span>{account.code}</span>
 			<span>·</span>
 			<span>{AccountTypeDisplayLabels[account.type]}</span>
+			{#if NEEDS_REVIEW_TYPES.includes(account.type)}
+				<span>·</span>
+				<span>
+					{account.subType != null ? AccountSubTypeDisplayLabels[account.subType] : 'Needs review'}
+				</span>
+			{:else if account.subType != null}
+				<span>·</span>
+				<span>{AccountSubTypeDisplayLabels[account.subType]}</span>
+			{/if}
 			{#if account.hasChildren}<span>·</span><span>Heading</span>{/if}
 			{#if !account.active}<span>·</span><span>Inactive</span>{/if}
 			{#if account.id === data.defaultAccountId}<span>·</span><span>Used by default</span>{/if}
@@ -254,6 +285,35 @@
 					normally runs.
 				</p>
 			</div>
+
+			{#if subTypes.length > 0}
+				{@const needsReview = NEEDS_REVIEW_TYPES.includes(selectedType)}
+				<div class="field">
+					<label class="field-label" for="acc-sub-type">
+						Sub-type {needsReview ? '*' : ''}
+					</label>
+					<select
+						id="acc-sub-type"
+						class="plain-select"
+						disabled={!canEdit}
+						value={subType ?? ''}
+						onchange={(e) => {
+							const raw = e.currentTarget.value;
+							subType = raw ? (Number(raw) as AccountSubTypeCode) : null;
+						}}
+					>
+						{#if subType == null}
+							<option value="">{needsReview ? 'Needs review' : 'Not yet classified'}</option>
+						{/if}
+						{#each subTypes as st (st)}
+							<option value={st}>{AccountSubTypeDisplayLabels[st]}</option>
+						{/each}
+					</select>
+					<p class="field-hint">
+						What kind of {AccountTypeDisplayLabels[selectedType].toLowerCase()} this is.
+					</p>
+				</div>
+			{/if}
 
 			<div class="field" style="margin-bottom:0;">
 				<label class="field-label" for="acc-parent">Parent heading</label>

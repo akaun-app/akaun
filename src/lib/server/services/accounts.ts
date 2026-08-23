@@ -1,8 +1,12 @@
 import { eq, sql } from "drizzle-orm";
 import { accountDefaults, accounts, bankStatements, ledgerMovements } from "../db/schema.js";
 import {
+  AccountSubType,
+  AccountSubTypesByType,
+  AccountType,
   DefaultAccountPurpose,
   LedgerRecordKind,
+  type AccountSubTypeCode,
   type AccountTypeCode,
 } from "$lib/enums.js";
 import { diffRecords, recordAudit } from "../audit.js";
@@ -10,8 +14,11 @@ import { accountEvents } from "../ledger/events.js";
 import { buildMovements } from "../ledger/entry-builder.js";
 import { rankAfter } from "../ledger/rank.js";
 import { lowestFreeAccountCode } from "../ledger/account-code.js";
-import { legacyRoleForAccountType } from "../ledger/account-type.js";
-import { canAddAccountChild, canChangeAccountType, canDeactivateAccount, canDeleteAccount as deletionEligibility } from "../ledger/account-eligibility.js";
+import {
+  legacyRoleForAccountType,
+  NEEDS_REVIEW_TYPES,
+} from "../ledger/account-type.js";
+import { canAddAccountChild, canChangeAccountSubType, canChangeAccountType, canDeactivateAccount, canDeleteAccount as deletionEligibility } from "../ledger/account-eligibility.js";
 import { descendantsOf, validateAccountParent } from "../ledger/account-hierarchy.js";
 import { fromMinor } from "../ledger/money.js";
 import { mainCurrencyCode } from "../currency/form.js";
@@ -61,6 +68,41 @@ export function createAccount(
   const name = data.name.trim();
   if (!name) return { ok: false, reason: "Give the account a name." };
 
+  {
+    const allowed = AccountSubTypesByType[data.type];
+    if (allowed === undefined) {
+      if (data.subType !== undefined) {
+        return {
+          ok: false,
+          reason: "A sub-type does not apply to this account type.",
+        };
+      }
+    } else {
+      if (
+        data.type === AccountType.Asset &&
+        data.subType === AccountSubType.Equipment
+      ) {
+        return {
+          ok: false,
+          reason:
+            "Equipment is chosen on the record form as what money was spent on, not set here.",
+        };
+      }
+      if (data.subType !== undefined && !allowed.includes(data.subType)) {
+        return {
+          ok: false,
+          reason: "That sub-type does not belong to this account type.",
+        };
+      }
+      if (
+        data.subType === undefined &&
+        NEEDS_REVIEW_TYPES.includes(data.type)
+      ) {
+        return { ok: false, reason: "Choose what kind of account this is." };
+      }
+    }
+  }
+
   let row: typeof accounts.$inferSelect;
   try {
     row = db.transaction((tx) => {
@@ -76,6 +118,7 @@ export function createAccount(
       const codes = tx.select({ code: accounts.code }).from(accounts).all().flatMap((item) => item.code == null ? [] : [item.code]);
       const inserted = tx.insert(accounts).values({
         role: legacyRoleForAccountType(data.type), type: data.type,
+        subType: AccountSubTypesByType[data.type] !== undefined ? (data.subType ?? null) : null,
         code: lowestFreeAccountCode(data.type, codes), name,
         parentId: data.parentId ?? null, rank: rankAfter(null),
         createdBy: actingUserId, updatedBy: actingUserId,
@@ -120,9 +163,57 @@ export function patchAccount(
     };
   }
 
+  const effectiveType = patch.type ?? (existing.type as AccountTypeCode);
+  if (patch.subType !== undefined) {
+    const allowed = AccountSubTypesByType[effectiveType];
+    if (allowed === undefined) {
+      return {
+        ok: false,
+        reason: "A sub-type does not apply to this account type.",
+      };
+    }
+    if (
+      effectiveType === AccountType.Asset &&
+      patch.subType === AccountSubType.Equipment
+    ) {
+      return {
+        ok: false,
+        reason:
+          "Equipment is chosen on the record form as what money was spent on, not set here.",
+      };
+    }
+    if (!allowed.includes(patch.subType)) {
+      return {
+        ok: false,
+        reason: "That sub-type does not belong to this account type.",
+      };
+    }
+  }
+
+  // A type change without an explicit new sub-type leaves the old sub-type's
+  // *value* in place; once it no longer belongs to `effectiveType`'s allowed
+  // set (e.g. an Asset's `Cash` code becoming a Liability), it must be
+  // cleared to "needs review" rather than silently misread by a report.
+  const staleSubType =
+    patch.type !== undefined &&
+    patch.type !== existing.type &&
+    patch.subType === undefined &&
+    existing.subType !== null &&
+    !(AccountSubTypesByType[effectiveType] ?? []).includes(
+      existing.subType as AccountSubTypeCode,
+    );
+
   const state = dependencyState(db, id);
   if (patch.type !== undefined && patch.type !== existing.type) {
     const check = canChangeAccountType(state);
+    if (!check.ok) return check;
+  }
+  if (patch.subType !== undefined && patch.subType !== existing.subType) {
+    const check = canChangeAccountSubType({
+      canChange: true,
+      isSystem: existing.isSystem,
+      archived: existing.archivedAt !== null,
+    });
     if (!check.ok) return check;
   }
   if (patch.active === false) {
@@ -150,6 +241,11 @@ export function patchAccount(
       const result = tx.update(accounts).set({
         ...(name ? { name } : {}),
         ...(patch.type !== undefined ? { type: patch.type, role: legacyRoleForAccountType(patch.type), code } : {}),
+        ...(patch.subType !== undefined
+          ? { subType: patch.subType }
+          : staleSubType
+            ? { subType: null }
+            : {}),
         ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
         ...(patch.active !== undefined ? { archivedAt: patch.active ? null : new Date().toISOString() } : {}),
         updatedBy: actingUserId, updatedAt: new Date().toISOString(),

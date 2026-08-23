@@ -5,7 +5,13 @@ import { hasPermission } from "$lib/server/permissions.js";
 import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
 import { listAccounts } from "$lib/server/queries/accounts.js";
 import { createAccount } from "$lib/server/services/accounts.js";
-import { AccountType, type AccountTypeCode } from "$lib/enums.js";
+import {
+  AccountSubTypesByType,
+  AccountType,
+  type AccountSubTypeCode,
+  type AccountTypeCode,
+} from "$lib/enums.js";
+import { NEEDS_REVIEW_TYPES } from "$lib/server/ledger/account-type.js";
 
 /**
  * The kinds of account a person may create.
@@ -26,8 +32,37 @@ const createSchema = z
       }),
     name: z.string().trim().min(1).max(120),
     parentId: z.number().int().positive().nullable().optional(),
+    subType: z.number().int().optional() as z.ZodType<AccountSubTypeCode | undefined>,
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    const allowed = AccountSubTypesByType[data.type];
+    if (allowed === undefined) {
+      if (data.subType !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["subType"],
+          message: "A sub-type does not apply to this account type.",
+        });
+      }
+      return;
+    }
+    if (data.subType === undefined) {
+      if (NEEDS_REVIEW_TYPES.includes(data.type)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["subType"],
+          message: "Choose what kind of account this is.",
+        });
+      }
+    } else if (!allowed.includes(data.subType)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["subType"],
+        message: "That sub-type does not belong to this account type.",
+      });
+    }
+  });
 
 export const GET: RequestHandler = async ({ locals, url }) => {
   if (!hasPermission(locals, "accounts", "view")) return forbidden();
@@ -54,6 +89,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     type: parsed.data.type,
     name: parsed.data.name,
     parentId: parsed.data.parentId,
+    subType: parsed.data.subType,
   });
   if (!result.ok) return refused(result.reason);
 

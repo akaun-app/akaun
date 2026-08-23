@@ -18,6 +18,7 @@ function total(
     type: accountTypeFor(role),
     parentId: null,
     role,
+    subType: null,
     contactId,
     amountMinor,
   };

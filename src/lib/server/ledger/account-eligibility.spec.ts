@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canAddAccountChild,
+  canChangeAccountSubType,
   canChangeAccountType,
   canDeactivateAccount,
   canDeleteAccount,
@@ -87,5 +88,49 @@ describe("protected account lifecycle", () => {
     expect(canDeactivateAccount({ ...FREE, movementCount: 1 })).toEqual({
       ok: true,
     });
+  });
+});
+
+/**
+ * `canChangeAccountSubType` is deliberately looser than `canChangeAccountType`
+ * (005 research.md §3): a "needs review" account must stay correctable however
+ * much history it has picked up, so the only thing that can refuse it is the
+ * same edit-lock state that already blocks editing the account at all.
+ */
+describe("canChangeAccountSubType", () => {
+  const EDITABLE = { canChange: true, isSystem: false, archived: false };
+
+  it("allows the change on an editable account with no history", () => {
+    expect(canChangeAccountSubType(EDITABLE)).toEqual({ ok: true });
+  });
+
+  it("is not blocked by movement, child, statement or default count", () => {
+    // The same dependency state that refuses `canChangeAccountType` on every
+    // count, proving the sub-type rule really ignores all four.
+    const heavilyUsed: AccountDependencyState = {
+      movementCount: 500,
+      childCount: 3,
+      statementCount: 12,
+      defaultCount: 1,
+      otherDependencyCount: 0,
+      activeDescendantCount: 0,
+    };
+    expect(canChangeAccountType(heavilyUsed).ok).toBe(false);
+    expect(canChangeAccountSubType(EDITABLE)).toEqual({ ok: true });
+  });
+
+  it("refuses when the caller lacks permission to change the account", () => {
+    const result = canChangeAccountSubType({ ...EDITABLE, canChange: false });
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses on a system account", () => {
+    const result = canChangeAccountSubType({ ...EDITABLE, isSystem: true });
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses on an archived account", () => {
+    const result = canChangeAccountSubType({ ...EDITABLE, archived: true });
+    expect(result.ok).toBe(false);
   });
 });

@@ -7,10 +7,9 @@
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import type { ReportsPageData, ReportView } from '$lib/server/loaders/reports.js';
 	import BalanceSheetReport from './BalanceSheetReport.svelte';
-	import OwedToUs from './OwedToUs.svelte';
+	import CashFlowStatementReport from './CashFlowStatementReport.svelte';
 	import PartnerStatementReport from './PartnerStatementReport.svelte';
 	import ProfitLossReport from './ProfitLossReport.svelte';
-	import WeOwe from './WeOwe.svelte';
 	import './reports.css';
 
 	/**
@@ -27,20 +26,22 @@
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
 
-	const TABS: { view: ReportView; label: string }[] = [
-		{ view: 'profit-loss', label: 'Profit & Loss' },
-		{ view: 'balance-sheet', label: 'Balance Sheet' },
-		{ view: 'partners', label: "Partners' Equity" },
-		{ view: 'owed-to-us', label: 'Receivables' },
-		{ view: 'we-owe', label: 'Payables' }
-	];
+	const TABS = $derived(
+		(
+			[
+				{ view: 'profit-loss', label: 'Profit & Loss' },
+				{ view: 'balance-sheet', label: 'Balance Sheet' },
+				{ view: 'cash-flow', label: 'Cash Flow Statement' },
+				{ view: 'partners', label: "Partners' Equity" }
+			] satisfies { view: ReportView; label: string }[]
+		).filter((tab) => tab.view !== 'partners' || data.hasPartners)
+	);
 
 	const DESCRIPTIONS: Record<ReportView, string> = {
 		'profit-loss': 'Revenue and expenses for the period',
 		'balance-sheet': 'Assets, liabilities and equity as at a date',
-		partners: "Each partner's contributions, share of profit and drawings",
-		'owed-to-us': 'What customers still owe, and how overdue each one is',
-		'we-owe': 'What the business still has to pay, and when it falls due'
+		'cash-flow': 'Where cash came from and what it went on, for the period',
+		partners: "Each partner's contributions, share of profit and drawings"
 	};
 
 	/** The dates a link has to carry so the report a reader opens is the one you saw. */
@@ -62,16 +63,16 @@
 				return { endpoint: 'profit-loss', query: period };
 			case 'balance-sheet':
 				return { endpoint: 'balance-sheet', query: `asAt=${p.asAt}` };
+			case 'cash-flow':
+				return { endpoint: 'cash-flow', query: period };
 			case 'partners':
 				return { endpoint: 'partner-statement', query: period };
-			default:
-				// The who-owes-what views are a way of reading what is already on the
-				// records screens, not a report an accountant is sent.
-				return null;
 		}
 	});
 
-	const showsPeriod = $derived(data.view === 'profit-loss' || data.view === 'partners');
+	const showsPeriod = $derived(
+		data.view === 'profit-loss' || data.view === 'cash-flow' || data.view === 'partners'
+	);
 	const showsAsAt = $derived(data.view === 'balance-sheet');
 
 	// The dates live in the URL, so the pickers need somewhere writable of their
@@ -161,11 +162,9 @@
 		<ProfitLossReport report={data.report} {isMobile} />
 	{:else if data.view === 'balance-sheet'}
 		<BalanceSheetReport report={data.report} {isMobile} />
+	{:else if data.view === 'cash-flow'}
+		<CashFlowStatementReport report={data.report} {isMobile} />
 	{:else if data.view === 'partners'}
 		<PartnerStatementReport report={data.report} {isMobile} />
-	{:else if data.view === 'owed-to-us'}
-		<OwedToUs report={data.report} {isMobile} />
-	{:else if data.view === 'we-owe'}
-		<WeOwe report={data.report} />
 	{/if}
 </div>

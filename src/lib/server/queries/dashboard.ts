@@ -1,17 +1,4 @@
-import {
-  and,
-  desc,
-  eq,
-  exists,
-  gte,
-  isNotNull,
-  lt,
-  lte,
-  ne,
-  not,
-  sql,
-  type SQL,
-} from "drizzle-orm";
+import { and, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import {
   accounts,
   accountDefaults,
@@ -22,7 +9,7 @@ import {
   settlements,
 } from "../db/schema.js";
 import {
-  AccountRole,
+  AccountSubType,
   AccountType,
   DefaultAccountPurpose,
   InvoiceStatus,
@@ -31,13 +18,7 @@ import {
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
 import type { LedgerDb, Minor } from "../ledger/types.js";
-import {
-  fundsFlow,
-  type FundsFlowReport,
-} from "../ledger/reports/funds-flow.js";
-import { balanceSheetReport, ledgerTrackingStartDate } from "./reports.js";
-
-export type PeriodTotals = { total: number; count: number };
+import { balanceSheetReport, cashFlowReport, profitLossReport } from "./reports.js";
 
 /**
  * Dashboard aggregates computed in SQL (SUM / COUNT / GROUP BY) instead of
@@ -65,143 +46,6 @@ function toDisplayAmount(amountMinor: number, type: AccountTypeCode): number {
   return (amountMinor * sign) / 100;
 }
 
-/** SUM + COUNT over one role's accounts within [from, to] (inclusive). */
-function typeTotals(
-  db: LedgerDb,
-  type: AccountTypeCode,
-  from: string,
-  to: string,
-): PeriodTotals {
-  const row = db
-    .select({
-      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-      // One record can touch two categories; the dashboard counts records,
-      // not sides.
-      count: sql<number>`count(distinct ${ledgerMovements.recordId})`,
-    })
-    .from(ledgerMovements)
-    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(
-      and(
-        eq(accounts.type, type),
-        gte(ledgerRecords.date, from),
-        lte(ledgerRecords.date, to),
-      ),
-    )
-    .get();
-  return {
-    total: toDisplayAmount(row?.totalMinor ?? 0, type),
-    count: row?.count ?? 0,
-  };
-}
-
-/** What was spent in [from, to] — the expense categories' movements. */
-export function expenseTotals(
-  db: LedgerDb,
-  from: string,
-  to: string,
-): PeriodTotals {
-  return typeTotals(db, AccountType.Expense, from, to);
-}
-
-/** What was earned in [from, to] — the income categories' movements. */
-export function incomeTotals(
-  db: LedgerDb,
-  from: string,
-  to: string,
-): PeriodTotals {
-  return typeTotals(db, AccountType.Revenue, from, to);
-}
-
-/**
- * What the business still owes, all time — the balance of the one we-owe
- * account. An expense is outstanding exactly while its side of that account is
- * unsettled, so this figure and the who-owes-what screens read the same rows.
- */
-export function outstandingTotal(db: LedgerDb): number {
-  const payableAccountId =
-    db
-      .select({ accountId: accountDefaults.accountId })
-      .from(accountDefaults)
-      .where(eq(accountDefaults.purpose, DefaultAccountPurpose.Payable))
-      .get()?.accountId ?? null;
-  if (payableAccountId === null) return 0;
-  const row = db
-    .select({
-      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-    })
-    .from(ledgerMovements)
-    .where(eq(ledgerMovements.accountId, payableAccountId))
-    .get();
-  return toDisplayAmount(row?.totalMinor ?? 0, AccountType.Liability);
-}
-
-/** Monthly totals for one role keyed by 'YYYY-MM', for records dated on/after `from`. */
-function monthlyTotals(
-  db: LedgerDb,
-  type: AccountTypeCode,
-  from: string,
-): Record<string, number> {
-  const month = sql<string>`substr(${ledgerRecords.date}, 1, 7)`;
-  const rows = db
-    .select({
-      month,
-      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-    })
-    .from(ledgerMovements)
-    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(and(eq(accounts.type, type), gte(ledgerRecords.date, from)))
-    .groupBy(month)
-    .all();
-  return Object.fromEntries(
-    rows.map((r) => [r.month, toDisplayAmount(r.totalMinor, type)]),
-  );
-}
-
-export const monthlyExpenseTotals = (db: LedgerDb, from: string) =>
-  monthlyTotals(db, AccountType.Expense, from);
-export const monthlyIncomeTotals = (db: LedgerDb, from: string) =>
-  monthlyTotals(db, AccountType.Revenue, from);
-
-/**
- * Top expense categories within [from, to], descending.
- *
- * Each line is one expense-category account's movement over the period, which
- * is exactly what the same line of the profit and loss is (FR-025).
- */
-export function expenseCategoryBreakdown(
-  db: LedgerDb,
-  from: string,
-  to: string,
-  limit = 6,
-): { label: string; value: number }[] {
-  return db
-    .select({
-      label: accounts.name,
-      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-    })
-    .from(ledgerMovements)
-    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(
-      and(
-        eq(accounts.type, AccountType.Expense),
-        gte(ledgerRecords.date, from),
-        lte(ledgerRecords.date, to),
-      ),
-    )
-    .groupBy(accounts.id)
-    .orderBy(desc(sql`sum(${ledgerMovements.amountMinor})`))
-    .limit(limit)
-    .all()
-    .map((r) => ({
-      label: r.label,
-      value: toDisplayAmount(r.totalMinor, AccountType.Expense),
-    }));
-}
-
 /**
  * The newest records of one kind with the contact they name and the figure that
  * landed on their category, newest first.
@@ -223,7 +67,7 @@ function recentRecords(
   // purpose: they must agree with the profit and loss, which equipment leaves.
   const onCategorySide =
     type === AccountType.Expense
-      ? sql`(${accounts.type} = ${type} or ${accounts.role} = ${AccountRole.Equipment})`
+      ? sql`(${accounts.type} = ${type} or ${accounts.subType} = ${AccountSubType.Equipment})`
       : sql`${accounts.type} = ${type}`;
   return db
     .select({
@@ -352,150 +196,84 @@ export function overdueInvoicesCount(db: LedgerDb): number {
 }
 
 // ---------------------------------------------------------------------------
-// Financial position, and what moved it.
-//
-// The dashboard used to answer one of the three statements' questions — "did I
-// trade profitably?" — and the standardized chart made that answer incomplete on
-// its own. Equipment is capitalised, so a laptop leaves the expense figure
-// entirely (002 FR-006b) and a screen showing only revenue and expenses cannot
-// say where the money went. What follows adds the other two questions: what the
-// business is worth, and what moved the funds it holds.
+// The three statement-based indicators (005 FR-013, FR-014). Each is a thin
+// read of the same report function `/reports` itself calls — never a second,
+// separately written calculation — so the dashboard and Reports can never
+// disagree (User Story 4's tally guarantee, research.md §9).
 // ---------------------------------------------------------------------------
 
-/**
- * `isMoneyPotAccount` written in SQL — the one live definition of the money
- * side, and, because equipment is the only non-current asset in the chart,
- * exactly the current assets.
- *
- * It cannot be narrowed to cash: `seed-accounts.ts` stamps `AccountRole.Bank` on
- * every asset as a compatibility value, so a bank account, a receivable and
- * inventory are indistinguishable by role. See the note on
- * `ledger/reports/funds-flow.ts`.
- */
-const IS_CURRENT_ASSET = and(
-  eq(accounts.type, AccountType.Asset),
-  ne(accounts.role, AccountRole.Equipment),
-)!;
+export type NetProfitIndicator = {
+  amountMinor: Minor;
+  dateFrom: string;
+  dateTo: string;
+};
 
-/** Current assets summed over the records a comparator admits, in whole cents. */
-function currentAssetsMinor(db: LedgerDb, window: SQL): Minor {
-  const row = db
-    .select({
-      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
-    })
-    .from(ledgerMovements)
-    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(and(IS_CURRENT_ASSET, window))
-    .get();
-  return row?.totalMinor ?? 0;
-}
-
-/** What the business holds and is owed as at a date, in whole currency units. */
-export function currentAssetsAsAt(db: LedgerDb, asAt: string): number {
-  return toDisplayAmount(
-    currentAssetsMinor(db, lte(ledgerRecords.date, asAt)),
-    AccountType.Asset,
-  );
-}
-
-/**
- * What the business owns, owes and is worth, as at a date, in whole units.
- *
- * This calls the balance sheet rather than summing the three types again, so the
- * dashboard's figures and `/reports/balance-sheet` are the same arithmetic over
- * the same rows and cannot drift (FR-031). `balances` comes along for the ride:
- * it is false only when the books do not add up, and a dashboard that showed a
- * net worth without saying so would be the more misleading of the two.
- */
-export function positionAsAt(
+/** Income less expenses over the period — the same figure `/reports/profit-loss` shows. */
+export function netProfitIndicator(
   db: LedgerDb,
-  asAt: string,
-): {
-  assetsTotal: number;
-  liabilitiesTotal: number;
-  equityTotal: number;
-  balances: boolean;
-} {
-  const report = balanceSheetReport(db, asAt);
+  dateFrom: string,
+  dateTo: string,
+): NetProfitIndicator {
   return {
-    assetsTotal: report.owned.totalMinor / 100,
-    liabilitiesTotal: report.owed.totalMinor / 100,
-    equityTotal: report.ownersStake.totalMinor / 100,
-    balances: report.balances,
+    amountMinor: profitLossReport(db, dateFrom, dateTo).resultMinor,
+    dateFrom,
+    dateTo,
   };
 }
 
+export type PositionIndicator = {
+  assetsTotalMinor: Minor;
+  liabilitiesTotalMinor: Minor;
+  equityTotalMinor: Minor;
+  balances: boolean;
+  asAt: string;
+};
+
 /**
- * Where the period's funds came from and what they went on.
+ * What the business owns, owes and is worth, as at a date.
  *
- * Three reads and a pure rule. The rule and the reasoning behind it are in
- * `ledger/reports/funds-flow.ts`; this only fetches its rows.
- *
- * The row set is every side that is **not** on a current asset, from the records
- * that touched one. Both halves matter. Without the `exists`, a bill taken on
- * credit would be counted although no funds moved; without the `not` on the
- * outer side, a transfer between two bank accounts would appear as both a source
- * and a use. Together they are exactly the sides that explain the movement, which
- * is why the statement ties to the cent.
- *
- * The opening and closing figures are read separately rather than derived from
- * the rows, so `ties` is a real check on the database and not a restatement of
- * the sum above it.
+ * This calls the balance sheet rather than summing the three types again, so
+ * the dashboard's figures and `/reports/balance-sheet` are the same
+ * arithmetic over the same rows and cannot drift (FR-031). `balances` comes
+ * along for the ride: it is false only when the books do not add up, and a
+ * dashboard that showed a net worth without saying so would be the more
+ * misleading of the two (FR-016). The old standalone "current assets" and
+ * "accounts payable" tiles are lines *within* this one statement, not figures
+ * beside it (research.md §11) — `assetsTotalMinor`/`liabilitiesTotalMinor`
+ * already include them.
  */
-export function fundsFlowStatement(
+export function positionIndicator(
   db: LedgerDb,
-  from: string,
-  to: string,
-): FundsFlowReport {
-  const touchesCurrentAssets = db
-    .select({ one: sql`1` })
-    .from(ledgerMovements)
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(
-      and(eq(ledgerMovements.recordId, ledgerRecords.id), IS_CURRENT_ASSET),
-    );
+  asAt: string,
+): PositionIndicator {
+  const report = balanceSheetReport(db, asAt);
+  return {
+    assetsTotalMinor: report.owned.totalMinor,
+    liabilitiesTotalMinor: report.owed.totalMinor,
+    equityTotalMinor: report.ownersStake.totalMinor,
+    balances: report.balances,
+    asAt,
+  };
+}
 
-  const rows = db
-    .select({
-      accountId: accounts.id,
-      type: accounts.type,
-      role: accounts.role,
-      amountMinor: ledgerMovements.amountMinor,
-    })
-    .from(ledgerMovements)
-    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
-    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
-    .where(
-      and(
-        gte(ledgerRecords.date, from),
-        lte(ledgerRecords.date, to),
-        not(IS_CURRENT_ASSET),
-        exists(touchesCurrentAssets),
-      ),
-    )
-    .all();
+export type CashFlowIndicator = {
+  netChangeMinor: Minor;
+  needsReviewMinor: Minor;
+  dateFrom: string;
+  dateTo: string;
+};
 
-  const payableAccountId =
-    db
-      .select({ accountId: accountDefaults.accountId })
-      .from(accountDefaults)
-      .where(eq(accountDefaults.purpose, DefaultAccountPurpose.Payable))
-      .get()?.accountId ?? null;
-
-  return fundsFlow({
-    dateFrom: from,
-    dateTo: to,
-    // Strictly before `from`, so there is no date arithmetic to get wrong.
-    openingMinor: currentAssetsMinor(db, lt(ledgerRecords.date, from)),
-    closingMinor: currentAssetsMinor(db, lte(ledgerRecords.date, to)),
-    payableAccountId,
-    rows: rows.map((row) => ({
-      accountId: row.accountId,
-      type: row.type as AccountTypeCode,
-      role: row.role,
-      amountMinor: row.amountMinor,
-    })),
-    trackingStartedOn: ledgerTrackingStartDate(db),
-  });
+/** The same net change in cash `/reports/cash-flow` shows, for the same period. */
+export function cashFlowIndicator(
+  db: LedgerDb,
+  dateFrom: string,
+  dateTo: string,
+): CashFlowIndicator {
+  const report = cashFlowReport(db, dateFrom, dateTo);
+  return {
+    netChangeMinor: report.netChangeMinor,
+    needsReviewMinor: report.needsReviewMinor,
+    dateFrom,
+    dateTo,
+  };
 }

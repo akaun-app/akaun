@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AccountType } from "$lib/enums.js";
+import { AccountSubType, AccountType } from "$lib/enums.js";
 import * as schema from "../db/schema.js";
 import { accountDefaults, accounts, auditLog, users } from "../db/schema.js";
 import { DefaultAccountPurpose } from "$lib/enums.js";
@@ -26,14 +26,14 @@ afterEach(() => sqlite.close());
 
 describe("account service", () => {
   it("Create_WhenNamesRepeat_ShouldAssignDistinctLowestCodes", () => {
-    const first = createAccount(db, 1, { name: "Savings", type: AccountType.Asset });
-    const second = createAccount(db, 1, { name: "Savings", type: AccountType.Asset });
+    const first = createAccount(db, 1, { name: "Savings", type: AccountType.Asset, subType: AccountSubType.Bank });
+    const second = createAccount(db, 1, { name: "Savings", type: AccountType.Asset, subType: AccountSubType.Bank });
     expect(first.ok && first.value.code).toBe(1000);
     expect(second.ok && second.value.code).toBe(1001);
   });
 
   it("Patch_WhenUnusedTypeChanges_ShouldAllocateInNewRange", () => {
-    const created = createAccount(db, 1, { name: "Loan", type: AccountType.Asset });
+    const created = createAccount(db, 1, { name: "Loan", type: AccountType.Asset, subType: AccountSubType.Bank });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     const changed = patchAccount(db, created.value.id, 1, { type: AccountType.Liability });
@@ -42,10 +42,10 @@ describe("account service", () => {
   });
 
   it("Delete_WhenAccountHasChild_ShouldRefuse", () => {
-    const parent = createAccount(db, 1, { name: "Cash", type: AccountType.Asset });
+    const parent = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
     expect(parent.ok).toBe(true);
     if (!parent.ok) return;
-    expect(createAccount(db, 1, { name: "Till", type: AccountType.Asset, parentId: parent.value.id }).ok).toBe(true);
+    expect(createAccount(db, 1, { name: "Till", type: AccountType.Asset, subType: AccountSubType.Cash, parentId: parent.value.id }).ok).toBe(true);
     expect(removeAccount(db, parent.value.id, 1)).toEqual({ ok: false, reason: "Move or delete this account's children first." });
   });
 
@@ -53,6 +53,7 @@ describe("account service", () => {
     const created = createAccount(db, 1, {
       name: "Temporary",
       type: AccountType.Asset,
+      subType: AccountSubType.Bank,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -79,7 +80,7 @@ describe("account service", () => {
   });
 
   it("Archive_WhenSavedDefaultUsesAccount_ShouldRefuse", () => {
-    const created=createAccount(db,1,{name:"Bank",type:AccountType.Asset}); expect(created.ok).toBe(true); if(!created.ok)return;
+    const created=createAccount(db,1,{name:"Bank",type:AccountType.Asset,subType:AccountSubType.Bank}); expect(created.ok).toBe(true); if(!created.ok)return;
     db.insert(accountDefaults).values({purpose:DefaultAccountPurpose.EverydayTransaction,accountId:created.value.id,updatedBy:1}).run();
     expect(patchAccount(db,created.value.id,1,{active:false})).toEqual({ok:false,reason:"Choose a replacement saved default before deactivating this account."});
   });

@@ -548,8 +548,9 @@ th.sortable:hover .th-idle { opacity: .5; }
 .dash-scroll { flex: 1; overflow-y: auto; padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 18px; }
 
 /* ===================== Dashboard ===================== */
-.kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; }
-.kpi { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); }
+.kpi-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.kpi { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); display: block; text-align: inherit; color: inherit; text-decoration: none; }
+.kpi:hover { border-color: var(--primary); }
 .kpi-top { display: flex; align-items: center; gap: 9px; }
 .kpi-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent); color: var(--muted-foreground); }
 .kpi.tone-green .kpi-icon { background: var(--green-soft); color: var(--green); }
@@ -561,6 +562,7 @@ th.sortable:hover .th-idle { opacity: .5; }
 .kpi-value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-top: 12px; font-family: "Geist Mono", monospace; font-variant-numeric: tabular-nums; }
 .kpi-cur { font-size: 13px; color: var(--muted-foreground); font-weight: 500; margin-right: 5px; vertical-align: 2px; }
 .kpi-sub { font-size: 12px; color: var(--muted-foreground); margin-top: 3px; }
+.kpi-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--red); }
 
 .panel-row { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: stretch; }
 .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm); min-width: 0; display: flex; flex-direction: column; }

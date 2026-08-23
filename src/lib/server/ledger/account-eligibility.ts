@@ -33,6 +33,42 @@ export function postingEligibility(state: PostingEligibilityState): Allowed {
   return allowed;
 }
 
+/**
+ * The account's own edit-lock state — the conditions that already block
+ * editing it at all, independent of any particular field.
+ */
+export type AccountEditLockState = {
+  canChange: boolean;
+  isSystem: boolean;
+  archived: boolean;
+};
+
+/**
+ * Whether an existing Asset account's sub-type may be changed.
+ *
+ * Deliberately not `canChangeAccountType`: the sub-type describes what the
+ * account *is*, not a fact fixed at creation, so it is not blocked by
+ * movement, child, statement or default count the way changing `type` is
+ * (005 research.md §3) — only by the same edit-lock state that already blocks
+ * editing this account at all.
+ */
+export function canChangeAccountSubType(state: AccountEditLockState): Allowed {
+  if (!state.canChange) {
+    return refused("You do not have permission to change this account.");
+  }
+  if (state.isSystem) {
+    return refused(
+      "This is one of the accounts the app needs to work, so its sub-type cannot be changed.",
+    );
+  }
+  if (state.archived) {
+    return refused(
+      "This account is archived, so its sub-type cannot be changed.",
+    );
+  }
+  return allowed;
+}
+
 export function canChangeAccountType(state: AccountDependencyState): Allowed {
   if (state.movementCount > 0) {
     return refused(

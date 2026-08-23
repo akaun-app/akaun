@@ -4,8 +4,19 @@
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
-	import { AccountType, AccountTypeDisplayLabels, type AccountTypeCode } from '$lib/enums.js';
+	import {
+		AccountSubTypeDisplayLabels,
+		AccountSubTypesByType,
+		AccountType,
+		AccountTypeDisplayLabels,
+		type AccountTypeCode
+	} from '$lib/enums.js';
 	import type { AccountView } from '$lib/server/ledger/types.js';
+
+	// Mirrors src/lib/server/ledger/account-type.ts's NEEDS_REVIEW_TYPES — an
+	// account of one of these types has no safe default classification, so a
+	// sub-type must be chosen at creation rather than left "needs review".
+	const REQUIRES_SUB_TYPE: AccountTypeCode[] = [AccountType.Asset, AccountType.Liability];
 
 	/**
 	 * Adding an account to the chart.
@@ -36,6 +47,9 @@
 	);
 
 	let selectedType = $state<AccountTypeCode>(AccountType.Asset);
+
+	const subTypes = $derived(AccountSubTypesByType[selectedType] ?? []);
+	const subTypeRequired = $derived(REQUIRES_SUB_TYPE.includes(selectedType));
 
 	/** A heading can only sit above an account of its own type. */
 	const parents = $derived(accounts.filter((a) => a.type === selectedType && a.active));
@@ -84,6 +98,34 @@
 						once the account has movements.
 					</p>
 				</div>
+
+				{#if subTypes.length > 0}
+					<div class="field">
+						<label class="field-label" for="account-sub-type">
+							Sub-type {subTypeRequired ? '*' : ''}
+						</label>
+						<select
+							id="account-sub-type"
+							name="subType"
+							required={subTypeRequired}
+							class="plain-select"
+						>
+							{#if !subTypeRequired}
+								<option value="">Not yet classified</option>
+							{/if}
+							{#each subTypes as subType (subType)}
+								<option value={subType}>{AccountSubTypeDisplayLabels[subType]}</option>
+							{/each}
+						</select>
+						<p class="field-hint">
+							{#if subTypeRequired}
+								What kind of {AccountTypeDisplayLabels[selectedType].toLowerCase()} this is.
+							{:else}
+								Leave unclassified to have it treated as operating for now.
+							{/if}
+						</p>
+					</div>
+				{/if}
 
 				<div class="field">
 					<label class="field-label" for="account-parent">Parent heading</label>

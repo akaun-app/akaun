@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, AccountType, LedgerRecordKind } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  LedgerRecordKind,
+} from "$lib/enums.js";
 import {
   sidesFromAccounts,
   type SidesInput,
@@ -22,66 +27,77 @@ const ACCOUNTS = {
     id: 1,
     type: AccountType.Asset,
     role: AccountRole.Bank,
+    subType: AccountSubType.Bank,
     archived: false,
   },
   cash: {
     id: 2,
     type: AccountType.Asset,
     role: AccountRole.Cash,
+    subType: AccountSubType.Cash,
     archived: false,
   },
   fuel: {
     id: 3,
     type: AccountType.Expense,
     role: AccountRole.ExpenseCategory,
+    subType: null,
     archived: false,
   },
   sales: {
     id: 4,
     type: AccountType.Revenue,
     role: AccountRole.IncomeCategory,
+    subType: null,
     archived: false,
   },
   savings: {
     id: 5,
     type: AccountType.Asset,
     role: AccountRole.Bank,
+    subType: AccountSubType.Bank,
     archived: false,
   },
   payable: {
     id: 6,
     type: AccountType.Liability,
     role: AccountRole.Payable,
+    subType: null,
     archived: false,
   },
   receivable: {
     id: 7,
     type: AccountType.Asset,
     role: AccountRole.Receivable,
+    subType: AccountSubType.Receivable,
     archived: false,
   },
   opening: {
     id: 8,
     type: AccountType.Equity,
     role: AccountRole.OpeningBalances,
+    subType: null,
     archived: false,
   },
   capital: {
     id: 9,
     type: AccountType.Equity,
     role: AccountRole.PartnerCapital,
+    subType: null,
     archived: false,
   },
   archived: {
     id: 10,
     type: AccountType.Expense,
     role: AccountRole.ExpenseCategory,
+    subType: null,
     archived: true,
   },
   paper: {
     id: 11,
     type: AccountType.Expense,
     role: AccountRole.ExpenseCategory,
+    subType: null,
     archived: false,
   },
   // An asset the business keeps, chosen on the form beside the categories.
@@ -89,6 +105,7 @@ const ACCOUNTS = {
     id: 12,
     type: AccountType.Asset,
     role: AccountRole.Equipment,
+    subType: AccountSubType.Equipment,
     archived: false,
   },
 };

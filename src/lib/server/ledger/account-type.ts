@@ -1,5 +1,16 @@
-import { AccountRole, AccountType } from "$lib/enums.js";
-import type { AccountRoleCode, AccountTypeCode } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  ExpenseSubType,
+  LiabilitySubType,
+  RevenueSubType,
+} from "$lib/enums.js";
+import type {
+  AccountRoleCode,
+  AccountSubTypeCode,
+  AccountTypeCode,
+} from "$lib/enums.js";
 
 export type NormalBalance = "debit" | "credit";
 export type FinancialStatement = "balance_sheet" | "income_statement";
@@ -83,12 +94,6 @@ export function legacyRoleForAccountType(
 /** @deprecated Conversion-only alias; new accounting behavior reads account.type. */
 export const accountTypeFor = accountTypeForLegacyRole;
 
-/** @deprecated Role-based compatibility helper until report consumers migrate. */
-export function displaySign(role: AccountRoleCode): 1 | -1 {
-  if (role === AccountRole.PartnerDrawings) return 1;
-  return displaySignForAccountType(accountTypeForLegacyRole(role));
-}
-
 /**
  * The two sides of every everyday record: a place money sits, and a statement of
  * what the money was for.
@@ -101,31 +106,37 @@ export function displaySign(role: AccountRoleCode): 1 | -1 {
  * makes buying a laptop look like moving cash between two pots, which is how it
  * ends up needing the `adjustments` ability that no seeded group grants.
  *
- * `role` is the only column that tells the two apart, which is why it outlived
- * the move to fixed types. Everything that splits the chart into pots and
- * categories must go through these two, so the split cannot drift between the
- * record form, the records list, the dashboard and the importer.
+ * `subType` is the only column that tells the two apart for an Asset account
+ * (005 research.md §12 — this used to be `role`, now inert for Asset rows).
+ * Everything that splits the chart into pots and categories must go through
+ * these two, so the split cannot drift between the record form, the records
+ * list, the dashboard and the importer.
  */
-export type RoleAndType = {
+export type TypeAndSubType = {
   type: AccountTypeCode;
-  /** Plain `number`, matching `AccountRow.role` in the frozen `types.ts`. */
-  role: number;
+  /**
+   * Absent for Equity. For Asset/Liability, `null` means "needs review"
+   * (`isNeedsReview` below). For Expense/Revenue, `null` defaults safely to
+   * Operating (`expenseBucket`/`revenueBucket` below).
+   */
+  subType: AccountSubTypeCode | null;
 };
 
 /** Something the business keeps, recorded as an asset but chosen as a category. */
-export function isEquipmentAccount(account: RoleAndType): boolean {
+export function isEquipmentAccount(account: TypeAndSubType): boolean {
   return (
-    account.type === AccountType.Asset && account.role === AccountRole.Equipment
+    account.type === AccountType.Asset &&
+    account.subType === AccountSubType.Equipment
   );
 }
 
 /** A place money actually sits or is owed. */
-export function isMoneyPotAccount(account: RoleAndType): boolean {
+export function isMoneyPotAccount(account: TypeAndSubType): boolean {
   return account.type === AccountType.Asset && !isEquipmentAccount(account);
 }
 
 /** What a record is "for": a spending or earning category, or equipment. */
-export function isCategoryAccount(account: RoleAndType): boolean {
+export function isCategoryAccount(account: TypeAndSubType): boolean {
   return (
     account.type === AccountType.Expense ||
     account.type === AccountType.Revenue ||
@@ -133,32 +144,103 @@ export function isCategoryAccount(account: RoleAndType): boolean {
   );
 }
 
-/** Conversion-era compatibility predicates. */
-export function isSharedOwedRole(role: AccountRoleCode): boolean {
-  return role === AccountRole.Receivable || role === AccountRole.Payable;
-}
-
-export const MONEY_POT_ROLES: AccountRoleCode[] = [
-  AccountRole.Bank,
-  AccountRole.Wallet,
-  AccountRole.Cash,
-  AccountRole.Card,
+/**
+ * "Cash and cash equivalents" for the Cash Flow Statement (FR-006) — money that
+ * is, for practical purposes, already cash.
+ */
+export const CASH_AND_EQUIVALENT_SUBTYPES: AccountSubTypeCode[] = [
+  AccountSubType.Cash,
+  AccountSubType.Bank,
+  AccountSubType.Wallet,
+  AccountSubType.Card,
 ];
 
-export function isCategoryRole(role: AccountRoleCode): boolean {
+/** Current assets that are never cash. */
+export const OTHER_CURRENT_ASSET_SUBTYPES: AccountSubTypeCode[] = [
+  AccountSubType.Receivable,
+  AccountSubType.Inventory,
+  AccountSubType.OtherCurrentAsset,
+];
+
+/** Liabilities due within the normal operating cycle, for the Balance Sheet. */
+export const CURRENT_LIABILITY_SUBTYPES: AccountSubTypeCode[] = [
+  LiabilitySubType.AccountsPayable,
+  LiabilitySubType.AccruedLiabilities,
+  LiabilitySubType.ShortTermLoan,
+  LiabilitySubType.OtherCurrentLiability,
+];
+
+/** Liabilities due beyond the normal operating cycle, for the Balance Sheet. */
+export const NON_CURRENT_LIABILITY_SUBTYPES: AccountSubTypeCode[] = [
+  LiabilitySubType.LongTermLoan,
+  LiabilitySubType.OtherNonCurrentLiability,
+];
+
+export const COGS_SUBTYPES: AccountSubTypeCode[] = [
+  ExpenseSubType.CostOfGoodsSold,
+];
+export const OTHER_EXPENSE_SUBTYPES: AccountSubTypeCode[] = [
+  ExpenseSubType.OtherExpense,
+];
+export const OTHER_REVENUE_SUBTYPES: AccountSubTypeCode[] = [
+  RevenueSubType.OtherRevenue,
+];
+
+/**
+ * Types with no safe default classification — a new account of one of these
+ * types must be classified at creation (`services/accounts.ts`), and an
+ * unclassified existing one shows as "needs review" (`isNeedsReview` below).
+ */
+export const NEEDS_REVIEW_TYPES: AccountTypeCode[] = [
+  AccountType.Asset,
+  AccountType.Liability,
+];
+
+/**
+ * An Asset or Liability account with no sub-type set yet (FR-005). Expense
+ * and Revenue are absent here on purpose: an unclassified one defaults
+ * safely to Operating (see `expenseBucket`/`revenueBucket` below) instead of
+ * needing review, because unlike Asset/Liability there is no statement
+ * section or cash-flow activity that a wrong guess could misplace it into.
+ */
+export function isNeedsReview(account: TypeAndSubType): boolean {
   return (
-    role === AccountRole.ExpenseCategory || role === AccountRole.IncomeCategory
+    NEEDS_REVIEW_TYPES.includes(account.type) && account.subType == null
   );
 }
 
-export function isProfitAndLossRole(role: AccountRoleCode): boolean {
-  return (
-    financialStatementFor(accountTypeForLegacyRole(role)) === "income_statement"
-  );
+export type AssetBucket = "current" | "nonCurrent" | "needsReview";
+
+/** Where an Asset line belongs on a classified Balance Sheet. */
+export function assetBucket(subType: AccountSubTypeCode | null): AssetBucket {
+  if (subType == null) return "needsReview";
+  if (subType === AccountSubType.Equipment) return "nonCurrent";
+  return "current"; // cash-and-equivalent or another current-asset subtype
 }
 
-export function isBalanceSheetRole(role: AccountRoleCode): boolean {
-  return (
-    financialStatementFor(accountTypeForLegacyRole(role)) === "balance_sheet"
-  );
+export type LiabilityBucket = "current" | "nonCurrent" | "needsReview";
+
+/** Where a Liability line belongs on a classified Balance Sheet, or the Cash Flow Statement. */
+export function liabilityBucket(
+  subType: AccountSubTypeCode | null,
+): LiabilityBucket {
+  if (subType == null) return "needsReview";
+  if (CURRENT_LIABILITY_SUBTYPES.includes(subType)) return "current";
+  return "nonCurrent"; // only NON_CURRENT_LIABILITY_SUBTYPES values remain
+}
+
+export type ExpenseBucket = "cogs" | "operating" | "other";
+
+/** Where an Expense line belongs for Gross Profit / Operating Income. */
+export function expenseBucket(subType: AccountSubTypeCode | null): ExpenseBucket {
+  if (subType === ExpenseSubType.CostOfGoodsSold) return "cogs";
+  if (subType === ExpenseSubType.OtherExpense) return "other";
+  return "operating"; // OperatingExpense, or null — the soft default
+}
+
+export type RevenueBucket = "operating" | "other";
+
+/** Where a Revenue line belongs for Gross Profit / Operating Income. */
+export function revenueBucket(subType: AccountSubTypeCode | null): RevenueBucket {
+  return subType === RevenueSubType.OtherRevenue ? "other" : "operating"; // OperatingRevenue, or null
 }

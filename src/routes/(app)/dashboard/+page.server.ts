@@ -2,22 +2,15 @@ import type { PageServerLoad } from "./$types.js";
 import { redirect } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import {
-  expenseTotals,
-  incomeTotals,
-  outstandingTotal,
-  monthlyExpenseTotals,
-  monthlyIncomeTotals,
-  expenseCategoryBreakdown,
+  cashFlowIndicator,
+  netProfitIndicator,
+  positionIndicator,
   recentExpenses,
   recentIncomes,
-  currentAssetsAsAt,
-  positionAsAt,
-  fundsFlowStatement,
 } from "$lib/server/queries/dashboard.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
   periodDateRange,
-  periodMonthKeys,
   isDashboardPeriod,
   toISODate,
 } from "$lib/dashboard-periods.js";
@@ -31,61 +24,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const now = new Date();
   const { start: periodStart, end: periodEnd } = periodDateRange(period, now);
 
-  // Headline figures — SUM / COUNT computed in SQL.
-  const exp = expenseTotals(db, periodStart, periodEnd);
-  const inc = incomeTotals(db, periodStart, periodEnd);
-  const outstanding = outstandingTotal(db);
-
-  // Position as at today, not as at the period end: "what am I worth" is a
-  // question about now, and a balance sheet dated last month would read as a
-  // stale bank balance. The period selector governs the period figures only.
+  // Net profit and cash flow read the selected period; financial position is
+  // "as at today" — a balance sheet dated last month would read as a stale
+  // bank balance, so the period selector governs the other two figures only.
   const today = toISODate(now);
-  const currentAssets = currentAssetsAsAt(db, today);
-  const position = positionAsAt(db, today);
 
-  // What moved the funds over the selected period, split by activity. This is
-  // the one place capitalised equipment is visible on the dashboard.
-  const fundsFlow = fundsFlowStatement(db, periodStart, periodEnd);
+  const netProfit = netProfitIndicator(db, periodStart, periodEnd);
+  const position = positionIndicator(db, today);
+  const cashFlow = cashFlowIndicator(db, periodStart, periodEnd);
 
-  // Month-series scoped to the selected period — one GROUP BY per table, looked up by month key.
-  const months = periodMonthKeys(period, now);
-  const monthLabels: Record<string, string> = {};
-  months.forEach((m) => {
-    const [y, mo] = m.split("-");
-    const names = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    monthLabels[m] = names[parseInt(mo) - 1] + " " + y.slice(2);
-  });
-  const monthSeriesStart = months[0] + "-01";
-  const expByMonth = monthlyExpenseTotals(db, monthSeriesStart);
-  const incByMonth = monthlyIncomeTotals(db, monthSeriesStart);
-
-  const cashFlow = months.map((m) => ({
-    label: monthLabels[m],
-    income: incByMonth[m] ?? 0,
-    expense: expByMonth[m] ?? 0,
-  }));
-  const trendData = months.map((m) => ({
-    label: monthLabels[m],
-    value: (incByMonth[m] ?? 0) - (expByMonth[m] ?? 0),
-  }));
-
-  // Category breakdown for the period — GROUP BY category, top 6.
-  const categoryData = expenseCategoryBreakdown(db, periodStart, periodEnd, 6);
-
-  // Recent activity — 7 newest of each, merged and trimmed to 7.
+  // Recent activity — 7 newest of each, merged and trimmed to 7 (FR-017).
   const recentEx = recentExpenses(db, 7).map((e) => ({
     kind: "expense" as const,
     date: e.date,
@@ -106,18 +54,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   return {
     period,
-    expTotal: exp.total,
-    incTotal: inc.total,
-    net: inc.total - exp.total,
-    outstanding,
-    currentAssets,
+    netProfit,
     position,
-    fundsFlow,
-    expCount: exp.count,
-    incCount: inc.count,
     cashFlow,
-    categoryData,
-    trendData,
     recent,
   };
 };

@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   AccountRole,
+  AccountSubType,
   AccountType,
   AccountTypeLabels,
+  ExpenseSubType,
+  LiabilitySubType,
+  RevenueSubType,
   type AccountRoleCode,
 } from "$lib/enums.js";
 import {
   accountTypeFor,
   accountTypeForLegacyRole,
+  assetBucket,
+  expenseBucket,
   financialStatementFor,
+  isNeedsReview,
+  liabilityBucket,
   normalBalanceFor,
+  revenueBucket,
 } from "./account-type.js";
 
 describe("fixed account types", () => {
@@ -68,5 +77,62 @@ describe("legacy role conversion", () => {
       expect(accountTypeForLegacyRole(role)).toBe(type);
       expect(accountTypeFor(role)).toBe(type);
     }
+  });
+});
+
+describe("needs review", () => {
+  it("flags an unclassified Asset or Liability account", () => {
+    expect(isNeedsReview({ type: AccountType.Asset, subType: null })).toBe(
+      true,
+    );
+    expect(isNeedsReview({ type: AccountType.Liability, subType: null })).toBe(
+      true,
+    );
+    expect(
+      isNeedsReview({ type: AccountType.Asset, subType: AccountSubType.Bank }),
+    ).toBe(false);
+  });
+
+  it("never flags an unclassified Expense or Revenue account: they default to Operating", () => {
+    expect(isNeedsReview({ type: AccountType.Expense, subType: null })).toBe(
+      false,
+    );
+    expect(isNeedsReview({ type: AccountType.Revenue, subType: null })).toBe(
+      false,
+    );
+  });
+
+  it("never flags Equity: it has no sub-type", () => {
+    expect(isNeedsReview({ type: AccountType.Equity, subType: null })).toBe(
+      false,
+    );
+  });
+});
+
+describe("statement buckets", () => {
+  it("assetBucket: cash-and-equivalent or another current asset is current, Equipment is non-current, unclassified needs review", () => {
+    expect(assetBucket(AccountSubType.Bank)).toBe("current");
+    expect(assetBucket(AccountSubType.Receivable)).toBe("current");
+    expect(assetBucket(AccountSubType.Equipment)).toBe("nonCurrent");
+    expect(assetBucket(null)).toBe("needsReview");
+  });
+
+  it("liabilityBucket: a current-liability sub-type is current, a long-term one is non-current, unclassified needs review", () => {
+    expect(liabilityBucket(LiabilitySubType.AccountsPayable)).toBe("current");
+    expect(liabilityBucket(LiabilitySubType.LongTermLoan)).toBe("nonCurrent");
+    expect(liabilityBucket(null)).toBe("needsReview");
+  });
+
+  it("expenseBucket: Cost of Goods Sold and Other Expense are named, everything else (including unclassified) is Operating", () => {
+    expect(expenseBucket(ExpenseSubType.CostOfGoodsSold)).toBe("cogs");
+    expect(expenseBucket(ExpenseSubType.OtherExpense)).toBe("other");
+    expect(expenseBucket(ExpenseSubType.OperatingExpense)).toBe("operating");
+    expect(expenseBucket(null)).toBe("operating");
+  });
+
+  it("revenueBucket: Other Revenue is named, everything else (including unclassified) is Operating", () => {
+    expect(revenueBucket(RevenueSubType.OtherRevenue)).toBe("other");
+    expect(revenueBucket(RevenueSubType.OperatingRevenue)).toBe("operating");
+    expect(revenueBucket(null)).toBe("operating");
   });
 });

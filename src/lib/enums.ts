@@ -263,6 +263,55 @@ export const AccountCodeRanges = {
   [AccountType.Expense]: { start: 5000, end: 5999 },
 } as const;
 
+// The finer classification within `type`. `type` is the main group; `subType`
+// says which kind of asset, liability, expense or revenue this is. Nullable
+// on the account row. For Asset and Liability, NULL means "needs review", not
+// a distinct sentinel value — there is no safe default classification for an
+// account that could be a payable or a long-term loan. For Expense and
+// Revenue, NULL is a safe default of "Operating" (see `isNeedsReview` and the
+// `*Bucket` functions in `server/ledger/account-type.ts`) — Equity has no
+// sub-type. Append-only, same convention as every other enum here.
+//
+// Grouped into one small object per account type, then merged below into the
+// single stored/wire value every reader still imports as `AccountSubType` —
+// this keeps each type's codes from drifting out of sync with
+// `AccountSubTypesByType`, which is derived from these groups rather than
+// hand-listed.
+export const AssetSubType = {
+  Cash: 1,
+  Bank: 2,
+  Wallet: 3,
+  Card: 4,
+  Receivable: 5,
+  Inventory: 6,
+  OtherCurrentAsset: 7,
+  Equipment: 8,
+} as const;
+export const LiabilitySubType = {
+  AccountsPayable: 9,
+  AccruedLiabilities: 10,
+  ShortTermLoan: 11,
+  LongTermLoan: 12,
+  OtherCurrentLiability: 13,
+  OtherNonCurrentLiability: 14,
+} as const;
+export const ExpenseSubType = {
+  CostOfGoodsSold: 15,
+  OperatingExpense: 16,
+  OtherExpense: 17,
+} as const;
+export const RevenueSubType = {
+  OperatingRevenue: 18,
+  OtherRevenue: 19,
+} as const;
+
+export const AccountSubType = {
+  ...AssetSubType,
+  ...LiabilitySubType,
+  ...ExpenseSubType,
+  ...RevenueSubType,
+} as const;
+
 export const DefaultAccountPurpose = {
   Receivable: 1,
   Payable: 2,
@@ -287,25 +336,12 @@ export const LedgerRecordKind = {
 
 export type AccountRoleCode = (typeof AccountRole)[keyof typeof AccountRole];
 export type AccountTypeCode = (typeof AccountType)[keyof typeof AccountType];
+export type AccountSubTypeCode =
+  (typeof AccountSubType)[keyof typeof AccountSubType];
 export type DefaultAccountPurposeCode =
   (typeof DefaultAccountPurpose)[keyof typeof DefaultAccountPurpose];
 export type LedgerRecordKindCode =
   (typeof LedgerRecordKind)[keyof typeof LedgerRecordKind];
-
-export const AccountRoleLabels: Record<number, string> = {
-  [AccountRole.Bank]: "bank",
-  [AccountRole.Wallet]: "wallet",
-  [AccountRole.Cash]: "cash",
-  [AccountRole.Card]: "card",
-  [AccountRole.Equipment]: "equipment",
-  [AccountRole.Receivable]: "receivable",
-  [AccountRole.Payable]: "payable",
-  [AccountRole.OpeningBalances]: "opening_balances",
-  [AccountRole.PartnerCapital]: "partner_capital",
-  [AccountRole.PartnerDrawings]: "partner_drawings",
-  [AccountRole.ExpenseCategory]: "expense_category",
-  [AccountRole.IncomeCategory]: "income_category",
-};
 
 export const AccountTypeLabels: Record<number, string> = {
   [AccountType.Asset]: "asset",
@@ -329,6 +365,72 @@ export const AccountTypeDisplayLabels: Record<number, string> = {
   [AccountType.Equity]: "Equity",
   [AccountType.Revenue]: "Revenue",
   [AccountType.Expense]: "Expense",
+};
+
+export const AccountSubTypeLabels: Record<number, string> = {
+  [AccountSubType.Cash]: "cash",
+  [AccountSubType.Bank]: "bank",
+  [AccountSubType.Wallet]: "wallet",
+  [AccountSubType.Card]: "card",
+  [AccountSubType.Receivable]: "receivable",
+  [AccountSubType.Inventory]: "inventory",
+  [AccountSubType.OtherCurrentAsset]: "other_current_asset",
+  [AccountSubType.Equipment]: "equipment",
+  [AccountSubType.AccountsPayable]: "accounts_payable",
+  [AccountSubType.AccruedLiabilities]: "accrued_liabilities",
+  [AccountSubType.ShortTermLoan]: "short_term_loan",
+  [AccountSubType.LongTermLoan]: "long_term_loan",
+  [AccountSubType.OtherCurrentLiability]: "other_current_liability",
+  [AccountSubType.OtherNonCurrentLiability]: "other_non_current_liability",
+  [AccountSubType.CostOfGoodsSold]: "cost_of_goods_sold",
+  [AccountSubType.OperatingExpense]: "operating_expense",
+  [AccountSubType.OtherExpense]: "other_expense",
+  [AccountSubType.OperatingRevenue]: "operating_revenue",
+  [AccountSubType.OtherRevenue]: "other_revenue",
+};
+
+// Same split as `AccountTypeDisplayLabels` above — the wire labels stay
+// lowercase snake_case for URLs/API payloads/the zod enum; these are for a
+// picker, a badge or a column a reader sees.
+export const AccountSubTypeDisplayLabels: Record<number, string> = {
+  [AccountSubType.Cash]: "Cash",
+  [AccountSubType.Bank]: "Bank",
+  [AccountSubType.Wallet]: "Wallet",
+  [AccountSubType.Card]: "Card",
+  [AccountSubType.Receivable]: "Accounts receivable",
+  [AccountSubType.Inventory]: "Inventory",
+  [AccountSubType.OtherCurrentAsset]: "Other current asset",
+  [AccountSubType.Equipment]: "Equipment",
+  [AccountSubType.AccountsPayable]: "Accounts payable",
+  [AccountSubType.AccruedLiabilities]: "Accrued liabilities",
+  [AccountSubType.ShortTermLoan]: "Short-term loan",
+  [AccountSubType.LongTermLoan]: "Long-term loan",
+  [AccountSubType.OtherCurrentLiability]: "Other current liability",
+  [AccountSubType.OtherNonCurrentLiability]: "Other non-current liability",
+  [AccountSubType.CostOfGoodsSold]: "Cost of goods sold",
+  [AccountSubType.OperatingExpense]: "Operating expense",
+  [AccountSubType.OtherExpense]: "Other expense",
+  [AccountSubType.OperatingRevenue]: "Operating revenue",
+  [AccountSubType.OtherRevenue]: "Other revenue",
+};
+
+/**
+ * Which sub-type codes are valid for a given account type — derived from the
+ * per-type groups above, not hand-listed, so a new code added to e.g.
+ * `LiabilitySubType` can't be forgotten here. Equity is absent: it has no
+ * sub-type. Equipment is excluded from Asset's list: it is stamped wherever
+ * the record form's "bought and kept" path creates an account, never offered
+ * as an interactive choice (005 research.md §4).
+ */
+export const AccountSubTypesByType: Partial<
+  Record<AccountTypeCode, AccountSubTypeCode[]>
+> = {
+  [AccountType.Asset]: Object.values(AssetSubType).filter(
+    (subType) => subType !== AssetSubType.Equipment,
+  ),
+  [AccountType.Liability]: Object.values(LiabilitySubType),
+  [AccountType.Expense]: Object.values(ExpenseSubType),
+  [AccountType.Revenue]: Object.values(RevenueSubType),
 };
 
 export const DefaultAccountPurposeLabels: Record<number, string> = {
@@ -362,8 +464,8 @@ export const LedgerRecordKindLabels: Record<number, string> = {
   [LedgerRecordKind.Journal]: "journal",
 };
 
-export const accountRoleEnum = makeEnum(AccountRoleLabels);
 export const accountTypeEnum = makeEnum(AccountTypeLabels);
+export const accountSubTypeEnum = makeEnum(AccountSubTypeLabels);
 export const defaultAccountPurposeEnum = makeEnum(DefaultAccountPurposeLabels);
 export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
 

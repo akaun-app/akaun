@@ -1,6 +1,7 @@
 import {
   AccountType,
   LedgerRecordKind,
+  type AccountSubTypeCode,
   type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
@@ -34,6 +35,8 @@ export type SidesAccount = {
    * are assets, and only one of them holds money. See `isMoneyPotAccount`.
    */
   role: number;
+  /** Meaningful only when `type === Asset`. `null` means "needs review". */
+  subType: AccountSubTypeCode | null;
   archived: boolean;
 };
 

@@ -1,4 +1,18 @@
-import { and, asc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  not,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import {
   accounts,
   contactRoles,
@@ -7,18 +21,24 @@ import {
   ledgerRecords,
 } from "../db/schema.js";
 import {
+  AccountType,
   Role,
   type AccountRoleCode,
+  type AccountSubTypeCode,
   type AccountTypeCode,
 } from "$lib/enums.js";
+import { CASH_AND_EQUIVALENT_SUBTYPES } from "../ledger/account-type.js";
 import { balanceSheet } from "../ledger/reports/balance-sheet.js";
+import { cashFlow, type CashFlowRow } from "../ledger/reports/cash-flow.js";
 import type { PartnerContact } from "../ledger/reports/partner-statement.js";
 import { partnerStatement } from "../ledger/reports/partner-statement.js";
 import { profitLoss } from "../ledger/reports/profit-loss.js";
 import type {
   AccountTotal,
   BalanceSheetReport,
+  CashFlowReport,
   LedgerDb,
+  Minor,
   PartnerStatementReport,
   ProfitLossReport,
   UpgradeState,
@@ -63,6 +83,7 @@ function accountTotals(
       type: accounts.type,
       parentId: accounts.parentId,
       role: accounts.role,
+      subType: accounts.subType,
       contactId: accounts.contactId,
     })
     .from(accounts)
@@ -87,6 +108,7 @@ function accountTotals(
     code: row.code ?? row.accountId,
     type: row.type as AccountTypeCode,
     role: row.role as AccountRoleCode,
+    subType: row.subType as AccountSubTypeCode | null,
     amountMinor: amountByAccount.get(row.accountId) ?? 0,
   }));
 }
@@ -182,6 +204,112 @@ export function partnerStatementReport(
     partners: partnerContacts(db),
     totals,
     resultMinor: profitLoss({ dateFrom, dateTo, totals }).resultMinor,
+    trackingStartedOn: ledgerTrackingStartDate(db),
+  });
+}
+
+/** An Asset account holding cash or a cash equivalent (FR-006). */
+const IS_CASH_AND_EQUIVALENT = and(
+  eq(accounts.type, AccountType.Asset),
+  inArray(accounts.subType, CASH_AND_EQUIVALENT_SUBTYPES),
+)!;
+
+/**
+ * Cash-and-equivalent, or a needs-review Asset account (`subType` not yet
+ * set) — until an account is classified there is no way to tell which side of
+ * the Cash Flow Statement its movement belongs on, so `cashFlowReport`'s row
+ * query has to admit it the same way it admits real cash (research.md §5).
+ */
+const IS_FUND_ACCOUNT = and(
+  eq(accounts.type, AccountType.Asset),
+  or(isNull(accounts.subType), inArray(accounts.subType, CASH_AND_EQUIVALENT_SUBTYPES)),
+)!;
+
+/** Cash and cash equivalents summed over the records a comparator admits. */
+function cashAndEquivalentMinor(db: LedgerDb, window: SQL): Minor {
+  const row = db
+    .select({
+      totalMinor: sql<number>`coalesce(sum(${ledgerMovements.amountMinor}), 0)`,
+    })
+    .from(ledgerMovements)
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
+    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .where(and(IS_CASH_AND_EQUIVALENT, window))
+    .get();
+  return row?.totalMinor ?? 0;
+}
+
+/**
+ * Where the period's cash came from and what it went on (FR-006, FR-010).
+ *
+ * The row set is every side that is **not** cash-and-equivalent, from the
+ * records that touched a fund account — the same `exists`/`not` shape
+ * `fundsFlowStatement` used, substituting the fund predicate for the
+ * current-asset one. `needsReviewMinor` here is read independently, the same
+ * way `openingCashMinor`/`closingCashMinor` are — but it covers only the
+ * needs-review **Asset** total; `cashFlow()` itself adds the needs-review
+ * Liability contribution on top, from `rows`, because that one is not safe to
+ * read independently of them (see `ledger/reports/cash-flow.ts`'s doc comment
+ * for why, and for why the tie-out is still an identity rather than a
+ * coincidence).
+ */
+export function cashFlowReport(
+  db: LedgerDb,
+  dateFrom: string,
+  dateTo: string,
+): CashFlowReport {
+  const touchesFund = db
+    .select({ one: sql`1` })
+    .from(ledgerMovements)
+    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .where(and(eq(ledgerMovements.recordId, ledgerRecords.id), IS_FUND_ACCOUNT));
+
+  const rows = db
+    .select({
+      accountId: accounts.id,
+      type: accounts.type,
+      subType: accounts.subType,
+      amountMinor: ledgerMovements.amountMinor,
+    })
+    .from(ledgerMovements)
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
+    .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .where(
+      and(
+        gte(ledgerRecords.date, dateFrom),
+        lte(ledgerRecords.date, dateTo),
+        not(IS_CASH_AND_EQUIVALENT),
+        exists(touchesFund),
+      ),
+    )
+    .all();
+
+  // Asset only: a needs-review Asset account's own movement always qualifies,
+  // because `IS_FUND_ACCOUNT` already admits it by definition. A needs-review
+  // *Liability*'s movement does not — most liability activity never touches a
+  // fund account at all (an accrual against an expense, say), so it must not
+  // be swept in here unconditionally. `cashFlow()` picks up a needs-review
+  // Liability's contribution from `rows` instead, where it is scoped to
+  // records that actually touched a fund account.
+  const needsReviewMinor = accountTotalsBetween(db, dateFrom, dateTo)
+    .filter((total) => total.type === AccountType.Asset && total.subType == null)
+    .reduce((sum, total) => sum + total.amountMinor, 0);
+
+  const cashFlowRows: CashFlowRow[] = rows.map((row) => ({
+    accountId: row.accountId,
+    type: row.type as AccountTypeCode,
+    subType: row.subType as AccountSubTypeCode | null,
+    amountMinor: row.amountMinor,
+  }));
+
+  return cashFlow({
+    dateFrom,
+    dateTo,
+    // Strictly before `dateFrom`, so there is no date arithmetic to get wrong.
+    openingCashMinor: cashAndEquivalentMinor(db, lt(ledgerRecords.date, dateFrom)),
+    closingCashMinor: cashAndEquivalentMinor(db, lte(ledgerRecords.date, dateTo)),
+    needsReviewMinor,
+    rows: cashFlowRows,
     trackingStartedOn: ledgerTrackingStartDate(db),
   });
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, AccountType, type AccountRoleCode } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  LiabilitySubType,
+  type AccountRoleCode,
+  type AccountSubTypeCode,
+} from "$lib/enums.js";
 import { balanceSheet } from "./balance-sheet.js";
 import { profitLoss } from "./profit-loss.js";
 import { accountTypeFor } from "../account-type.js";
@@ -37,6 +44,7 @@ function totalsIn(
         type: accountTypeFor(m.role),
         parentId: null,
         role: m.role,
+        subType: null,
         contactId: null,
         amountMinor: m.amountMinor,
       });
@@ -221,6 +229,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Asset,
           parentId: null,
           role: AccountRole.Bank,
+          subType: null,
           contactId: null,
           amountMinor: 0,
         },
@@ -231,6 +240,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Asset,
           parentId: 90,
           role: AccountRole.Bank,
+          subType: null,
           contactId: null,
           amountMinor: 700,
         },
@@ -241,6 +251,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Asset,
           parentId: 90,
           role: AccountRole.Bank,
+          subType: null,
           contactId: null,
           amountMinor: 300,
         },
@@ -251,6 +262,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Liability,
           parentId: null,
           role: AccountRole.Payable,
+          subType: null,
           contactId: null,
           amountMinor: -1_000,
         },
@@ -429,5 +441,111 @@ describe("a sheet drawn up over history the app never kept", () => {
       totals: totalsIn(MOVEMENTS, null, "2026-02-28"),
     });
     expect(sheet.notes).toEqual([]);
+  });
+});
+
+function totalOf(
+  accountId: number,
+  code: number,
+  accountName: string,
+  type: (typeof AccountType)[keyof typeof AccountType],
+  amountMinor: Minor,
+  subType: AccountSubTypeCode | null,
+): AccountTotal {
+  return {
+    accountId,
+    code,
+    accountName,
+    type,
+    parentId: null,
+    role: AccountRole.Bank,
+    subType,
+    contactId: null,
+    amountMinor,
+  };
+}
+
+describe("Current / Non-current subsections", () => {
+  it("splits assets into current, non-current (equipment) and needs review", () => {
+    const sheet = balanceSheet({
+      asAt: "2026-03-31",
+      totals: [
+        totalOf(101, 1000, "Bank", AccountType.Asset, 500_00, AccountSubType.Bank),
+        totalOf(102, 1500, "Van", AccountType.Asset, 900_00, AccountSubType.Equipment),
+        totalOf(103, 1400, "Clearing", AccountType.Asset, 100_00, null),
+      ],
+    });
+    const bySubsection = (label: string) =>
+      sheet.owned.subsections?.find((s) => s.label === label);
+    expect(bySubsection("Current")?.lines.map((l) => l.accountId)).toEqual([
+      101,
+    ]);
+    expect(bySubsection("Non-current")?.lines.map((l) => l.accountId)).toEqual(
+      [102],
+    );
+    expect(bySubsection("Needs review")?.lines.map((l) => l.accountId)).toEqual(
+      [103],
+    );
+    const subsectionTotal = (sheet.owned.subsections ?? []).reduce(
+      (sum, s) => sum + s.totalMinor,
+      0,
+    );
+    expect(subsectionTotal).toBe(sheet.owned.totalMinor);
+  });
+
+  it("splits liabilities into current, non-current (long-term loan) and needs review", () => {
+    const sheet = balanceSheet({
+      asAt: "2026-03-31",
+      totals: [
+        totalOf(
+          201,
+          2000,
+          "Accounts Payable",
+          AccountType.Liability,
+          -25_000,
+          LiabilitySubType.AccountsPayable,
+        ),
+        totalOf(
+          202,
+          2200,
+          "Long-term Loan",
+          AccountType.Liability,
+          -500_000,
+          LiabilitySubType.LongTermLoan,
+        ),
+        totalOf(
+          203,
+          2100,
+          "Loans",
+          AccountType.Liability,
+          -10_000,
+          null,
+        ),
+      ],
+    });
+    const bySubsection = (label: string) =>
+      sheet.owed.subsections?.find((s) => s.label === label);
+    expect(bySubsection("Current")?.lines.map((l) => l.accountId)).toEqual([
+      201,
+    ]);
+    expect(bySubsection("Non-current")?.lines.map((l) => l.accountId)).toEqual(
+      [202],
+    );
+    expect(bySubsection("Needs review")?.lines.map((l) => l.accountId)).toEqual(
+      [203],
+    );
+    const subsectionTotal = (sheet.owed.subsections ?? []).reduce(
+      (sum, s) => sum + s.totalMinor,
+      0,
+    );
+    expect(subsectionTotal).toBe(sheet.owed.totalMinor);
+  });
+
+  it("gives owners' stake no subsections at all", () => {
+    const sheet = balanceSheet({
+      asAt: "2026-02-28",
+      totals: totalsIn(MOVEMENTS, null, "2026-02-28"),
+    });
+    expect(sheet.ownersStake.subsections).toBeUndefined();
   });
 });

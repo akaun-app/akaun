@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   categoryAccountForImport,
   matchCategoryAccount,
+  resolvePaidFromAccountId,
   type CategoryChoice,
 } from "./category-accounts.js";
 
@@ -66,5 +67,23 @@ describe("the saved fallback for imported categories", () => {
   it("does not put unmatched income into an expense account", () => {
     const result = categoryAccountForImport("income", CHOICES, "Unknown", 91);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("resolvePaidFromAccountId", () => {
+  it("passes the picked account through unchanged for an ordinary expense", () => {
+    expect(resolvePaidFromAccountId(7, false, 99)).toBe(7);
+  });
+
+  it("reads picking Accounts Payable as owed, not already paid", () => {
+    expect(resolvePaidFromAccountId(99, false, 99)).toBeNull();
+  });
+
+  it("never translates the account for income, even if it matches Payable's id", () => {
+    expect(resolvePaidFromAccountId(99, true, 99)).toBe(99);
+  });
+
+  it("passes the account through when Payable isn't configured", () => {
+    expect(resolvePaidFromAccountId(7, false, null)).toBe(7);
   });
 });

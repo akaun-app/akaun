@@ -1,4 +1,8 @@
-import type { AccountTypeCode, DefaultAccountPurposeCode } from "$lib/enums.js";
+import type {
+  AccountSubTypeCode,
+  AccountTypeCode,
+  DefaultAccountPurposeCode,
+} from "$lib/enums.js";
 
 /** The role-free account contract shared by account API consumers. */
 export type AccountView = {
@@ -6,6 +10,11 @@ export type AccountView = {
   code: number;
   name: string;
   type: AccountTypeCode;
+  /**
+   * Absent for Equity. For Asset/Liability, `null` means "needs review". For
+   * Expense/Revenue, `null` defaults safely to Operating.
+   */
+  subType: AccountSubTypeCode | null;
   parentId: number | null;
   active: boolean;
   hasChildren: boolean;
@@ -19,6 +28,7 @@ export type AccountCreateInput = {
   name: string;
   type: AccountTypeCode;
   parentId?: number | null;
+  subType?: AccountSubTypeCode;
 };
 
 export type AccountUpdateInput = Partial<{
@@ -26,6 +36,7 @@ export type AccountUpdateInput = Partial<{
   type: AccountTypeCode;
   parentId: number | null;
   active: boolean;
+  subType: AccountSubTypeCode;
 }>;
 
 export type AccountDefaultView = {

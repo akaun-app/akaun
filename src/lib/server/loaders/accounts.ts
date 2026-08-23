@@ -17,7 +17,11 @@ import {
 import { toMinor } from "$lib/server/ledger/money.js";
 import { listStatementSummaries } from "$lib/server/services/reconciliation.js";
 import { isValidDate } from "$lib/server/date.js";
-import { AccountType, type AccountTypeCode } from "$lib/enums.js";
+import {
+  AccountType,
+  type AccountSubTypeCode,
+  type AccountTypeCode,
+} from "$lib/enums.js";
 import type { AccountView as AccountApiView } from "$lib/components/accounts/account-types.js";
 
 function toRoleFreeAccount(account: ReturnType<typeof listAccounts>[number]): AccountApiView {
@@ -26,6 +30,7 @@ function toRoleFreeAccount(account: ReturnType<typeof listAccounts>[number]): Ac
     code: account.code!,
     name: account.name,
     type: account.type,
+    subType: account.subType,
     parentId: account.parentId ?? null,
     active: account.active!,
     hasChildren: account.hasChildren!,
@@ -147,6 +152,9 @@ export const accountsActions: Actions = {
       type,
       name,
       parentId: data.get("parentId") ? parseInt(String(data.get("parentId"))) : null,
+      subType: data.get("subType")
+        ? (parseInt(String(data.get("subType"))) as AccountSubTypeCode)
+        : undefined,
     });
     if (!result.ok) return fail(409, { error: result.reason });
     return { success: true, id: result.value.id };
@@ -167,6 +175,9 @@ export const accountsActions: Actions = {
       type: data.has("type") ? parseInt(String(data.get("type"))) as AccountTypeCode : undefined,
       parentId: data.has("parentId") ? (data.get("parentId") ? parseInt(String(data.get("parentId"))) : null) : undefined,
       active: activeRaw === null ? undefined : activeRaw === "true",
+      subType: data.has("subType")
+        ? (parseInt(String(data.get("subType"))) as AccountSubTypeCode)
+        : undefined,
     });
     if (!result.ok) return fail(409, { error: result.reason });
     return { success: true, id };

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, AccountType, LedgerRecordKind } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  LedgerRecordKind,
+} from "$lib/enums.js";
 import {
   accountHistoryCsv,
   balanceSheetCsv,
@@ -141,6 +146,10 @@ const PROFIT_LOSS: ProfitLossReport = {
   expenses: [{ accountId: 2, accountName: "Software", amountMinor: 4_500 }],
   totalExpensesMinor: 4_500,
   resultMinor: 145_500,
+  subtotals: [
+    { label: "Gross profit", amountMinor: 150_000 },
+    { label: "Operating income", amountMinor: 145_500 },
+  ],
   notes: ["Invoices sent before 2026-01-01 are not included."],
 };
 
@@ -280,6 +289,7 @@ const ACCOUNT_HISTORY: AccountHistoryReport = {
   account: {
     id: 1,
     role: AccountRole.Bank,
+    subType: AccountSubType.Bank,
     name: "Bank",
     contactId: null,
     isSystem: false,

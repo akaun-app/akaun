@@ -22,6 +22,7 @@
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import type {
   AccountRoleCode,
+  AccountSubTypeCode,
   AccountTypeCode,
   LedgerRecordKindCode,
 } from "$lib/enums.js";
@@ -56,6 +57,8 @@ export type AccountRow = {
   role: number;
   code?: number;
   type: AccountTypeCode;
+  /** Meaningful only when `type === Asset`. `null` means "needs review". */
+  subType: AccountSubTypeCode | null;
   name: string;
   parentId?: number | null;
   mergedIntoAccountId?: number | null;
@@ -88,12 +91,19 @@ export type AccountCreate = {
   name: string;
   type: AccountTypeCode;
   parentId?: number | null;
+  /**
+   * Required by the service layer for `type === Asset` or `Liability`
+   * (no safe default); optional for `Expense`/`Revenue` (defaults to
+   * Operating); rejected for `Equity`. Never `Equipment` (Research §4).
+   */
+  subType?: AccountSubTypeCode;
 };
 export type AccountPatch = {
   name?: string;
   type?: AccountTypeCode;
   parentId?: number | null;
   active?: boolean;
+  subType?: AccountSubTypeCode;
 };
 
 /** The system accounts the upgrade seeds, resolved once per request. */
@@ -157,6 +167,8 @@ export type MovementView = {
    * `components/accounts/display-sign.ts` is the client's copy of that rule.
    */
   accountRole: number;
+  /** Meaningful only when `accountType === Asset`. `null` means "needs review". */
+  accountSubType: AccountSubTypeCode | null;
   amountMinor: Minor;
 };
 
@@ -489,12 +501,22 @@ export type ProfitLossReport = {
   totalExpensesMinor: Minor;
   /** Income less expenses over the period. */
   resultMinor: Minor;
+  /** "Gross profit" (income less Cost of Goods Sold) and "Operating income" (gross profit less Operating expense). */
+  subtotals: { label: string; amountMinor: Minor }[];
   notes: string[];
+};
+
+export type BalanceSheetSubsection = {
+  label: "Current" | "Non-current" | "Needs review";
+  lines: ReportLine[];
+  totalMinor: Minor;
 };
 
 export type BalanceSheetSection = {
   lines: ReportLine[];
   totalMinor: Minor;
+  /** Present only for `owned` and `owed` — `ownersStake` has no sub-type to bucket by. */
+  subsections?: BalanceSheetSubsection[];
 };
 
 export type BalanceSheetReport = {
@@ -508,6 +530,44 @@ export type BalanceSheetReport = {
   accumulatedResultMinor: Minor;
   /** False only if the books do not balance; `differenceMinor` says by how much. */
   balances: boolean;
+  differenceMinor: Minor;
+  notes: string[];
+};
+
+/**
+ * One line of a Cash Flow Statement activity. `accountId` is `null` for every
+ * line here: each is an aggregation by activity/classification (e.g. "Change
+ * in receivables" can span several receivable accounts), never a single
+ * account's own line the way `ReportLine` is.
+ */
+export type CashFlowLine = {
+  accountId: number | null;
+  label: string;
+  amountMinor: Minor;
+};
+
+export type CashFlowSection = {
+  label: "Operating" | "Investing" | "Financing";
+  lines: CashFlowLine[];
+  totalMinor: Minor;
+};
+
+export type CashFlowReport = {
+  dateFrom: string;
+  dateTo: string;
+  operating: CashFlowSection;
+  investing: CashFlowSection;
+  financing: CashFlowSection;
+  /** Movement on "needs review" accounts, shown separately (FR-005). */
+  needsReviewMinor: Minor;
+  /** Cash and cash equivalents, independently read, as at the day before `dateFrom`. */
+  openingCashMinor: Minor;
+  /** Cash and cash equivalents, independently read, as at `dateTo`. */
+  closingCashMinor: Minor;
+  /** Sum of the three sections' totals — excludes `needsReviewMinor` (FR-005). */
+  netChangeMinor: Minor;
+  /** False only if the figures do not add up; `differenceMinor` says by how much. */
+  ties: boolean;
   differenceMinor: Minor;
   notes: string[];
 };
@@ -569,6 +629,11 @@ export type AccountTotal = {
   type: AccountTypeCode;
   parentId: number | null;
   role: AccountRoleCode;
+  /**
+   * Absent for Equity. For Asset/Liability, `null` means "needs review". For
+   * Expense/Revenue, `null` defaults safely to Operating.
+   */
+  subType: AccountSubTypeCode | null;
   contactId: number | null;
   amountMinor: Minor;
 };

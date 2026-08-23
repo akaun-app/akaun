@@ -73,6 +73,24 @@ export function categoryAccountForImport(
 }
 
 /**
+ * A reviewer who picked Accounts Payable as the paying side is saying "I paid
+ * this personally, the business owes it instead" (FR-008, FR-011) — the same
+ * choice the manual Records form makes via `sides-from-accounts.ts`. A null
+ * paying side is what `entry-builder.ts` reads as owed rather than already
+ * paid. Income has no equivalent: `receivedIntoAccountId` is never null.
+ */
+export function resolvePaidFromAccountId(
+  accountId: number,
+  isIncome: boolean,
+  payableAccountId: number | null,
+): number | null {
+  if (isIncome || payableAccountId == null || accountId !== payableAccountId) {
+    return accountId;
+  }
+  return null;
+}
+
+/**
  * The account a category name refers to, or null when none of them do.
  *
  * Matched ignoring case and surrounding spaces, because "office supplies" off a

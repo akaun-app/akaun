@@ -644,6 +644,10 @@ export const accounts = sqliteTable(
     // conversion release only, so migration 0016 can map old installations in
     // one transaction before later readers stop depending on it.
     type: integer("type"),
+    // AccountSubType code. Meaningful only when type = Asset; NULL there means
+    // "needs review", not a distinct sentinel value. NULL/unused for every
+    // other type. See $lib/enums.ts.
+    subType: integer("sub_type"),
     code: integer("code"),
     name: text("name").notNull(),
     parentId: integer("parent_id").references(

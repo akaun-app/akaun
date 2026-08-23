@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { AccountRole, AccountType, type AccountRoleCode } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountType,
+  ExpenseSubType,
+  RevenueSubType,
+  type AccountRoleCode,
+  type AccountSubTypeCode,
+} from "$lib/enums.js";
 import { profitLoss } from "./profit-loss.js";
 import { accountTypeFor } from "../account-type.js";
 import type { AccountTotal, Minor } from "../types.js";
@@ -13,6 +20,7 @@ function total(
   accountName: string,
   role: AccountRoleCode,
   amountMinor: Minor,
+  subType: AccountSubTypeCode | null = null,
 ): AccountTotal {
   return {
     accountId,
@@ -21,6 +29,7 @@ function total(
     type: accountTypeFor(role),
     parentId: null,
     role,
+    subType,
     contactId: null,
     amountMinor,
   };
@@ -147,6 +156,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Revenue,
           parentId: null,
           role: AccountRole.IncomeCategory,
+          subType: null,
           contactId: null,
           amountMinor: 0,
         },
@@ -157,6 +167,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Revenue,
           parentId: 80,
           role: AccountRole.IncomeCategory,
+          subType: null,
           contactId: null,
           amountMinor: -900,
         },
@@ -167,6 +178,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Revenue,
           parentId: 80,
           role: AccountRole.IncomeCategory,
+          subType: null,
           contactId: null,
           amountMinor: -600,
         },
@@ -177,6 +189,7 @@ describe("fixed types and hierarchy", () => {
           type: AccountType.Expense,
           parentId: null,
           role: AccountRole.ExpenseCategory,
+          subType: null,
           contactId: null,
           amountMinor: 200,
         },
@@ -377,5 +390,93 @@ describe("a period reaching back before the app kept these books", () => {
       trackingStartedOn: null,
     });
     expect(report.notes).toEqual([]);
+  });
+});
+
+describe("Gross profit and Operating income", () => {
+  it("takes Cost of Goods Sold off revenue for gross profit, then Operating expense for operating income", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        total(
+          SALES,
+          "Sales",
+          AccountRole.IncomeCategory,
+          -100_000,
+          RevenueSubType.OperatingRevenue,
+        ),
+        total(
+          SOFTWARE,
+          "Cost of Goods Sold",
+          AccountRole.ExpenseCategory,
+          40_000,
+          ExpenseSubType.CostOfGoodsSold,
+        ),
+        total(
+          TRAVEL,
+          "Rent",
+          AccountRole.ExpenseCategory,
+          20_000,
+          ExpenseSubType.OperatingExpense,
+        ),
+      ],
+    });
+    expect(report.subtotals).toEqual([
+      { label: "Gross profit", amountMinor: 60_000 },
+      { label: "Operating income", amountMinor: 40_000 },
+    ]);
+    expect(report.resultMinor).toBe(40_000);
+  });
+
+  it("treats an unclassified Expense or Revenue account as Operating, with no needs-review warning", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        total(SALES, "Sales", AccountRole.IncomeCategory, -50_000),
+        total(SOFTWARE, "Software", AccountRole.ExpenseCategory, 5_000),
+      ],
+    });
+    expect(report.subtotals).toEqual([
+      { label: "Gross profit", amountMinor: 50_000 },
+      { label: "Operating income", amountMinor: 45_000 },
+    ]);
+    expect(report.notes).toEqual([]);
+  });
+
+  it("keeps Other Expense and Other Revenue out of gross profit and operating income", () => {
+    const report = profitLoss({
+      dateFrom: "2026-01-01",
+      dateTo: "2026-01-31",
+      totals: [
+        total(
+          SALES,
+          "Sales",
+          AccountRole.IncomeCategory,
+          -50_000,
+          RevenueSubType.OperatingRevenue,
+        ),
+        total(
+          CONSULTING,
+          "Gain on sale",
+          AccountRole.IncomeCategory,
+          -1_000,
+          RevenueSubType.OtherRevenue,
+        ),
+        total(
+          SOFTWARE,
+          "Write-off",
+          AccountRole.ExpenseCategory,
+          2_000,
+          ExpenseSubType.OtherExpense,
+        ),
+      ],
+    });
+    expect(report.subtotals).toEqual([
+      { label: "Gross profit", amountMinor: 50_000 },
+      { label: "Operating income", amountMinor: 50_000 },
+    ]);
+    expect(report.resultMinor).toBe(49_000);
   });
 });

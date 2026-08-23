@@ -4,13 +4,14 @@ import { hasPermission } from "$lib/server/permissions.js";
 import { normalizeDate, today } from "$lib/server/date.js";
 import {
   balanceSheetReport,
+  cashFlowReport,
+  partnerContacts,
   partnerStatementReport,
   profitLossReport,
 } from "$lib/server/queries/reports.js";
-import { outstandingAgeing } from "$lib/server/queries/settlements.js";
-import type { OutstandingAgeing } from "$lib/server/queries/settlements.js";
 import type {
   BalanceSheetReport,
+  CashFlowReport,
   PartnerStatementReport,
   ProfitLossReport,
 } from "$lib/server/ledger/types.js";
@@ -21,36 +22,47 @@ import type {
  *
  * Each view is its own URL and each carries its dates in the query string, so
  * the report a user is looking at is the report they get when they send someone
- * the link. Nothing here computes a report: the three period reports come from
- * `queries/reports.ts` and the two who-owes-what views from
- * `queries/settlements.ts`, which is what keeps every figure on this screen the
+ * the link. Nothing here computes a report: the four period reports come from
+ * `queries/reports.ts`, which is what keeps every figure on this screen the
  * same arithmetic as the same figure anywhere else in the app (FR-031).
  */
 
 export const REPORT_VIEWS = [
   "profit-loss",
   "balance-sheet",
+  "cash-flow",
   "partners",
-  "owed-to-us",
-  "we-owe",
 ] as const;
 
 export type ReportView = (typeof REPORT_VIEWS)[number];
+
+/**
+ * Retired report tabs, replaced by Contacts (005 FR-009, research.md §8): the
+ * balance either direction owed was always a duplicate of what Contacts
+ * already shows for a person or entity, not a movement list.
+ */
+const RETIRED_VIEWS = ["owed-to-us", "we-owe"] as const;
 
 const DEFAULT_VIEW: ReportView = "profit-loss";
 
 /** Both ends of the period the screen is showing, and the single date form of it. */
 export type ReportPeriod = { dateFrom: string; dateTo: string; asAt: string };
 
-export type ReportsPageData =
+export type ReportsPageData = {
+  hasPartners: boolean;
+} & (
   | { view: "profit-loss"; period: ReportPeriod; report: ProfitLossReport }
   | { view: "balance-sheet"; period: ReportPeriod; report: BalanceSheetReport }
+  | { view: "cash-flow"; period: ReportPeriod; report: CashFlowReport }
   | { view: "partners"; period: ReportPeriod; report: PartnerStatementReport }
-  | { view: "owed-to-us"; period: ReportPeriod; report: OutstandingAgeing }
-  | { view: "we-owe"; period: ReportPeriod; report: OutstandingAgeing };
+);
 
 function isReportView(value: string): value is ReportView {
   return (REPORT_VIEWS as readonly string[]).includes(value);
+}
+
+function isRetiredView(value: string): boolean {
+  return (RETIRED_VIEWS as readonly string[]).includes(value);
 }
 
 /**
@@ -84,6 +96,11 @@ export function loadReportsPage(
   if (!hasPermission(locals, "reports", "view"))
     throw redirect(302, "/dashboard");
 
+  // Contacts already renders the balance either direction owed, for every
+  // contact — one navigation step, not an explanation of an absence.
+  if (viewParam !== null && isRetiredView(viewParam))
+    throw redirect(302, "/contacts");
+
   // A link to a report that does not exist lands on the first one rather than
   // on an error page.
   if (viewParam !== null && !isReportView(viewParam))
@@ -91,6 +108,7 @@ export function loadReportsPage(
   const view: ReportView = viewParam === null ? DEFAULT_VIEW : viewParam;
 
   const period = defaultPeriod(url);
+  const hasPartners = partnerContacts(db).length > 0;
 
   switch (view) {
     case "profit-loss":
@@ -98,29 +116,28 @@ export function loadReportsPage(
         view,
         period,
         report: profitLossReport(db, period.dateFrom, period.dateTo),
+        hasPartners,
       };
     case "balance-sheet":
-      return { view, period, report: balanceSheetReport(db, period.asAt) };
+      return {
+        view,
+        period,
+        report: balanceSheetReport(db, period.asAt),
+        hasPartners,
+      };
+    case "cash-flow":
+      return {
+        view,
+        period,
+        report: cashFlowReport(db, period.dateFrom, period.dateTo),
+        hasPartners,
+      };
     case "partners":
       return {
         view,
         period,
         report: partnerStatementReport(db, period.dateFrom, period.dateTo),
-      };
-    case "owed-to-us":
-      return {
-        view,
-        period,
-        report: outstandingAgeing(db, {
-          direction: "owed-to-us",
-          openOnly: true,
-        }),
-      };
-    case "we-owe":
-      return {
-        view,
-        period,
-        report: outstandingAgeing(db, { direction: "we-owe", openOnly: true }),
+        hasPartners,
       };
   }
 }

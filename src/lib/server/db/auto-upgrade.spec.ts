@@ -4,9 +4,17 @@ import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AccountRole, AccountType } from "$lib/enums.js";
+import {
+  AccountRole,
+  AccountSubType,
+  AccountType,
+  ExpenseSubType,
+  LiabilitySubType,
+  RevenueSubType,
+} from "$lib/enums.js";
 import {
   applyMigrationRange,
+  applySubTypeBackfill,
   classifyDatabaseFile,
   upgradeDatabaseFile,
 } from "./auto-upgrade.js";
@@ -462,6 +470,122 @@ describe("mapping a legacy chart onto the standardized one", () => {
     expect(source.merged_into_account_id).toBe(survivor.id);
     expect(source.archived_at).not.toBeNull();
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    db.close();
+  });
+});
+
+/**
+ * A book already standardized by an earlier release, before `sub_type`
+ * existed — the common case: most real installations are already here, not
+ * mid-conversion, and `applySubTypeBackfill` has to reach them too
+ * (005 research.md §2).
+ */
+function completedShape(): string {
+  const path = fixturePath();
+  const db = new Database(path);
+  applyMigrationRange(db, 0, 17);
+  db.query(
+    "INSERT INTO users(id, email, username, password_hash, role) VALUES (1, 'admin@localhost', 'admin', 'x', 'owner')",
+  ).run();
+  const insert = (name: string, code: number, role: number) =>
+    db
+      .query(
+        "INSERT INTO accounts(role, type, code, name, rank) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(role, AccountType.Asset, code, name, name);
+  insert("Cash", 1000, AccountRole.Cash);
+  insert("Bank", 1100, AccountRole.Bank);
+  insert("Accounts Receivable", 1200, AccountRole.Receivable);
+  insert("Inventory", 1300, AccountRole.Bank);
+  // Not one of the four recognized codes.
+  insert("Marketplace Clearing", 1400, AccountRole.Bank);
+  // Legacy-migrated: already carries the retired Equipment role.
+  insert("Company Van", 1500, AccountRole.Equipment);
+  const insertOtherType = (name: string, code: number, type: number) =>
+    db
+      .query(
+        "INSERT INTO accounts(role, type, code, name, rank) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(AccountRole.Payable, type, code, name, name);
+  insertOtherType("Accounts Payable", 2000, AccountType.Liability);
+  // Not one of the recognized Liability codes — a loan's name doesn't say
+  // short- vs long-term.
+  insertOtherType("Loans", 2100, AccountType.Liability);
+  insertOtherType("Product Sales", 4000, AccountType.Revenue);
+  insertOtherType("Other Revenue", 4100, AccountType.Revenue);
+  insertOtherType("Cost of Goods Sold", 5000, AccountType.Expense);
+  insertOtherType("Advertising", 5100, AccountType.Expense);
+  insertOtherType("Other Expenses", 5900, AccountType.Expense);
+  // A true non-account-type row (Equity), to prove it is left alone.
+  insertOtherType("Owner's Equity", 3000, AccountType.Equity);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.close();
+  return path;
+}
+
+function subTypeByName(db: Database, name: string): number | null {
+  return (
+    db.query("SELECT sub_type FROM accounts WHERE name = ?").get(name) as {
+      sub_type: number | null;
+    }
+  ).sub_type;
+}
+
+describe("account sub-type backfill", () => {
+  it("Backfill_WhenRunOnAnAlreadyStandardizedChart_ShouldClassifyOnlyTheRecognizedDefaults", () => {
+    const path = completedShape();
+    const db = new Database(path);
+    applySubTypeBackfill(db);
+
+    expect(subTypeByName(db, "Cash")).toBe(AccountSubType.Cash);
+    expect(subTypeByName(db, "Bank")).toBe(AccountSubType.Bank);
+    expect(subTypeByName(db, "Accounts Receivable")).toBe(
+      AccountSubType.Receivable,
+    );
+    expect(subTypeByName(db, "Inventory")).toBe(AccountSubType.Inventory);
+    // Not one of the four recognized codes: stays "needs review".
+    expect(subTypeByName(db, "Marketplace Clearing")).toBeNull();
+    // Already carries the legacy Equipment role.
+    expect(subTypeByName(db, "Company Van")).toBe(AccountSubType.Equipment);
+    // Liability, Expense and Revenue defaults recognized by code, same as Asset.
+    expect(subTypeByName(db, "Accounts Payable")).toBe(
+      LiabilitySubType.AccountsPayable,
+    );
+    expect(subTypeByName(db, "Product Sales")).toBe(
+      RevenueSubType.OperatingRevenue,
+    );
+    expect(subTypeByName(db, "Other Revenue")).toBe(RevenueSubType.OtherRevenue);
+    expect(subTypeByName(db, "Cost of Goods Sold")).toBe(
+      ExpenseSubType.CostOfGoodsSold,
+    );
+    expect(subTypeByName(db, "Advertising")).toBe(
+      ExpenseSubType.OperatingExpense,
+    );
+    expect(subTypeByName(db, "Other Expenses")).toBe(
+      ExpenseSubType.OtherExpense,
+    );
+    // "Loans" doesn't say short- vs long-term: stays "needs review".
+    expect(subTypeByName(db, "Loans")).toBeNull();
+    // Equity has no sub-type at all: untouched.
+    expect(subTypeByName(db, "Owner's Equity")).toBeNull();
+    db.close();
+  });
+
+  it("Backfill_WhenRunTwice_ShouldNeverOverwriteAnAlreadyClassifiedAccount", () => {
+    const path = completedShape();
+    const db = new Database(path);
+    applySubTypeBackfill(db);
+    // A user reclassified "Inventory" by hand between boots.
+    db.query("UPDATE accounts SET sub_type = ? WHERE name = ?").run(
+      AccountSubType.OtherCurrentAsset,
+      "Inventory",
+    );
+
+    applySubTypeBackfill(db);
+
+    expect(subTypeByName(db, "Inventory")).toBe(
+      AccountSubType.OtherCurrentAsset,
+    );
     db.close();
   });
 });

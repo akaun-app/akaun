@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `sub_type` integer;

@@ -58,3 +58,23 @@ export function openRecord(item: RecordRef): void {
   // eslint-disable-next-line svelte/no-navigation-without-resolve -- recordPathFor returns a resolved route.
   goto(path);
 }
+
+/**
+ * Where a dashboard indicator's own figure came from (005 FR-015).
+ *
+ * Each carries the exact `dateFrom`/`dateTo`/`asAt` the tile displayed, so
+ * following it lands on the matching Reports statement already showing the
+ * same figure — never a generic link to the report with today's default
+ * period, which could show a different number than the tile did.
+ */
+export function profitLossHref(dateFrom: string, dateTo: string): string {
+  return `${resolve('/(app)/reports/[view]', { view: 'profit-loss' })}?from=${dateFrom}&to=${dateTo}`;
+}
+
+export function balanceSheetHref(asAt: string): string {
+  return `${resolve('/(app)/reports/[view]', { view: 'balance-sheet' })}?asAt=${asAt}`;
+}
+
+export function cashFlowHref(dateFrom: string, dateTo: string): string {
+  return `${resolve('/(app)/reports/[view]', { view: 'cash-flow' })}?from=${dateFrom}&to=${dateTo}`;
+}

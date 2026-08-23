@@ -3,6 +3,7 @@ import { AccountType } from "$lib/enums.js";
 import type {
   AccountHistoryReport,
   BalanceSheetReport,
+  CashFlowReport,
   CsvTable,
   PartnerStatementReport,
   ProfitLossReport,
@@ -133,6 +134,42 @@ export function balanceSheetCsv(report: BalanceSheetReport): CsvTable {
       ),
     ],
     notes: [`As at ${report.asAt}.`, ...report.notes],
+  };
+}
+
+function cashFlowSectionRows(
+  section: CashFlowReport["operating"],
+): (string | number | null)[][] {
+  const rows = section.lines.map((line) => [
+    section.label,
+    line.label,
+    fromMinor(line.amountMinor),
+  ]);
+  rows.push([section.label, "Total", fromMinor(section.totalMinor)]);
+  return rows;
+}
+
+export function cashFlowCsv(report: CashFlowReport): CsvTable {
+  const rows: (string | number | null)[][] = [
+    ...cashFlowSectionRows(report.operating),
+    ...cashFlowSectionRows(report.investing),
+    ...cashFlowSectionRows(report.financing),
+  ];
+  if (report.needsReviewMinor !== 0) {
+    rows.push([
+      "Needs review",
+      "Not yet classified as cash or another asset type",
+      fromMinor(report.needsReviewMinor),
+    ]);
+  }
+  rows.push(["Cash", "Opening cash and cash equivalents", fromMinor(report.openingCashMinor)]);
+  rows.push(["Cash", "Net change in cash", fromMinor(report.netChangeMinor)]);
+  rows.push(["Cash", "Closing cash and cash equivalents", fromMinor(report.closingCashMinor)]);
+
+  return {
+    columns: SECTION_COLUMNS,
+    rows,
+    notes: [coveredPeriod(report.dateFrom, report.dateTo), ...report.notes],
   };
 }
 

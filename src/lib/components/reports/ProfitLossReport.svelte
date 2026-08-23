@@ -97,5 +97,26 @@
 		{/each}
 	</div>
 
+	{#if report.subtotals.length > 0}
+		<div class="rep-block">
+			<div class="rep-block-head">
+				<div>
+					<div class="rep-block-title">Summary</div>
+					<div class="rep-block-sub">Revenue and expenses split by what they're for</div>
+				</div>
+			</div>
+			<table class="rep-table">
+				<tbody>
+					{#each report.subtotals as subtotal (subtotal.label)}
+						<tr class="rep-total">
+							<td>{subtotal.label}</td>
+							<td class="rep-amount">{formatMinor(subtotal.amountMinor)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+
 	<ReportNotes notes={report.notes} />
 </div>

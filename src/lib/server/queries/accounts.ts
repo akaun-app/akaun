@@ -1,13 +1,16 @@
 import {
   and,
   asc,
+  desc,
   eq,
+  gt,
   gte,
   inArray,
   isNull,
   lt,
   lte,
   ne,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -19,10 +22,11 @@ import {
   ledgerRecords,
 } from "../db/schema.js";
 import {
-  AccountRole,
+  AccountSubType,
   AccountType,
   DefaultAccountPurpose,
   LedgerRecordKind,
+  type AccountSubTypeCode,
   type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
@@ -51,6 +55,7 @@ function toAccountRow(row: typeof accounts.$inferSelect): AccountRow {
     id: row.id,
     role: row.role,
     type: row.type as AccountTypeCode,
+    subType: row.subType as AccountSubTypeCode | null,
     code: row.code ?? row.id,
     name: row.name,
     parentId: row.parentId,
@@ -320,13 +325,60 @@ export function defaultAccountId(db: LedgerDb): number | null {
       .where(
         and(
           eq(accounts.type, AccountType.Asset),
-          // Equipment is an asset that nothing is ever paid from.
-          ne(accounts.role, AccountRole.Equipment),
+          // Equipment is an asset that nothing is ever paid from. Null-safe:
+          // `subType` is nullable ("needs review") and a needs-review account
+          // is still a valid everyday-record fallback, but SQL's three-valued
+          // logic means a bare `<>` against a NULL column silently drops it
+          // (research.md §12's correctness caution).
+          or(isNull(accounts.subType), ne(accounts.subType, AccountSubType.Equipment)),
           isNull(accounts.archivedAt),
         ),
       )
       .orderBy(asc(accounts.code), asc(accounts.id))
       .get()?.id ?? null
+  );
+}
+
+/**
+ * The account a contact was last paid from, or last paid into, on a record of
+ * the given kind — so a repeat vendor or customer pre-fills the account that
+ * was actually used for them last time instead of the one global default
+ * (import worker, FR-011/FR-019). Nothing is stored for this: it is read
+ * straight off the ledger, so it can never drift from what actually happened
+ * and a reviewer's own correction becomes next time's answer automatically.
+ */
+export function lastPaymentAccountForContact(
+  db: LedgerDb,
+  contactId: number,
+  kind: typeof LedgerRecordKind.Expense | typeof LedgerRecordKind.Income,
+): number | null {
+  const record = db
+    .select({ id: ledgerRecords.id })
+    .from(ledgerRecords)
+    .where(
+      and(eq(ledgerRecords.contactId, contactId), eq(ledgerRecords.kind, kind)),
+    )
+    .orderBy(desc(ledgerRecords.date), desc(ledgerRecords.id))
+    .limit(1)
+    .get();
+  if (!record) return null;
+
+  // An expense's paying side is the negative half of `twoSided(category,
+  // paidFrom, amount)` — true whether it landed on a bank account or, when
+  // the expense was owed, on the shared Payable account itself. An income's
+  // receiving side is the positive half of `twoSided(receivedInto, category,
+  // amount)`.
+  const side =
+    kind === LedgerRecordKind.Expense
+      ? lt(ledgerMovements.amountMinor, 0)
+      : gt(ledgerMovements.amountMinor, 0);
+
+  return (
+    db
+      .select({ accountId: ledgerMovements.accountId })
+      .from(ledgerMovements)
+      .where(and(eq(ledgerMovements.recordId, record.id), side))
+      .get()?.accountId ?? null
   );
 }
 

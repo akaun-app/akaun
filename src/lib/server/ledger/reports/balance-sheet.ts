@@ -1,8 +1,11 @@
 import { AccountType } from "$lib/enums.js";
+import type { AccountSubTypeCode } from "$lib/enums.js";
+import { assetBucket, liabilityBucket } from "../account-type.js";
 import type {
   AccountTotal,
   BalanceSheetReport,
   BalanceSheetSection,
+  BalanceSheetSubsection,
   Minor,
   ReportLine,
 } from "../types.js";
@@ -46,13 +49,100 @@ export type BalanceSheetInput = {
 const ACCUMULATED_RESULT_ACCOUNT_ID = 0;
 const ACCUMULATED_RESULT_LABEL = "Current earnings";
 
-function sectionFrom(lines: ReportLine[]): BalanceSheetSection {
+function sectionFrom(
+  lines: ReportLine[],
+  subsections?: BalanceSheetSubsection[],
+): BalanceSheetSection {
   return {
     lines,
     totalMinor: lines
       .filter((line) => !line.isSubtotal)
       .reduce((running, line) => running + line.amountMinor, 0),
+    ...(subsections ? { subsections } : {}),
   };
+}
+
+const SUBSECTION_ORDER: {
+  key: "current" | "nonCurrent" | "needsReview";
+  label: BalanceSheetSubsection["label"];
+}[] = [
+  { key: "current", label: "Current" },
+  { key: "nonCurrent", label: "Non-current" },
+  { key: "needsReview", label: "Needs review" },
+];
+
+/**
+ * Buckets a flat, already-filtered `lines` list (one account type, depth 0
+ * upward) into Current / Non-current / Needs review, using each top-level
+ * account's own leaf descendants to decide. A heading whose leaves span more
+ * than one bucket lands in "Needs review" rather than guessing — a rule
+ * worth revisiting once tested against a real multi-level chart.
+ */
+function subsectionsFor(
+  lines: ReportLine[],
+  subTypeById: Map<number, AccountSubTypeCode | null>,
+  bucketFor: (
+    subType: AccountSubTypeCode | null,
+  ) => "current" | "nonCurrent" | "needsReview",
+): BalanceSheetSubsection[] {
+  const byId = new Map(lines.map((line) => [line.accountId, line]));
+  const childrenById = new Map<number, ReportLine[]>();
+  for (const line of lines) {
+    if (line.parentId == null || !byId.has(line.parentId)) continue;
+    const siblings = childrenById.get(line.parentId) ?? [];
+    siblings.push(line);
+    childrenById.set(line.parentId, siblings);
+  }
+
+  const leafBuckets = (
+    id: number,
+    seen = new Set<number>(),
+  ): Set<"current" | "nonCurrent" | "needsReview"> => {
+    if (seen.has(id)) return new Set();
+    seen.add(id);
+    const kids = childrenById.get(id) ?? [];
+    if (kids.length === 0) {
+      return new Set([bucketFor(subTypeById.get(id) ?? null)]);
+    }
+    const result = new Set<"current" | "nonCurrent" | "needsReview">();
+    for (const child of kids) {
+      for (const bucket of leafBuckets(child.accountId, new Set(seen))) {
+        result.add(bucket);
+      }
+    }
+    return result;
+  };
+
+  const groups = new Map<string, ReportLine[]>();
+  for (const line of lines.filter((l) => l.depth === 0)) {
+    const distinct = leafBuckets(line.accountId);
+    const bucket = distinct.size === 1 ? [...distinct][0] : "needsReview";
+    const group = groups.get(bucket) ?? [];
+    const collect = (id: number, seen = new Set<number>()): void => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const self = byId.get(id);
+      if (self) group.push(self);
+      for (const child of childrenById.get(id) ?? []) {
+        collect(child.accountId, seen);
+      }
+    };
+    collect(line.accountId);
+    groups.set(bucket, group);
+  }
+
+  return SUBSECTION_ORDER.filter(({ key }) => groups.has(key)).map(
+    ({ key, label }) => {
+      const groupLines = groups.get(key)!;
+      return {
+        label,
+        lines: groupLines,
+        totalMinor: groupLines
+          .filter((line) => !line.isSubtotal)
+          .reduce((sum, line) => sum + line.amountMinor, 0),
+      };
+    },
+  );
 }
 
 function reportLines(totals: AccountTotal[], type: number): ReportLine[] {
@@ -146,8 +236,18 @@ export function balanceSheet(input: BalanceSheetInput): BalanceSheetReport {
     amountMinor: accumulatedResultMinor,
   });
 
-  const ownedSection = sectionFrom(owned);
-  const owedSection = sectionFrom(owed);
+  const subTypeById = new Map(
+    input.totals.map((total) => [total.accountId, total.subType]),
+  );
+
+  const ownedSection = sectionFrom(
+    owned,
+    subsectionsFor(owned, subTypeById, assetBucket),
+  );
+  const owedSection = sectionFrom(
+    owed,
+    subsectionsFor(owed, subTypeById, liabilityBucket),
+  );
   const ownersStakeSection = sectionFrom(ownersStake);
 
   const differenceMinor =

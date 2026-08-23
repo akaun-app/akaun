@@ -48,6 +48,73 @@
 	}
 </script>
 
+{#snippet lineRow(line: BalanceSheetSection['lines'][number])}
+	<tr>
+		<td>
+			{#if line.accountId === NOTHING_TO_OPEN}
+				<span
+					style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
+					class:font-semibold={line.isSubtotal}>{line.accountName}</span
+				>
+			{:else}
+				<button
+					type="button"
+					class="rep-open related-link"
+					onclick={() => openAccountHistory(line.accountId)}
+				>
+					<span
+						style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
+						class:font-semibold={line.isSubtotal}>{line.accountName}</span
+					>
+					<ChevronRight size={13} />
+				</button>
+			{/if}
+		</td>
+		<td class="rep-amount">{formatMinor(line.amountMinor)}</td>
+	</tr>
+{/snippet}
+
+{#snippet sectionTable(section: BalanceSheetSection)}
+	{#if section.lines.length === 0}
+		<p class="rep-empty">Nothing at this date.</p>
+	{:else if section.subsections && section.subsections.length > 0}
+		{#each section.subsections as subsection (subsection.label)}
+			<div class="rep-subsection-title">{subsection.label}</div>
+			<table class="rep-table">
+				<tbody>
+					{#each subsection.lines as line (line.accountId)}
+						{@render lineRow(line)}
+					{/each}
+					<tr class="rep-total">
+						<td>Subtotal</td>
+						<td class="rep-amount">{formatMinor(subsection.totalMinor)}</td>
+					</tr>
+				</tbody>
+			</table>
+		{/each}
+		<table class="rep-table">
+			<tbody>
+				<tr class="rep-total">
+					<td>Total</td>
+					<td class="rep-amount">{totalOf(section)}</td>
+				</tr>
+			</tbody>
+		</table>
+	{:else}
+		<table class="rep-table">
+			<tbody>
+				{#each section.lines as line (line.accountId)}
+					{@render lineRow(line)}
+				{/each}
+				<tr class="rep-total">
+					<td>Total</td>
+					<td class="rep-amount">{totalOf(section)}</td>
+				</tr>
+			</tbody>
+		</table>
+	{/if}
+{/snippet}
+
 <div class="rep-scroll">
 	<div class="rep-result">
 		<div>
@@ -76,36 +143,7 @@
 					<div class="rep-block-sub">Cash, receivables and property the business owns</div>
 				</div>
 			</div>
-			{#if report.owned.lines.length === 0}
-				<p class="rep-empty">Nothing at this date.</p>
-			{:else}
-				<table class="rep-table">
-					<tbody>
-						{#each report.owned.lines as line (line.accountId)}
-							<tr>
-								<td>
-									<button
-										type="button"
-										class="rep-open related-link"
-										onclick={() => openAccountHistory(line.accountId)}
-									>
-										<span
-											style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
-											class:font-semibold={line.isSubtotal}>{line.accountName}</span
-										>
-										<ChevronRight size={13} />
-									</button>
-								</td>
-								<td class="rep-amount">{formatMinor(line.amountMinor)}</td>
-							</tr>
-						{/each}
-						<tr class="rep-total">
-							<td>Total</td>
-							<td class="rep-amount">{totalOf(report.owned)}</td>
-						</tr>
-					</tbody>
-				</table>
-			{/if}
+			{@render sectionTable(report.owned)}
 		</div>
 
 		<div class="rep-cols one-col">
@@ -117,43 +155,7 @@
 							<div class="rep-block-sub">{group.sub}</div>
 						</div>
 					</div>
-					{#if group.section.lines.length === 0}
-						<p class="rep-empty">Nothing at this date.</p>
-					{:else}
-						<table class="rep-table">
-							<tbody>
-								{#each group.section.lines as line (line.accountId)}
-									<tr>
-										<td>
-											{#if line.accountId === NOTHING_TO_OPEN}
-												<span
-													style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
-													class:font-semibold={line.isSubtotal}>{line.accountName}</span
-												>
-											{:else}
-												<button
-													type="button"
-													class="rep-open related-link"
-													onclick={() => openAccountHistory(line.accountId)}
-												>
-													<span
-														style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
-														class:font-semibold={line.isSubtotal}>{line.accountName}</span
-													>
-													<ChevronRight size={13} />
-												</button>
-											{/if}
-										</td>
-										<td class="rep-amount">{formatMinor(line.amountMinor)}</td>
-									</tr>
-								{/each}
-								<tr class="rep-total">
-									<td>Total</td>
-									<td class="rep-amount">{totalOf(group.section)}</td>
-								</tr>
-							</tbody>
-						</table>
-					{/if}
+					{@render sectionTable(group.section)}
 				</div>
 			{/each}
 		</div>

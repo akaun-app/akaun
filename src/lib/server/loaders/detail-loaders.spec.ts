@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AccountType, LedgerRecordKind } from "$lib/enums.js";
+import { AccountSubType, AccountType, LedgerRecordKind } from "$lib/enums.js";
 import { eq } from "drizzle-orm";
 import * as schema from "../db/schema.js";
 import {
@@ -91,7 +91,7 @@ function writeRecord(
 
 describe("record detail", () => {
   it("GetRecord_WhenOlderThanTheListPage_ShouldStillResolve", () => {
-    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset });
+    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
     const fuel = createAccount(db, 1, {
       name: "Fuel",
       type: AccountType.Expense,
@@ -119,7 +119,7 @@ describe("record detail", () => {
   });
 
   it("GetRecord_ShouldCarryBothSides_SoThePageCanShowTheEntry", () => {
-    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset });
+    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
     const fuel = createAccount(db, 1, {
       name: "Fuel",
       type: AccountType.Expense,
@@ -141,10 +141,12 @@ describe("account detail", () => {
     const survivor = createAccount(db, 1, {
       name: "Bank",
       type: AccountType.Asset,
+      subType: AccountSubType.Bank,
     });
     const merged = createAccount(db, 1, {
       name: "Bank (old)",
       type: AccountType.Asset,
+      subType: AccountSubType.Bank,
     });
     if (!survivor.ok || !merged.ok) return;
 
@@ -165,11 +167,13 @@ describe("account detail", () => {
     const parent = createAccount(db, 1, {
       name: "Current assets",
       type: AccountType.Asset,
+      subType: AccountSubType.Bank,
     });
     if (!parent.ok) return;
     const child = createAccount(db, 1, {
       name: "Maybank",
       type: AccountType.Asset,
+      subType: AccountSubType.Bank,
       parentId: parent.value.id,
     });
     if (!child.ok) return;
@@ -181,13 +185,13 @@ describe("account detail", () => {
   });
 
   it("OpeningBalanceFor_WhenNoneIsSet_ShouldBeNull", () => {
-    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset });
+    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
     if (!cash.ok) return;
     expect(openingBalanceFor(db, cash.value.id)).toBeNull();
   });
 
   it("RecentMovements_ShouldBeNewestFirst_NotOldest", () => {
-    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset });
+    const cash = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
     const fuel = createAccount(db, 1, {
       name: "Fuel",
       type: AccountType.Expense,

@@ -14,6 +14,7 @@ import { defaultAccountId } from "$lib/server/queries/accounts.js";
 import {
   categoryAccountForImport,
   categoryChoices,
+  resolvePaidFromAccountId,
 } from "$lib/server/import/category-accounts.js";
 import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { resolveOrCreateContact } from "$lib/server/queries/contacts.js";
@@ -43,6 +44,8 @@ const log = createLogger("import:confirm");
 const overridesSchema = z.object({
   // A label ("expense"/"income") from the review screen, or a code.
   document_type: z.union([z.number().int(), z.string()]).optional(),
+  // item_name = the description; supplier = the other party's name — always, regardless
+  // of expense or income (see partyRawName / sides.description below).
   item_name: z.string().optional(),
   supplier: z.string().optional(),
   date: z.string().optional(),
@@ -148,6 +151,16 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     );
   }
 
+  const payableDefault = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.Payable,
+  );
+  const paidFromAccountId = resolvePaidFromAccountId(
+    accountId,
+    isIncome,
+    payableDefault.ok ? payableDefault.value : null,
+  );
+
   // A category that could not be read lands on Uncategorised and is flagged, the
   // same way the upgrade treats a record it could not place: a document that was
   // paid for is still a document that was paid for (spec edge case, FR-019).
@@ -168,12 +181,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
   // Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
   // Priority: explicit contactId → typed new name → confident match → raw extracted name.
+  // `supplier` always carries the other party's name, regardless of kind — only which
+  // contact bucket to search (Supplier vs Customer) depends on isIncome.
   const role = isIncome ? Role.Customer : Role.Supplier;
-  const partyRawName = isIncome ? itemName : supplier;
+  const partyRawName = supplier;
   // If the user edited the party name as free text, don't let a stale fuzzy match win.
-  const partyEdited = isIncome
-    ? overrides.item_name !== undefined
-    : overrides.supplier !== undefined;
+  const partyEdited = overrides.supplier !== undefined;
   const uploader = row.createdBy;
   let contactId: number | null = null;
   if (typeof overrides.contactId === "number") {
@@ -211,7 +224,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
         categoryAccountId,
         receivedIntoAccountId: accountId,
         date,
-        description: supplier,
+        description: itemName,
         amount,
         currency,
         exchangeRate,
@@ -223,7 +236,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     : {
         kind: "expense",
         categoryAccountId,
-        paidFromAccountId: accountId,
+        paidFromAccountId,
         date,
         description: itemName,
         amount,

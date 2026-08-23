@@ -36,6 +36,7 @@ function toDefaultAccount(account: ReturnType<typeof accountViews>[number]) {
     code: account.code ?? account.id,
     name: account.name,
     type: account.type,
+    subType: account.subType,
     parentId: account.parentId ?? null,
     active: account.active ?? false,
     hasChildren: account.hasChildren ?? false,

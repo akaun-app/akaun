@@ -69,6 +69,20 @@
 	margin-top: 2px;
 }
 
+/* A Current / Non-current / Needs review sub-heading above its own table. */
+.rep-subsection-title {
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted-foreground);
+	padding: 10px 16px 4px;
+}
+
+.rep-subsection-title:not(:first-child) {
+	border-top: 1px solid var(--border);
+}
+
 .rep-table {
 	width: 100%;
 	border-collapse: collapse;
