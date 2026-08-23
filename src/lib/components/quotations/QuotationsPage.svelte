@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { createResourceStream, mergeById } from '$lib/sse.js';
 	import { fly } from 'svelte/transition';
 	import {
@@ -14,18 +13,14 @@
 	import EmptyState from '$lib/components/ui/EmptyState.svelte';
 	import StatCard from '$lib/components/ui/StatCard.svelte';
 	import FilterDropdown from '$lib/components/ui/FilterDropdown.svelte';
-	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
-	import LineItemEditor from '$lib/components/ui/LineItemEditor.svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
-	import * as Select from '$lib/components/ui/select/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import { formatMoney, formatMoneyRM, formatDateShort } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
-	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
-	import { QuotationStatus, QuotationStatusLabels, Role, EntityType } from '$lib/enums.js';
+	import { formatCurrencyAmount } from '$lib/currency.js';
+	import { QuotationStatus, QuotationStatusLabels } from '$lib/enums.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { loadQuotationsPage } from '$lib/server/loaders/quotations.js';
@@ -66,74 +61,10 @@
 		if (mobileSearchOpen && mobileSearchEl) mobileSearchEl.focus();
 	});
 
-	type LineInput = { description: string; quantity: number; unitPrice: number };
-
-	// Create form state
-	const todayISO = () => new Date().toISOString().slice(0, 10);
-	let showNew = $state(false);
-	let newIssueDate = $state(todayISO());
-	let newExpiryDate = $state('');
-	let newContactId = $state<number | null>(null);
-	let newContactName = $state<string | null>(null);
-	let newCurrency = $state(mainCurrency());
-	let newExchangeRate = $state('1');
-	let newNotes = $state('');
-	let newTerms = $state('');
-	let newReference = $state('');
-	let newLines = $state<LineInput[]>([{ description: '', quantity: 1, unitPrice: 0 }]);
-	let newSaving = $state(false);
-	let newError = $state('');
-	let newRateFetching = $state(false);
-	let newRateError = $state('');
-
-	// Mobile panel detection
-	const screen = useIsMobile();
-	const isMobile = $derived(screen.current);
-	const panelSide = $derived(isMobile ? 'bottom' : 'right');
-
 	// Debounced search
 	$effect(() => {
 		const v = searchRaw;
 		const t = setTimeout(() => (search = v), 300);
-		return () => clearTimeout(t);
-	});
-
-	// Reset new form on close
-	$effect(() => {
-		if (!showNew) {
-			newIssueDate = todayISO();
-			newExpiryDate = '';
-			newContactId = null;
-			newContactName = null;
-			newCurrency = mainCurrency();
-			newExchangeRate = '1';
-			newNotes = '';
-			newTerms = '';
-			newReference = '';
-			newLines = [{ description: '', quantity: 1, unitPrice: 0 }];
-			newError = '';
-		}
-	});
-
-	// Auto-fetch exchange rate for the new form when currency or date changes
-	$effect(() => {
-		const cur = newCurrency;
-		const d = newIssueDate;
-		if (cur === mainCurrency() || !d) { newExchangeRate = '1'; newRateError = ''; return; }
-		newRateFetching = true;
-		newRateError = '';
-		const t = setTimeout(async () => {
-			try {
-				const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${d}`);
-				const json = await res.json();
-				if (json.rate != null) newExchangeRate = String(json.rate);
-				else { newRateError = 'No rate found — enter manually'; }
-			} catch {
-				newRateError = 'Could not fetch rate — enter manually';
-			} finally {
-				newRateFetching = false;
-			}
-		}, 400);
 		return () => clearTimeout(t);
 	});
 
@@ -239,59 +170,6 @@
 		void goto(quotationHref(q.id));
 	}
 
-	// Create a new quotation via JSON API (line items can't be FormData)
-	async function handleCreate() {
-		if (!newContactId && !newContactName) {
-			newError = 'Customer is required';
-			return;
-		}
-		if (!newLines.some((l) => l.description.trim())) {
-			newError = 'At least one line item with a description is required';
-			return;
-		}
-		newSaving = true;
-		newError = '';
-		try {
-			// If user typed a new contact name, create the contact first
-			let resolvedContactId = newContactId;
-			if (!resolvedContactId && newContactName) {
-				const cr = await fetch('/api/contacts', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ entityType: EntityType.Business, legalName: newContactName, roles: [Role.Customer] })
-				});
-				if (!cr.ok) { newError = 'Failed to create contact — try again'; newSaving = false; return; }
-				resolvedContactId = (await cr.json()).id;
-			}
-			const res = await fetch('/api/quotations', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					issueDate: newIssueDate,
-					expiryDate: newExpiryDate || null,
-					contactId: resolvedContactId,
-					currency: newCurrency,
-					exchangeRate: parseFloat(newExchangeRate) || 1,
-					notes: newNotes || null,
-					terms: newTerms || null,
-					reference: newReference || null,
-					lines: newLines
-				})
-			});
-			if (!res.ok) {
-				const err = await res.json();
-				newError = err.error ?? 'Failed to create quotation';
-			} else {
-				showNew = false;
-				// SSE will push the new item onto the list
-			}
-		} catch {
-			newError = 'Network error — try again';
-		} finally {
-			newSaving = false;
-		}
-	}
-
 	createResourceStream<QuotationStreamMsg>('/api/quotations/stream', (msg) => {
 		if (msg.type === 'quotation-update') quotations = mergeById(quotations, [msg.item]);
 		else if (msg.type === 'quotation-delete')
@@ -345,12 +223,15 @@
 			>
 				{#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
 			</button>
-			<button
-				onclick={() => (showNew = true)}
-				style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
-			>
-				<Plus size={15} /> <span class="btn-text">New quotation</span>
-			</button>
+			{#if data.perms.add}
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+				<a
+					href={resolve('/(app)/quotations/new')}
+					style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; text-decoration:none;"
+				>
+					<Plus size={15} /> <span class="btn-text">New quotation</span>
+				</a>
+			{/if}
 		</div>
 	</header>
 
@@ -646,149 +527,6 @@
 				</div>
 			</div>
 			<Button class="w-full" onclick={() => (mobileFilterOpen = false)}>Show results</Button>
-		</Sheet.Content>
-</Sheet.Root>
-
-<!-- Detail sheet -->
-<!-- Create sheet -->
-<Sheet.Root bind:open={showNew}>
-		<Sheet.Content
-			side={panelSide}
-			style={isMobile
-				? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;'
-				: 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}
-		>
-			<div
-				style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-			>
-				<div>
-					<div class="sheet-eyebrow">New</div>
-					<div class="sheet-title-text">New quotation</div>
-				</div>
-				<Sheet.Close class="sheet-close">
-					<X size={16} />
-				</Sheet.Close>
-			</div>
-
-			<div
-				style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:0;"
-			>
-				{#if newError}
-					<div
-						style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;"
-					>
-						{newError}
-					</div>
-				{/if}
-
-				<div class="field-grid field">
-					<div>
-						<label class="field-label" for="new-issue-date">Issue Date *</label>
-						<DatePicker name="newIssueDate" bind:value={newIssueDate} />
-					</div>
-					<div>
-						<label class="field-label" for="new-expiry-date">Expiry Date</label>
-						<DatePicker name="newExpiryDate" bind:value={newExpiryDate} placeholder="No expiry" />
-					</div>
-				</div>
-
-				<div class="field">
-					<label class="field-label" for="new-customer">Customer</label>
-					<ContactSelect
-						role={Role.Customer}
-						bind:value={newContactId}
-						bind:newName={newContactName}
-						placeholder="Search or select a customer…"
-					/>
-				</div>
-
-				<div class="field-grid field">
-					<div>
-						<label class="field-label" for="newCurrency">Currency</label>
-						<Select.Root type="single" bind:value={newCurrency}>
-							<Select.Trigger id="newCurrency" class="w-full">{newCurrency}</Select.Trigger>
-							<Select.Content>
-								{#each CURRENCIES as c (c.code)}
-									<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					{#if newCurrency !== mainCurrency()}
-						<div>
-							<label class="field-label" for="newRate"
-								>Rate (1 {newCurrency} = ? {mainCurrency()})</label
-							>
-							<Input
-								id="newRate"
-								type="text"
-								inputmode="decimal"
-								placeholder={newRateFetching ? 'Fetching…' : '1.0'}
-								disabled={newRateFetching}
-								bind:value={newExchangeRate}
-							/>
-							{#if newRateFetching || newRateError}
-								<p class="foreign-note">{newRateFetching ? 'Fetching rate…' : newRateError}</p>
-							{/if}
-						</div>
-					{/if}
-				</div>
-
-				<div class="field">
-					<label class="field-label" for="newReference">Reference</label>
-					<Input
-						id="newReference"
-						type="text"
-						placeholder="Optional reference number…"
-						bind:value={newReference}
-					/>
-				</div>
-
-				<div class="field">
-					<div class="field-label">Line Items *</div>
-					<LineItemEditor bind:lines={newLines} currency={newCurrency} />
-				</div>
-
-				<div class="field">
-					<label class="field-label" for="newNotes">Notes</label>
-					<Textarea
-						id="newNotes"
-						placeholder="Optional notes for the customer…"
-						class="leading-relaxed"
-						bind:value={newNotes}
-					/>
-				</div>
-
-				<div class="field">
-					<label class="field-label" for="newTerms">Terms &amp; Conditions</label>
-					<Textarea
-						id="newTerms"
-						placeholder="Optional terms…"
-						class="leading-relaxed"
-						bind:value={newTerms}
-					/>
-				</div>
-			</div>
-
-			<div class="sheet-foot">
-				<div class="sheet-foot-actions">
-					<button
-						type="button"
-						class="sheet-btn"
-						onclick={() => (showNew = false)}
-					>
-						Cancel
-					</button>
-					<button
-						type="button"
-						class="sheet-btn sheet-btn-primary"
-						onclick={handleCreate}
-						disabled={newSaving}
-					>
-						{newSaving ? 'Creating…' : 'Create quotation'}
-					</button>
-				</div>
-			</div>
 		</Sheet.Content>
 </Sheet.Root>
 

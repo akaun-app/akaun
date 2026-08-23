@@ -195,6 +195,8 @@
 			allAccounts={data.allAccounts}
 			contacts={data.contacts}
 			defaultAccountId={data.defaultAccountId}
+			lastForeignCurrencyExpense={data.lastForeignCurrencyExpense}
+			lastForeignCurrencyIncome={data.lastForeignCurrencyIncome}
 			canChange={data.perms.change}
 			canAdjust={data.perms.adjustments}
 		/>

@@ -31,6 +31,23 @@ Instead of typing every receipt in by hand, you can snap a photo or upload a sca
 - **Real-time Updates** — changes made by one person (or in another browser tab) show up instantly for everyone else, no refresh needed.
 - **PDF Export** — customizable document templates (with your own company logo) drive printable/downloadable quotations, invoices, and claim summaries.
 
+## Editing Rules: What You Can Change After a Record Is Settled or Reconciled
+
+Once a payment has settled an expense or income, or a bank statement line has been matched to it during reconciliation, that record **locks** — this protects the numbers other records (the payment, the bank match) now depend on from being pulled out from under them.
+
+- **Always editable, locked or not:** description, contact, reference, remark, and attachments.
+- **Still editable once locked:** the **category** — what an expense or income was actually for. Fixing a miscategorized record (it was filed under the wrong expense/income account) never touches the money that was already paid or matched, so this stays open even after settlement or reconciliation.
+- **Locked once settled or reconciled:** the amount, the date, the currency, and the account the money actually moved through (what it was paid from, or received into). Changing any of these after a payment or a bank line points at the record would make that payment or bank match wrong.
+- **Deleting** a settled or reconciled record is blocked outright.
+
+| Scenario                       | You CAN                                                                      | You CANNOT                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Nothing has happened to it yet | Change anything — amount, date, accounts, category, description, etc.        | —                                                                                  |
+| A payment has settled it       | Fix the category, edit description/contact/reference/remark, add attachments | Change the amount, date, currency, or the account it was paid from/into; delete it |
+| It's matched to a bank line    | Same as above                                                                | Same as above — plus unmatch the bank line before any of it applies again          |
+
+**To unlock:** undo the payment (remove the settlement) or unmatch the bank statement line from the account's reconciliation screen. The record then goes back to fully editable.
+
 ## Screenshots
 
 <!-- TODO: add screenshots once available (dashboard, expenses list, OCR import, claim detail) -->
@@ -101,7 +118,7 @@ proxy_buffers 4 16k;
 proxy_busy_buffers_size 32k;
 ```
 
-In Nginx Proxy Manager, add both blocks via the proxy host's **Advanced** tab. Don't use the "Websockets Support" toggle as a substitute for the first block — it applies `proxy_http_version 1.1` with `Upgrade`/`Connection: upgrade` handling to the *entire* host including normal page traffic, which this app's server does not handle correctly and will make the whole site unreachable.
+In Nginx Proxy Manager, add both blocks via the proxy host's **Advanced** tab. Don't use the "Websockets Support" toggle as a substitute for the first block — it applies `proxy_http_version 1.1` with `Upgrade`/`Connection: upgrade` handling to the _entire_ host including normal page traffic, which this app's server does not handle correctly and will make the whole site unreachable.
 
 ## Manual / From-Source Setup
 
@@ -117,15 +134,15 @@ bun server.js
 
 Configure the app via environment variables (copy `.env.example` to `.env` and edit, or export them directly):
 
-| Variable          | Default             | Purpose                                                    |
-| ----------------- | ------------------- | ----------------------------------------------------------- |
-| `DATABASE_PATH`   | `./data/akaun.db`   | SQLite database file location                                |
-| `STORAGE_PATH`    | `./data/storage`    | Where uploaded files (receipts, attachments) are stored      |
-| `BODY_SIZE_LIMIT` | `15M`               | Max upload size                                              |
-| `LOG_LEVEL`       | `info`              | `trace` \| `debug` \| `info` \| `warn` \| `error`            |
-| `SSL_ENABLED`     | `false`             | Serve over HTTPS                                             |
-| `SSL_KEY_PATH`    | _(none)_            | Path to TLS private key, required if `SSL_ENABLED=true`      |
-| `SSL_CERT_PATH`   | _(none)_            | Path to TLS certificate, required if `SSL_ENABLED=true`      |
+| Variable          | Default           | Purpose                                                 |
+| ----------------- | ----------------- | ------------------------------------------------------- |
+| `DATABASE_PATH`   | `./data/akaun.db` | SQLite database file location                           |
+| `STORAGE_PATH`    | `./data/storage`  | Where uploaded files (receipts, attachments) are stored |
+| `BODY_SIZE_LIMIT` | `15M`             | Max upload size                                         |
+| `LOG_LEVEL`       | `info`            | `trace` \| `debug` \| `info` \| `warn` \| `error`       |
+| `SSL_ENABLED`     | `false`           | Serve over HTTPS                                        |
+| `SSL_KEY_PATH`    | _(none)_          | Path to TLS private key, required if `SSL_ENABLED=true` |
+| `SSL_CERT_PATH`   | _(none)_          | Path to TLS certificate, required if `SSL_ENABLED=true` |
 
 Database migrations are generated with `bun run db:generate` and applied automatically on startup.
 

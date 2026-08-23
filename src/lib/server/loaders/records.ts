@@ -25,8 +25,8 @@ import {
 } from "$lib/server/ledger/account-type.js";
 
 /**
- * The one load and one set of actions behind both `/records` and
- * `/records/[id]`.
+ * The loads and actions behind `/records`, `/records/[id]`, `/records/new`
+ * and `/records/new/payment`.
  *
  * This replaces `loaders/ledger.ts`, which served `/expenses` and `/income` and
  * differed between them in three things: which kind it listed, which accounts it
@@ -87,6 +87,44 @@ export function loadRecordDetail(locals: App.Locals, id: number) {
     settlements: settlementsForRecord(db, id),
     ...recordFormOptions(locals),
   };
+}
+
+/**
+ * The blank form, for `/records/new`.
+ *
+ * Gated on `add`, not `view` — a create page's whole reason to exist fails
+ * without it, so a user who lacks it is sent back rather than shown a form
+ * that would 403 on submit.
+ */
+export function loadRecordNew(locals: App.Locals) {
+  if (!hasPermission(locals, "records", "add")) throw redirect(302, LIST_PATH);
+
+  return recordFormOptions(locals);
+}
+
+/**
+ * The blank payment/receipt form, for `/records/new/payment`.
+ *
+ * Opens scoped to one contact, the way the drawer it replaces always did —
+ * carried as a query param rather than a route segment, since it is prefilled
+ * context for a create form and not a link to another feature's record.
+ */
+export function loadPaymentNew(locals: App.Locals, url: URL) {
+  if (!hasPermission(locals, "records", "add")) throw redirect(302, LIST_PATH);
+
+  const rawContactId = url.searchParams.get("contactId");
+  const contactId =
+    rawContactId !== null &&
+    Number.isInteger(Number(rawContactId)) &&
+    Number(rawContactId) > 0
+      ? Number(rawContactId)
+      : null;
+  const direction: "we-pay" | "we-receive" =
+    url.searchParams.get("direction") === "we-receive"
+      ? "we-receive"
+      : "we-pay";
+
+  return { contactId, direction, ...recordFormOptions(locals) };
 }
 
 /**

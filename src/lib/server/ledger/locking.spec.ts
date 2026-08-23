@@ -36,33 +36,43 @@ describe("what a settled or reconciled record refuses", () => {
     ["settled", SETTLED],
     ["reconciled", RECONCILED],
     ["both", BOTH],
-  ])("refuses the amount, the date and any account while %s", (_label, state) => {
-    expect(canEditField("amount", state)).toBe(false);
-    expect(canEditField("date", state)).toBe(false);
-    expect(canEditField("paidFromAccountId", state)).toBe(false);
-    expect(canEditField("receivedIntoAccountId", state)).toBe(false);
-    expect(canEditField("fromAccountId", state)).toBe(false);
-    expect(canEditField("toAccountId", state)).toBe(false);
-    expect(canEditField("categoryAccountId", state)).toBe(false);
-    expect(canEditField("exchangeRate", state)).toBe(false);
-    expect(canEditField("currency", state)).toBe(false);
-  });
+  ])(
+    "refuses the amount, the date and the money account while %s",
+    (_label, state) => {
+      expect(canEditField("amount", state)).toBe(false);
+      expect(canEditField("date", state)).toBe(false);
+      expect(canEditField("paidFromAccountId", state)).toBe(false);
+      expect(canEditField("receivedIntoAccountId", state)).toBe(false);
+      expect(canEditField("fromAccountId", state)).toBe(false);
+      expect(canEditField("toAccountId", state)).toBe(false);
+      expect(canEditField("exchangeRate", state)).toBe(false);
+      expect(canEditField("currency", state)).toBe(false);
+    },
+  );
 
   it.each([
     ["settled", SETTLED],
     ["reconciled", RECONCILED],
     ["both", BOTH],
-  ])("still allows the description, contact, reference and remark while %s", (_label, state) => {
-    expect(canEditField("description", state)).toBe(true);
-    expect(canEditField("contactId", state)).toBe(true);
-    expect(canEditField("reference", state)).toBe(true);
-    expect(canEditField("remark", state)).toBe(true);
-    // Attachments are supporting documents, not accounting data.
-    expect(canEditField("attachments", state)).toBe(true);
-  });
+  ])(
+    "still allows the description, contact, reference, remark and category while %s",
+    (_label, state) => {
+      expect(canEditField("description", state)).toBe(true);
+      expect(canEditField("contactId", state)).toBe(true);
+      expect(canEditField("reference", state)).toBe(true);
+      expect(canEditField("remark", state)).toBe(true);
+      // Attachments are supporting documents, not accounting data.
+      expect(canEditField("attachments", state)).toBe(true);
+      // A settlement or bank match never points at the category side, so
+      // correcting what the record was for cannot make either one wrong.
+      expect(canEditField("categoryAccountId", state)).toBe(true);
+    },
+  );
 
   it("reports every locked field so a screen can disable exactly those", () => {
-    expect([...lockStateOf(SETTLED).lockedFields].sort()).toEqual([...LOCKED_FIELDS].sort());
+    expect([...lockStateOf(SETTLED).lockedFields].sort()).toEqual(
+      [...LOCKED_FIELDS].sort(),
+    );
   });
 
   it("refuses deletion", () => {

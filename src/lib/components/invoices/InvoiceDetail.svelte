@@ -6,17 +6,12 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
-	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
-	import LineItemEditor from '$lib/components/ui/LineItemEditor.svelte';
-	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import * as Select from '$lib/components/ui/select/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import InvoiceForm from './InvoiceForm.svelte';
 	import SettlementList from '$lib/components/ledger/SettlementList.svelte';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
-	import { CURRENCIES, formatCurrencyAmount } from '$lib/currency.js';
+	import { formatCurrencyAmount } from '$lib/currency.js';
 	import { formatDate, formatMinor, formatMoney } from '$lib/format.js';
-	import { EntityType, InvoiceStatus, Role } from '$lib/enums.js';
+	import { InvoiceStatus } from '$lib/enums.js';
 	import type { loadInvoiceDetail } from '$lib/server/loaders/invoices.js';
 
 	/**
@@ -42,6 +37,12 @@
 	let invoice = $derived<Invoice>(data.invoice);
 
 	let isEditing = $state(false);
+	let formRef = $state<{
+		submit: () => Promise<Invoice | null>;
+		revert: () => void;
+		blockedBy: () => string | null;
+	} | null>(null);
+	let formDirty = $state(false);
 	let saving = $state(false);
 	let saveError = $state('');
 	let issuing = $state(false);
@@ -50,17 +51,9 @@
 	let issueConfirmOpen = $state(false);
 	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 
-	// --- Edit fields --------------------------------------------------------
-	let editIssueDate = $state('');
-	let editDueDate = $state('');
-	let editContactId = $state<number | null>(null);
-	let editContactName = $state<string | null>(null);
-	let editCurrency = $state('');
-	let editExchangeRate = $state('1');
-	let editNotes = $state('');
-	let editTerms = $state('');
-	let editReference = $state('');
-	let editLines = $state<{ description: string; quantity: number; unitPrice: number }[]>([]);
+	// Only actually dirty while the form is mounted: leaving edit mode discards
+	// whatever the form held, the same way closing the drawer this replaced did.
+	const dirty = $derived(isEditing && formDirty);
 
 	const isDraft = $derived(invoice.status === InvoiceStatus.Draft);
 	const canEdit = $derived(data.perms.change && invoice.status !== InvoiceStatus.Cancelled);
@@ -82,73 +75,16 @@
 	}
 
 	function startEdit() {
-		editIssueDate = invoice.issueDate;
-		editDueDate = invoice.dueDate ?? '';
-		editContactId = invoice.contactId;
-		editContactName = null;
-		editCurrency = invoice.currency;
-		editExchangeRate = String(invoice.exchangeRate);
-		editNotes = invoice.notes ?? '';
-		editTerms = invoice.terms ?? '';
-		editReference = invoice.reference ?? '';
-		editLines = invoice.lines.map((l) => ({
-			description: l.description,
-			quantity: l.quantity,
-			unitPrice: l.unitPrice
-		}));
 		saveError = '';
 		isEditing = true;
 	}
 
 	async function saveEdit() {
-		saving = true;
-		saveError = '';
-		try {
-			let resolvedContactId = editContactId;
-			if (!resolvedContactId && editContactName) {
-				const cr = await fetch('/api/contacts', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						entityType: EntityType.Business,
-						legalName: editContactName,
-						roles: [Role.Customer]
-					})
-				});
-				if (!cr.ok) {
-					saveError = 'Failed to create contact — try again';
-					saving = false;
-					return;
-				}
-				resolvedContactId = (await cr.json()).id;
-			}
-			const res = await fetch(`/api/invoices/${invoice.id}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					issueDate: editIssueDate,
-					dueDate: editDueDate || null,
-					contactId: resolvedContactId,
-					currency: editCurrency,
-					exchangeRate: parseFloat(editExchangeRate) || 1,
-					notes: editNotes || null,
-					terms: editTerms || null,
-					reference: editReference || null,
-					lines: editLines
-				})
-			});
-			if (!res.ok) {
-				const err = await res.json();
-				saveError = err.error ?? 'Save failed';
-			} else {
-				invoice = await res.json();
-				isEditing = false;
-				void auditTrailRef?.refresh();
-			}
-		} catch {
-			saveError = 'Network error — try again';
-		} finally {
-			saving = false;
+		const saved = await formRef?.submit();
+		if (saved) {
+			invoice = saved;
+			isEditing = false;
+			void auditTrailRef?.refresh();
 		}
 	}
 
@@ -178,10 +114,10 @@
 <DetailPage
 	backHref="/invoices"
 	backLabel="Invoices"
-	dirty={isEditing}
+	{dirty}
 	{saving}
 	saveLabel="Save"
-	dirtyNote="Editing this invoice"
+	dirtyNote={formRef?.blockedBy() ?? 'Editing this invoice'}
 	onsave={saveEdit}
 	onrevert={() => (isEditing = false)}
 >
@@ -239,95 +175,7 @@
 
 	{#snippet main()}
 		{#if isEditing}
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Invoice</span></div>
-
-				<div class="field-grid field">
-					<div>
-						<label class="field-label" for="edit-issue-date">Issue date *</label>
-						<DatePicker name="editIssueDate" bind:value={editIssueDate} />
-					</div>
-					<div>
-						<label class="field-label" for="edit-due-date">Due date</label>
-						<DatePicker name="editDueDate" bind:value={editDueDate} placeholder="No due date" />
-					</div>
-				</div>
-
-				<div class="field">
-					<label class="field-label" for="edit-customer">Customer</label>
-					<ContactSelect
-						role={Role.Customer}
-						bind:value={editContactId}
-						bind:newName={editContactName}
-						placeholder="Select customer…"
-					/>
-				</div>
-
-				<div class="field-grid field">
-					<div>
-						<label class="field-label" for="editCurrency">Currency</label>
-						<Select.Root type="single" bind:value={editCurrency}>
-							<Select.Trigger id="editCurrency" class="w-full">{editCurrency}</Select.Trigger>
-							<Select.Content>
-								{#each CURRENCIES as c (c.code)}
-									<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					{#if editCurrency !== mainCurrency()}
-						<div>
-							<label class="field-label" for="editRate">
-								Rate (1 {editCurrency} = ? {mainCurrency()})
-							</label>
-							<Input
-								id="editRate"
-								type="text"
-								inputmode="decimal"
-								placeholder="1.0"
-								bind:value={editExchangeRate}
-							/>
-						</div>
-					{/if}
-				</div>
-
-				<div class="field" style="margin-bottom:0;">
-					<label class="field-label" for="editReference">Reference</label>
-					<Input
-						id="editReference"
-						type="text"
-						placeholder="Optional reference…"
-						bind:value={editReference}
-					/>
-				</div>
-			</section>
-
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Line items *</span></div>
-				<LineItemEditor bind:lines={editLines} currency={editCurrency} />
-			</section>
-
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">What the customer reads</span></div>
-				<div class="field">
-					<label class="field-label" for="editNotes">Notes</label>
-					<Textarea
-						id="editNotes"
-						placeholder="Optional notes for the customer…"
-						class="leading-relaxed"
-						bind:value={editNotes}
-					/>
-				</div>
-				<div class="field" style="margin-bottom:0;">
-					<label class="field-label" for="editTerms">Terms &amp; conditions</label>
-					<Textarea
-						id="editTerms"
-						placeholder="Optional terms…"
-						class="leading-relaxed"
-						bind:value={editTerms}
-					/>
-				</div>
-			</section>
+			<InvoiceForm bind:this={formRef} bind:dirty={formDirty} bind:saving bind:error={saveError} {invoice} />
 		{:else}
 			<section class="detail-card">
 				<div class="detail-card-head"><span class="detail-card-title">Line items</span></div>

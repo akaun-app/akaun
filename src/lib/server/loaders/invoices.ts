@@ -22,7 +22,24 @@ export function loadInvoicesPage(locals: App.Locals) {
     else counts.sent++;
   });
 
-  return { invoices: allInvoices, counts };
+  return {
+    invoices: allInvoices,
+    counts,
+    perms: { add: hasPermission(locals, "invoices", "add") },
+  };
+}
+
+/**
+ * The blank form, for `/invoices/new`.
+ *
+ * Gated on `add`, not `view` — a create page's whole reason to exist fails
+ * without it, so a user who lacks it is sent back rather than shown a form
+ * that would 403 on submit.
+ */
+export function loadInvoiceNew(locals: App.Locals) {
+  if (!hasPermission(locals, "invoices", "add"))
+    throw redirect(302, "/invoices");
+  return {};
 }
 
 /**

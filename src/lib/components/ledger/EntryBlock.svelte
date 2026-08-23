@@ -35,6 +35,8 @@
 		canAdjust = false,
 		defaultAccountId = null,
 		readOnly = false,
+		fromDisabled = readOnly,
+		toDisabled = readOnly,
 		mainAmountMinor = 0,
 		onaddside,
 		onremoveside
@@ -48,11 +50,22 @@
 		canAdjust?: boolean;
 		defaultAccountId?: number | null;
 		readOnly?: boolean;
+		/** Overrides `readOnly` for just the "money came out of" side. */
+		fromDisabled?: boolean;
+		/** Overrides `readOnly` for just the "and went into" side. */
+		toDisabled?: boolean;
 		/** The record's own figure in cents — what the two named sides are worth. */
 		mainAmountMinor?: number;
 		onaddside?: () => void;
 		onremoveside?: (key: number) => void;
 	} = $props();
+
+	// Mirrors `toAccountChoices` in RecordForm.svelte: the "to" side can never
+	// offer the account "from" already claimed, in the full chart any more than
+	// in the shortlist — otherwise a `canAdjust` user's full-chart pre-select can
+	// land on `fromAccountId`, which RecordForm's own guard effect immediately
+	// clears back to null, and AccountSelect picks it again: an infinite loop.
+	const toAllAccounts = $derived(allAccounts.filter((a) => a.id !== fromAccountId));
 
 	const allSides = $derived.by((): SideDraft[] => {
 		const main = (Math.abs(mainAmountMinor) / 100).toFixed(2);
@@ -93,7 +106,7 @@
 					name="fromAccount"
 					label="Money came out of"
 					{defaultAccountId}
-					disabled={readOnly}
+					disabled={fromDisabled}
 					bare
 				/>
 			</div>
@@ -113,13 +126,13 @@
 				{:else}
 					<AccountSelect
 						accounts={toAccountChoices}
-						{allAccounts}
+						allAccounts={toAllAccounts}
 						{canAdjust}
 						bind:value={toAccountId}
 						name="toAccount"
 						label="And went into"
 						{defaultAccountId}
-						disabled={readOnly}
+						disabled={toDisabled}
 						bare
 					/>
 				{/if}

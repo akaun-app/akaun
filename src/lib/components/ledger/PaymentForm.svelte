@@ -1,40 +1,39 @@
 <script lang="ts">
-	import { X } from '@lucide/svelte';
-	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
-	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import AccountSelect from './AccountSelect.svelte';
 	import type { AccountView, OutstandingItem, RecordView } from '$lib/server/ledger/types.js';
 
 	/**
-	 * Recording a payment, and ticking what it covers.
+	 * The fields for recording a payment, and ticking what it covers.
+	 *
+	 * One definition, so a future second host (an edit surface, if one is ever
+	 * added) cannot offer a different set of fields than the create page does —
+	 * the same reason `RecordForm` is its own component.
 	 *
 	 * The payment and the note saying what it paid off are one action for the
 	 * user, so they are one request: `POST /api/records` takes the payment and
 	 * its allocations together and takes the payment back if the allocations are
 	 * refused, rather than leaving money recorded against nothing (FR-015).
-	 *
-	 * When a rule refuses — usually because more has been put against an item
-	 * than is left on it — the sentence shown is the one the API sent. This
-	 * screen never writes its own wording for a refusal, so the figure the user
-	 * is told is the figure the rule actually used (FR-016, Principle VII).
 	 */
 	type Direction = 'we-pay' | 'we-receive';
 
 	let {
-		open = $bindable(false),
 		direction = 'we-pay',
 		accounts,
 		contacts = [],
 		defaultAccountId = null,
 		contactId: initialContactId = null,
-		onclose,
-		onsaved
+		// Write-only out-parameters: the frame around this form reads them to
+		// decide whether to show a save bar and what to put on it.
+		// eslint-disable-next-line no-useless-assignment
+		dirty = $bindable(false),
+		// eslint-disable-next-line no-useless-assignment
+		saving = $bindable(false),
+		error = $bindable('')
 	}: {
-		open?: boolean;
 		/** we-pay: we are paying someone. we-receive: someone is paying us. */
 		direction?: Direction;
 		/** The asset and liability accounts the payment or receipt account offers. */
@@ -43,13 +42,10 @@
 		defaultAccountId?: number | null;
 		/** Opens with this person already chosen, from a row that names them. */
 		contactId?: number | null;
-		onclose: () => void;
-		onsaved?: (record: RecordView) => void;
+		dirty?: boolean;
+		saving?: boolean;
+		error?: string;
 	} = $props();
-
-	const screen = useIsMobile();
-	const isMobile = $derived(screen.current);
-	const panelSide = $derived(isMobile ? 'bottom' : 'right');
 
 	// --- Form state ---------------------------------------------------------
 	let date = $state('');
@@ -71,22 +67,33 @@
 	let picked = $state<Record<number, string>>({});
 	let items = $state<OutstandingItem[]>([]);
 	let loading = $state(false);
-	let error = $state('');
-	let saving = $state(false);
 
-	/** Re-seeds the form whenever the drawer opens. */
-	$effect(() => {
-		if (!open) return;
+	let snapshot = $state('');
+	function fingerprint(): string {
+		return JSON.stringify([date, description, reference, remark, contactId, moneyAccountId, amountInput, picked]);
+	}
+	function seed() {
 		date = new Date().toISOString().slice(0, 10);
 		description = '';
 		reference = '';
 		remark = '';
 		contactId = initialContactId;
+		moneyAccountId = null;
 		amountInput = '0.00';
 		amountEdited = false;
 		picked = {};
 		error = '';
+		snapshot = fingerprint();
+	}
+	seed();
+
+	$effect(() => {
+		dirty = snapshot !== '' && fingerprint() !== snapshot;
 	});
+
+	export function revert(): void {
+		seed();
+	}
 
 	// Paying what we owe clears the money-we-owe side; being paid clears the
 	// money-owed-to-us side. The list of what can be covered follows from that.
@@ -99,7 +106,7 @@
 		const person = contactId;
 		const dir = listDirection;
 		const token = ++loadToken;
-		if (!open || person === null) {
+		if (person === null) {
 			items = [];
 			loading = false;
 			return;
@@ -137,9 +144,7 @@
 			.filter((a) => a.amountMinor > 0)
 	);
 
-	const allocatedMinor = $derived(
-		allocations.reduce((sum, a) => sum + a.amountMinor, 0)
-	);
+	const allocatedMinor = $derived(allocations.reduce((sum, a) => sum + a.amountMinor, 0));
 
 	$effect(() => {
 		const total = allocatedMinor;
@@ -147,12 +152,9 @@
 		amountInput = (total / 100).toFixed(2);
 	});
 
-	const amountMinor = $derived(
-		Math.round(parseFloat(String(amountInput ?? '')) * 100) || 0
-	);
+	const amountMinor = $derived(Math.round(parseFloat(String(amountInput ?? '')) * 100) || 0);
 	const unallocatedMinor = $derived(amountMinor - allocatedMinor);
 
-	const title = $derived(direction === 'we-pay' ? 'Record a payment' : 'Record a receipt');
 	const contactLabel = $derived(direction === 'we-pay' ? 'Who was paid? *' : 'Who paid you? *');
 	const moneyLabel = $derived(direction === 'we-pay' ? 'Payment account' : 'Receipt account');
 
@@ -170,13 +172,15 @@
 		}
 	}
 
-	const canSave = $derived(
-		contactId !== null && moneyAccountId !== null && amountMinor > 0 && !saving
-	);
+	export function blockedBy(): string | null {
+		if (contactId === null) return direction === 'we-pay' ? 'Choose who this pays.' : 'Choose who paid this.';
+		if (moneyAccountId === null) return 'Choose an account.';
+		if (amountMinor <= 0) return 'Enter an amount.';
+		return null;
+	}
 
-	async function save(event: SubmitEvent) {
-		event.preventDefault();
-		if (saving) return;
+	export async function submit(): Promise<RecordView | null> {
+		if (blockedBy()) return null;
 		saving = true;
 		error = '';
 
@@ -204,162 +208,118 @@
 			const body = await res.json().catch(() => null);
 			// The rule's own sentence, never a rewrite of it (FR-016).
 			error = body?.reason ?? body?.error ?? 'That payment could not be saved.';
-			return;
+			return null;
 		}
-		onsaved?.(await res.json());
-		onclose();
+		const saved = await res.json();
+		snapshot = fingerprint();
+		return saved;
 	}
 </script>
 
-<Sheet.Root
-	{open}
-	onOpenChange={(o) => {
-		if (!o) onclose();
-	}}
->
-		<Sheet.Content
-			side={panelSide}
-			style={isMobile
-				? 'height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;'
-				: 'width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;'}
-		>
-			<div
-				style="display:flex; align-items:flex-start; justify-content:space-between; padding:22px 22px 16px; border-bottom:1px solid var(--border);"
-			>
-				<div>
-					<div class="sheet-eyebrow">New</div>
-					<div class="sheet-title-text">{title}</div>
-				</div>
-				<Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
-			</div>
+{#if error}
+	<div class="form-error">{error}</div>
+{/if}
 
-			<form onsubmit={save} style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
-				<div style="flex:1; overflow-y:auto; padding:20px 22px;">
-					{#if error}
-						<div class="form-error">{error}</div>
-					{/if}
+<section class="detail-card">
+	<div class="detail-card-head"><span class="detail-card-title">Payment</span></div>
 
-					<div class="field">
-						<label class="field-label" for="pay-contact">{contactLabel}</label>
-						<select id="pay-contact" bind:value={contactId} required class="plain-select">
-							<option value={null} disabled>Choose a person</option>
-							{#each contacts as contact (contact.id)}
-								<option value={contact.id}>{contact.legalName}</option>
-							{/each}
-						</select>
-					</div>
+	<div class="field">
+		<label class="field-label" for="pay-contact">{contactLabel}</label>
+		<select id="pay-contact" bind:value={contactId} required class="plain-select">
+			<option value={null} disabled>Choose a person</option>
+			{#each contacts as contact (contact.id)}
+				<option value={contact.id}>{contact.legalName}</option>
+			{/each}
+		</select>
+	</div>
 
-					<div class="field">
-						<label class="field-label" for="pay-description">Description *</label>
-						<Input
-							id="pay-description"
-							bind:value={description}
-							required
-							maxlength={500}
-							class="w-full"
-						/>
-					</div>
+	<div class="field">
+		<label class="field-label" for="pay-description">Description *</label>
+		<Input id="pay-description" bind:value={description} required maxlength={500} class="w-full" />
+	</div>
 
-					<div class="field">
-						<label class="field-label" for="pay-amount">Amount ({mainCurrencySymbol()}) *</label>
-						<Input
-							id="pay-amount"
+	<div class="field">
+		<label class="field-label" for="pay-amount">Amount ({mainCurrencySymbol()}) *</label>
+		<Input
+			id="pay-amount"
+			type="number"
+			step="0.01"
+			bind:value={amountInput}
+			oninput={() => (amountEdited = true)}
+			required
+			class="w-full"
+		/>
+	</div>
+
+	<div class="field">
+		<label class="field-label" for="pay-date">Date *</label>
+		<Input id="pay-date" type="date" bind:value={date} required class="w-full" />
+	</div>
+
+	<AccountSelect {accounts} bind:value={moneyAccountId} name="paymentAccount" label={moneyLabel} {defaultAccountId} />
+</section>
+
+<section class="detail-card">
+	<div class="detail-card-head"><span class="detail-card-title">Allocation</span></div>
+
+	{#if contactId === null}
+		<p class="covers-note">Choose a contact to see what is outstanding.</p>
+	{:else if loading}
+		<p class="covers-note">Looking…</p>
+	{:else if items.length === 0}
+		<p class="covers-note">Nothing is outstanding with this person.</p>
+	{:else}
+		<div class="covers-list">
+			{#each items as item (item.movementId)}
+				<div class="covers-row" class:on={isPicked(item)}>
+					<label class="covers-tick">
+						<input type="checkbox" checked={isPicked(item)} onchange={() => toggle(item)} />
+						<span class="covers-main">
+							<span class="covers-name">{item.description || 'Record'}</span>
+							<span class="covers-sub">
+								{formatDate(item.date)}{item.recordNumber ? ` · ${item.recordNumber}` : ''} · {formatMinor(
+									item.outstandingMinor
+								)} outstanding
+								{#if item.daysOverdue > 0}
+									· {item.daysOverdue} days late
+								{/if}
+							</span>
+						</span>
+					</label>
+					{#if isPicked(item)}
+						<input
+							class="covers-amount"
 							type="number"
 							step="0.01"
-							bind:value={amountInput}
-							oninput={() => (amountEdited = true)}
-							required
-							class="w-full"
+							aria-label="Amount put against {item.description || 'this record'}"
+							bind:value={picked[item.movementId]}
 						/>
-					</div>
-
-					<div class="field">
-						<label class="field-label" for="pay-date">Date *</label>
-						<Input id="pay-date" type="date" bind:value={date} required class="w-full" />
-					</div>
-
-					<AccountSelect
-						{accounts}
-						bind:value={moneyAccountId}
-						name="paymentAccount"
-						label={moneyLabel}
-						{defaultAccountId}
-					/>
-
-					<div class="detail-section-label">Allocation</div>
-					{#if contactId === null}
-						<p class="covers-note">Choose a contact to see what is outstanding.</p>
-					{:else if loading}
-						<p class="covers-note">Looking…</p>
-					{:else if items.length === 0}
-						<p class="covers-note">Nothing is outstanding with this person.</p>
-					{:else}
-						<div class="covers-list">
-							{#each items as item (item.movementId)}
-								<div class="covers-row" class:on={isPicked(item)}>
-									<label class="covers-tick">
-										<input
-											type="checkbox"
-											checked={isPicked(item)}
-											onchange={() => toggle(item)}
-										/>
-										<span class="covers-main">
-											<span class="covers-name">{item.description || 'Record'}</span>
-											<span class="covers-sub">
-												{formatDate(item.date)}{item.recordNumber
-													? ` · ${item.recordNumber}`
-													: ''} · {formatMinor(item.outstandingMinor)} outstanding
-												{#if item.daysOverdue > 0}
-													· {item.daysOverdue} days late
-												{/if}
-											</span>
-										</span>
-									</label>
-									{#if isPicked(item)}
-										<input
-											class="covers-amount"
-											type="number"
-											step="0.01"
-											aria-label="Amount put against {item.description || 'this record'}"
-											bind:value={picked[item.movementId]}
-										/>
-									{/if}
-								</div>
-							{/each}
-						</div>
 					{/if}
-
-					<div class="field">
-						<label class="field-label" for="pay-reference">Reference</label>
-						<Input id="pay-reference" bind:value={reference} maxlength={200} class="w-full" />
-					</div>
-
-					<div class="field">
-						<label class="field-label" for="pay-remark">Remark</label>
-						<Textarea id="pay-remark" bind:value={remark} rows={2} class="leading-relaxed" />
-					</div>
 				</div>
+			{/each}
+		</div>
+	{/if}
 
-				<div class="sheet-foot">
-					{#if allocatedMinor > 0 && unallocatedMinor > 0}
-						<div class="sheet-foot-note">
-							{formatMinor(unallocatedMinor)} of this payment is not put against anything yet.
-						</div>
-					{:else if allocatedMinor > 0}
-						<div class="sheet-foot-note">
-							This pays off {formatMinor(allocatedMinor)}.
-						</div>
-					{/if}
-					<div class="sheet-foot-actions">
-						<button type="button" class="sheet-btn" onclick={onclose}>Cancel</button>
-						<button type="submit" class="sheet-btn sheet-btn-primary" disabled={!canSave}>
-							{saving ? 'Saving…' : 'Save'}
-						</button>
-					</div>
-				</div>
-			</form>
-		</Sheet.Content>
-</Sheet.Root>
+	{#if allocatedMinor > 0 && unallocatedMinor > 0}
+		<p class="covers-note">{formatMinor(unallocatedMinor)} of this payment is not put against anything yet.</p>
+	{:else if allocatedMinor > 0}
+		<p class="covers-note">This pays off {formatMinor(allocatedMinor)}.</p>
+	{/if}
+</section>
+
+<section class="detail-card">
+	<div class="detail-card-head"><span class="detail-card-title">Details</span></div>
+
+	<div class="field">
+		<label class="field-label" for="pay-reference">Reference</label>
+		<Input id="pay-reference" bind:value={reference} maxlength={200} class="w-full" />
+	</div>
+
+	<div class="field">
+		<label class="field-label" for="pay-remark">Remark</label>
+		<Textarea id="pay-remark" bind:value={remark} rows={2} class="leading-relaxed" />
+	</div>
+</section>
 
 <style>
 	.form-error {

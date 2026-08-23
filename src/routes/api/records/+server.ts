@@ -238,6 +238,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
                 id: account.id,
                 type: account.type,
                 role: account.role,
+                subType: account.subType,
                 archived: account.archivedAt !== null,
               }
             : null;

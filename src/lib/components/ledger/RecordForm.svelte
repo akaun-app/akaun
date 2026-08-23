@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import { X } from '@lucide/svelte';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { formatMoneyRM } from '$lib/format.js';
-	import { CURRENCIES } from '$lib/currency.js';
-	import { LedgerRecordKind } from '$lib/enums.js';
+	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
+	import { AccountSubType, AccountType, EntityType, LedgerRecordKind, Role } from '$lib/enums.js';
 	import EntryBlock from './EntryBlock.svelte';
 	// The running difference itself is drawn by `EntryBlock`, which owns the
 	// lines it is computed from.
@@ -14,9 +17,9 @@
 	/**
 	 * The fields that describe a record — nothing else.
 	 *
-	 * One definition, two frames: the create drawer on the Records list, and the
-	 * editor on `/records/[id]`. When the fields lived inside the drawer, the
-	 * page could only have had a second copy of them, and two copies of "which
+	 * One definition, two frames: the create page at `/records/new`, and the
+	 * editor on `/records/[id]`. Splitting the fields out this way means the
+	 * two pages can never offer two different forms, and two copies of "which
 	 * accounts may this side name" is two answers waiting to disagree.
 	 *
 	 * Writes go through `/api/records`. Nothing here uses an accounting word
@@ -29,7 +32,8 @@
 		allAccounts = [],
 		contacts = [],
 		defaultAccountId = null,
-		lastForeignCurrency = null,
+		lastForeignCurrencyExpense = null,
+		lastForeignCurrencyIncome = null,
 		canChange = false,
 		canAdjust = false,
 		onsaved,
@@ -49,8 +53,10 @@
 		allAccounts?: AccountView[];
 		contacts?: { id: number; legalName: string }[];
 		defaultAccountId?: number | null;
-		/** The last foreign currency this user recorded in. */
-		lastForeignCurrency?: string | null;
+		/** The last foreign currency this user recorded an expense in. */
+		lastForeignCurrencyExpense?: string | null;
+		/** The last foreign currency this user recorded income in. */
+		lastForeignCurrencyIncome?: string | null;
 		canChange?: boolean;
 		/** Free choice of account, and a third side (FR-031). */
 		canAdjust?: boolean;
@@ -71,6 +77,8 @@
 	let reference = $state('');
 	let remark = $state('');
 	let contactId = $state<number | null>(null);
+	/** Typed but not yet created — resolved into a real contact on save. */
+	let contactName = $state<string | null>(null);
 	// The two everyday questions, and the only two the form asks about accounts:
 	// which account the money left, and which it went to. The kind is derived
 	// from them on the server and never picked here (D-01, FR-006).
@@ -95,13 +103,14 @@
 	/** What the server last told us, so `dirty` has something to compare against. */
 	let snapshot = $state('');
 
-	function seed(source: RecordView | null) {
+	async function seed(source: RecordView | null) {
 		date = source?.date ?? new Date().toISOString().slice(0, 10);
 		description = source?.description ?? '';
 		amount = source ? String(source.amount) : '';
 		reference = source?.reference ?? '';
 		remark = source?.remark ?? '';
 		contactId = source?.contactId ?? null;
+		contactName = null;
 		error = '';
 
 		// An existing record opens in the currency it was recorded in, at the rate
@@ -109,7 +118,7 @@
 		// that rate is part of what the record says.
 		const recordedCurrency = source?.currency ?? mainCurrency();
 		showForeign = recordedCurrency !== mainCurrency();
-		entryCurrency = showForeign ? recordedCurrency : (lastForeignCurrency ?? mainCurrency());
+		entryCurrency = showForeign ? recordedCurrency : (preferredForeignCurrency ?? mainCurrency());
 		rate = source ? String(source.exchangeRate) : '';
 		foreignAmount = showForeign && source ? String(source.amount) : '';
 		rateError = '';
@@ -140,6 +149,10 @@
 			toAccountId = null;
 			extraSides = [];
 		}
+		// AccountSelect fills a blank from/to with its default the moment it
+		// mounts (FR-011) — wait for that pending update to land before taking
+		// the baseline, or a freshly opened create page reads as already dirty.
+		await tick();
 		snapshot = fingerprint();
 	}
 
@@ -156,6 +169,7 @@
 			reference,
 			remark,
 			contactId,
+			contactName,
 			fromAccountId,
 			toAccountId,
 			extraSides.map((s) => [s.accountId, s.direction, s.amount])
@@ -179,6 +193,23 @@
 
 	$effect(() => {
 		dirty = snapshot !== '' && fingerprint() !== snapshot;
+	});
+
+	// A foreign currency is offered only on an expense or income (see
+	// `looksLikeExpenseOrIncome`). Re-picking the "to" account into a transfer
+	// or opening balance, say, closes the box the same way the X does, rather
+	// than leaving a foreign figure attached to a kind that cannot carry one.
+	$effect(() => {
+		if (looksLikeExpenseOrIncome || !showForeign) return;
+		// Carry over what was being shown as the main-currency figure, rather
+		// than reverting to whatever `amount` last held — for a record seeded
+		// from a foreign record that is still its own typed figure, in the
+		// wrong currency (FR-005).
+		if (convertedMain != null) amount = convertedMain.toFixed(2);
+		showForeign = false;
+		rate = '';
+		rateError = '';
+		foreignAmount = '';
 	});
 
 	export function revert(): void {
@@ -256,12 +287,75 @@
 		if (toAccountId !== null && toAccountId === fromAccountId) toAccountId = null;
 	});
 
+	/**
+	 * Whether this record looks like an everyday expense or income — the only
+	 * two kinds a foreign currency is offered on (FR-005 scope). A saved record
+	 * already knows its kind; an unsaved one is read off the two chosen
+	 * accounts' own `type`, the same direct check the form already makes for
+	 * `contactRole` below.
+	 */
+	const accountTypeOf = $derived(
+		(accountId: number | null) =>
+			accountId === null
+				? null
+				: (allAccounts.concat(sideChoices).find((a) => a.id === accountId)?.type ?? null)
+	);
+
+	const predictedKind = $derived.by(() => {
+		if (record) return record.kind;
+		const fromType = accountTypeOf(fromAccountId);
+		const toType = accountTypeOf(toAccountId);
+		if (fromType === AccountType.Expense || toType === AccountType.Expense) {
+			return LedgerRecordKind.Expense;
+		}
+		if (fromType === AccountType.Revenue || toType === AccountType.Revenue) {
+			return LedgerRecordKind.Income;
+		}
+		return null;
+	});
+
+	const looksLikeExpenseOrIncome = $derived(
+		predictedKind === LedgerRecordKind.Expense || predictedKind === LedgerRecordKind.Income
+	);
+
+	/**
+	 * Per-kind memory, so a supplier paid abroad and a customer billed abroad
+	 * each keep their own last-used currency, mirroring the server's own split
+	 * (`USER_PREF_KEYS.lastForeignCurrencyExpense` / `...Income`).
+	 */
+	const preferredForeignCurrency = $derived(
+		predictedKind === LedgerRecordKind.Income
+			? lastForeignCurrencyIncome ?? lastForeignCurrencyExpense
+			: lastForeignCurrencyExpense ?? lastForeignCurrencyIncome
+	);
+
 	/** A record created by issuing an invoice is read-only here (FR-013). */
 	const fromInvoice = $derived(record?.kind === LedgerRecordKind.InvoiceIssue);
 	const readOnly = $derived(fromInvoice || locked || (!canChange && !isNew));
 
 	/** A payment's sides are decided in the payment drawer, not restated here. */
 	const isPayment = $derived(record?.kind === LedgerRecordKind.Payment);
+
+	/**
+	 * Whether this kind's category side is safe to unlock even while the money
+	 * side is settled or reconciled — a settlement or a bank match never
+	 * points at a category account, so correcting what the record was for
+	 * cannot make either one wrong (FR-017a).
+	 */
+	const categoryUnlockable = $derived(
+		locked &&
+			canChange &&
+			!fromInvoice &&
+			(record?.kind === LedgerRecordKind.Expense || record?.kind === LedgerRecordKind.Income)
+	);
+
+	/** Expense's category is `toAccountId`; Income's is `fromAccountId` (see `sidesFor`). */
+	const fromReadOnly = $derived(
+		readOnly && !(categoryUnlockable && record?.kind === LedgerRecordKind.Income)
+	);
+	const toReadOnly = $derived(
+		readOnly && !(categoryUnlockable && record?.kind === LedgerRecordKind.Expense)
+	);
 
 	// --- The running difference, live (FR-010) -------------------------------
 	// The two named sides always cancel — the builder fills them from the
@@ -324,6 +418,36 @@
 		return false;
 	});
 
+	/**
+	 * Which kind of contact this record's shape calls for.
+	 *
+	 * There is no upfront "kind" picker here (D-01), so this reads the same two
+	 * chosen sides `needsContact` does: a category names what the money was for
+	 * (an expense category → a supplier, an income category → a customer), and a
+	 * shared owed account with no category side names who it is owed to or by
+	 * the same way (FR-008, FR-011).
+	 */
+	const contactRole = $derived.by(() => {
+		const categoryId = [fromAccountId, toAccountId].find(
+			(id) => id !== null && categories.some((c) => c.id === id)
+		);
+		const category = categories.find((c) => c.id === categoryId);
+		if (category?.type === AccountType.Expense) return Role.Supplier;
+		if (category?.type === AccountType.Revenue) return Role.Customer;
+
+		const list = allAccounts.concat(sideChoices);
+		for (const id of [fromAccountId, toAccountId]) {
+			if (id === null) continue;
+			const subType = list.find((a) => a.id === id)?.subType;
+			if (subType === AccountSubType.Receivable) return Role.Customer;
+			if (subType === AccountSubType.AccountsPayable) return Role.Supplier;
+		}
+		return Role.Customer;
+	});
+
+	/** `ContactSelect` starts blank until it has fetched anything itself. */
+	const contactInitialLabel = $derived(record?.contactName ?? null);
+
 	/** The body the records API expects, in the everyday terms of this screen. */
 	function payload() {
 		// The record keeps what was actually typed — the foreign figure and its
@@ -360,11 +484,24 @@
 	/** The fields a patch may carry: everything on a free record, the rest on a locked one. */
 	function patchPayload() {
 		const everyday = { description, reference, remark, contactId };
-		// A locked record refuses its amount, date and accounts, and a payment is
-		// described by the payment drawer, which is where its direction and what
-		// it covers are decided. This form only reads one back, so it never
-		// tries to restate its sides (FR-012).
-		if (locked || isPayment) return everyday;
+		// A locked record refuses its amount, date and the account it moved
+		// through, and a payment is described by the payment drawer, which is
+		// where its direction and what it covers are decided. This form only
+		// reads one back, so it never tries to restate its sides (FR-012).
+		if (locked || isPayment) {
+			// The category side is not itself settled or reconciled — only the
+			// money side is — so it stays editable, and a corrected
+			// miscategorization is sent on its own rather than restating both
+			// accounts (FR-017a).
+			if (categoryUnlockable) {
+				return {
+					...everyday,
+					categoryAccountId:
+						record?.kind === LedgerRecordKind.Expense ? toAccountId : fromAccountId
+				};
+			}
+			return everyday;
+		}
 
 		return {
 			...everyday,
@@ -384,6 +521,25 @@
 		if (saving) return null;
 		saving = true;
 		error = '';
+
+		if (!contactId && contactName) {
+			const created = await fetch('/api/contacts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					entityType: EntityType.Business,
+					legalName: contactName,
+					roles: [contactRole]
+				})
+			});
+			if (!created.ok) {
+				saving = false;
+				error = 'Could not create that contact — try again.';
+				return null;
+			}
+			contactId = (await created.json()).id;
+			contactName = null;
+		}
 
 		const res = await fetch(record ? `/api/records/${record.id}` : '/api/records', {
 			method: record ? 'PATCH' : 'POST',
@@ -436,33 +592,18 @@
 	<div class="field-grid">
 		<div class="field">
 			<div class="amount-head">
-				<label class="field-label" for="rec-amount">
-					Amount ({isForeign ? entryCurrency : mainCurrencySymbol()}) *
-				</label>
+				<label class="field-label" for="rec-amount">Amount ({mainCurrencySymbol()}) *</label>
 			</div>
 
 			{#if isForeign}
-				<div class="currency-row">
-					<select
-						bind:value={entryCurrency}
-						disabled={readOnly}
-						class="plain-select"
-						aria-label="Currency"
-					>
-						{#each CURRENCIES as c (c.code)}
-							<option value={c.code}>{c.code} — {c.name}</option>
-						{/each}
-					</select>
-					<Input
-						id="rec-amount"
-						type="number"
-						step="0.01"
-						bind:value={foreignAmount}
-						required
-						disabled={readOnly}
-						class="w-full"
-					/>
-				</div>
+				<Input
+					id="rec-amount"
+					type="text"
+					value={convertedMain != null ? convertedMain.toFixed(2) : ''}
+					disabled
+					readonly
+					class="w-full"
+				/>
 			{:else}
 				<Input
 					id="rec-amount"
@@ -489,53 +630,102 @@
 		</div>
 	</div>
 
-	{#if !readOnly}
+	{#if looksLikeExpenseOrIncome && !readOnly && !showForeign}
 		<button
 			type="button"
 			class="detail-card-action"
 			onclick={() => {
-				showForeign = !showForeign;
-				if (!showForeign) {
-					// Back to the main currency: the rate must go back to 1 too, or the
-					// amount would keep being converted by a rate that no longer applies.
-					rate = '';
-					rateError = '';
-					foreignAmount = '';
-				} else if (entryCurrency === mainCurrency()) {
-					entryCurrency = lastForeignCurrency ?? '';
+				showForeign = true;
+				if (entryCurrency === mainCurrency()) {
+					entryCurrency = preferredForeignCurrency ?? '';
 				}
 			}}
 		>
-			{showForeign ? 'It was in ' + mainCurrency() : 'It was in another currency'}
+			+ Foreign currency
 		</button>
 	{/if}
 
-	{#if isForeign}
-		<div class="field" style="margin-top:14px;">
-			<label class="field-label" for="rec-rate">
-				{mainCurrency()} per 1 {entryCurrency} *
-			</label>
-			<Input
-				id="rec-rate"
-				type="number"
-				step="0.000001"
-				bind:value={rate}
-				required
-				disabled={readOnly}
-				class="w-full"
-			/>
-			<p class="field-hint">
-				{#if rateFetching}
-					Looking up the rate for {date}…
-				{:else if rateError}
-					{rateError}
-				{:else if convertedMain != null}
-					Comes to {formatMoneyRM(convertedMain)}. Looked up for {date} and kept with the
-					record, so it stays right when rates move.
-				{:else}
-					The rate on the record's own date. Change the date and it is looked up again.
+	{#if showForeign}
+		<div class="foreign-box">
+			<div class="foreign-box-head">
+				<span class="foreign-box-title">Foreign currency</span>
+				{#if !readOnly}
+					<button
+						type="button"
+						class="foreign-box-close"
+						aria-label="Remove foreign currency"
+						onclick={() => {
+							// Carry over what was being shown as the main-currency figure,
+							// so undoing "foreign" does not silently swap the amount back
+							// to a stale, wrongly-denominated figure.
+							if (convertedMain != null) amount = convertedMain.toFixed(2);
+							showForeign = false;
+							rate = '';
+							rateError = '';
+							foreignAmount = '';
+						}}
+					>
+						<X size={14} />
+					</button>
 				{/if}
-			</p>
+			</div>
+
+			<div class="field">
+				<label class="field-label" for="rec-currency">Currency</label>
+				<select
+					id="rec-currency"
+					bind:value={entryCurrency}
+					disabled={readOnly}
+					class="plain-select"
+				>
+					{#each CURRENCIES as c (c.code)}
+						<option value={c.code}>{c.code} — {c.name}</option>
+					{/each}
+				</select>
+			</div>
+
+			<div class="field">
+				<label class="field-label" for="rec-foreign-amount">Amount ({entryCurrency})</label>
+				<div class="foreign-amount-row">
+					<span class="foreign-amount-symbol">{currencySymbol(entryCurrency)}</span>
+					<Input
+						id="rec-foreign-amount"
+						type="number"
+						step="0.01"
+						bind:value={foreignAmount}
+						required
+						disabled={readOnly}
+						class="w-full"
+					/>
+				</div>
+			</div>
+
+			<div class="field" style="margin-bottom:0;">
+				<label class="field-label" for="rec-rate">
+					Rate (1 {entryCurrency} = ? {mainCurrency()}) *
+				</label>
+				<Input
+					id="rec-rate"
+					type="number"
+					step="0.000001"
+					bind:value={rate}
+					required
+					disabled={readOnly}
+					class="w-full"
+				/>
+				<p class="field-hint">
+					{#if rateFetching}
+						Looking up the rate for {date}…
+					{:else if rateError}
+						{rateError}
+					{:else if convertedMain != null}
+						Comes to {formatMoneyRM(convertedMain)}. Looked up for {date} and kept with the
+						record, so it stays right when rates move.
+					{:else}
+						The rate on the record's own date. Change the date and it is looked up again.
+					{/if}
+				</p>
+			</div>
 		</div>
 	{/if}
 </section>
@@ -551,6 +741,8 @@
 	{canAdjust}
 	{defaultAccountId}
 	{readOnly}
+	fromDisabled={fromReadOnly}
+	toDisabled={toReadOnly}
 	{mainAmountMinor}
 	onaddside={addSide}
 	onremoveside={removeSide}
@@ -564,36 +756,29 @@
 		     is — the balance would be owed to nobody (FR-008). -->
 		<div class="field">
 			<label class="field-label" for="rec-contact">Contact *</label>
-			<select
-				id="rec-contact"
+			<ContactSelect
+				role={contactRole}
 				bind:value={contactId}
-				required
+				bind:newName={contactName}
+				initialLabel={contactInitialLabel}
 				disabled={!canChange && !isNew}
-				class="plain-select"
-			>
-				<option value={null}>—</option>
-				{#each contacts as contact (contact.id)}
-					<option value={contact.id}>{contact.legalName}</option>
-				{/each}
-			</select>
-			{#if contactId === null}
+				placeholder="Search or create a contact…"
+			/>
+			{#if contactId === null && !contactName}
 				<p class="field-hint">Name the customer or supplier this is owed to or by.</p>
 			{/if}
 		</div>
 	{:else if contacts.length > 0}
 		<div class="field">
 			<label class="field-label" for="rec-contact">Contact</label>
-			<select
-				id="rec-contact"
+			<ContactSelect
+				role={contactRole}
 				bind:value={contactId}
+				bind:newName={contactName}
+				initialLabel={contactInitialLabel}
 				disabled={!canChange && !isNew}
-				class="plain-select"
-			>
-				<option value={null}>—</option>
-				{#each contacts as contact (contact.id)}
-					<option value={contact.id}>{contact.legalName}</option>
-				{/each}
-			</select>
+				placeholder="Search or create a contact…"
+			/>
 		</div>
 	{/if}
 
@@ -643,9 +828,48 @@
 		align-items: center;
 		justify-content: space-between;
 	}
-	.currency-row {
+	.foreign-box {
+		margin-top: 14px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--muted);
+		padding: 14px;
+	}
+	.foreign-box-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 12px;
+	}
+	.foreign-box-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--foreground);
+	}
+	.foreign-box-close {
 		display: grid;
-		grid-template-columns: 150px minmax(0, 1fr);
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border: none;
+		background: none;
+		border-radius: 6px;
+		color: var(--muted-foreground);
+		cursor: pointer;
+	}
+	.foreign-box-close:hover {
+		background: var(--accent);
+		color: var(--destructive);
+	}
+	.foreign-amount-row {
+		display: flex;
+		align-items: center;
 		gap: 8px;
+	}
+	.foreign-amount-symbol {
+		font-size: 13.5px;
+		color: var(--muted-foreground);
+		min-width: 1.2em;
+		text-align: center;
 	}
 </style>

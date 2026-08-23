@@ -129,6 +129,26 @@ export function createRecord(
     legacyId?: number | null;
   },
 ): Refusable<RecordView> {
+  // A foreign currency is offered on an expense or income only — see
+  // `RecordForm.svelte`'s `looksLikeExpenseOrIncome`. Checked here, the one
+  // choke point every caller passes through (the records API, auto-import,
+  // reconciliation's transfer action, `services/invoices.ts`), rather than in
+  // each route (FR-031c's pattern: enforced on the server, never by hiding a
+  // control on just one of them). A rate other than 1 is what "foreign" means
+  // on a record — a main-currency one is always sent with `exchangeRate: 1` —
+  // so that alone is the signal, with no need to know the main currency itself.
+  if (
+    data.kind !== "expense" &&
+    data.kind !== "income" &&
+    data.exchangeRate !== 1
+  ) {
+    return {
+      ok: false,
+      reason:
+        "Only expense and income records can be recorded in another currency.",
+    };
+  }
+
   const amountMinor = toMinor(data.amount, data.exchangeRate);
 
   const context = contextFor(db, data);
@@ -218,6 +238,22 @@ export function patchRecord(
     if (!sides.ok) return sides;
     const amount = patch.amount ?? existing.amount;
     const exchangeRate = patch.exchangeRate ?? existing.exchangeRate;
+    // Both accounts named means the kind is re-derived (see `sidesFor`), so the
+    // currency gate is checked against what it is *becoming*, not what it was
+    // — an expense turned transfer cannot keep a foreign figure just because
+    // it had one a moment ago. A rate other than 1 is what "foreign" means on
+    // a record (a main-currency one is always sent with `exchangeRate: 1`).
+    if (
+      sides.value.kind !== "expense" &&
+      sides.value.kind !== "income" &&
+      exchangeRate !== 1
+    ) {
+      return {
+        ok: false,
+        reason:
+          "Only expense and income records can be recorded in another currency.",
+      };
+    }
     const context = contextFor(db, sides.value);
     if (!context.ok) return context;
     const built = buildMovements(
@@ -231,6 +267,17 @@ export function patchRecord(
     );
     if (!built.ok) return built;
     movements = built.value;
+  } else if (
+    patch.exchangeRate !== undefined &&
+    patch.exchangeRate !== 1 &&
+    existing.kind !== LedgerRecordKind.Expense &&
+    existing.kind !== LedgerRecordKind.Income
+  ) {
+    return {
+      ok: false,
+      reason:
+        "Only expense and income records can be recorded in another currency.",
+    };
   }
 
   updateRecord(
@@ -338,6 +385,7 @@ function sidesFor(
                 id: account.id,
                 type: account.type,
                 role: account.role,
+                subType: account.subType,
                 archived: account.archivedAt !== null,
               }
             : null;

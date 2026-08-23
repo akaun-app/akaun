@@ -26,8 +26,6 @@
   import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import RecordSheet from "$lib/components/ledger/RecordSheet.svelte";
-  import PaymentSheet from "$lib/components/ledger/PaymentSheet.svelte";
   import { statusLabelFor } from "$lib/components/ledger/record-status.js";
   import {
     formatDateShort,
@@ -42,7 +40,7 @@
   import { createResourceStream, mergeById } from "$lib/sse.js";
   import { SvelteSet, SvelteURLSearchParams } from "svelte/reactivity";
   import { AccountType, LedgerRecordKind } from "$lib/enums.js";
-  import { isCategorySide } from "$lib/components/ledger/account-kinds.js";
+  import { isCategorySide } from "$lib/components/ledger/account-sub-types.js";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
@@ -175,7 +173,6 @@
   let sort = $state({ key: "date", dir: "desc" as "asc" | "desc" });
   let selected = new SvelteSet<number>();
 
-  let showNew = $state(false);
   let mobileFilterOpen = $state(false);
   let mobileSearchOpen = $state(false);
   let mobileSearchEl = $state<HTMLInputElement | null>(null);
@@ -519,8 +516,6 @@
 
   let owedItems = $state<OutstandingItem[]>([]);
   let owedOpen = $state(true);
-  let payContactId = $state<number | null>(null);
-  let showPayment = $state(false);
 
   async function loadOwed() {
     const res = await fetch("/api/settlements?direction=we-owe");
@@ -556,9 +551,11 @@
     void goto(recordHref(item.recordId));
   }
 
-  function startPayment(group: OwedGroup) {
-    payContactId = group.contactId;
-    showPayment = true;
+  // A payment opens scoped to this contact, the way the drawer it replaced
+  // always did — carried as a query param since it's prefilled context for a
+  // create form, not a link to another feature's record.
+  function payHref(group: OwedGroup): string {
+    return `${resolve("/(app)/records/new/payment")}?contactId=${group.contactId}`;
   }
 
   // --- Live updates -------------------------------------------------------
@@ -806,12 +803,13 @@
         {#if mobileSearchOpen}<X size={16} />{:else}<Search size={16} />{/if}
       </button>
       {#if data.perms.add}
-        <button
-          onclick={() => (showNew = true)}
-          style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"
+        <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+        <a
+          href={resolve("/(app)/records/new")}
+          style="display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; background:var(--primary); color:var(--primary-foreground); border:none; border-radius:8px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; text-decoration:none;"
         >
           <Plus size={15} /> <span class="btn-text">New record</span>
-        </button>
+        </a>
       {/if}
     </div>
   </header>
@@ -898,13 +896,10 @@
                       >{formatMinor(group.totalMinor)}</span
                     >
                     {#if data.perms.add}
-                      <button
-                        type="button"
-                        class="owed-pay-btn"
-                        onclick={() => startPayment(group)}
-                      >
+                      <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+                      <a class="owed-pay-btn" href={payHref(group)}>
                         Record a payment
-                      </button>
+                      </a>
                     {/if}
                   </div>
                   {#each group.items as item (item.movementId)}
@@ -1656,31 +1651,6 @@
     </Sheet.Content>
 </Sheet.Root>
 
-<!-- Paying somebody back -->
-<PaymentSheet
-  open={showPayment}
-  direction="we-pay"
-  accounts={data.accounts}
-  contacts={data.contacts}
-  defaultAccountId={data.defaultAccountId}
-  contactId={payContactId}
-  onclose={() => (showPayment = false)}
-  onsaved={() => loadOwed()}
-/>
-
-<!-- New record -->
-<RecordSheet
-  open={showNew}
-  accounts={data.accounts}
-  categories={data.categories}
-  allAccounts={data.allAccounts}
-  contacts={data.contacts}
-  defaultAccountId={data.defaultAccountId}
-  lastForeignCurrency={data.lastForeignCurrencyExpense}
-  canAdjust={data.perms.adjustments}
-  onclose={() => (showNew = false)}
-/>
-
 <style>
   /* The row's primary cell is the link. It fills the cell so the whole name
      area is the target, and it never looks like a link — the row already reads
@@ -1989,6 +1959,7 @@
     white-space: nowrap;
   }
   .owed-pay-btn {
+    display: inline-block;
     border: 1px solid var(--border);
     background: var(--card);
     border-radius: 7px;
@@ -1996,6 +1967,7 @@
     font-family: inherit;
     font-size: 11.5px;
     color: var(--foreground);
+    text-decoration: none;
     cursor: pointer;
     white-space: nowrap;
   }

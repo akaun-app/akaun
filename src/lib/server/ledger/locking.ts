@@ -12,13 +12,19 @@ import type { Allowed, LockResult, LockState } from "./types.js";
  * The refusal always names what to undo, so a locked field is never a dead end.
  */
 
-/** Fixed while the record is settled or reconciled. */
+/**
+ * Fixed while the record is settled or reconciled.
+ *
+ * `categoryAccountId` is deliberately not here: a settlement or a bank match
+ * always points at the money side (a receivable/payable or a money-pot
+ * movement), never at a category account, so correcting what an already-paid
+ * or already-matched record was *for* cannot make either wrong.
+ */
 export const LOCKED_FIELDS = [
   "amount",
   "currency",
   "exchangeRate",
   "date",
-  "categoryAccountId",
   "paidFromAccountId",
   "receivedIntoAccountId",
   "fromAccountId",
@@ -39,11 +45,11 @@ export const ALWAYS_EDITABLE_FIELDS = [
 const LOCKED = new Set<string>(LOCKED_FIELDS);
 
 const SETTLED_REASON =
-  "A payment has settled this record. Undo the settlement before changing its amount, date or account.";
+  "A payment has settled this record. Undo the settlement before changing its amount, date or the account it moved through.";
 const RECONCILED_REASON =
-  "This record is matched to a bank line. Unmatch it first before changing its amount, date or account.";
+  "This record is matched to a bank line. Unmatch it first before changing its amount, date or the account it moved through.";
 const BOTH_REASON =
-  "A payment has settled this record and it is matched to a bank line. Undo the settlement and unmatch the bank line before changing its amount, date or account.";
+  "A payment has settled this record and it is matched to a bank line. Undo the settlement and unmatch the bank line before changing its amount, date or the account it moved through.";
 
 function reasonFor(state: LockState): string | null {
   if (state.settled && state.reconciled) return BOTH_REASON;

@@ -227,11 +227,23 @@ again on other pages with many fields or with editable lists.
 
 ### Detail Page Standard
 
-**Read and edit one record on a page. Create a new one in a drawer.**
+**Read and edit one record on a page.**
 
-That one sentence covers every screen, including the surfaces that used to be named exceptions:
-reports and the reconcile workspaces were already pages because they were already things you read
-and work in.
+That covers every screen, including the surfaces that used to be named exceptions: reports and the
+reconcile workspaces were already pages because they were already things you read and work in.
+
+**Create a new one in a drawer, unless the form has outgrown 500px.** Records, Payments, Invoices
+and Quotations create on a full page too — each has either a dynamic, repeating section (extra
+ledger lines, settlement allocations, invoice/quotation line items) or attachments, none of which a
+drawer holds well — and a successful save on one of these pages navigates to the new record's own
+page rather than staying on the list. Account, Opening Balance, Contact and the reconciliation
+Transfer sheet stay as drawers: a handful of static fields fit 500px fine, and turning a three-field
+form into a page would only add a round trip. A create page reuses the same `DetailPage` frame as
+the detail page it hands off to (`hero`/`main`/`rail` snippets, the built-in unsaved-changes guard),
+with `record={null}` (or the entity's equivalent) — see `records/RecordCreate.svelte` and
+`ledger/RecordForm.svelte`'s create/edit split for the reference shape, mirrored by `PaymentForm`,
+`invoices/InvoiceForm.svelte` and `quotations/QuotationForm.svelte`. Each create page's loader gates
+on `add`, not `view`, and redirects rather than rendering a form that would 403 on submit.
 
 Every detail page is built on `DetailPage.svelte` (`$lib/components/ui`), which supplies the frame:
 a topbar with `BackLink`, a hero, a two-column body (`.detail-grid` — the record on the left, a
@@ -265,11 +277,15 @@ in a 456px column, with the amount and status scrolling out of view before the f
 `beforeNavigate` + `ConfirmDialog` guarding a navigation that would drop the edits. Fields render
 read-only when `!canChange` or when the record is `locked` — the same conditions the drawer applied.
 
-**Going back.** `BackLink.svelte` calls `history.back()` when `afterNavigate` says the previous
-entry is the list, and `goto(href)` otherwise. The branch is load-bearing: the list's filters live
-in the address bar and its scroll position lives in the history entry, so `history.back()` restores
-both and `goto` restores neither. `history.length` is not a usable signal — it counts the whole tab
-session.
+**Going back.** `BackLink.svelte` calls `history.back()` whenever `afterNavigate` says there is any
+real previous in-app entry, and falls back to `goto(href)` only when there is not (a fresh load, a
+reload, or a pasted link). It does not require that entry to be the list: a hop from a relation card
+— an account, a contact, another record — leaves a real, useful entry underneath, and browser
+history already knows what it is. The branch is load-bearing when the previous entry *is* the list:
+the list's filters live in the address bar and its scroll position lives in the history entry, so
+`history.back()` restores both and `goto` restores neither. `history.length` is not a usable signal
+— it counts the whole tab session. The button's label falls back to a generic "Back" when we trust
+history but don't actually know the previous page's name (i.e. it isn't `href`).
 
 **Rows are real links.** The primary cell of a list row is an `<a href>` (class `row-link`), with
 the row's `onclick` bailing out when the event came from inside an anchor. That gives hover
@@ -282,9 +298,10 @@ deep link to a single record load a thousand rows and then *redirect away* from 
 them. A missing id redirects to the list rather than throwing — there is no `+error.svelte` in the
 app shell to land on.
 
-**Drawers for creating.** Below is the `Sheet` spec, which still governs every create drawer
-(`RecordSheet`, `AccountSheet`, `PaymentSheet`, `OpeningBalanceSheet`, the contact/invoice/quotation
-create forms).
+**Drawers for creating.** Below is the `Sheet` spec, which still governs every create drawer that
+remains one: `AccountSheet`, `OpeningBalanceSheet`, the contact create form, and the reconciliation
+Transfer sheet in `StatementMatch.svelte`. Records, Payments, Invoices and Quotations moved to a
+full create page instead — see the carve-out above.
 
 **Do not add `<Sheet.Portal>` or `<Sheet.Overlay>` around `<Sheet.Content>`.** `sheet-content.svelte`
 already renders both. Every caller used to add its own, so each open drawer painted two `bg-black/35`
@@ -413,8 +430,10 @@ no second kind of route. `PageState.viaPush` is retired.
 - **Only the detail route needs `actions`** where something still posts a form action — accounts
   (opening balance, deactivate, delete), contacts, invoices and quotations (delete). Records
   writes entirely through `/api/records`, so `/records/[id]` exports no actions at all.
-- A create drawer that succeeds does **not** navigate. The SSE event puts the new row on the list;
-  the user stays where they were.
+- A create **drawer** that succeeds does **not** navigate. The SSE event puts the new row on the
+  list; the user stays where they were. A create **page** (Records, Payments, Invoices,
+  Quotations) does the opposite: it navigates to the new record's own page, since staying on
+  `/records/new` after saving has nothing to show.
 
 ## Tooling
 

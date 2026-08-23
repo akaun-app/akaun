@@ -24,6 +24,7 @@ import {
 import {
   DefaultAccountPurpose,
   LedgerRecordKind,
+  type AccountSubTypeCode,
   type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
@@ -331,6 +332,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountName: accounts.name,
       accountType: accounts.type,
       accountRole: accounts.role,
+      accountSubType: accounts.subType,
     })
     .from(ledgerMovements)
     .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
@@ -373,6 +375,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountName: m.accountName,
       accountType: m.accountType as AccountTypeCode,
       accountRole: m.accountRole,
+      accountSubType: m.accountSubType as AccountSubTypeCode | null,
       amountMinor: m.amountMinor,
     });
 
@@ -667,24 +670,61 @@ export function lockStateFor(db: LedgerDb, recordId: number): LockState {
 // Writes — movements always come from entry-builder.ts
 // ---------------------------------------------------------------------------
 
+/**
+ * A side that keeps its `sortOrder` is updated in place, not replaced — its
+ * id stays the same, so a settlement or reconciliation allocation pointing at
+ * it (via an `onDelete: "cascade"` foreign key) survives a rebuild that never
+ * actually touched that side (FR-017a's category exception depends on this).
+ * A side that gains or loses its place is inserted or deleted as before.
+ */
 function replaceMovements(
   db: LedgerDb,
   recordId: number,
   movements: MovementDraft[],
 ): void {
-  db.delete(ledgerMovements)
+  const existingRows = db
+    .select({ id: ledgerMovements.id, sortOrder: ledgerMovements.sortOrder })
+    .from(ledgerMovements)
     .where(eq(ledgerMovements.recordId, recordId))
-    .run();
-  db.insert(ledgerMovements)
-    .values(
-      movements.map((m) => ({
-        recordId,
-        accountId: m.accountId,
-        amountMinor: m.amountMinor,
-        sortOrder: m.sortOrder,
-      })),
-    )
-    .run();
+    .all();
+  const existingBySortOrder = new Map(
+    existingRows.map((r) => [r.sortOrder, r.id]),
+  );
+  const nextSortOrders = new Set(movements.map((m) => m.sortOrder));
+
+  for (const m of movements) {
+    const existingId = existingBySortOrder.get(m.sortOrder);
+    if (existingId === undefined) continue;
+    db.update(ledgerMovements)
+      .set({ accountId: m.accountId, amountMinor: m.amountMinor })
+      .where(eq(ledgerMovements.id, existingId))
+      .run();
+  }
+
+  const toInsert = movements.filter(
+    (m) => !existingBySortOrder.has(m.sortOrder),
+  );
+  if (toInsert.length > 0) {
+    db.insert(ledgerMovements)
+      .values(
+        toInsert.map((m) => ({
+          recordId,
+          accountId: m.accountId,
+          amountMinor: m.amountMinor,
+          sortOrder: m.sortOrder,
+        })),
+      )
+      .run();
+  }
+
+  const toDeleteIds = existingRows
+    .filter((r) => !nextSortOrders.has(r.sortOrder))
+    .map((r) => r.id);
+  if (toDeleteIds.length > 0) {
+    db.delete(ledgerMovements)
+      .where(inArray(ledgerMovements.id, toDeleteIds))
+      .run();
+  }
 }
 
 export function insertRecord(

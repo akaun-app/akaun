@@ -117,6 +117,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
                 id: account.id,
                 type: account.type,
                 role: account.role,
+                subType: account.subType,
                 archived: account.archivedAt !== null,
               }
             : null;

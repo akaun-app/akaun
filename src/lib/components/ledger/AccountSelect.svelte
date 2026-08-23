@@ -31,7 +31,7 @@
 	}: {
 		/** The shortlist: the accounts this side would sensibly be. */
 		accounts: AccountView[];
-		/** Every account, offered one step away — only with `adjustments`. */
+		/** Every account, offered in place of the shortlist for a user with `adjustments`. */
 		allAccounts?: AccountView[];
 		canAdjust?: boolean;
 		value?: number | null;
@@ -50,26 +50,13 @@
 		bare?: boolean;
 	} = $props();
 
-	/**
-	 * Whether the full chart of accounts is showing.
-	 *
-	 * Each side offers the accounts it would sensibly be — categories for what a
-	 * record was for, money pots for where it came from or went. That shortlist
-	 * is what makes the form answerable without knowing the chart of accounts
-	 * exists. The full list is one step away rather than gone, and only for
-	 * someone with `adjustments`, because a record between any two accounts is
-	 * exactly what that ability is for (FR-008a, FR-031).
-	 */
-	let showAll = $state(false);
-
-	// A record already pointing at an account outside the shortlist opens with
-	// the full list showing, so the picker never hides what the record says.
-	$effect(() => {
-		if (!canAdjust || value == null) return;
-		if (!accounts.some((a) => a.id === value)) showAll = true;
-	});
-
-	const offered = $derived(showAll && canAdjust ? allAccounts : accounts);
+	// Each side offers the accounts it would sensibly be — categories for what a
+	// record was for, money pots for where it came from or went. That shortlist
+	// is what makes the form answerable without knowing the chart of accounts
+	// exists. A user with `adjustments` gets the whole chart instead, because a
+	// record between any two accounts is exactly what that ability is for
+	// (FR-008a, FR-031).
+	const offered = $derived(canAdjust && allAccounts.length > 0 ? allAccounts : accounts);
 
 	// Archived accounts stay out of the picker but never disappear from history.
 	const choices = $derived(
@@ -86,10 +73,7 @@
 		value = (preferred ?? choices[0]).id;
 	});
 
-	// One account is only "no question to ask" when there is genuinely nothing
-	// else to offer — not when a wider list is a click away.
-	const canWiden = $derived(canAdjust && !showAll && allAccounts.length > accounts.length);
-	const onlyChoice = $derived(choices.length === 1 && !canWiden ? choices[0] : null);
+	const onlyChoice = $derived(choices.length === 1 ? choices[0] : null);
 	const id = $derived(`account-select-${name}`);
 </script>
 
@@ -124,15 +108,6 @@
 				</option>
 			{/each}
 		</select>
-		{#if canWiden && !disabled}
-			<button type="button" class="widen" onclick={() => (showAll = true)}>
-				Choose any account
-			</button>
-		{:else if showAll && canAdjust && !disabled}
-			<button type="button" class="widen" onclick={() => (showAll = false)}>
-				Show the usual accounts
-			</button>
-		{/if}
 		{#if disabled && disabledReason}
 			<p class="hint">{disabledReason}</p>
 		{/if}
@@ -160,19 +135,5 @@
 	.account-select:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
-	}
-	.widen {
-		margin-top: 6px;
-		padding: 0;
-		border: none;
-		background: none;
-		color: var(--primary);
-		font-family: inherit;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-	}
-	.widen:hover {
-		text-decoration: underline;
 	}
 </style>

@@ -20,7 +20,23 @@ export function loadQuotationsPage(locals: App.Locals) {
 		else if (q.status === QuotationStatus.Converted) counts.converted++;
 	});
 
-	return { quotations: allQuotations, counts };
+	return {
+		quotations: allQuotations,
+		counts,
+		perms: { add: hasPermission(locals, 'quotations', 'add') }
+	};
+}
+
+/**
+ * The blank form, for `/quotations/new`.
+ *
+ * Gated on `add`, not `view` — a create page's whole reason to exist fails
+ * without it, so a user who lacks it is sent back rather than shown a form
+ * that would 403 on submit.
+ */
+export function loadQuotationNew(locals: App.Locals) {
+	if (!hasPermission(locals, 'quotations', 'add')) throw redirect(302, '/quotations');
+	return {};
 }
 
 /**
