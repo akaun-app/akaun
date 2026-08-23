@@ -55,6 +55,7 @@ function validate(
   movements: MovementDraft[],
   contactId: number | null,
   ctx: BuildContext,
+  input: BuildInput,
 ): Refusable<MovementDraft[]> {
   if (movements.length < 2) {
     return refuse(
@@ -86,7 +87,14 @@ function validate(
       m.accountId === ctx.receivableAccountId ||
       m.accountId === ctx.payableAccountId,
   );
-  if (touchesSharedOwed && contactId === null) {
+  // A payment that ticks off items across several contacts at once (one real
+  // bank transfer, several suppliers) names no single contact of its own —
+  // each settlement it creates already points at the contact its own bill
+  // belongs to, so the attribution is not lost, just not on this record. Every
+  // other kind that touches the shared owed account still must name one.
+  const isBatchPayment =
+    input.kind === "payment" && (input.settlements?.length ?? 0) > 0;
+  if (touchesSharedOwed && contactId === null && !isBatchPayment) {
     return refuse(
       "Say who this money is owed to, or owed by, before saving it.",
     );
@@ -101,7 +109,7 @@ export function buildMovements(
 ): Refusable<MovementDraft[]> {
   const built = buildFor(input, ctx);
   if (!built.ok) return built;
-  return validate(built.value, input.contactId, ctx);
+  return validate(built.value, input.contactId, ctx, input);
 }
 
 function buildFor(

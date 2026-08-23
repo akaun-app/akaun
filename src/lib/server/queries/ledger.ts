@@ -10,6 +10,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import {
   accounts,
   accountDefaults,
@@ -481,6 +482,20 @@ function toRecordView(
 // Reads
 // ---------------------------------------------------------------------------
 
+// Aliased purely to let a batch payment's own record — which touches this
+// contact only through its settlements, not its own `contactId` — join back
+// to that contact without colliding with the ledger_movements/ledger_records
+// already selected from for the row itself (see the `contactId` filter below).
+const paymentMovementsForContact = alias(
+  ledgerMovements,
+  "payment_movements_for_contact",
+);
+const owedMovementsForContact = alias(
+  ledgerMovements,
+  "owed_movements_for_contact",
+);
+const owedRecordsForContact = alias(ledgerRecords, "owed_records_for_contact");
+
 function recordConditions(filters: RecordListFilters): SQL[] {
   const conditions: SQL[] = [];
 
@@ -492,7 +507,20 @@ function recordConditions(filters: RecordListFilters): SQL[] {
     );
   }
   if (filters.contactId !== undefined) {
-    conditions.push(eq(ledgerRecords.contactId, filters.contactId));
+    // A contact's own records, plus a batch payment that settled one of their
+    // bills without naming them as its own single contact (FR-008's
+    // exception for a payment covering several contacts at once) — that
+    // attribution lives in `settlements`, not on the payment's own row.
+    conditions.push(
+      sql`(${eq(ledgerRecords.contactId, filters.contactId)} OR EXISTS (
+        SELECT 1 FROM ${paymentMovementsForContact}
+        INNER JOIN ${settlements} ON ${settlements.paymentMovementId} = ${paymentMovementsForContact.id}
+        INNER JOIN ${owedMovementsForContact} ON ${owedMovementsForContact.id} = ${settlements.owedMovementId}
+        INNER JOIN ${owedRecordsForContact} ON ${owedRecordsForContact.id} = ${owedMovementsForContact.recordId}
+        WHERE ${paymentMovementsForContact.recordId} = ${ledgerRecords.id}
+          AND ${owedRecordsForContact.contactId} = ${filters.contactId}
+      ))`,
+    );
   }
   if (filters.dateFrom)
     conditions.push(gte(ledgerRecords.date, filters.dateFrom));

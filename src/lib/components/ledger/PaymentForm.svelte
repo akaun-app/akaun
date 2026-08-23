@@ -26,6 +26,7 @@
 		contacts = [],
 		defaultAccountId = null,
 		contactId: initialContactId = null,
+		batch: initialBatch = false,
 		// Write-only out-parameters: the frame around this form reads them to
 		// decide whether to show a save bar and what to put on it.
 		// eslint-disable-next-line no-useless-assignment
@@ -42,10 +43,20 @@
 		defaultAccountId?: number | null;
 		/** Opens with this person already chosen, from a row that names them. */
 		contactId?: number | null;
+		/** Opens in batch mode, every contact's outstanding items already ticked. */
+		batch?: boolean;
 		dirty?: boolean;
 		saving?: boolean;
 		error?: string;
 	} = $props();
+
+	/**
+	 * One contact, chosen up front — or several at once, one real bank transfer
+	 * settling items across all of them, with no single contact of its own
+	 * (the payment's settlements carry that attribution instead, see FR-008's
+	 * exception for a batch payment).
+	 */
+	let mode = $state<'single' | 'batch'>('single');
 
 	// --- Form state ---------------------------------------------------------
 	let date = $state('');
@@ -78,6 +89,7 @@
 		reference = '';
 		remark = '';
 		contactId = initialContactId;
+		mode = initialBatch ? 'batch' : 'single';
 		moneyAccountId = null;
 		amountInput = '0.00';
 		amountEdited = false;
@@ -99,24 +111,62 @@
 	// money-owed-to-us side. The list of what can be covered follows from that.
 	const listDirection = $derived(direction === 'we-pay' ? 'we-owe' : 'owed-to-us');
 
+	/** Every item ticked, at its full outstanding amount — the ordinary "pay it all" case. */
+	function tickAll(list: OutstandingItem[]): Record<number, string> {
+		const next: Record<number, string> = {};
+		for (const item of list) next[item.movementId] = (item.outstandingMinor / 100).toFixed(2);
+		return next;
+	}
+
+	export function selectAll(): void {
+		picked = tickAll(items);
+	}
+
+	export function selectNone(): void {
+		picked = {};
+	}
+
 	// A stale answer must never overwrite a newer one, so each request carries a
 	// token and only the newest one is allowed to land.
 	let loadToken = 0;
 	$effect(() => {
+		const currentMode = mode;
 		const person = contactId;
 		const dir = listDirection;
 		const token = ++loadToken;
-		if (person === null) {
-			items = [];
-			loading = false;
+
+		if (currentMode === 'single') {
+			if (person === null) {
+				items = [];
+				loading = false;
+				return;
+			}
+			loading = true;
+			fetch(`/api/settlements?direction=${dir}&contactId=${person}`)
+				.then((res) => (res.ok ? res.json() : null))
+				.then((body) => {
+					if (token !== loadToken) return;
+					items = body?.items ?? [];
+					loading = false;
+				})
+				.catch(() => {
+					if (token !== loadToken) return;
+					items = [];
+					loading = false;
+				});
 			return;
 		}
+
+		// Batch mode: every contact's outstanding items at once, ticked by
+		// default — the user asked to pay it all, and deselects what should
+		// wait rather than hunting down and ticking each item by hand.
 		loading = true;
-		fetch(`/api/settlements?direction=${dir}&contactId=${person}`)
+		fetch(`/api/settlements?direction=${dir}`)
 			.then((res) => (res.ok ? res.json() : null))
 			.then((body) => {
 				if (token !== loadToken) return;
 				items = body?.items ?? [];
+				picked = tickAll(items);
 				loading = false;
 			})
 			.catch(() => {
@@ -127,10 +177,30 @@
 	});
 
 	// Changing who the payment is with invalidates every tick against the old
-	// person's items — those movements are not theirs to pay off.
+	// person's items — those movements are not theirs to pay off. Irrelevant in
+	// batch mode, where no single contact is chosen at all.
 	$effect(() => {
+		if (mode !== 'single') return;
 		void contactId;
 		picked = {};
+	});
+
+	/** Every ticked item, grouped by who it belongs to (batch mode only). */
+	const groupedItems = $derived.by(() => {
+		const byContact = new Map<
+			number,
+			{ contactId: number; contactName: string; items: OutstandingItem[] }
+		>();
+		for (const item of items) {
+			if (item.contactId === null) continue;
+			let group = byContact.get(item.contactId);
+			if (!group) {
+				group = { contactId: item.contactId, contactName: item.contactName ?? '', items: [] };
+				byContact.set(item.contactId, group);
+			}
+			group.items.push(item);
+		}
+		return [...byContact.values()].sort((a, b) => a.contactName.localeCompare(b.contactName));
 	});
 
 	// A box left empty is the same as not having ticked the item, so it is
@@ -173,8 +243,11 @@
 	}
 
 	export function blockedBy(): string | null {
-		if (contactId === null) return direction === 'we-pay' ? 'Choose who this pays.' : 'Choose who paid this.';
+		if (mode === 'single' && contactId === null) {
+			return direction === 'we-pay' ? 'Choose who this pays.' : 'Choose who paid this.';
+		}
 		if (moneyAccountId === null) return 'Choose an account.';
+		if (mode === 'batch' && allocations.length === 0) return 'Tick at least one item to pay.';
 		if (amountMinor <= 0) return 'Enter an amount.';
 		return null;
 	}
@@ -196,7 +269,9 @@
 				exchangeRate: 1,
 				reference,
 				remark,
-				contactId,
+				// A batch payment names no single contact — each settlement it
+				// creates already points at the contact its own item belongs to.
+				contactId: mode === 'batch' ? null : contactId,
 				paidFromAccountId: moneyAccountId,
 				direction,
 				settlements: allocations
@@ -224,14 +299,43 @@
 	<div class="detail-card-head"><span class="detail-card-title">Payment</span></div>
 
 	<div class="field">
-		<label class="field-label" for="pay-contact">{contactLabel}</label>
-		<select id="pay-contact" bind:value={contactId} required class="plain-select">
-			<option value={null} disabled>Choose a person</option>
-			{#each contacts as contact (contact.id)}
-				<option value={contact.id}>{contact.legalName}</option>
-			{/each}
-		</select>
+		<span class="field-label">Who</span>
+		<div class="mode-toggle" role="radiogroup" aria-label="One contact or several">
+			<button
+				type="button"
+				class="mode-btn"
+				class:active={mode === 'single'}
+				onclick={() => (mode = 'single')}
+			>
+				One contact
+			</button>
+			<button
+				type="button"
+				class="mode-btn"
+				class:active={mode === 'batch'}
+				onclick={() => (mode = 'batch')}
+			>
+				Several at once
+			</button>
+		</div>
 	</div>
+
+	{#if mode === 'single'}
+		<div class="field">
+			<label class="field-label" for="pay-contact">{contactLabel}</label>
+			<select id="pay-contact" bind:value={contactId} required class="plain-select">
+				<option value={null} disabled>Choose a person</option>
+				{#each contacts as contact (contact.id)}
+					<option value={contact.id}>{contact.legalName}</option>
+				{/each}
+			</select>
+		</div>
+	{:else}
+		<p class="covers-note" style="margin-bottom:0;">
+			One transfer, split across every outstanding item below — tick off what it does not cover
+			yet.
+		</p>
+	{/if}
 
 	<div class="field">
 		<label class="field-label" for="pay-description">Description *</label>
@@ -246,9 +350,13 @@
 			step="0.01"
 			bind:value={amountInput}
 			oninput={() => (amountEdited = true)}
+			disabled={mode === 'batch'}
 			required
 			class="w-full"
 		/>
+		{#if mode === 'batch'}
+			<p class="field-hint">The sum of what is ticked below — there is nobody to put a remainder on.</p>
+		{/if}
 	</div>
 
 	<div class="field">
@@ -260,50 +368,106 @@
 </section>
 
 <section class="detail-card">
-	<div class="detail-card-head"><span class="detail-card-title">Allocation</span></div>
+	<div class="detail-card-head">
+		<span class="detail-card-title">Allocation</span>
+		{#if mode === 'batch' && items.length > 0}
+			<div class="covers-bulk">
+				<button type="button" class="covers-bulk-btn" onclick={selectAll}>Select all</button>
+				<button type="button" class="covers-bulk-btn" onclick={selectNone}>Select none</button>
+			</div>
+		{/if}
+	</div>
 
-	{#if contactId === null}
-		<p class="covers-note">Choose a contact to see what is outstanding.</p>
+	{#if mode === 'single'}
+		{#if contactId === null}
+			<p class="covers-note">Choose a contact to see what is outstanding.</p>
+		{:else if loading}
+			<p class="covers-note">Looking…</p>
+		{:else if items.length === 0}
+			<p class="covers-note">Nothing is outstanding with this person.</p>
+		{:else}
+			<div class="covers-list">
+				{#each items as item (item.movementId)}
+					<div class="covers-row" class:on={isPicked(item)}>
+						<label class="covers-tick">
+							<input type="checkbox" checked={isPicked(item)} onchange={() => toggle(item)} />
+							<span class="covers-main">
+								<span class="covers-name">{item.description || 'Record'}</span>
+								<span class="covers-sub">
+									{formatDate(item.date)}{item.recordNumber ? ` · ${item.recordNumber}` : ''} · {formatMinor(
+										item.outstandingMinor
+									)} outstanding
+									{#if item.daysOverdue > 0}
+										· {item.daysOverdue} days late
+									{/if}
+								</span>
+							</span>
+						</label>
+						{#if isPicked(item)}
+							<input
+								class="covers-amount"
+								type="number"
+								step="0.01"
+								aria-label="Amount put against {item.description || 'this record'}"
+								bind:value={picked[item.movementId]}
+							/>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
 	{:else if loading}
 		<p class="covers-note">Looking…</p>
-	{:else if items.length === 0}
-		<p class="covers-note">Nothing is outstanding with this person.</p>
+	{:else if groupedItems.length === 0}
+		<p class="covers-note">Nothing is outstanding with anyone.</p>
 	{:else}
-		<div class="covers-list">
-			{#each items as item (item.movementId)}
-				<div class="covers-row" class:on={isPicked(item)}>
-					<label class="covers-tick">
-						<input type="checkbox" checked={isPicked(item)} onchange={() => toggle(item)} />
-						<span class="covers-main">
-							<span class="covers-name">{item.description || 'Record'}</span>
-							<span class="covers-sub">
-								{formatDate(item.date)}{item.recordNumber ? ` · ${item.recordNumber}` : ''} · {formatMinor(
-									item.outstandingMinor
-								)} outstanding
-								{#if item.daysOverdue > 0}
-									· {item.daysOverdue} days late
-								{/if}
-							</span>
-						</span>
-					</label>
-					{#if isPicked(item)}
-						<input
-							class="covers-amount"
-							type="number"
-							step="0.01"
-							aria-label="Amount put against {item.description || 'this record'}"
-							bind:value={picked[item.movementId]}
-						/>
-					{/if}
+		{#each groupedItems as group (group.contactId)}
+			<div class="covers-group">
+				<span class="covers-group-title">{group.contactName}</span>
+				<div class="covers-list">
+					{#each group.items as item (item.movementId)}
+						<div class="covers-row" class:on={isPicked(item)}>
+							<label class="covers-tick">
+								<input type="checkbox" checked={isPicked(item)} onchange={() => toggle(item)} />
+								<span class="covers-main">
+									<span class="covers-name">{item.description || 'Record'}</span>
+									<span class="covers-sub">
+										{formatDate(item.date)}{item.recordNumber
+											? ` · ${item.recordNumber}`
+											: ''} · {formatMinor(item.outstandingMinor)} outstanding
+										{#if item.daysOverdue > 0}
+											· {item.daysOverdue} days late
+										{/if}
+									</span>
+								</span>
+							</label>
+							{#if isPicked(item)}
+								<input
+									class="covers-amount"
+									type="number"
+									step="0.01"
+									aria-label="Amount put against {item.description || 'this record'}"
+									bind:value={picked[item.movementId]}
+								/>
+							{/if}
+						</div>
+					{/each}
 				</div>
-			{/each}
-		</div>
+			</div>
+		{/each}
 	{/if}
 
-	{#if allocatedMinor > 0 && unallocatedMinor > 0}
-		<p class="covers-note">{formatMinor(unallocatedMinor)} of this payment is not put against anything yet.</p>
-	{:else if allocatedMinor > 0}
-		<p class="covers-note">This pays off {formatMinor(allocatedMinor)}.</p>
+	{#if mode === 'single'}
+		{#if allocatedMinor > 0 && unallocatedMinor > 0}
+			<p class="covers-note">{formatMinor(unallocatedMinor)} of this payment is not put against anything yet.</p>
+		{:else if allocatedMinor > 0}
+			<p class="covers-note">This pays off {formatMinor(allocatedMinor)}.</p>
+		{/if}
+	{:else if allocations.length > 0}
+		<p class="covers-note">
+			This pays off {formatMinor(allocatedMinor)} across {allocations.length}
+			{allocations.length === 1 ? 'item' : 'items'}.
+		</p>
 	{/if}
 </section>
 
@@ -377,6 +541,54 @@
 	.covers-sub {
 		font-size: 11.5px;
 		color: var(--muted-foreground);
+	}
+	.mode-toggle {
+		display: flex;
+		gap: 6px;
+	}
+	.mode-btn {
+		flex: 1;
+		padding: 7px 10px;
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		background: var(--card);
+		color: var(--muted-foreground);
+		font-family: inherit;
+		font-size: 12.5px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.mode-btn.active {
+		border-color: var(--primary);
+		background: var(--accent);
+		color: var(--foreground);
+	}
+	.covers-bulk {
+		display: flex;
+		gap: 8px;
+	}
+	.covers-bulk-btn {
+		border: none;
+		background: none;
+		color: var(--primary);
+		font-family: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		padding: 0;
+	}
+	.covers-group {
+		margin-bottom: 14px;
+	}
+	.covers-group:last-child {
+		margin-bottom: 0;
+	}
+	.covers-group-title {
+		display: block;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--muted-foreground);
+		margin-bottom: 6px;
 	}
 	.covers-amount {
 		width: 92px;

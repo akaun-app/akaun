@@ -214,6 +214,25 @@ export function patchRecord(
   const existing = getRecord(db, id);
   if (!existing) return { ok: false, reason: "That record no longer exists." };
 
+  // Who a payment names — one contact, or none because its settlements each
+  // point at their own — is decided once, at creation. `contactId` is not a
+  // money field, so an ordinary patch never rebuilds movements to re-check it;
+  // without this, a change to it could silently turn a batch payment into a
+  // single-contact one (or the reverse) with no re-validation at all. The
+  // form resends the unchanged value on every save, so only an actual change
+  // is refused here.
+  if (
+    existing.kind === LedgerRecordKind.Payment &&
+    patch.contactId !== undefined &&
+    patch.contactId !== existing.contactId
+  ) {
+    return {
+      ok: false,
+      reason:
+        "A payment's contact is set when it is created and cannot be changed afterward. Delete it and record it again.",
+    };
+  }
+
   const lock = lockStateFor(db, id);
   for (const field of Object.keys(patch) as (keyof RecordPatch)[]) {
     if (patch[field] === undefined) continue;

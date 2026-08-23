@@ -56,6 +56,7 @@
 			contacts={data.contacts}
 			defaultAccountId={data.defaultAccountId}
 			contactId={data.contactId}
+			batch={data.batch}
 		/>
 	{/snippet}
 </DetailPage>

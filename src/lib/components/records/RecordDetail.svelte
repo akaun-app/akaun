@@ -72,6 +72,18 @@
 	const contact = $derived(
 		data.contacts.find((c) => c.id === record.contactId) ?? null
 	);
+	// A batch payment names no single contact of its own — each settlement it
+	// creates carries its own instead (CLAUDE.md's ledger notes, FR-008). Only
+	// meaningful for a payment; every other kind with no contact just has none.
+	const batchContactCount = $derived(
+		record.kind === LedgerRecordKind.Payment && record.contactId === null
+			? new Set(
+					settlementLinks
+						.map((l) => l.otherContactId)
+						.filter((id): id is number => id !== null)
+				).size
+			: 0
+	);
 
 	async function save() {
 		const saved = await formRef?.submit();
@@ -218,6 +230,17 @@
 					</span>
 					<ChevronRight size={14} color="var(--muted-foreground)" />
 				</button>
+			</section>
+		{:else if batchContactCount > 0}
+			<section class="detail-card">
+				<div class="detail-card-head"><span class="detail-card-title">Contact</span></div>
+				<div class="ob-card ob-card-static">
+					<span class="ob-icon"><Users size={15} /></span>
+					<span class="ob-main">
+						<span class="ob-title">{batchContactCount} contacts</span>
+						<span class="ob-sub">One transfer, split across several suppliers — see below.</span>
+					</span>
+				</div>
 			</section>
 		{/if}
 

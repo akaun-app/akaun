@@ -558,6 +558,13 @@
     return `${resolve("/(app)/records/new/payment")}?contactId=${group.contactId}`;
   }
 
+  /** One transfer settling every outstanding payable at once, across every
+   *  contact — the payment screen opens in batch mode with everything
+   *  ticked, so this is one action rather than one per contact. */
+  function payAllHref(): string {
+    return `${resolve("/(app)/records/new/payment")}?direction=we-pay&batch=1`;
+  }
+
   // --- Live updates -------------------------------------------------------
   type LedgerStreamMsg =
     | { type: "record-update"; record: RecordView }
@@ -888,6 +895,14 @@
 
           {#if owedOpen}
             <div class="owed-body">
+              {#if data.perms.add && owedGroups.length > 1}
+                <div class="owed-all-row">
+                  <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+                  <a class="owed-pay-btn" href={payAllHref()}>
+                    Pay all outstanding
+                  </a>
+                </div>
+              {/if}
               {#each owedGroups as group (group.contactId)}
                 <div class="owed-group">
                   <div class="owed-group-head">
@@ -1936,6 +1951,10 @@
     flex-direction: column;
     gap: 14px;
     padding: 0 14px 14px;
+  }
+  .owed-all-row {
+    display: flex;
+    justify-content: flex-end;
   }
   .owed-group {
     display: flex;

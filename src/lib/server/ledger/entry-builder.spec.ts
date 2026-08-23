@@ -402,4 +402,48 @@ describe("what the builder refuses", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/account/i);
   });
+
+  it("refuses a payment naming no contact and no settlements", () => {
+    const result = build({
+      kind: "payment",
+      amountMinor: 5000,
+      contactId: null,
+      paidFromAccountId: BANK,
+      direction: "we-pay",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/who/i);
+  });
+});
+
+describe("a batch payment — several contacts settled by one payment", () => {
+  it("allows a payment naming no contact when it carries settlements", () => {
+    const result = build({
+      kind: "payment",
+      amountMinor: 15000,
+      contactId: null,
+      paidFromAccountId: BANK,
+      direction: "we-pay",
+      settlements: [
+        { owedMovementId: 101, amountMinor: 10000 },
+        { owedMovementId: 102, amountMinor: 5000 },
+      ],
+    });
+    expect(result.ok, result.ok ? "" : result.reason).toBe(true);
+  });
+
+  it("still clears what we owe and empties the payer, same as any payment", () => {
+    const m = movementsOf(
+      build({
+        kind: "payment",
+        amountMinor: 15000,
+        contactId: null,
+        paidFromAccountId: BANK,
+        direction: "we-pay",
+        settlements: [{ owedMovementId: 101, amountMinor: 15000 }],
+      }),
+    );
+    expect(amountOn(m, PAYABLE)).toBe(15000);
+    expect(amountOn(m, BANK)).toBe(-15000);
+  });
 });

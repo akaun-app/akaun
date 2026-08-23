@@ -123,8 +123,11 @@ export function loadPaymentNew(locals: App.Locals, url: URL) {
     url.searchParams.get("direction") === "we-receive"
       ? "we-receive"
       : "we-pay";
+  // Lands the form open to every contact's outstanding items at once, ticked
+  // by default — the "pay all outstanding" entry point on the Records screen.
+  const batch = url.searchParams.get("batch") === "1";
 
-  return { contactId, direction, ...recordFormOptions(locals) };
+  return { contactId, direction, batch, ...recordFormOptions(locals) };
 }
 
 /**

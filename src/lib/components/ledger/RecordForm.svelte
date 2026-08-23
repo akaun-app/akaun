@@ -751,7 +751,16 @@
 <section class="detail-card">
 	<div class="detail-card-head"><span class="detail-card-title">Details</span></div>
 
-	{#if needsContact}
+	{#if needsContact && isPayment && contactId === null}
+		<!-- A batch payment names no single contact — each settlement it created
+		     points at its own instead. Set once, at creation; not editable here. -->
+		<div class="field">
+			<span class="field-label">Contact</span>
+			<p class="field-hint" style="margin-top:0;">
+				Several contacts — this payment covers more than one. See the list below.
+			</p>
+		</div>
+	{:else if needsContact}
 		<!-- A side on a shared owed account is meaningless without saying whose it
 		     is — the balance would be owed to nobody (FR-008). -->
 		<div class="field">
@@ -761,7 +770,7 @@
 				bind:value={contactId}
 				bind:newName={contactName}
 				initialLabel={contactInitialLabel}
-				disabled={!canChange && !isNew}
+				disabled={isPayment || (!canChange && !isNew)}
 				placeholder="Search or create a contact…"
 			/>
 			{#if contactId === null && !contactName}

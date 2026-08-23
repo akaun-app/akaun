@@ -314,6 +314,10 @@ export type SettlementLink = {
   otherDate: string;
   otherDescription: string;
   otherKind: number;
+  /** Null for a batch payment covering several contacts, or any other kind
+   *  with no contact of its own. */
+  otherContactId: number | null;
+  otherContactName: string | null;
 };
 
 export function settlementsForRecord(
@@ -359,9 +363,12 @@ export function settlementsForRecord(
       date: ledgerRecords.date,
       description: ledgerRecords.description,
       kind: ledgerRecords.kind,
+      contactId: ledgerRecords.contactId,
+      contactName: contacts.legalName,
     })
     .from(ledgerMovements)
     .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
+    .leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
     .where(inArray(ledgerMovements.id, otherMovementIds))
     .all();
   const otherByMovement = new Map(others.map((o) => [o.movementId, o]));
@@ -382,6 +389,8 @@ export function settlementsForRecord(
       otherDate: other.date,
       otherDescription: other.description,
       otherKind: other.kind,
+      otherContactId: other.contactId,
+      otherContactName: other.contactName ?? null,
     });
   }
   return links;

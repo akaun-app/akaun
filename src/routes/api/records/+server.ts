@@ -69,7 +69,13 @@ const createSchema = z.discriminatedUnion("kind", [
     ...common,
     kind: z.literal("payment"),
     paidFromAccountId: accountId,
-    contactId: accountId,
+    // Null names no single contact — a payment that settles items across
+    // several contacts at once (one bank transfer, several suppliers) is
+    // allowed only when its settlements carry that attribution instead.
+    // `entry-builder.ts`'s `validate()` is what actually refuses a null
+    // contact with no settlements (FR-008); this is just what lets the shape
+    // through to it.
+    contactId: accountId.nullable(),
     direction: z.enum(["we-pay", "we-receive"]),
     settlements: z
       .array(
@@ -297,6 +303,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       ? result.value.movements.find((m) => m.accountId === owedDefault.value)
       : undefined;
 
+    // `createSettlements` itself refuses a null-contact (batch) payment whose
+    // settlements do not add up to the whole amount — there is nobody left to
+    // put a remainder on, unlike an ordinary single-contact payment.
     const settled = paymentMovement
       ? createSettlements(
           db,

@@ -26,6 +26,8 @@
 		otherDate: string;
 		otherDescription: string;
 		otherKind: number;
+		otherContactId: number | null;
+		otherContactName: string | null;
 	};
 
 	let {
@@ -78,7 +80,11 @@
 
 	function subOf(link: SettlementLink): string {
 		const date = formatDate(link.otherDate);
-		return link.otherRecordNumber ? `${date} · ${link.otherRecordNumber}` : date;
+		const withNumber = link.otherRecordNumber ? `${date} · ${link.otherRecordNumber}` : date;
+		// Named only when it differs from the row it is already attached to — a
+		// batch payment's own rail is the one place several contacts show up
+		// side by side, so that is the one place worth naming whose item this is.
+		return link.otherContactName ? `${link.otherContactName} · ${withNumber}` : withNumber;
 	}
 </script>
 

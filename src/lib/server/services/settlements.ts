@@ -95,11 +95,23 @@ export function createSettlements(
           "A payment can only cover items of the same kind — money we owe, or money owed to us, not both.",
       };
     }
-    if (owed.contactId !== payment.contactId) {
+    // A payment naming one contact can only cover that contact's own items.
+    // A payment naming none (a batch across several contacts) instead trusts
+    // each settlement to carry its own attribution — but every item it covers
+    // must still belong to someone; nothing here settles an unowned side.
+    if (payment.contactId !== null) {
+      if (owed.contactId !== payment.contactId) {
+        return {
+          ok: false,
+          reason:
+            "This payment and that item belong to different people. A payment can only cover what the same person is owed.",
+        };
+      }
+    } else if (owed.contactId === null) {
       return {
         ok: false,
         reason:
-          "This payment and that item belong to different people. A payment can only cover what the same person is owed.",
+          "That item belongs to nobody in particular, so this payment cannot say whose debt it clears.",
       };
     }
     // One side has to be the money going out and the other the money coming in;
@@ -121,6 +133,24 @@ export function createSettlements(
     payment.amountMinor,
   );
   if (!check.ok) return check;
+
+  // A payment naming one contact may leave part of itself unallocated — the
+  // rest just sits as a payment to that person with nothing (yet) put against
+  // it. A payment naming none has nobody left to put a remainder on, so it
+  // has to be spent in full.
+  if (payment.contactId === null) {
+    const allocatedMinor = allocations.reduce(
+      (sum, a) => sum + a.amountMinor,
+      0,
+    );
+    if (allocatedMinor !== Math.abs(payment.amountMinor)) {
+      return {
+        ok: false,
+        reason:
+          "A payment covering no single contact has to be fully allocated — there is nobody left to put the remainder on.",
+      };
+    }
+  }
 
   const ids = insertSettlements(
     db,
