@@ -1,9 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { accountDefaults, accounts, bankStatements, ledgerMovements } from "../db/schema.js";
 import {
-  AccountSubType,
   AccountSubTypesByType,
-  AccountType,
   DefaultAccountPurpose,
   LedgerRecordKind,
   type AccountSubTypeCode,
@@ -14,35 +12,21 @@ import { accountEvents } from "../ledger/events.js";
 import { buildMovements } from "../ledger/entry-builder.js";
 import { rankAfter } from "../ledger/rank.js";
 import { lowestFreeAccountCode } from "../ledger/account-code.js";
+import { legacyRoleForAccountType, NEEDS_REVIEW_TYPES } from "../ledger/account-type.js";
 import {
-  legacyRoleForAccountType,
-  NEEDS_REVIEW_TYPES,
-} from "../ledger/account-type.js";
-import { canAddAccountChild, canChangeAccountSubType, canChangeAccountType, canDeactivateAccount, canDeleteAccount as deletionEligibility } from "../ledger/account-eligibility.js";
+  canAddAccountChild,
+  canChangeAccountSubType,
+  canChangeAccountType,
+  canDeactivateAccount,
+  canDeleteAccount as deletionEligibility,
+} from "../ledger/account-eligibility.js";
 import { descendantsOf, validateAccountParent } from "../ledger/account-hierarchy.js";
 import { fromMinor } from "../ledger/money.js";
 import { mainCurrencyCode } from "../currency/form.js";
-import type {
-  AccountCreate,
-  AccountPatch,
-  AccountView,
-  LedgerDb,
-  Minor,
-  Refusable,
-} from "../ledger/types.js";
-import {
-  accountRefs,
-  getAccount,
-  openingBalanceFor,
-} from "../queries/accounts.js";
+import type { AccountCreate, AccountPatch, AccountView, LedgerDb, Minor, Refusable } from "../ledger/types.js";
+import { accountRefs, getAccount, openingBalanceFor } from "../queries/accounts.js";
 import { requireAccountDefault } from "./account-defaults.js";
-import {
-  deleteRecord,
-  getRecordRow,
-  insertRecord,
-  lockStateFor,
-  updateRecord,
-} from "../queries/ledger.js";
+import { deleteRecord, getRecordRow, insertRecord, lockStateFor, updateRecord } from "../queries/ledger.js";
 
 /**
  * Writing to the chart of accounts.
@@ -60,11 +44,7 @@ function emitAccount(db: LedgerDb, id: number): AccountView | null {
   return account;
 }
 
-export function createAccount(
-  db: LedgerDb,
-  actingUserId: number,
-  data: AccountCreate,
-): Refusable<AccountView> {
+export function createAccount(db: LedgerDb, actingUserId: number, data: AccountCreate): Refusable<AccountView> {
   const name = data.name.trim();
   if (!name) return { ok: false, reason: "Give the account a name." };
 
@@ -78,26 +58,13 @@ export function createAccount(
         };
       }
     } else {
-      if (
-        data.type === AccountType.Asset &&
-        data.subType === AccountSubType.Equipment
-      ) {
-        return {
-          ok: false,
-          reason:
-            "Equipment is chosen on the record form as what money was spent on, not set here.",
-        };
-      }
       if (data.subType !== undefined && !allowed.includes(data.subType)) {
         return {
           ok: false,
           reason: "That sub-type does not belong to this account type.",
         };
       }
-      if (
-        data.subType === undefined &&
-        NEEDS_REVIEW_TYPES.includes(data.type)
-      ) {
+      if (data.subType === undefined && NEEDS_REVIEW_TYPES.includes(data.type)) {
         return { ok: false, reason: "Choose what kind of account this is." };
       }
     }
@@ -106,24 +73,60 @@ export function createAccount(
   let row: typeof accounts.$inferSelect;
   try {
     row = db.transaction((tx) => {
-      const hierarchy = tx.select({ id: accounts.id, type: accounts.type, parentId: accounts.parentId }).from(accounts).all()
-        .filter((item): item is { id: number; type: AccountTypeCode; parentId: number | null } => item.type != null);
+      const hierarchy = tx
+        .select({
+          id: accounts.id,
+          type: accounts.type,
+          parentId: accounts.parentId,
+        })
+        .from(accounts)
+        .all()
+        .filter(
+          (
+            item,
+          ): item is {
+            id: number;
+            type: AccountTypeCode;
+            parentId: number | null;
+          } => item.type != null,
+        );
       const temporaryId = -1;
-      const parentCheck = validateAccountParent([...hierarchy, { id: temporaryId, type: data.type, parentId: null }], temporaryId, data.parentId ?? null);
+      const parentCheck = validateAccountParent(
+        [...hierarchy, { id: temporaryId, type: data.type, parentId: null }],
+        temporaryId,
+        data.parentId ?? null,
+      );
       if (!parentCheck.ok) throw new AccountRefusal(parentCheck.reason);
       if (data.parentId != null) {
         const eligibility = canAddAccountChild(dependencyState(tx, data.parentId));
         if (!eligibility.ok) throw new AccountRefusal(eligibility.reason);
       }
-      const codes = tx.select({ code: accounts.code }).from(accounts).all().flatMap((item) => item.code == null ? [] : [item.code]);
-      const inserted = tx.insert(accounts).values({
-        role: legacyRoleForAccountType(data.type), type: data.type,
-        subType: AccountSubTypesByType[data.type] !== undefined ? (data.subType ?? null) : null,
-        code: lowestFreeAccountCode(data.type, codes), name,
-        parentId: data.parentId ?? null, rank: rankAfter(null),
-        createdBy: actingUserId, updatedBy: actingUserId,
-      }).returning().get()!;
-      recordAudit(tx, { recordType: "account", recordId: inserted.id, userId: actingUserId, action: "create" });
+      const codes = tx
+        .select({ code: accounts.code })
+        .from(accounts)
+        .all()
+        .flatMap((item) => (item.code == null ? [] : [item.code]));
+      const inserted = tx
+        .insert(accounts)
+        .values({
+          role: legacyRoleForAccountType(data.type),
+          type: data.type,
+          subType: AccountSubTypesByType[data.type] !== undefined ? (data.subType ?? null) : null,
+          code: lowestFreeAccountCode(data.type, codes),
+          name,
+          parentId: data.parentId ?? null,
+          rank: rankAfter(null),
+          createdBy: actingUserId,
+          updatedBy: actingUserId,
+        })
+        .returning()
+        .get()!;
+      recordAudit(tx, {
+        recordType: "account",
+        recordId: inserted.id,
+        userId: actingUserId,
+        action: "create",
+      });
       return inserted;
     });
   } catch (error) {
@@ -158,8 +161,7 @@ export function patchAccount(
   if (patch.active === false && existing.isSystem) {
     return {
       ok: false,
-      reason:
-        "This is one of the accounts the app needs to work, so it cannot be archived.",
+      reason: "This is one of the accounts the app needs to work, so it cannot be archived.",
     };
   }
 
@@ -170,16 +172,6 @@ export function patchAccount(
       return {
         ok: false,
         reason: "A sub-type does not apply to this account type.",
-      };
-    }
-    if (
-      effectiveType === AccountType.Asset &&
-      patch.subType === AccountSubType.Equipment
-    ) {
-      return {
-        ok: false,
-        reason:
-          "Equipment is chosen on the record form as what money was spent on, not set here.",
       };
     }
     if (!allowed.includes(patch.subType)) {
@@ -199,9 +191,7 @@ export function patchAccount(
     patch.type !== existing.type &&
     patch.subType === undefined &&
     existing.subType !== null &&
-    !(AccountSubTypesByType[effectiveType] ?? []).includes(
-      existing.subType as AccountSubTypeCode,
-    );
+    !(AccountSubTypesByType[effectiveType] ?? []).includes(existing.subType as AccountSubTypeCode);
 
   const state = dependencyState(db, id);
   if (patch.type !== undefined && patch.type !== existing.type) {
@@ -235,22 +225,40 @@ export function patchAccount(
     db.transaction((tx) => {
       let code = existing.code;
       if (patch.type !== undefined && patch.type !== existing.type) {
-        const codes = tx.select({ code: accounts.code }).from(accounts).all().flatMap((item) => item.code == null ? [] : [item.code]);
+        const codes = tx
+          .select({ code: accounts.code })
+          .from(accounts)
+          .all()
+          .flatMap((item) => (item.code == null ? [] : [item.code]));
         code = lowestFreeAccountCode(patch.type, codes);
       }
-      const result = tx.update(accounts).set({
-        ...(name ? { name } : {}),
-        ...(patch.type !== undefined ? { type: patch.type, role: legacyRoleForAccountType(patch.type), code } : {}),
-        ...(patch.subType !== undefined
-          ? { subType: patch.subType }
-          : staleSubType
-            ? { subType: null }
+      const result = tx
+        .update(accounts)
+        .set({
+          ...(name ? { name } : {}),
+          ...(patch.type !== undefined
+            ? {
+                type: patch.type,
+                role: legacyRoleForAccountType(patch.type),
+                code,
+              }
             : {}),
-        ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
-        ...(patch.active !== undefined ? { archivedAt: patch.active ? null : new Date().toISOString() } : {}),
-        updatedBy: actingUserId, updatedAt: new Date().toISOString(),
-      }).where(eq(accounts.id, id)).returning().get()!;
-      recordAudit(tx, { recordType: "account", recordId: id, userId: actingUserId, action: "update", changes: diffRecords(existing, result) });
+          ...(patch.subType !== undefined ? { subType: patch.subType } : staleSubType ? { subType: null } : {}),
+          ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
+          ...(patch.active !== undefined ? { archivedAt: patch.active ? null : new Date().toISOString() } : {}),
+          updatedBy: actingUserId,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(accounts.id, id))
+        .returning()
+        .get()!;
+      recordAudit(tx, {
+        recordType: "account",
+        recordId: id,
+        userId: actingUserId,
+        action: "update",
+        changes: diffRecords(existing, result),
+      });
     });
   } catch (error) {
     if (error instanceof AccountRefusal) return { ok: false, reason: error.message };
@@ -264,14 +272,14 @@ export function patchAccount(
   return { ok: true, value: account };
 }
 
-export function removeAccount(
-  db: LedgerDb,
-  id: number,
-  actingUserId: number,
-): Refusable<null> {
+export function removeAccount(db: LedgerDb, id: number, actingUserId: number): Refusable<null> {
   const existing = db.select().from(accounts).where(eq(accounts.id, id)).get();
   if (!existing) return { ok: false, reason: "That account no longer exists." };
-  if (existing.isSystem) return { ok: false, reason: "This is one of the accounts the app needs to work, so it cannot be deleted." };
+  if (existing.isSystem)
+    return {
+      ok: false,
+      reason: "This is one of the accounts the app needs to work, so it cannot be deleted.",
+    };
   const check = deletionEligibility(dependencyState(db, id));
   if (!check.ok) {
     return {
@@ -297,8 +305,23 @@ export function removeAccount(
 class AccountRefusal extends Error {}
 
 function hierarchyRows(db: LedgerDb) {
-  return db.select({ id: accounts.id, type: accounts.type, parentId: accounts.parentId }).from(accounts).all()
-    .filter((row): row is { id: number; type: AccountTypeCode; parentId: number | null } => row.type != null);
+  return db
+    .select({
+      id: accounts.id,
+      type: accounts.type,
+      parentId: accounts.parentId,
+    })
+    .from(accounts)
+    .all()
+    .filter(
+      (
+        row,
+      ): row is {
+        id: number;
+        type: AccountTypeCode;
+        parentId: number | null;
+      } => row.type != null,
+    );
 }
 
 function dependencyState(db: LedgerDb, id: number) {
@@ -306,7 +329,11 @@ function dependencyState(db: LedgerDb, id: number) {
   const descendants = descendantsOf(hierarchy, id);
   const childCount = hierarchy.filter((row) => row.parentId === id).length;
   const activeDescendantCount = descendants.filter((descendantId) => {
-    const row = db.select({ archivedAt: accounts.archivedAt }).from(accounts).where(eq(accounts.id, descendantId)).get();
+    const row = db
+      .select({ archivedAt: accounts.archivedAt })
+      .from(accounts)
+      .where(eq(accounts.id, descendantId))
+      .get();
     return row?.archivedAt == null;
   }).length;
   return {
@@ -364,8 +391,7 @@ export function setOpeningBalance(
     if (lock.settled || lock.reconciled) {
       return {
         ok: false,
-        reason:
-          "This account's opening balance is already settled or matched to a bank line, so it cannot be changed.",
+        reason: "This account's opening balance is already settled or matched to a bank line, so it cannot be changed.",
       };
     }
   }
@@ -409,13 +435,7 @@ export function setOpeningBalance(
 
   if (existing !== null) {
     const before = getRecordRow(db, existing);
-    updateRecord(
-      db,
-      existing,
-      actingUserId,
-      { date: data.date, amount, description },
-      built.value,
-    );
+    updateRecord(db, existing, actingUserId, { date: data.date, amount, description }, built.value);
     recordAudit(db, {
       recordType: "record",
       recordId: existing,
@@ -461,20 +481,21 @@ export function ensurePartnerAccounts(
 ): void {
   // Contact roles remain contact metadata. They no longer create accounts;
   // partner capital/drawings are ordinary Equity accounts in the fixed chart.
-  void db; void contactId; void contactName; void actingUserId;
+  void db;
+  void contactId;
+  void contactName;
+  void actingUserId;
 }
 
 /**
  * Removing the partner role: archive the pair when it holds movements, delete
  * it when it does not (FR-008b). History is never thrown away.
  */
-export function retirePartnerAccounts(
-  db: LedgerDb,
-  contactId: number,
-  actingUserId: number,
-): void {
+export function retirePartnerAccounts(db: LedgerDb, contactId: number, actingUserId: number): void {
   // Removing a contact's Partner role must not mutate the independent chart.
-  void db; void contactId; void actingUserId;
+  void db;
+  void contactId;
+  void actingUserId;
 }
 
 /** Re-emits an account so a balance change from a record write reaches open tabs. */

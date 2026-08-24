@@ -126,13 +126,35 @@ export type TypeAndSubType = {
 export function isEquipmentAccount(account: TypeAndSubType): boolean {
   return (
     account.type === AccountType.Asset &&
-    account.subType === AccountSubType.Equipment
+    account.subType === AccountSubType.FixedAsset
+  );
+}
+
+/** Canonical name; retained beside the old helper during the terminology migration. */
+export const isFixedAssetAccount = isEquipmentAccount;
+
+export const PURCHASE_ASSET_SUBTYPES: AccountSubTypeCode[] = [
+  AccountSubType.Inventory,
+  AccountSubType.PrepaymentsAndDeposits,
+  AccountSubType.TaxReceivable,
+  AccountSubType.OtherCurrentAsset,
+  AccountSubType.FixedAsset,
+  AccountSubType.IntangibleAsset,
+  AccountSubType.OtherNonCurrentAsset,
+];
+
+/** An asset acquired from a document rather than an account used to pay. */
+export function isPurchaseAssetAccount(account: TypeAndSubType): boolean {
+  return (
+    account.type === AccountType.Asset &&
+    account.subType !== null &&
+    PURCHASE_ASSET_SUBTYPES.includes(account.subType)
   );
 }
 
 /** A place money actually sits or is owed. */
 export function isMoneyPotAccount(account: TypeAndSubType): boolean {
-  return account.type === AccountType.Asset && !isEquipmentAccount(account);
+  return account.type === AccountType.Asset && !isPurchaseAssetAccount(account);
 }
 
 /** What a record is "for": a spending or earning category, or equipment. */
@@ -140,7 +162,7 @@ export function isCategoryAccount(account: TypeAndSubType): boolean {
   return (
     account.type === AccountType.Expense ||
     account.type === AccountType.Revenue ||
-    isEquipmentAccount(account)
+    isPurchaseAssetAccount(account)
   );
 }
 
@@ -159,7 +181,16 @@ export const CASH_AND_EQUIVALENT_SUBTYPES: AccountSubTypeCode[] = [
 export const OTHER_CURRENT_ASSET_SUBTYPES: AccountSubTypeCode[] = [
   AccountSubType.Receivable,
   AccountSubType.Inventory,
+  AccountSubType.PrepaymentsAndDeposits,
+  AccountSubType.Clearing,
+  AccountSubType.TaxReceivable,
   AccountSubType.OtherCurrentAsset,
+];
+
+export const NON_CURRENT_ASSET_SUBTYPES: AccountSubTypeCode[] = [
+  AccountSubType.FixedAsset,
+  AccountSubType.IntangibleAsset,
+  AccountSubType.OtherNonCurrentAsset,
 ];
 
 /** Liabilities due within the normal operating cycle, for the Balance Sheet. */
@@ -168,6 +199,8 @@ export const CURRENT_LIABILITY_SUBTYPES: AccountSubTypeCode[] = [
   LiabilitySubType.AccruedLiabilities,
   LiabilitySubType.ShortTermLoan,
   LiabilitySubType.OtherCurrentLiability,
+  LiabilitySubType.CreditCard,
+  LiabilitySubType.TaxPayable,
 ];
 
 /** Liabilities due beyond the normal operating cycle, for the Balance Sheet. */
@@ -204,9 +237,7 @@ export const NEEDS_REVIEW_TYPES: AccountTypeCode[] = [
  * section or cash-flow activity that a wrong guess could misplace it into.
  */
 export function isNeedsReview(account: TypeAndSubType): boolean {
-  return (
-    NEEDS_REVIEW_TYPES.includes(account.type) && account.subType == null
-  );
+  return NEEDS_REVIEW_TYPES.includes(account.type) && account.subType == null;
 }
 
 export type AssetBucket = "current" | "nonCurrent" | "needsReview";
@@ -214,7 +245,7 @@ export type AssetBucket = "current" | "nonCurrent" | "needsReview";
 /** Where an Asset line belongs on a classified Balance Sheet. */
 export function assetBucket(subType: AccountSubTypeCode | null): AssetBucket {
   if (subType == null) return "needsReview";
-  if (subType === AccountSubType.Equipment) return "nonCurrent";
+  if (NON_CURRENT_ASSET_SUBTYPES.includes(subType)) return "nonCurrent";
   return "current"; // cash-and-equivalent or another current-asset subtype
 }
 
@@ -232,7 +263,9 @@ export function liabilityBucket(
 export type ExpenseBucket = "cogs" | "operating" | "other";
 
 /** Where an Expense line belongs for Gross Profit / Operating Income. */
-export function expenseBucket(subType: AccountSubTypeCode | null): ExpenseBucket {
+export function expenseBucket(
+  subType: AccountSubTypeCode | null,
+): ExpenseBucket {
   if (subType === ExpenseSubType.CostOfGoodsSold) return "cogs";
   if (subType === ExpenseSubType.OtherExpense) return "other";
   return "operating"; // OperatingExpense, or null — the soft default
@@ -241,6 +274,8 @@ export function expenseBucket(subType: AccountSubTypeCode | null): ExpenseBucket
 export type RevenueBucket = "operating" | "other";
 
 /** Where a Revenue line belongs for Gross Profit / Operating Income. */
-export function revenueBucket(subType: AccountSubTypeCode | null): RevenueBucket {
+export function revenueBucket(
+  subType: AccountSubTypeCode | null,
+): RevenueBucket {
   return subType === RevenueSubType.OtherRevenue ? "other" : "operating"; // OperatingRevenue, or null
 }

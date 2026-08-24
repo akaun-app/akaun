@@ -4,6 +4,7 @@
     AccountDefaultView,
     AccountView,
   } from "$lib/components/accounts/account-types.js";
+  import { AccountSubType, DefaultAccountPurpose } from "$lib/enums.js";
 
   let {
     defaults,
@@ -48,6 +49,27 @@
     ),
   );
   let saving = $state(false);
+
+  function eligible(item: AccountDefaultView, account: AccountView): boolean {
+    if (account.type !== item.requiredType || !account.postingEligible)
+      return false;
+    if (item.purpose === DefaultAccountPurpose.Payable) {
+      return account.subType === AccountSubType.AccountsPayable;
+    }
+    if (item.purpose === DefaultAccountPurpose.Receivable) {
+      return account.subType === AccountSubType.Receivable;
+    }
+    if (item.purpose === DefaultAccountPurpose.EverydayTransaction) {
+      return new Set<number>([
+        AccountSubType.Cash,
+        AccountSubType.Bank,
+        AccountSubType.Wallet,
+        AccountSubType.Card,
+        AccountSubType.Clearing,
+      ]).has(account.subType ?? -1);
+    }
+    return true;
+  }
 
   async function save() {
     saving = true;
@@ -101,7 +123,7 @@
           disabled={disabled || saving}
         >
           <option value={0}>Choose an account</option>
-          {#each accounts.filter((account) => account.type === item.requiredType && account.postingEligible) as account (account.id)}
+          {#each accounts.filter( (account) => eligible(item, account), ) as account (account.id)}
             <option value={account.id}
               >{account.code} — {account.path.join(" › ")}</option
             >

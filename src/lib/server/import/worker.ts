@@ -6,7 +6,7 @@ import { createLogger } from "../logger.js";
 import { getSetting, SETTING_KEYS } from "../settings.js";
 import { categoryChoices } from "./category-accounts.js";
 import {
-  defaultAccountId,
+  getAccount,
   lastPaymentAccountForContact,
 } from "../queries/accounts.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
@@ -23,7 +23,13 @@ import {
   LedgerRecordKind,
   Role,
   documentTypeEnum,
+  DefaultAccountPurpose,
 } from "$lib/enums.js";
+import { requireAccountDefault } from "../services/account-defaults.js";
+import {
+  isImportIncomeTarget,
+  isImportPurchaseSource,
+} from "./account-policy.js";
 import { join } from "path";
 
 const log = createLogger("import:worker");
@@ -299,6 +305,40 @@ async function processJob(job: typeof importQueue.$inferSelect) {
               : LedgerRecordKind.Expense,
           )
         : null;
+    const learnedAccount =
+      learnedAccountId == null ? null : getAccount(db, learnedAccountId);
+    const payableDefault = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.Payable,
+    );
+    const receivableDefault = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.Receivable,
+    );
+    const transactionDefault = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.EverydayTransaction,
+    );
+    const learnedEligible = learnedAccount
+      ? docType === DocumentType.Income
+        ? isImportIncomeTarget(
+            learnedAccount,
+            receivableDefault.ok ? receivableDefault.value : null,
+          )
+        : isImportPurchaseSource(
+            learnedAccount,
+            payableDefault.ok ? payableDefault.value : null,
+          )
+      : false;
+    const dueDefault =
+      result.payment_status === "due"
+        ? requireAccountDefault(
+            db,
+            docType === DocumentType.Income
+              ? DefaultAccountPurpose.Receivable
+              : DefaultAccountPurpose.Payable,
+          )
+        : null;
 
     const now = new Date().toISOString();
     db.update(importQueue)
@@ -316,7 +356,14 @@ async function processJob(job: typeof importQueue.$inferSelect) {
         exchangeRate,
         reference: result.reference,
         category: result.category,
-        accountId: learnedAccountId ?? defaultAccountId(db),
+        accountId:
+          dueDefault?.ok === true
+            ? dueDefault.value
+            : learnedEligible
+              ? learnedAccountId
+              : transactionDefault.ok
+                ? transactionDefault.value
+                : null,
         duplicateOf: dup?.duplicateOf ?? null,
         duplicateConfidence: dup?.confidence ?? null,
         duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,

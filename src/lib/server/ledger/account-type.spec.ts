@@ -15,11 +15,42 @@ import {
   assetBucket,
   expenseBucket,
   financialStatementFor,
+  isCategoryAccount,
+  isMoneyPotAccount,
   isNeedsReview,
   liabilityBucket,
   normalBalanceFor,
   revenueBucket,
 } from "./account-type.js";
+
+describe("everyday account roles", () => {
+  it("keeps transaction assets separate from assets bought by documents", () => {
+    expect(
+      isMoneyPotAccount({
+        type: AccountType.Asset,
+        subType: AccountSubType.Bank,
+      }),
+    ).toBe(true);
+    expect(
+      isMoneyPotAccount({
+        type: AccountType.Asset,
+        subType: AccountSubType.Inventory,
+      }),
+    ).toBe(false);
+    expect(
+      isCategoryAccount({
+        type: AccountType.Asset,
+        subType: AccountSubType.FixedAsset,
+      }),
+    ).toBe(true);
+    expect(
+      isCategoryAccount({
+        type: AccountType.Asset,
+        subType: AccountSubType.IntangibleAsset,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("fixed account types", () => {
   it("AccountType_WhenEnumerated_ShouldContainExactlyFiveStableTypes", () => {
@@ -110,15 +141,19 @@ describe("needs review", () => {
 });
 
 describe("statement buckets", () => {
-  it("assetBucket: cash-and-equivalent or another current asset is current, Equipment is non-current, unclassified needs review", () => {
+  it("assetBucket: operating assets are current and long-lived assets are non-current", () => {
     expect(assetBucket(AccountSubType.Bank)).toBe("current");
     expect(assetBucket(AccountSubType.Receivable)).toBe("current");
-    expect(assetBucket(AccountSubType.Equipment)).toBe("nonCurrent");
+    expect(assetBucket(AccountSubType.FixedAsset)).toBe("nonCurrent");
+    expect(assetBucket(AccountSubType.IntangibleAsset)).toBe("nonCurrent");
+    expect(assetBucket(AccountSubType.PrepaymentsAndDeposits)).toBe("current");
     expect(assetBucket(null)).toBe("needsReview");
   });
 
   it("liabilityBucket: a current-liability sub-type is current, a long-term one is non-current, unclassified needs review", () => {
     expect(liabilityBucket(LiabilitySubType.AccountsPayable)).toBe("current");
+    expect(liabilityBucket(LiabilitySubType.CreditCard)).toBe("current");
+    expect(liabilityBucket(LiabilitySubType.TaxPayable)).toBe("current");
     expect(liabilityBucket(LiabilitySubType.LongTermLoan)).toBe("nonCurrent");
     expect(liabilityBucket(null)).toBe("needsReview");
   });

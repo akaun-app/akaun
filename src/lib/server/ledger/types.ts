@@ -94,7 +94,7 @@ export type AccountCreate = {
   /**
    * Required by the service layer for `type === Asset` or `Liability`
    * (no safe default); optional for `Expense`/`Revenue` (defaults to
-   * Operating); rejected for `Equity`. Never `Equipment` (Research §4).
+   * Operating); rejected for `Equity`.
    */
   subType?: AccountSubTypeCode;
 };

@@ -10,7 +10,7 @@ import { moveToRecordStorage, displayName } from "$lib/server/file-storage.js";
 import { normalizeDate } from "$lib/server/date.js";
 import { createRecord, emitRecordUpdate } from "$lib/server/services/ledger.js";
 import { addAttachment } from "$lib/server/queries/ledger.js";
-import { defaultAccountId } from "$lib/server/queries/accounts.js";
+import { defaultAccountId, getAccount } from "$lib/server/queries/accounts.js";
 import {
   categoryAccountForImport,
   categoryChoices,
@@ -30,6 +30,12 @@ import {
 import type { RecordCreate } from "$lib/server/ledger/types.js";
 import type { RequestHandler } from "./$types.js";
 import { hasPermission } from "$lib/server/permissions.js";
+import {
+  isImportIncomeSource,
+  isImportIncomeTarget,
+  isImportPurchaseSource,
+  isImportPurchaseTarget,
+} from "$lib/server/import/account-policy.js";
 
 const log = createLogger("import:confirm");
 
@@ -60,6 +66,8 @@ const overridesSchema = z.object({
   newContactName: z.string().optional(),
   // Which account paid for this / received it (FR-011, FR-019).
   accountId: z.number().int().positive().nullable().optional(),
+  fromAccountId: z.number().int().positive().optional(),
+  toAccountId: z.number().int().positive().optional(),
 });
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
@@ -141,8 +149,23 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
   // Which account paid for this / received it. The review screen pre-selects one,
   // but a document that reached review before any account existed still has none.
-  const accountId =
-    overrides.accountId ?? row.accountId ?? defaultAccountId(db);
+  const explicitSides =
+    overrides.fromAccountId !== undefined &&
+    overrides.toAccountId !== undefined;
+  if (
+    (overrides.fromAccountId === undefined) !==
+    (overrides.toAccountId === undefined)
+  ) {
+    return refused(
+      "Choose both the source and target account before importing.",
+    );
+  }
+
+  const accountId = explicitSides
+    ? isIncome
+      ? overrides.toAccountId!
+      : overrides.fromAccountId!
+    : (overrides.accountId ?? row.accountId ?? defaultAccountId(db));
   if (accountId == null) {
     return refused(
       isIncome
@@ -155,11 +178,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     db,
     DefaultAccountPurpose.Payable,
   );
-  const paidFromAccountId = resolvePaidFromAccountId(
-    accountId,
-    isIncome,
-    payableDefault.ok ? payableDefault.value : null,
-  );
+  const payableAccountId = payableDefault.ok ? payableDefault.value : null;
 
   // A category that could not be read lands on Uncategorised and is flagged, the
   // same way the upgrade treats a record it could not place: a document that was
@@ -169,15 +188,48 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     db,
     DefaultAccountPurpose.UncategorisedExpense,
   );
-  const selectedCategory = categoryAccountForImport(
-    kind,
-    categoryChoices(db, kind),
-    category,
-    uncategorisedDefault.ok ? uncategorisedDefault.value : null,
+  let categoryAccountId: number;
+  let uncategorised = false;
+  if (explicitSides) {
+    const from = getAccount(db, overrides.fromAccountId!);
+    const to = getAccount(db, overrides.toAccountId!);
+    if (!from || !to)
+      return refused("Choose accounts that are still available.");
+    const receivableDefault = requireAccountDefault(
+      db,
+      DefaultAccountPurpose.Receivable,
+    );
+    const valid = isIncome
+      ? isImportIncomeSource(from) &&
+        isImportIncomeTarget(
+          to,
+          receivableDefault.ok ? receivableDefault.value : null,
+        )
+      : isImportPurchaseSource(from, payableAccountId) &&
+        isImportPurchaseTarget(to);
+    if (!valid) {
+      return refused(
+        "Those source and target accounts are not valid for this document.",
+      );
+    }
+    categoryAccountId = isIncome ? from.id : to.id;
+  } else {
+    const selectedCategory = categoryAccountForImport(
+      kind,
+      categoryChoices(db, kind),
+      category,
+      uncategorisedDefault.ok ? uncategorisedDefault.value : null,
+    );
+    if (!selectedCategory.ok) return refused(selectedCategory.reason);
+    categoryAccountId = selectedCategory.value.accountId;
+    uncategorised = selectedCategory.value.uncategorised;
+  }
+
+  const paidFromAccountId = resolvePaidFromAccountId(
+    accountId,
+    isIncome,
+    payableAccountId,
   );
-  if (!selectedCategory.ok) return refused(selectedCategory.reason);
-  const { accountId: categoryAccountId, uncategorised } =
-    selectedCategory.value;
 
   // Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
   // Priority: explicit contactId → typed new name → confident match → raw extracted name.

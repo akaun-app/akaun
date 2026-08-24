@@ -25,28 +25,66 @@ beforeEach(() => {
 afterEach(() => sqlite.close());
 
 describe("account service", () => {
+  it("Create_WhenFixedAsset_ShouldAllowPostingAccount", () => {
+    const created = createAccount(db, 1, {
+      name: "Production machine",
+      type: AccountType.Asset,
+      subType: AccountSubType.FixedAsset,
+    });
+    expect(created.ok).toBe(true);
+    expect(created.ok && created.value.subType).toBe(AccountSubType.FixedAsset);
+  });
+
   it("Create_WhenNamesRepeat_ShouldAssignDistinctLowestCodes", () => {
-    const first = createAccount(db, 1, { name: "Savings", type: AccountType.Asset, subType: AccountSubType.Bank });
-    const second = createAccount(db, 1, { name: "Savings", type: AccountType.Asset, subType: AccountSubType.Bank });
+    const first = createAccount(db, 1, {
+      name: "Savings",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+    });
+    const second = createAccount(db, 1, {
+      name: "Savings",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+    });
     expect(first.ok && first.value.code).toBe(1000);
     expect(second.ok && second.value.code).toBe(1001);
   });
 
   it("Patch_WhenUnusedTypeChanges_ShouldAllocateInNewRange", () => {
-    const created = createAccount(db, 1, { name: "Loan", type: AccountType.Asset, subType: AccountSubType.Bank });
+    const created = createAccount(db, 1, {
+      name: "Loan",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+    });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    const changed = patchAccount(db, created.value.id, 1, { type: AccountType.Liability });
+    const changed = patchAccount(db, created.value.id, 1, {
+      type: AccountType.Liability,
+    });
     expect(changed.ok && changed.value.type).toBe(AccountType.Liability);
     expect(changed.ok && changed.value.code).toBe(2000);
   });
 
   it("Delete_WhenAccountHasChild_ShouldRefuse", () => {
-    const parent = createAccount(db, 1, { name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash });
+    const parent = createAccount(db, 1, {
+      name: "Cash",
+      type: AccountType.Asset,
+      subType: AccountSubType.Cash,
+    });
     expect(parent.ok).toBe(true);
     if (!parent.ok) return;
-    expect(createAccount(db, 1, { name: "Till", type: AccountType.Asset, subType: AccountSubType.Cash, parentId: parent.value.id }).ok).toBe(true);
-    expect(removeAccount(db, parent.value.id, 1)).toEqual({ ok: false, reason: "Move or delete this account's children first." });
+    expect(
+      createAccount(db, 1, {
+        name: "Till",
+        type: AccountType.Asset,
+        subType: AccountSubType.Cash,
+        parentId: parent.value.id,
+      }).ok,
+    ).toBe(true);
+    expect(removeAccount(db, parent.value.id, 1)).toEqual({
+      ok: false,
+      reason: "Move or delete this account's children first.",
+    });
   });
 
   it("Delete_WhenEventEmits_ShouldHaveCommittedAudit", () => {
@@ -61,13 +99,12 @@ describe("account service", () => {
     let auditWasVisible = false;
     const onDeleted = ({ id }: { id: number }) => {
       if (id !== created.value.id) return;
-      auditWasVisible =
-        db
-          .select({ action: auditLog.action })
-          .from(auditLog)
-          .where(eq(auditLog.recordId, id))
-          .all()
-          .some((row: { action: string }) => row.action === "delete");
+      auditWasVisible = db
+        .select({ action: auditLog.action })
+        .from(auditLog)
+        .where(eq(auditLog.recordId, id))
+        .all()
+        .some((row: { action: string }) => row.action === "delete");
     };
     accountEvents.on("account-deleted", onDeleted);
     try {
@@ -80,14 +117,40 @@ describe("account service", () => {
   });
 
   it("Archive_WhenSavedDefaultUsesAccount_ShouldRefuse", () => {
-    const created=createAccount(db,1,{name:"Bank",type:AccountType.Asset,subType:AccountSubType.Bank}); expect(created.ok).toBe(true); if(!created.ok)return;
-    db.insert(accountDefaults).values({purpose:DefaultAccountPurpose.EverydayTransaction,accountId:created.value.id,updatedBy:1}).run();
-    expect(patchAccount(db,created.value.id,1,{active:false})).toEqual({ok:false,reason:"Choose a replacement saved default before deactivating this account."});
+    const created = createAccount(db, 1, {
+      name: "Bank",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    db.insert(accountDefaults)
+      .values({
+        purpose: DefaultAccountPurpose.EverydayTransaction,
+        accountId: created.value.id,
+        updatedBy: 1,
+      })
+      .run();
+    expect(patchAccount(db, created.value.id, 1, { active: false })).toEqual({
+      ok: false,
+      reason: "Choose a replacement saved default before deactivating this account.",
+    });
   });
 
   it("CanonicalRead_WhenSourceWasMerged_ShouldResolveSurvivor", () => {
-    const survivor=createAccount(db,1,{name:"Sales",type:AccountType.Revenue}); const source=createAccount(db,1,{name:"Old Sales",type:AccountType.Revenue}); if(!survivor.ok||!source.ok)return;
-    db.update(accounts).set({mergedIntoAccountId:survivor.value.id,archivedAt:"2026-01-01"}).where(eq(accounts.id,source.value.id)).run();
-    expect(getAccount(db,source.value.id)?.id).toBe(survivor.value.id);
+    const survivor = createAccount(db, 1, {
+      name: "Sales",
+      type: AccountType.Revenue,
+    });
+    const source = createAccount(db, 1, {
+      name: "Old Sales",
+      type: AccountType.Revenue,
+    });
+    if (!survivor.ok || !source.ok) return;
+    db.update(accounts)
+      .set({ mergedIntoAccountId: survivor.value.id, archivedAt: "2026-01-01" })
+      .where(eq(accounts.id, source.value.id))
+      .run();
+    expect(getAccount(db, source.value.id)?.id).toBe(survivor.value.id);
   });
 });

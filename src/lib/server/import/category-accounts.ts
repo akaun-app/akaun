@@ -1,5 +1,5 @@
 import { AccountType, type AccountTypeCode } from "$lib/enums.js";
-import { isEquipmentAccount } from "../ledger/account-type.js";
+import { isImportPurchaseTarget } from "./account-policy.js";
 import { listAccounts } from "../queries/accounts.js";
 import type { LedgerDb } from "../ledger/types.js";
 
@@ -32,12 +32,11 @@ export function categoryChoices(
     .filter(
       (a) =>
         a.postingEligible &&
-        // Equipment is on the expense list for the same reason it is on the
-        // record form: buying something the business keeps is still an expense
-        // document (002 FR-006b). It is an asset, so a type filter alone misses
-        // it. It is absent from income — equipment is bought, never earned.
+        // Purchasable assets are on this list for the same reason fixed assets
+        // were historically offered beside expense categories: a purchase
+        // document may capitalise value instead of putting it on the P&L.
         (a.type === CATEGORY_TYPES[kind] ||
-          (kind === "expense" && isEquipmentAccount(a))),
+          (kind === "expense" && isImportPurchaseTarget(a))),
     )
     .map((a) => ({
       id: a.id,

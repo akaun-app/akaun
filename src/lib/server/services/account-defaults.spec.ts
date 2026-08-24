@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  AccountSubType,
   AccountType,
   DefaultAccountPurpose,
   type AccountTypeCode,
@@ -36,6 +37,7 @@ beforeEach(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       role INTEGER NOT NULL,
       type INTEGER,
+      sub_type INTEGER,
       code INTEGER,
       name TEXT NOT NULL,
       parent_id INTEGER REFERENCES accounts(id),
@@ -76,15 +78,20 @@ beforeEach(() => {
   sqlite.run("INSERT INTO users (id) VALUES (7)");
 });
 
-function account(type: AccountTypeCode, name: string, extra = ""): number {
+function account(
+  type: AccountTypeCode,
+  name: string,
+  extra = "",
+  subType: number | null = null,
+): number {
   const count = sqlite
     .query<{ n: number }, []>("SELECT count(*) AS n FROM accounts")
     .get()!.n;
   sqlite.run(
-    `INSERT INTO accounts (role, type, code, name, rank ${extra ? ", archived_at" : ""}) VALUES (1, ?, ?, ?, ? ${extra ? ", ?" : ""})`,
+    `INSERT INTO accounts (role, type, sub_type, code, name, rank ${extra ? ", archived_at" : ""}) VALUES (1, ?, ?, ?, ?, ? ${extra ? ", ?" : ""})`,
     extra
-      ? [type, 1000 + count, name, name, extra]
-      : [type, 1000 + count, name, name],
+      ? [type, subType, 1000 + count, name, name, extra]
+      : [type, subType, 1000 + count, name, name],
   );
   return Number(
     sqlite.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get()!
@@ -95,7 +102,18 @@ function account(type: AccountTypeCode, name: string, extra = ""): number {
 function validInputs() {
   return PURPOSES.map(([purpose, type], index) => ({
     purpose,
-    accountId: account(type, `Account ${index}`),
+    accountId: account(
+      type,
+      `Account ${index}`,
+      "",
+      purpose === DefaultAccountPurpose.Receivable
+        ? AccountSubType.Receivable
+        : purpose === DefaultAccountPurpose.Payable
+          ? AccountSubType.AccountsPayable
+          : purpose === DefaultAccountPurpose.EverydayTransaction
+            ? AccountSubType.Bank
+            : null,
+    ),
   }));
 }
 
@@ -112,9 +130,10 @@ describe("saved account defaults", () => {
     ).toEqual(inputs.map((item) => [item.purpose, item.accountId, true]));
     expect(
       sqlite
-        .query<{ n: number }, []>(
-          "SELECT count(*) AS n FROM audit_log WHERE record_type = 'account' AND action = 'update'",
-        )
+        .query<
+          { n: number },
+          []
+        >("SELECT count(*) AS n FROM audit_log WHERE record_type = 'account' AND action = 'update'")
         .get()!.n,
     ).toBe(6);
   });
@@ -128,7 +147,9 @@ describe("saved account defaults", () => {
       initial.map((item) => item.accountId),
     );
     expect(
-      sqlite.query<{ n: number }, []>("SELECT count(*) AS n FROM audit_log").get()!.n,
+      sqlite
+        .query<{ n: number }, []>("SELECT count(*) AS n FROM audit_log")
+        .get()!.n,
     ).toBe(6);
   });
 
@@ -159,6 +180,36 @@ describe("saved account defaults", () => {
       replaceAccountDefaults(db, 7, [
         { ...base[0], accountId: heading },
         ...base.slice(1),
+      ]).ok,
+    ).toBe(false);
+  });
+
+  it("refuses semantically wrong owed and transaction defaults", () => {
+    const base = validInputs();
+    const loan = account(
+      AccountType.Liability,
+      "Loan",
+      "",
+      AccountSubType.ShortTermLoan,
+    );
+    expect(
+      replaceAccountDefaults(db, 7, [
+        base[0],
+        { ...base[1], accountId: loan },
+        ...base.slice(2),
+      ]).ok,
+    ).toBe(false);
+
+    const inventory = account(
+      AccountType.Asset,
+      "Inventory",
+      "",
+      AccountSubType.Inventory,
+    );
+    expect(
+      replaceAccountDefaults(db, 7, [
+        ...base.slice(0, 5),
+        { ...base[5], accountId: inventory },
       ]).ok,
     ).toBe(false);
   });

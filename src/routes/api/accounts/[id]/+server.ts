@@ -21,9 +21,7 @@ import {
 // become an expense category without rewriting what every movement against it
 // meant.
 //
-// Every sub-type code valid for *some* type — Equipment is never among these,
-// since it is chosen on the everyday record form, not here (005 research.md
-// §4), and `AccountSubTypesByType` never lists it. Whether a given sub-type
+// Every sub-type code valid for some type. Whether a given sub-type
 // applies to *this particular* account depends on its existing type, which
 // this schema cannot see, so that finer rejection is enforced by
 // `patchAccount` itself (`ledger/account-eligibility.ts`).
@@ -32,15 +30,25 @@ const KNOWN_SUB_TYPES = Object.values(AccountSubTypesByType).flat();
 const patchSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
-    type: z.number().int().refine((value): value is AccountTypeCode => Object.values(AccountType).includes(value as AccountTypeCode)).optional(),
+    type: z
+      .number()
+      .int()
+      .refine((value): value is AccountTypeCode =>
+        Object.values(AccountType).includes(value as AccountTypeCode),
+      )
+      .optional(),
     parentId: z.number().int().positive().nullable().optional(),
     active: z.boolean().optional(),
     subType: z
       .number()
       .int()
-      .refine((value): value is AccountSubTypeCode => KNOWN_SUB_TYPES.includes(value as AccountSubTypeCode), {
-        message: "Choose a known sub-type.",
-      })
+      .refine(
+        (value): value is AccountSubTypeCode =>
+          KNOWN_SUB_TYPES.includes(value as AccountSubTypeCode),
+        {
+          message: "Choose a known sub-type.",
+        },
+      )
       .optional(),
   })
   .strict();

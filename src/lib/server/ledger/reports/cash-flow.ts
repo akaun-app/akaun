@@ -5,7 +5,12 @@ import {
   type AccountTypeCode,
 } from "$lib/enums.js";
 import { expenseBucket, liabilityBucket } from "../account-type.js";
-import type { CashFlowLine, CashFlowReport, CashFlowSection, Minor } from "../types.js";
+import type {
+  CashFlowLine,
+  CashFlowReport,
+  CashFlowSection,
+  Minor,
+} from "../types.js";
 import { historyGapNotes } from "./notes.js";
 
 /**
@@ -98,7 +103,9 @@ function lineFor(row: CashFlowRow): LineSpec | null {
     switch (row.subType) {
       case null:
         return null;
-      case AccountSubType.Equipment:
+      case AccountSubType.FixedAsset:
+      case AccountSubType.IntangibleAsset:
+      case AccountSubType.OtherNonCurrentAsset:
         return {
           activity: "Investing",
           key: "capital-expenditure",

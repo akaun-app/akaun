@@ -5,7 +5,7 @@ import {
   type AccountTypeCode,
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
-import { isEquipmentAccount, isMoneyPotAccount } from "./account-type.js";
+import { isMoneyPotAccount, isPurchaseAssetAccount } from "./account-type.js";
 import type { Minor, RecordCreateSides, Refusable } from "./types.js";
 
 /**
@@ -81,7 +81,9 @@ function isMoneyPot(account: SidesAccount): boolean {
 
 /** What a record is "for": a spending category, an earning category, equipment. */
 function isSpendingCategory(account: SidesAccount): boolean {
-  return account.type === AccountType.Expense || isEquipmentAccount(account);
+  return (
+    account.type === AccountType.Expense || isPurchaseAssetAccount(account)
+  );
 }
 
 function isOwedAccount(account: SidesAccount, ctx: SidesContext): boolean {

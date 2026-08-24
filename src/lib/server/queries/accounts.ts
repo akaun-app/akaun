@@ -9,8 +9,6 @@ import {
   isNull,
   lt,
   lte,
-  ne,
-  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -325,12 +323,13 @@ export function defaultAccountId(db: LedgerDb): number | null {
       .where(
         and(
           eq(accounts.type, AccountType.Asset),
-          // Equipment is an asset that nothing is ever paid from. Null-safe:
-          // `subType` is nullable ("needs review") and a needs-review account
-          // is still a valid everyday-record fallback, but SQL's three-valued
-          // logic means a bare `<>` against a NULL column silently drops it
-          // (research.md §12's correctness caution).
-          or(isNull(accounts.subType), ne(accounts.subType, AccountSubType.Equipment)),
+          inArray(accounts.subType, [
+            AccountSubType.Cash,
+            AccountSubType.Bank,
+            AccountSubType.Wallet,
+            AccountSubType.Card,
+            AccountSubType.Clearing,
+          ]),
           isNull(accounts.archivedAt),
         ),
       )

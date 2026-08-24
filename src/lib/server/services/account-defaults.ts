@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import {
+  AccountSubType,
   DefaultAccountPurpose,
   DefaultAccountPurposeTypes,
   type DefaultAccountPurposeCode,
@@ -28,6 +29,33 @@ function invalidReason(purpose: DefaultAccountPurposeCode): string {
 
 function accountViews(db: LedgerDb) {
   return listAccounts(db, { includeArchived: true });
+}
+
+const TRANSACTION_SUBTYPES = new Set<number>([
+  AccountSubType.Cash,
+  AccountSubType.Bank,
+  AccountSubType.Wallet,
+  AccountSubType.Card,
+  AccountSubType.Clearing,
+]);
+
+function matchesPurpose(
+  purpose: DefaultAccountPurposeCode,
+  account: { type: number; subType: number | null },
+): boolean {
+  if (account.type !== DefaultAccountPurposeTypes[purpose]) return false;
+  switch (purpose) {
+    case DefaultAccountPurpose.Payable:
+      return account.subType === AccountSubType.AccountsPayable;
+    case DefaultAccountPurpose.Receivable:
+      return account.subType === AccountSubType.Receivable;
+    case DefaultAccountPurpose.EverydayTransaction:
+      return (
+        account.subType !== null && TRANSACTION_SUBTYPES.has(account.subType)
+      );
+    default:
+      return true;
+  }
 }
 
 function toDefaultAccount(account: ReturnType<typeof accountViews>[number]) {
@@ -66,7 +94,7 @@ export function getAccountDefaults(db: LedgerDb): AccountDefaultView[] {
     const account = rawAccount ? toDefaultAccount(rawAccount) : null;
     const valid =
       account !== null &&
-      account.type === DefaultAccountPurposeTypes[purpose] &&
+      matchesPurpose(purpose, account) &&
       account.postingEligible === true;
     return {
       purpose,
@@ -102,7 +130,7 @@ function validateReplacement(
     const account = accounts.get(value.accountId);
     if (
       !account ||
-      account.type !== DefaultAccountPurposeTypes[value.purpose] ||
+      !matchesPurpose(value.purpose, account) ||
       account.postingEligible !== true
     ) {
       return { ok: false, reason: invalidReason(value.purpose) };
@@ -121,7 +149,10 @@ export function replaceAccountDefaults(
   if (!checked.ok) return checked;
 
   const before = new Map(
-    getAccountDefaults(db).map((value) => [value.purpose, value.account?.id ?? null]),
+    getAccountDefaults(db).map((value) => [
+      value.purpose,
+      value.account?.id ?? null,
+    ]),
   );
   db.transaction((tx) => {
     tx.delete(accountDefaults).run();

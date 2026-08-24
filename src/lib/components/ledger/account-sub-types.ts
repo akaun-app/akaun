@@ -14,18 +14,30 @@ import type { MovementView } from "$lib/server/ledger/types.js";
 // about which side of a laptop purchase is the category.
 type SideOfRecord = Pick<MovementView, "accountType" | "accountSubType">;
 
-export function isEquipmentSide(side: SideOfRecord): boolean {
+export function isPurchaseAssetSide(side: SideOfRecord): boolean {
   return (
     side.accountType === AccountType.Asset &&
-    side.accountSubType === AccountSubType.Equipment
+    side.accountSubType !== null &&
+    new Set<number>([
+      AccountSubType.Inventory,
+      AccountSubType.PrepaymentsAndDeposits,
+      AccountSubType.TaxReceivable,
+      AccountSubType.OtherCurrentAsset,
+      AccountSubType.FixedAsset,
+      AccountSubType.IntangibleAsset,
+      AccountSubType.OtherNonCurrentAsset,
+    ]).has(side.accountSubType)
   );
 }
+
+/** @deprecated Use the broader purchase-asset name. */
+export const isEquipmentSide = isPurchaseAssetSide;
 
 /** The side that says what the record was *for*, not where the money sat. */
 export function isCategorySide(side: SideOfRecord): boolean {
   return (
     side.accountType === AccountType.Expense ||
     side.accountType === AccountType.Revenue ||
-    isEquipmentSide(side)
+    isPurchaseAssetSide(side)
   );
 }

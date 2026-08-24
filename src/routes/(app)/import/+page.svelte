@@ -1,16 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import {
-		Upload,
-		Clock,
-		Receipt,
-		Check,
-		X,
-		AlertTriangle,
-		RotateCcw,
-		Camera,
-		ExternalLink
-	} from '@lucide/svelte';
+	import { resolve } from '$app/paths';
+	import { Upload, Clock, Receipt, Check, X, AlertTriangle, RotateCcw, Camera, ExternalLink } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
@@ -21,7 +12,7 @@
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
-	import { Role, importStateEnum, documentTypeEnum } from '$lib/enums.js';
+	import { AccountType, Role, importStateEnum, documentTypeEnum } from '$lib/enums.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
 	import type { PageData } from './$types.js';
@@ -71,13 +62,13 @@
 	// Convert a raw DB queue row (INT enum codes) into a display Job (string labels).
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	function normalizeJob(j: any): Job {
-		let candidates: Candidate[] = [];
+		let candidates: Candidate[];
 		try {
 			candidates = j.matchCandidates ? JSON.parse(j.matchCandidates) : [];
 		} catch {
 			candidates = [];
 		}
-		let reasons: string[] = [];
+		let reasons: string[];
 		try {
 			reasons = j.duplicateReasons ? JSON.parse(j.duplicateReasons) : [];
 		} catch {
@@ -104,7 +95,7 @@
 			duplicateConfidence: j.duplicateConfidence ?? null,
 			duplicateReasons: reasons,
 			error: j.error,
-			_edits: {}
+			_edits: {},
 		};
 	}
 
@@ -117,10 +108,35 @@
 	// user with one account is never asked (FR-011).
 	// svelte-ignore state_referenced_locally
 	let accountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(data.jobs.map((j) => [j.id, j.accountId ?? null]))
+		Object.fromEntries(data.jobs.map((j) => [j.id, j.accountId ?? null])),
+	);
+	// The other side is stored by account id in the review state. Older queued
+	// jobs only carry the extracted account name, so resolve that once on load.
+	// svelte-ignore state_referenced_locally
+	let categoryAccountByJob = $state<Record<string, number | null>>(
+		Object.fromEntries(data.jobs.map((j) => [j.id, initialCategoryAccountId(j)])),
 	);
 
+	function initialCategoryAccountId(job: {
+		category?: string | null;
+		documentType?: number | string | null;
+	}): number | null {
+		const wanted = (job.category ?? '').trim().toLowerCase();
+		if (!wanted) return null;
+		const documentLabel =
+			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
+		const candidates = data.categoryAccounts.filter(
+			(account) =>
+				account.name.trim().toLowerCase() === wanted &&
+				(documentLabel === 'income'
+					? account.type === AccountType.Revenue
+					: account.type !== AccountType.Revenue),
+		);
+		return candidates[0]?.id ?? null;
+	}
+
 	// Store original file references for retry
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- File objects must stay outside $state.
 	const fileStore = new Map<string, File>();
 
 	// Why a job's import was refused, keyed by job id. Cleared when it goes through.
@@ -170,16 +186,18 @@
 	}
 
 	const PIPE_STATES = ['queued', 'extracting', 'processing'];
-	const PIPE_FILL: Record<string, number> = { queued: 10, extracting: 45, processing: 78 };
+	const PIPE_FILL: Record<string, number> = {
+		queued: 10,
+		extracting: 45,
+		processing: 78,
+	};
 
 	const pipeline = $derived(jobs.filter((j) => PIPE_STATES.includes(j.state)));
 	const failed = $derived(jobs.filter((j) => j.state === 'failed'));
 	const review = $derived(jobs.filter((j) => j.state === 'pending_review'));
-	const history = $derived(
-		jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state))
-	);
+	const history = $derived(jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state)));
 	const confirmable = $derived(
-		review.filter((j) => !j.duplicateOf && !jobAccountMissing(j)).length
+		review.filter((j) => !j.duplicateOf && !jobAccountMissing(j) && !jobCategoryMissing(j)).length,
 	);
 	let _es: EventSource | null = null;
 
@@ -213,7 +231,11 @@
 		jobs = jobs.map((local) => {
 			const server = byId.get(local.id);
 			if (!server) return local;
-			return { ...server, _edits: local._edits ?? {}, _uncategorised: local._uncategorised };
+			return {
+				...server,
+				_edits: local._edits ?? {},
+				_uncategorised: local._uncategorised,
+			};
 		});
 
 		// Prepend jobs added in another tab that we don't know about yet
@@ -225,6 +247,7 @@
 		// Never overwrite an account the reviewer has already picked here.
 		for (const j of incoming) {
 			if (!(j.id in accountByJob)) accountByJob[j.id] = j.accountId ?? null;
+			if (!(j.id in categoryAccountByJob)) categoryAccountByJob[j.id] = initialCategoryAccountId(j);
 		}
 	}
 
@@ -249,7 +272,7 @@
 				const res = await fetch('/api/import', {
 					method: 'POST',
 					body: form,
-					credentials: 'include'
+					credentials: 'include',
 				});
 				if (!res.ok) {
 					const err = await res.json().catch(() => ({ error: 'Upload failed' }));
@@ -286,16 +309,25 @@
 
 		// No more manual toggle — the kind sent to the server always follows whichever
 		// category is currently selected (see jobIsIncome).
+		const isIncome = jobIsIncome(job);
+		const categoryAccountId = categoryAccountByJob[jobId];
+		if (isIncome && categoryAccountId == null) return;
 		const body = {
 			...(job._edits ?? {}),
-			document_type: jobIsIncome(job) ? 'income' : 'expense',
-			accountId: accountByJob[jobId]
+			document_type: isIncome ? 'income' : 'expense',
+			accountId: accountByJob[jobId],
+			...(categoryAccountId == null
+				? {}
+				: {
+						fromAccountId: isIncome ? categoryAccountId : accountByJob[jobId],
+						toAccountId: isIncome ? accountByJob[jobId] : categoryAccountId,
+					}),
 		};
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(body),
-			credentials: 'include'
+			credentials: 'include',
 		});
 		if (!res.ok) {
 			// A rule refused it and nothing was written — say why, on the card.
@@ -308,8 +340,12 @@
 		const result = await res.json().catch(() => ({ uncategorised: false }));
 		jobs = jobs.map((j) =>
 			j.id === jobId
-				? { ...j, state: 'confirmed' as JobState, _uncategorised: !!result.uncategorised }
-				: j
+				? {
+						...j,
+						state: 'confirmed' as JobState,
+						_uncategorised: !!result.uncategorised,
+					}
+				: j,
 		);
 		// Transition to imported after a moment (the server does it async)
 		setTimeout(() => {
@@ -318,14 +354,14 @@
 	}
 
 	async function confirmAll() {
-		const toConfirm = review.filter((j) => !j.duplicateOf && !jobAccountMissing(j));
+		const toConfirm = review.filter((j) => !j.duplicateOf && !jobAccountMissing(j) && !jobCategoryMissing(j));
 		await Promise.all(toConfirm.map((j) => confirmJob(j.id)));
 	}
 
 	async function skipJob(jobId: string) {
 		const res = await fetch(`/api/import/${jobId}/skip`, {
 			method: 'POST',
-			credentials: 'include'
+			credentials: 'include',
 		});
 		if (res.ok) {
 			jobs = jobs.map((j) => (j.id === jobId ? { ...j, state: 'skipped' as JobState } : j));
@@ -337,7 +373,10 @@
 		if (!file) return;
 
 		// Delete the old job
-		await fetch(`/api/import/${jobId}`, { method: 'DELETE', credentials: 'include' });
+		await fetch(`/api/import/${jobId}`, {
+			method: 'DELETE',
+			credentials: 'include',
+		});
 		jobs = jobs.filter((j) => j.id !== jobId);
 
 		// Re-upload
@@ -345,12 +384,18 @@
 	}
 
 	async function discardJob(jobId: string) {
-		await fetch(`/api/import/${jobId}`, { method: 'DELETE', credentials: 'include' });
+		await fetch(`/api/import/${jobId}`, {
+			method: 'DELETE',
+			credentials: 'include',
+		});
 		jobs = jobs.filter((j) => j.id !== jobId);
 	}
 
 	async function clearHistory() {
-		await fetch('/api/import/history', { method: 'DELETE', credentials: 'include' });
+		await fetch('/api/import/history', {
+			method: 'DELETE',
+			credentials: 'include',
+		});
 		jobs = jobs.filter((j) => !['confirmed', 'imported', 'skipped'].includes(j.state));
 		clearHistoryDialogOpen = false;
 	}
@@ -366,10 +411,24 @@
 	// manual Expense/Income toggle) — mirrors how RecordForm derives contactRole from
 	// the chosen account's type with no upfront kind picker.
 	function jobIsIncome(job: Job): boolean {
-		const cat = String(editedValue(job, 'category') || '');
-		if (data.incomeCategories.includes(cat)) return true;
-		if (data.expenseCategories.includes(cat)) return false;
+		const account = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[job.id]);
+		if (account) return account.type === AccountType.Revenue;
 		return job.documentType === 'income';
+	}
+
+	function setCategoryAccount(jobId: string, raw: string): void {
+		const job = jobs.find((candidate) => candidate.id === jobId);
+		const wasIncome = job ? jobIsIncome(job) : false;
+		const value = Number(raw);
+		categoryAccountByJob[jobId] = Number.isInteger(value) && value > 0 ? value : null;
+		const selected = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[jobId]);
+		const isIncome = selected ? selected.type === AccountType.Revenue : wasIncome;
+		if (isIncome !== wasIncome) accountByJob[jobId] = null;
+	}
+
+	function categoryLabel(jobId: string): string {
+		const account = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[jobId]);
+		return account ? `${account.code} · ${(account.path ?? [account.name]).join(' › ')}` : 'Select account';
 	}
 
 	function editedValue(job: Job, key: string): string | number {
@@ -402,6 +461,9 @@
 	}
 	function jobAccountMissing(job: Job): boolean {
 		return accountByJob[job.id] == null;
+	}
+	function jobCategoryMissing(job: Job): boolean {
+		return jobIsIncome(job) && categoryAccountByJob[job.id] == null;
 	}
 	function jobConverted(job: Job): number | null {
 		const a = parseFloat(String(editedValue(job, 'amount')));
@@ -447,7 +509,7 @@
 		date: 'date',
 		supplier: 'supplier',
 		filename: 'filename',
-		content: 'content'
+		content: 'content',
 	};
 
 	function dupReasonsLabel(job: Job): string {
@@ -472,7 +534,10 @@
 
 	function formatMoney(n: number | null): string {
 		if (n == null) return '—';
-		return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+		return new Intl.NumberFormat('en-US', {
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2,
+		}).format(n);
 	}
 
 	// While the user is typing, show their raw text instead of the reformatted amount —
@@ -489,7 +554,8 @@
 	}
 
 	function onAmountBlur(jobId: string) {
-		const { [jobId]: _discard, ...rest } = amountDrafts;
+		const rest = { ...amountDrafts };
+		delete rest[jobId];
 		amountDrafts = rest;
 	}
 </script>
@@ -503,7 +569,8 @@
 		<div class="topbar-left">
 			<h1 class="page-title">Auto Import</h1>
 			<p class="page-sub">
-				Drop receipts &amp; invoices — text is extracted, then AI classifies each as income or expense and fills the fields
+				Drop receipts &amp; invoices — text is extracted, then AI classifies each as income or expense and fills the
+				fields
 			</p>
 		</div>
 		<div class="topbar-right">
@@ -523,7 +590,10 @@
 			class:drag
 			role="button"
 			tabindex="0"
-			ondragover={(e) => { e.preventDefault(); drag = true; }}
+			ondragover={(e) => {
+				e.preventDefault();
+				drag = true;
+			}}
 			ondragleave={() => (drag = false)}
 			ondrop={handleDrop}
 			onclick={() => fileInput?.click()}
@@ -531,7 +601,9 @@
 		>
 			<div class="dropzone-icon"><Upload size={26} /></div>
 			<div class="dropzone-title">Drop files here, or <u>browse</u></div>
-			<div class="dropzone-sub">PDF, JPG, PNG · scanned files run through OCR · income &amp; expenses detected automatically</div>
+			<div class="dropzone-sub">
+				PDF, JPG, PNG · scanned files run through OCR · income &amp; expenses detected automatically
+			</div>
 		</div>
 		<input
 			bind:this={fileInput}
@@ -639,7 +711,7 @@
 							<!-- Header -->
 							<div class="review-head">
 								<a
-									href="/api/import/{job.id}/file"
+									href={resolve('/api/import/[jobId]/file', { jobId: job.id })}
 									target="_blank"
 									rel="noopener"
 									class="review-file"
@@ -660,7 +732,8 @@
 
 							<div class="review-detected">
 								<Upload size={12} />
-								AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
+								AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before
+								importing
 							</div>
 
 							<!-- Fields grid -->
@@ -682,7 +755,9 @@
 								<div class="rfield">
 									<span class="rfield-label">
 										Contact
-										{#if isEdited(job, 'contactId') || isEdited(job, 'newContactName')}<span class="edited-tag">edited</span>{/if}
+										{#if isEdited(job, 'contactId') || isEdited(job, 'newContactName')}<span class="edited-tag"
+												>edited</span
+											>{/if}
 									</span>
 									<ContactSelect
 										role={isIncome ? Role.Customer : Role.Supplier}
@@ -717,11 +792,7 @@
 								<!-- Currency + exchange rate (auto-shown when a foreign currency is detected) -->
 								<div class="rfield">
 									<span class="rfield-label">Currency</span>
-									<Select.Root
-										type="single"
-										value={jobCurrency(job)}
-										onValueChange={(v) => setJobCurrency(job.id, v)}
-									>
+									<Select.Root type="single" value={jobCurrency(job)} onValueChange={(v) => setJobCurrency(job.id, v)}>
 										<Select.Trigger class="rinput w-full">{jobCurrency(job)}</Select.Trigger>
 										<Select.Content>
 											{#each CURRENCIES as c (c.code)}
@@ -772,23 +843,29 @@
 										</span>
 										<Select.Root
 											type="single"
-											value={String(editedValue(job, 'category'))}
-											onValueChange={(v) => updateEdit(job.id, 'category', v)}
+											value={categoryAccountByJob[job.id] == null ? '' : String(categoryAccountByJob[job.id])}
+											onValueChange={(v) => setCategoryAccount(job.id, v)}
 										>
 											<Select.Trigger class="rinput w-full">
-												{editedValue(job, 'category') || 'Select category'}
+												{categoryLabel(job.id)}
 											</Select.Trigger>
 											<Select.Content>
 												<Select.Group>
 													<Select.GroupHeading>Income</Select.GroupHeading>
-													{#each data.incomeCategories as cat}
-														<Select.Item value={cat} label={cat} />
+											{#each data.categoryAccounts.filter((account) => account.type === AccountType.Revenue) as account (account.id)}
+														<Select.Item
+															value={String(account.id)}
+															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
+														/>
 													{/each}
 												</Select.Group>
 												<Select.Group>
 													<Select.GroupHeading>Expense</Select.GroupHeading>
-													{#each data.expenseCategories as cat}
-														<Select.Item value={cat} label={cat} />
+											{#each data.categoryAccounts.filter((account) => account.type !== AccountType.Revenue) as account (account.id)}
+														<Select.Item
+															value={String(account.id)}
+															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
+														/>
 													{/each}
 												</Select.Group>
 											</Select.Content>
@@ -823,23 +900,29 @@
 										</span>
 										<Select.Root
 											type="single"
-											value={String(editedValue(job, 'category'))}
-											onValueChange={(v) => updateEdit(job.id, 'category', v)}
+											value={categoryAccountByJob[job.id] == null ? '' : String(categoryAccountByJob[job.id])}
+											onValueChange={(v) => setCategoryAccount(job.id, v)}
 										>
 											<Select.Trigger class="rinput w-full">
-												{editedValue(job, 'category') || 'Select category'}
+												{categoryLabel(job.id)}
 											</Select.Trigger>
 											<Select.Content>
 												<Select.Group>
 													<Select.GroupHeading>Expense</Select.GroupHeading>
-													{#each data.expenseCategories as cat}
-														<Select.Item value={cat} label={cat} />
+											{#each data.categoryAccounts.filter((account) => account.type !== AccountType.Revenue) as account (account.id)}
+														<Select.Item
+															value={String(account.id)}
+															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
+														/>
 													{/each}
 												</Select.Group>
 												<Select.Group>
 													<Select.GroupHeading>Income</Select.GroupHeading>
-													{#each data.incomeCategories as cat}
-														<Select.Item value={cat} label={cat} />
+											{#each data.categoryAccounts.filter((account) => account.type === AccountType.Revenue) as account (account.id)}
+														<Select.Item
+															value={String(account.id)}
+															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
+														/>
 													{/each}
 												</Select.Group>
 											</Select.Content>
@@ -875,7 +958,9 @@
 							</div>
 
 							{#if dup}
-								<div class="dup-note">{dupMessage(job)} Import only if this is a separate transaction.</div>
+								<div class="dup-note">
+									{dupMessage(job)} Import only if this is a separate transaction.
+								</div>
 							{/if}
 
 							<div class="review-actions">
@@ -884,6 +969,8 @@
 										{confirmErrors[job.id]}
 									{:else if jobAccountMissing(job)}
 										Say which account {isIncome ? 'received this' : 'paid for this'} before importing it.
+									{:else if jobCategoryMissing(job)}
+										Choose the account this document should be recorded against.
 									{:else if !isIncome && accountByJob[job.id] === data.payableAccountId}
 										Marked as paid personally — owed to the contact above until reimbursed.
 									{:else if numEdits > 0}
@@ -896,10 +983,11 @@
 									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
 									<Button
 										size="sm"
-										disabled={jobRateMissing(job) || jobAccountMissing(job)}
+										disabled={jobRateMissing(job) || jobAccountMissing(job) || jobCategoryMissing(job)}
 										onclick={() => confirmJob(job.id)}
 									>
-										<Check size={15} /> {dup ? 'Import anyway' : 'Confirm & import'}
+										<Check size={15} />
+										{dup ? 'Import anyway' : 'Confirm & import'}
 									</Button>
 								</div>
 							</div>
@@ -914,9 +1002,7 @@
 			<div class="import-section">
 				<div class="import-section-head between">
 					<span>This session <span class="hbadge">{history.length}</span></span>
-					<Button variant="ghost" size="sm" onclick={() => (clearHistoryDialogOpen = true)}>
-						Clear history
-					</Button>
+					<Button variant="ghost" size="sm" onclick={() => (clearHistoryDialogOpen = true)}>Clear history</Button>
 				</div>
 				<div class="proc-list">
 					{#each history as job (job.id)}
@@ -927,7 +1013,10 @@
 									<span>{displayTitle(job)}</span>
 								</div>
 								<span class="proc-type">Skipped{job.duplicateOf ? ' · duplicate' : ''}</span>
-								<span class="skip-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
+								<span class="skip-amt"
+									>{currencySymbol(job.currency)}
+									{formatMoney(job.amount)}</span
+								>
 							</div>
 						{:else}
 							{@const importing = job.state === 'confirmed'}
@@ -939,16 +1028,25 @@
 										<span class="ok-check"><Check size={11} strokeWidth={3} /></span>
 									{/if}
 									<span>{displayTitle(job)}</span>
-									<span class="type-chip" class:income={job.documentType === 'income'} class:expense={job.documentType !== 'income'}>
+									<span
+										class="type-chip"
+										class:income={job.documentType === 'income'}
+										class:expense={job.documentType !== 'income'}
+									>
 										{job.documentType === 'income' ? 'Income' : 'Expense'}
 									</span>
 								</div>
-								<span class="bucket-path">{importing
-											? 'Importing…'
-											: job._uncategorised
-												? `→ ${bucketPath(job)} · filed as Uncategorised`
-												: '→ ' + bucketPath(job)}</span>
-								<span class="imported-amt">{currencySymbol(job.currency)} {formatMoney(job.amount)}</span>
+								<span class="bucket-path"
+									>{importing
+										? 'Importing…'
+										: job._uncategorised
+											? `→ ${bucketPath(job)} · filed as Uncategorised`
+											: '→ ' + bucketPath(job)}</span
+								>
+								<span class="imported-amt"
+									>{currencySymbol(job.currency)}
+									{formatMoney(job.amount)}</span
+								>
 							</div>
 						{/if}
 					{/each}
@@ -1027,7 +1125,9 @@
 		font-weight: 600;
 		letter-spacing: -0.01em;
 		box-shadow: var(--shadow-lg);
-		transition: transform 0.15s, background-color 0.15s;
+		transition:
+			transform 0.15s,
+			background-color 0.15s;
 	}
 
 	@media (hover: hover) {

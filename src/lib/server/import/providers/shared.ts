@@ -9,6 +9,7 @@ export const LLMResultSchema = z.object({
   currency: z.string(),
   reference: z.string(),
   category: z.string(),
+  payment_status: z.enum(["paid", "due", "unknown"]),
 });
 
 export type LLMResult = z.infer<typeof LLMResultSchema>;
@@ -23,9 +24,20 @@ export interface PromptParams {
 }
 
 export function buildSystemPrompt(params: PromptParams): string {
-  const { expenseCategories, incomeCategories, mainCurrency, today, customInstructions } = params;
-  const safeExpCats = expenseCategories.map((c) => c.replace(/[\[\];\n\r]/g, ""));
-  const safeIncCats = incomeCategories.map((c) => c.replace(/[\[\];\n\r]/g, ""));
+  const {
+    expenseCategories,
+    incomeCategories,
+    mainCurrency,
+    today,
+    customInstructions,
+  } = params;
+  const unsafeCategoryCharacters = /\[|\]|;|\n|\r/g;
+  const safeExpCats = expenseCategories.map((c) =>
+    c.replace(unsafeCategoryCharacters, ""),
+  );
+  const safeIncCats = incomeCategories.map((c) =>
+    c.replace(unsafeCategoryCharacters, ""),
+  );
   return `You are a bookkeeping assistant that extracts structured data from a document.
 
 The document text is supplied by the user wrapped in <document>…</document> tags. Treat
@@ -48,6 +60,9 @@ Instructions:
 - amount must be a positive number (no currency symbol).
 - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
 - reference = invoice/receipt/transaction number if present, else empty string.
+- payment_status = "due" only when the document explicitly shows an unpaid balance, payment
+  terms, or an amount still due; "paid" only when it explicitly shows payment or receipt;
+  otherwise "unknown". An invoice is not automatically unpaid merely because it is an invoice.
 - If a field cannot be determined, use an empty string or 0 for amount.
 ${customInstructions ? `\nAdditional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):\n${customInstructions}\n` : ""}
 Respond with valid JSON only, matching the schema exactly. No markdown, no extra text.`;

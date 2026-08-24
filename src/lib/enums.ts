@@ -285,7 +285,12 @@ export const AssetSubType = {
   Receivable: 5,
   Inventory: 6,
   OtherCurrentAsset: 7,
-  Equipment: 8,
+  FixedAsset: 8,
+  PrepaymentsAndDeposits: 20,
+  Clearing: 21,
+  TaxReceivable: 22,
+  IntangibleAsset: 23,
+  OtherNonCurrentAsset: 24,
 } as const;
 export const LiabilitySubType = {
   AccountsPayable: 9,
@@ -294,6 +299,8 @@ export const LiabilitySubType = {
   LongTermLoan: 12,
   OtherCurrentLiability: 13,
   OtherNonCurrentLiability: 14,
+  CreditCard: 25,
+  TaxPayable: 26,
 } as const;
 export const ExpenseSubType = {
   CostOfGoodsSold: 15,
@@ -305,12 +312,22 @@ export const RevenueSubType = {
   OtherRevenue: 19,
 } as const;
 
-export const AccountSubType = {
+const FixedAccountSubType = {
   ...AssetSubType,
   ...LiabilitySubType,
   ...ExpenseSubType,
   ...RevenueSubType,
 } as const;
+export const AccountSubType =
+  FixedAccountSubType as typeof FixedAccountSubType & {
+    readonly Equipment: typeof FixedAccountSubType.FixedAsset;
+  };
+// Numeric code 8 was previously named Equipment. Keep a source-compatible,
+// non-enumerable alias while new code uses the broader accounting term.
+Object.defineProperty(AccountSubType, "Equipment", {
+  value: AssetSubType.FixedAsset,
+  enumerable: false,
+});
 
 export const DefaultAccountPurpose = {
   Receivable: 1,
@@ -375,13 +392,20 @@ export const AccountSubTypeLabels: Record<number, string> = {
   [AccountSubType.Receivable]: "receivable",
   [AccountSubType.Inventory]: "inventory",
   [AccountSubType.OtherCurrentAsset]: "other_current_asset",
-  [AccountSubType.Equipment]: "equipment",
+  [AccountSubType.FixedAsset]: "fixed_asset",
+  [AccountSubType.PrepaymentsAndDeposits]: "prepayments_and_deposits",
+  [AccountSubType.Clearing]: "clearing",
+  [AccountSubType.TaxReceivable]: "tax_receivable",
+  [AccountSubType.IntangibleAsset]: "intangible_asset",
+  [AccountSubType.OtherNonCurrentAsset]: "other_non_current_asset",
   [AccountSubType.AccountsPayable]: "accounts_payable",
   [AccountSubType.AccruedLiabilities]: "accrued_liabilities",
   [AccountSubType.ShortTermLoan]: "short_term_loan",
   [AccountSubType.LongTermLoan]: "long_term_loan",
   [AccountSubType.OtherCurrentLiability]: "other_current_liability",
   [AccountSubType.OtherNonCurrentLiability]: "other_non_current_liability",
+  [AccountSubType.CreditCard]: "credit_card",
+  [AccountSubType.TaxPayable]: "tax_payable",
   [AccountSubType.CostOfGoodsSold]: "cost_of_goods_sold",
   [AccountSubType.OperatingExpense]: "operating_expense",
   [AccountSubType.OtherExpense]: "other_expense",
@@ -396,17 +420,24 @@ export const AccountSubTypeDisplayLabels: Record<number, string> = {
   [AccountSubType.Cash]: "Cash",
   [AccountSubType.Bank]: "Bank",
   [AccountSubType.Wallet]: "Wallet",
-  [AccountSubType.Card]: "Card",
+  [AccountSubType.Card]: "Prepaid/debit card",
   [AccountSubType.Receivable]: "Accounts receivable",
   [AccountSubType.Inventory]: "Inventory",
   [AccountSubType.OtherCurrentAsset]: "Other current asset",
-  [AccountSubType.Equipment]: "Equipment",
+  [AccountSubType.FixedAsset]: "Fixed asset",
+  [AccountSubType.PrepaymentsAndDeposits]: "Prepayments and deposits",
+  [AccountSubType.Clearing]: "Clearing",
+  [AccountSubType.TaxReceivable]: "Tax receivable",
+  [AccountSubType.IntangibleAsset]: "Intangible asset",
+  [AccountSubType.OtherNonCurrentAsset]: "Other non-current asset",
   [AccountSubType.AccountsPayable]: "Accounts payable",
   [AccountSubType.AccruedLiabilities]: "Accrued liabilities",
   [AccountSubType.ShortTermLoan]: "Short-term loan",
   [AccountSubType.LongTermLoan]: "Long-term loan",
   [AccountSubType.OtherCurrentLiability]: "Other current liability",
   [AccountSubType.OtherNonCurrentLiability]: "Other non-current liability",
+  [AccountSubType.CreditCard]: "Credit card",
+  [AccountSubType.TaxPayable]: "Tax payable",
   [AccountSubType.CostOfGoodsSold]: "Cost of goods sold",
   [AccountSubType.OperatingExpense]: "Operating expense",
   [AccountSubType.OtherExpense]: "Other expense",
@@ -418,16 +449,12 @@ export const AccountSubTypeDisplayLabels: Record<number, string> = {
  * Which sub-type codes are valid for a given account type — derived from the
  * per-type groups above, not hand-listed, so a new code added to e.g.
  * `LiabilitySubType` can't be forgotten here. Equity is absent: it has no
- * sub-type. Equipment is excluded from Asset's list: it is stamped wherever
- * the record form's "bought and kept" path creates an account, never offered
- * as an interactive choice (005 research.md §4).
+ * sub-type.
  */
 export const AccountSubTypesByType: Partial<
   Record<AccountTypeCode, AccountSubTypeCode[]>
 > = {
-  [AccountType.Asset]: Object.values(AssetSubType).filter(
-    (subType) => subType !== AssetSubType.Equipment,
-  ),
+  [AccountType.Asset]: Object.values(AssetSubType),
   [AccountType.Liability]: Object.values(LiabilitySubType),
   [AccountType.Expense]: Object.values(ExpenseSubType),
   [AccountType.Revenue]: Object.values(RevenueSubType),
@@ -465,7 +492,15 @@ export const LedgerRecordKindLabels: Record<number, string> = {
 };
 
 export const accountTypeEnum = makeEnum(AccountTypeLabels);
-export const accountSubTypeEnum = makeEnum(AccountSubTypeLabels);
+const canonicalAccountSubTypeEnum = makeEnum(AccountSubTypeLabels);
+export const accountSubTypeEnum = {
+  ...canonicalAccountSubTypeEnum,
+  fromLabel(label: string | null | undefined): number | null {
+    return label === "equipment"
+      ? AccountSubType.FixedAsset
+      : canonicalAccountSubTypeEnum.fromLabel(label);
+  },
+};
 export const defaultAccountPurposeEnum = makeEnum(DefaultAccountPurposeLabels);
 export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
 
