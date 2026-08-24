@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   markInvoiceIssued: vi.fn(),
   createRecord: vi.fn(),
   requireAccountDefault: vi.fn(),
+  reindexRecord: vi.fn(),
 }));
 
 vi.mock("$lib/server/queries/invoices.js", () => ({
@@ -19,6 +20,9 @@ vi.mock("$lib/server/services/ledger.js", () => ({
 }));
 vi.mock("$lib/server/services/account-defaults.js", () => ({
   requireAccountDefault: mocks.requireAccountDefault,
+}));
+vi.mock("$lib/server/queries/ledger.js", () => ({
+  reindexRecord: mocks.reindexRecord,
 }));
 
 import { issueInvoice } from "./invoices.js";
@@ -49,6 +53,9 @@ describe("issuing an invoice with saved defaults", () => {
       7,
       expect.objectContaining({ incomeAccountId: 44 }),
     );
+    // Reindexed again after `markInvoiceIssued` links the invoice back to the
+    // record, so the record's search text can pick up the invoice's content.
+    expect(mocks.reindexRecord).toHaveBeenCalledWith(expect.anything(), 99);
   });
 
   it("does not create a partial record when the saved account is missing or invalid", () => {

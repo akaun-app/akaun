@@ -41,6 +41,10 @@
 	// --- State ---
 	let searchRaw = $state('');
 	let search = $state('');
+	// Which ids the server matched for the current search term — server-side
+	// because the search text (notes, terms, line items) isn't part of the row
+	// already loaded into the browser. `null` means no search is active.
+	let searchMatchedIds = $state<Set<number> | null>(null);
 	let statusTab = $state('all');
 	let overdueOnly = $state(false);
 	let dateFrom = $state('');
@@ -58,6 +62,30 @@
 		const v = searchRaw;
 		const t = setTimeout(() => (search = v), 300);
 		return () => clearTimeout(t);
+	});
+
+	// A keyword can live in a line item, a note or the terms — none of which is
+	// in the rows already loaded into the browser — so the term goes to the
+	// server instead of a client-only field check (mirrors `ContactSelect.svelte`).
+	$effect(() => {
+		const term = search.trim();
+		if (!term) {
+			searchMatchedIds = null;
+			return;
+		}
+		fetch(`/api/invoices?search=${encodeURIComponent(term)}&limit=500`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then((rows: Invoice[] | null) => {
+				if (!rows) {
+					searchMatchedIds = new Set();
+					return;
+				}
+				invoices = mergeById(invoices, rows);
+				searchMatchedIds = new Set(rows.map((r) => r.id));
+			})
+			.catch(() => {
+				searchMatchedIds = new Set();
+			});
 	});
 
 	// SSE — real-time updates from server
@@ -132,14 +160,9 @@
 		}
 		if (dateFrom) rows = rows.filter((inv) => inv.issueDate >= dateFrom);
 		if (dateTo) rows = rows.filter((inv) => inv.issueDate <= dateTo);
-		if (search.trim()) {
-			const s = search.toLowerCase();
-			rows = rows.filter(
-				(inv) =>
-					inv.invoiceNumber.toLowerCase().includes(s) ||
-					(inv.contactName ?? '').toLowerCase().includes(s) ||
-					(inv.reference ?? '').toLowerCase().includes(s)
-			);
+		if (searchMatchedIds) {
+			const matched = searchMatchedIds;
+			rows = rows.filter((inv) => matched.has(inv.id));
 		}
 		rows.sort((a, b) => {
 			const ak = sort.key as keyof typeof a;

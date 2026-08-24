@@ -15,6 +15,8 @@ import {
   accounts,
   accountDefaults,
   contacts,
+  invoiceLines,
+  invoices,
   ledgerMovements,
   ledgerRecords,
   recordAttachments,
@@ -180,21 +182,48 @@ export function reindexRecord(db: LedgerDb, recordId: number): void {
     .all()
     .map((r) => r.name);
 
+  let text = buildRecordSearchText({
+    recordNumber: row.recordNumber,
+    description: row.description,
+    reference: row.reference,
+    remark: row.remark,
+    contactName,
+    accountNames,
+    extractedText: row.extractedText,
+  });
+
+  // An issued invoice's own notes/terms/line items live on `invoices`, not on
+  // this record's columns — fold them in here (search only, never written back
+  // to the record's own `remark`) so the record is findable by that content
+  // too, not just from /invoices.
+  if (row.kind === LedgerRecordKind.InvoiceIssue) {
+    const invoice = db
+      .select({ id: invoices.id, notes: invoices.notes, terms: invoices.terms })
+      .from(invoices)
+      .where(eq(invoices.ledgerRecordId, recordId))
+      .get();
+    if (invoice) {
+      const lines = db
+        .select({ description: invoiceLines.description })
+        .from(invoiceLines)
+        .where(eq(invoiceLines.invoiceId, invoice.id))
+        .all();
+      text = joinSearchText(
+        text,
+        invoice.notes,
+        invoice.terms,
+        ...lines.map((l) => l.description),
+      );
+    }
+  }
+
   upsertSearchText(
     db,
     recordSearchText,
     recordSearchText.recordId,
     recordSearchText.text,
     recordId,
-    buildRecordSearchText({
-      recordNumber: row.recordNumber,
-      description: row.description,
-      reference: row.reference,
-      remark: row.remark,
-      contactName,
-      accountNames,
-      extractedText: row.extractedText,
-    }),
+    text,
   );
 }
 
