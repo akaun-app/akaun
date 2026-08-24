@@ -6,10 +6,12 @@ import {
   addAttachment,
   getRecord,
   listAttachments,
+  setExtractedText,
 } from "$lib/server/queries/ledger.js";
 import { resourceForKind } from "$lib/server/ledger/record-permissions.js";
 import { recordAudit } from "$lib/server/audit.js";
 import { emitRecordUpdate } from "$lib/server/services/ledger.js";
+import { extractAttachmentsText } from "$lib/server/extraction/attachment-text.js";
 import {
   displayName,
   MAX_UPLOAD_BYTES,
@@ -82,6 +84,17 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     finalPath,
     displayName(finalPath),
   );
+
+  // Re-run over every attachment, not just the new one, so the record's
+  // searchable text matches what "Rebuild search index" would produce.
+  try {
+    const text = await extractAttachmentsText(
+      listAttachments(db, id).map((a) => a.filename),
+    );
+    if (text != null) setExtractedText(db, id, text);
+  } catch {
+    // Best-effort: an attachment must still save even if it can't be indexed.
+  }
 
   recordAudit(db, {
     recordType: "record",

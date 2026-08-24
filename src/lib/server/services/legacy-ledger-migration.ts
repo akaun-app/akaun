@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { AccountRole, LedgerRecordKind } from "$lib/enums.js";
+import { joinSearchText } from "../search-text.js";
 
 export type LegacyConversionSummary = {
   expenses: number;
@@ -139,6 +140,7 @@ function insertRecord(
     currency: string;
     exchangeRate: number;
     amount: number;
+    extractedText: string | null;
     createdBy: number | null;
   },
 ): number {
@@ -150,7 +152,7 @@ function insertRecord(
   if (prior) return prior.id;
   const result = db
     .query(
-      "INSERT INTO ledger_records(id, kind, date, record_number, description, contact_id, reference, remark, currency, exchange_rate, amount, legacy_kind, legacy_id, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO ledger_records(id, kind, date, record_number, description, contact_id, reference, remark, currency, exchange_rate, amount, extracted_text, legacy_kind, legacy_id, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .get(
       row.id ?? null,
@@ -164,6 +166,7 @@ function insertRecord(
       row.currency,
       row.exchangeRate,
       row.amount,
+      row.extractedText,
       row.legacyKind,
       row.legacyId,
       row.createdBy,
@@ -188,6 +191,59 @@ function movement(
         .get(recordId, accountId, amountMinor, sortOrder) as { id: number }
     ).id,
   );
+}
+
+/**
+ * Rebuilds `record_search_text` for every migrated record — the migration's own
+ * equivalent of `reindexRecord` (`queries/ledger.ts`), which cannot be called
+ * directly here because it needs the drizzle-wrapped `LedgerDb`, not the raw
+ * `bun:sqlite` handle this whole conversion runs against. Without this, a migrated
+ * record has no search-text row at all: nothing else in this file ever inserts one,
+ * and migration 0015 drops the legacy `expense_search_text`/`income_search_text`
+ * tables it used to live in.
+ */
+function indexLegacyRecords(db: Database): void {
+  const records = db
+    .query(
+      "SELECT id, record_number, description, reference, remark, contact_id, extracted_text FROM ledger_records WHERE legacy_kind IN ('expense', 'income', 'claim')",
+    )
+    .all() as {
+    id: number;
+    record_number: string | null;
+    description: string;
+    reference: string;
+    remark: string;
+    contact_id: number | null;
+    extracted_text: string | null;
+  }[];
+  for (const record of records) {
+    const contactName = record.contact_id
+      ? ((
+          db
+            .query("SELECT legal_name AS name FROM contacts WHERE id = ?")
+            .get(record.contact_id) as { name: string } | null
+        )?.name ?? null)
+      : null;
+    const accountNames = (
+      db
+        .query(
+          "SELECT accounts.name AS name FROM ledger_movements JOIN accounts ON accounts.id = ledger_movements.account_id WHERE ledger_movements.record_id = ?",
+        )
+        .all(record.id) as { name: string }[]
+    ).map((r) => r.name);
+    const text = joinSearchText(
+      record.record_number,
+      record.description,
+      contactName,
+      record.reference,
+      record.remark,
+      ...accountNames,
+      record.extracted_text,
+    );
+    db.query(
+      "INSERT INTO record_search_text(record_id, text) VALUES (?, ?) ON CONFLICT(record_id) DO UPDATE SET text = excluded.text",
+    ).run(record.id, text);
+  }
 }
 
 export function convertLegacyLedger(db: Database): LegacyConversionSummary {
@@ -291,6 +347,7 @@ export function convertLegacyLedger(db: Database): LegacyConversionSummary {
       currency: row.currency,
       exchangeRate: row.exchange_rate,
       amount: row.amount,
+      extractedText: row.extracted_text ?? null,
       createdBy: row.created_by,
     });
     if (
@@ -340,6 +397,7 @@ export function convertLegacyLedger(db: Database): LegacyConversionSummary {
       currency: row.currency,
       exchangeRate: row.exchange_rate,
       amount: row.amount,
+      extractedText: row.extracted_text ?? null,
       createdBy: row.created_by,
     });
     if (
@@ -377,6 +435,7 @@ export function convertLegacyLedger(db: Database): LegacyConversionSummary {
       currency: "MYR",
       exchangeRate: 1,
       amount: total / 100,
+      extractedText: null,
       createdBy: claim.created_by,
     });
     if (
@@ -439,6 +498,8 @@ export function convertLegacyLedger(db: Database): LegacyConversionSummary {
       );
     }
   }
+
+  indexLegacyRecords(db);
 
   const unbalanced = Number(
     (

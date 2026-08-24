@@ -135,6 +135,14 @@ function productionShape(): string {
       "INSERT INTO income_attachments(income_id, filename, display_name) VALUES (?, ?, ?)",
     ).run(id, `income-${id}.pdf`, `Income ${id}`);
   }
+  // Attachment text a prior OCR pass already captured, to prove the upgrade
+  // carries it forward and keeps it searchable rather than dropping it.
+  db.query("UPDATE expenses SET extracted_text = ? WHERE id = 1").run(
+    "Receipt from Acme Hardware Sdn Bhd",
+  );
+  db.query("UPDATE incomes SET extracted_text = ? WHERE id = 1").run(
+    "Invoice paid by Acme Hardware Sdn Bhd",
+  );
   const queued = spread(QUEUED_CATEGORIES);
   for (let id = 1; id <= 34; id += 1) {
     db.query(
@@ -289,6 +297,46 @@ describe("staged chart conversion", () => {
         .get(),
     ).toEqual({ n: 236 });
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    db.close();
+  });
+
+  it("SearchText_WhenConversionRuns_ShouldCarryAttachmentTextAndIndexEveryRecord", () => {
+    const path = productionShape();
+    upgradeDatabaseFile({ databasePath: path });
+    const db = open(path);
+
+    const expenseRecord = db
+      .query(
+        "SELECT id, extracted_text FROM ledger_records WHERE legacy_kind = 'expense' AND legacy_id = 1",
+      )
+      .get() as { id: number; extracted_text: string | null };
+    expect(expenseRecord.extracted_text).toBe(
+      "Receipt from Acme Hardware Sdn Bhd",
+    );
+
+    const incomeRecord = db
+      .query(
+        "SELECT extracted_text FROM ledger_records WHERE legacy_kind = 'income' AND legacy_id = 1",
+      )
+      .get() as { extracted_text: string | null };
+    expect(incomeRecord.extracted_text).toBe(
+      "Invoice paid by Acme Hardware Sdn Bhd",
+    );
+
+    // Every migrated expense, income and claim record has a search-text row —
+    // none silently left unindexed by the conversion.
+    expect(
+      db
+        .query(
+          "SELECT count(*) AS n FROM record_search_text JOIN ledger_records ON ledger_records.id = record_search_text.record_id WHERE ledger_records.legacy_kind IN ('expense', 'income', 'claim')",
+        )
+        .get(),
+    ).toEqual({ n: 236 });
+
+    const expenseSearchText = db
+      .query("SELECT text FROM record_search_text WHERE record_id = ?")
+      .get(expenseRecord.id) as { text: string };
+    expect(expenseSearchText.text).toContain("Acme Hardware");
     db.close();
   });
 

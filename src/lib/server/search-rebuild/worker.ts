@@ -7,8 +7,7 @@ import {
   invoices,
   contacts,
 } from "../db/schema.js";
-import { extractText, inferMimeType } from "../extraction/document-text.js";
-import { urlForFile } from "../file-storage.js";
+import { extractAttachmentsText } from "../extraction/attachment-text.js";
 import { createLogger } from "../logger.js";
 import { searchRebuildEvents } from "./events.js";
 import { reindexRecord, setExtractedText } from "../queries/ledger.js";
@@ -77,28 +76,6 @@ export function startRebuild(): RebuildStatus {
   return status;
 }
 
-/** Re-runs local OCR/PDF extraction against a set of stored attachment files, best-effort. */
-async function reextractAttachmentText(
-  filenames: string[],
-): Promise<string | null> {
-  const parts: string[] = [];
-  for (const filename of filenames) {
-    try {
-      const text = await extractText(
-        urlForFile(filename),
-        inferMimeType(filename),
-      );
-      if (text) parts.push(text);
-    } catch (err) {
-      log.warn(
-        { err, filename },
-        "Re-extraction failed for attachment; skipping",
-      );
-    }
-  }
-  return parts.length ? parts.join("\n") : null;
-}
-
 /**
  * One store of records means one rebuild path: every kind of record — expense,
  * income, transfer, payment, journal entry — is re-indexed the same way, from
@@ -110,7 +87,7 @@ async function rebuildRecord(id: number) {
     .from(recordAttachments)
     .where(eq(recordAttachments.recordId, id))
     .all();
-  const text = await reextractAttachmentText(
+  const text = await extractAttachmentsText(
     attachments.map((a) => a.filename),
   );
   if (text != null) {
