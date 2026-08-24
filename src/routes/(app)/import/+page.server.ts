@@ -51,6 +51,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     db,
     DefaultAccountPurpose.EverydayTransaction,
   );
+  const uncategorised = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.UncategorisedExpense,
+  );
+  const uncategorisedIncome = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.UncategorisedIncome,
+  );
 
   const expensePaymentAccounts = allAccounts.filter((account) =>
     isImportPurchaseSource(account, payableAccount?.id ?? null),
@@ -70,10 +78,15 @@ export const load: PageServerLoad = async ({ locals }) => {
     expenseCategories,
     incomeCategories,
     categoryAccounts,
+    allAccounts,
     accounts: incomeReceiptAccounts,
     expensePaymentAccounts,
     payableAccountId: payableAccount?.id ?? null,
     receivableAccountId: receivableAccount?.id ?? null,
+    uncategorisedAccountId: uncategorised.ok ? uncategorised.value : null,
+    uncategorisedIncomeAccountId: uncategorisedIncome.ok
+      ? uncategorisedIncome.value
+      : null,
     defaultAccountId: transactionDefault.ok ? transactionDefault.value : null,
   };
 };

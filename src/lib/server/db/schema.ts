@@ -296,6 +296,12 @@ export const importQueue = sqliteTable("import_queue", {
   exchangeRate: real("exchange_rate"),
   reference: text("reference"),
   category: text("category"),
+  categoryAccountId: integer("category_account_id").references(
+    () => accounts.id,
+    {
+      onDelete: "set null",
+    },
+  ),
   remark: text("remark"),
   duplicateOf: integer("duplicate_of"),
   // 0-100 weighted-match confidence; set only when duplicateOf is set. See duplicate-detector.ts.

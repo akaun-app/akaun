@@ -33,8 +33,18 @@ type SeedAccount = {
 
 /** The useful default chart every fresh installation starts with (FR-055). */
 export const DEFAULT_CHART: readonly SeedAccount[] = [
-  { code: 1000, name: "Cash", type: AccountType.Asset, subType: AccountSubType.Cash },
-  { code: 1100, name: "Bank", type: AccountType.Asset, subType: AccountSubType.Bank },
+  {
+    code: 1000,
+    name: "Cash",
+    type: AccountType.Asset,
+    subType: AccountSubType.Cash,
+  },
+  {
+    code: 1100,
+    name: "Bank",
+    type: AccountType.Asset,
+    subType: AccountSubType.Bank,
+  },
   {
     code: 1200,
     name: "Accounts Receivable",
@@ -124,6 +134,7 @@ const INITIAL_DEFAULT_CODES: Readonly<
   [DefaultAccountPurpose.SalesRevenue]: 4000,
   [DefaultAccountPurpose.UncategorisedExpense]: 5900,
   [DefaultAccountPurpose.EverydayTransaction]: 1100,
+  [DefaultAccountPurpose.UncategorisedIncome]: 4100,
 };
 
 // Transitional only: the explicit conversion later retires the role column.

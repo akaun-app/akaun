@@ -60,3 +60,44 @@ export function isImportIncomeTarget(
     (posting(account) && account.id === receivableAccountId)
   );
 }
+
+export function importKindForSource(
+  account: AccountView,
+  payableAccountId: number | null,
+): "expense" | "income" | null {
+  if (isImportIncomeSource(account)) return "income";
+  if (isImportPurchaseSource(account, payableAccountId)) return "expense";
+  return null;
+}
+
+export function validateImportAccountPair(
+  from: AccountView,
+  to: AccountView,
+  payableAccountId: number | null,
+  receivableAccountId: number | null,
+): { ok: true; kind: "expense" | "income" } | { ok: false; reason: string } {
+  if (from.id === to.id) {
+    return {
+      ok: false,
+      reason: "Source and target must be different accounts.",
+    };
+  }
+  const kind = importKindForSource(from, payableAccountId);
+  if (kind == null) {
+    return {
+      ok: false,
+      reason: "That account cannot be used as an import source.",
+    };
+  }
+  const targetIsValid =
+    kind === "income"
+      ? isImportIncomeTarget(to, receivableAccountId)
+      : isImportPurchaseTarget(to);
+  return targetIsValid
+    ? { ok: true, kind }
+    : {
+        ok: false,
+        reason:
+          "Those source and target accounts are not valid for this document.",
+      };
+}

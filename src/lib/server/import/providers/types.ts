@@ -6,8 +6,8 @@ export type { LLMProviderType as ProviderType } from "../../llm/model-factory.js
 
 export interface LLMCallParams {
   text: string;
-  expenseCategories: string[];
-  incomeCategories: string[];
+  expenseAccounts: import("./shared.js").ImportAccountChoice[];
+  incomeAccounts: import("./shared.js").ImportAccountChoice[];
   mainCurrency: string;
   customInstructions?: string;
 }

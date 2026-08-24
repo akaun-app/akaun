@@ -14,6 +14,7 @@ import { defaultAccountId, getAccount } from "$lib/server/queries/accounts.js";
 import {
   categoryAccountForImport,
   categoryChoices,
+  matchCategoryAccount,
   resolvePaidFromAccountId,
 } from "$lib/server/import/category-accounts.js";
 import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
@@ -30,12 +31,7 @@ import {
 import type { RecordCreate } from "$lib/server/ledger/types.js";
 import type { RequestHandler } from "./$types.js";
 import { hasPermission } from "$lib/server/permissions.js";
-import {
-  isImportIncomeSource,
-  isImportIncomeTarget,
-  isImportPurchaseSource,
-  isImportPurchaseTarget,
-} from "$lib/server/import/account-policy.js";
+import { validateImportAccountPair } from "$lib/server/import/account-policy.js";
 
 const log = createLogger("import:confirm");
 
@@ -110,7 +106,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       row.documentType ??
       DocumentType.Expense;
   else docCode = row.documentType ?? DocumentType.Expense;
-  const isIncome = docCode === DocumentType.Income;
+  let isIncome = docCode === DocumentType.Income;
 
   // Merge: start from queue row, apply only the overridden fields
   const itemName = overrides.item_name ?? row.itemName ?? "";
@@ -161,19 +157,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     );
   }
 
-  const accountId = explicitSides
-    ? isIncome
-      ? overrides.toAccountId!
-      : overrides.fromAccountId!
-    : (overrides.accountId ?? row.accountId ?? defaultAccountId(db));
-  if (accountId == null) {
-    return refused(
-      isIncome
-        ? "Say which account received this before importing it."
-        : "Say which account paid for this before importing it.",
-    );
-  }
-
   const payableDefault = requireAccountDefault(
     db,
     DefaultAccountPurpose.Payable,
@@ -183,10 +166,13 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   // A category that could not be read lands on Uncategorised and is flagged, the
   // same way the upgrade treats a record it could not place: a document that was
   // paid for is still a document that was paid for (spec edge case, FR-019).
-  const kind = isIncome ? "income" : "expense";
-  const uncategorisedDefault = requireAccountDefault(
+  const uncategorisedExpenseDefault = requireAccountDefault(
     db,
     DefaultAccountPurpose.UncategorisedExpense,
+  );
+  const uncategorisedIncomeDefault = requireAccountDefault(
+    db,
+    DefaultAccountPurpose.UncategorisedIncome,
   );
   let categoryAccountId: number;
   let uncategorised = false;
@@ -199,30 +185,52 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       db,
       DefaultAccountPurpose.Receivable,
     );
-    const valid = isIncome
-      ? isImportIncomeSource(from) &&
-        isImportIncomeTarget(
-          to,
-          receivableDefault.ok ? receivableDefault.value : null,
-        )
-      : isImportPurchaseSource(from, payableAccountId) &&
-        isImportPurchaseTarget(to);
-    if (!valid) {
-      return refused(
-        "Those source and target accounts are not valid for this document.",
-      );
-    }
+    const pair = validateImportAccountPair(
+      from,
+      to,
+      payableAccountId,
+      receivableDefault.ok ? receivableDefault.value : null,
+    );
+    if (!pair.ok) return refused(pair.reason);
+    docCode =
+      pair.kind === "income" ? DocumentType.Income : DocumentType.Expense;
+    isIncome = docCode === DocumentType.Income;
     categoryAccountId = isIncome ? from.id : to.id;
+    const categoryDefault = isIncome
+      ? uncategorisedIncomeDefault
+      : uncategorisedExpenseDefault;
+    uncategorised =
+      categoryDefault.ok && categoryAccountId === categoryDefault.value;
   } else {
+    const kind = isIncome ? "income" : "expense";
+    const choices = categoryChoices(db, kind);
+    const categoryDefault = isIncome
+      ? uncategorisedIncomeDefault
+      : uncategorisedExpenseDefault;
+    const selectedAccountId =
+      row.categoryAccountId ?? matchCategoryAccount(choices, category);
     const selectedCategory = categoryAccountForImport(
       kind,
-      categoryChoices(db, kind),
-      category,
-      uncategorisedDefault.ok ? uncategorisedDefault.value : null,
+      choices,
+      selectedAccountId,
+      categoryDefault.ok ? categoryDefault.value : null,
     );
     if (!selectedCategory.ok) return refused(selectedCategory.reason);
     categoryAccountId = selectedCategory.value.accountId;
     uncategorised = selectedCategory.value.uncategorised;
+  }
+
+  const accountId = explicitSides
+    ? isIncome
+      ? overrides.toAccountId!
+      : overrides.fromAccountId!
+    : (overrides.accountId ?? row.accountId ?? defaultAccountId(db));
+  if (accountId == null) {
+    return refused(
+      isIncome
+        ? "Say which account received this before importing it."
+        : "Say which account paid for this before importing it.",
+    );
   }
 
   const paidFromAccountId = resolvePaidFromAccountId(
@@ -253,7 +261,11 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       role,
       uploader,
     );
-  } else if (row.matchedContactId && !partyEdited) {
+  } else if (
+    row.matchedContactId &&
+    !partyEdited &&
+    row.documentType === docCode
+  ) {
     contactId = row.matchedContactId;
   } else if (partyRawName.trim()) {
     contactId = resolveOrCreateContact(db, partyRawName, role, uploader);
@@ -265,6 +277,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     .set({
       state: ImportState.Confirmed,
       accountId,
+      documentType: docCode,
       confirmedAt: new Date().toISOString(),
     })
     .where(eq(importQueue.id, params.jobId))

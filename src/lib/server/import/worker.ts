@@ -4,11 +4,10 @@ import { importQueue, users } from "../db/schema.js";
 import { STORAGE_PATH } from "../env.js";
 import { createLogger } from "../logger.js";
 import { getSetting, SETTING_KEYS } from "../settings.js";
-import { categoryChoices } from "./category-accounts.js";
 import {
-  getAccount,
-  lastPaymentAccountForContact,
-} from "../queries/accounts.js";
+  categoryAccountForImport,
+  categoryChoices,
+} from "./category-accounts.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
 import { extractText, inferMimeType } from "../extraction/document-text.js";
 import { callLLMWithProviders } from "./llm.js";
@@ -20,16 +19,11 @@ import { mainCurrencyCode } from "../currency/form.js";
 import {
   ImportState,
   DocumentType,
-  LedgerRecordKind,
   Role,
   documentTypeEnum,
   DefaultAccountPurpose,
 } from "$lib/enums.js";
 import { requireAccountDefault } from "../services/account-defaults.js";
-import {
-  isImportIncomeTarget,
-  isImportPurchaseSource,
-} from "./account-policy.js";
 import { join } from "path";
 
 const log = createLogger("import:worker");
@@ -142,8 +136,8 @@ async function processJob(job: typeof importQueue.$inferSelect) {
 
     // The AI picks from the chart of accounts, so what it answers can be matched
     // straight back to an account on confirm (FR-006a).
-    const expenseCategories = categoryChoices(db, "expense").map((c) => c.name);
-    const incomeCategories = categoryChoices(db, "income").map((c) => c.name);
+    const expenseChoices = categoryChoices(db, "expense");
+    const incomeChoices = categoryChoices(db, "income");
     const mainCurrency = mainCurrencyCode(db);
     const rateLimitMs = parseInt(
       getSetting(db, SETTING_KEYS.autoImportRateLimitMs) ?? "0",
@@ -219,8 +213,16 @@ async function processJob(job: typeof importQueue.$inferSelect) {
       result = await callLLMWithProviders(
         {
           text,
-          expenseCategories,
-          incomeCategories,
+          expenseAccounts: expenseChoices.map(({ id, code, path }) => ({
+            id,
+            code,
+            path,
+          })),
+          incomeAccounts: incomeChoices.map(({ id, code, path }) => ({
+            id,
+            code,
+            path,
+          })),
           mainCurrency,
           customInstructions,
         },
@@ -288,57 +290,36 @@ async function processJob(job: typeof importQueue.$inferSelect) {
       exchangeRate = rate.rate;
     }
 
-    // Which account paid or received it. A repeat contact pre-fills whatever
-    // account was actually used for them last time (FR-011, FR-019) — a
-    // vendor usually paid from the same wallet, a customer usually pays into
-    // the same bank account, and this is also how a reviewer's own choice of
-    // Accounts Payable ("I paid this personally") carries forward to the
-    // vendor's next receipt. Falls back to the one global default when the
-    // contact has no matching history yet.
-    const learnedAccountId =
-      matchedId != null
-        ? lastPaymentAccountForContact(
-            db,
-            matchedId,
-            docType === DocumentType.Income
-              ? LedgerRecordKind.Income
-              : LedgerRecordKind.Expense,
-          )
-        : null;
-    const learnedAccount =
-      learnedAccountId == null ? null : getAccount(db, learnedAccountId);
-    const payableDefault = requireAccountDefault(
+    // An imported document proves an amount is owed, not that money moved.
+    // Payment is a separate event, so imports always start on Payable/Receivable.
+    const settlementDefault = requireAccountDefault(
       db,
-      DefaultAccountPurpose.Payable,
+      docType === DocumentType.Income
+        ? DefaultAccountPurpose.Receivable
+        : DefaultAccountPurpose.Payable,
     );
-    const receivableDefault = requireAccountDefault(
+    const categoryDefault = requireAccountDefault(
       db,
-      DefaultAccountPurpose.Receivable,
+      docType === DocumentType.Income
+        ? DefaultAccountPurpose.UncategorisedIncome
+        : DefaultAccountPurpose.UncategorisedExpense,
     );
-    const transactionDefault = requireAccountDefault(
-      db,
-      DefaultAccountPurpose.EverydayTransaction,
+    const kind = docType === DocumentType.Income ? "income" : "expense";
+    const choices = kind === "income" ? incomeChoices : expenseChoices;
+    const categoryResult = categoryAccountForImport(
+      kind,
+      choices,
+      result.category_account_id,
+      categoryDefault.ok ? categoryDefault.value : null,
     );
-    const learnedEligible = learnedAccount
-      ? docType === DocumentType.Income
-        ? isImportIncomeTarget(
-            learnedAccount,
-            receivableDefault.ok ? receivableDefault.value : null,
-          )
-        : isImportPurchaseSource(
-            learnedAccount,
-            payableDefault.ok ? payableDefault.value : null,
-          )
-      : false;
-    const dueDefault =
-      result.payment_status === "due"
-        ? requireAccountDefault(
-            db,
-            docType === DocumentType.Income
-              ? DefaultAccountPurpose.Receivable
-              : DefaultAccountPurpose.Payable,
-          )
-        : null;
+    const categoryAccountId = categoryResult.ok
+      ? categoryResult.value.accountId
+      : null;
+    const categoryName =
+      categoryAccountId == null
+        ? null
+        : (choices.find((choice) => choice.id === categoryAccountId)?.name ??
+          null);
 
     const now = new Date().toISOString();
     db.update(importQueue)
@@ -355,15 +336,9 @@ async function processJob(job: typeof importQueue.$inferSelect) {
         currency: detectedCurrency,
         exchangeRate,
         reference: result.reference,
-        category: result.category,
-        accountId:
-          dueDefault?.ok === true
-            ? dueDefault.value
-            : learnedEligible
-              ? learnedAccountId
-              : transactionDefault.ok
-                ? transactionDefault.value
-                : null,
+        category: categoryName,
+        categoryAccountId,
+        accountId: settlementDefault.ok ? settlementDefault.value : null,
         duplicateOf: dup?.duplicateOf ?? null,
         duplicateConfidence: dup?.confidence ?? null,
         duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,

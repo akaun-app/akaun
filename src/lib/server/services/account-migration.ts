@@ -53,6 +53,7 @@ const DEFAULT_CODE_BY_PURPOSE = {
   [DefaultAccountPurpose.SalesRevenue]: 4000,
   [DefaultAccountPurpose.UncategorisedExpense]: 5900,
   [DefaultAccountPurpose.EverydayTransaction]: 1100,
+  [DefaultAccountPurpose.UncategorisedIncome]: 4100,
 } as const;
 
 function compatibilityRole(type: AccountTypeCode): AccountRoleCode {

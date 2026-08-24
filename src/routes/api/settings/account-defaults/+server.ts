@@ -17,6 +17,7 @@ const purposeSchema = z.union([
   z.literal(DefaultAccountPurpose.SalesRevenue),
   z.literal(DefaultAccountPurpose.UncategorisedExpense),
   z.literal(DefaultAccountPurpose.EverydayTransaction),
+  z.literal(DefaultAccountPurpose.UncategorisedIncome),
 ]);
 const replaceSchema = z
   .object({

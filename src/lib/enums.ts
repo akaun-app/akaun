@@ -336,6 +336,7 @@ export const DefaultAccountPurpose = {
   SalesRevenue: 4,
   UncategorisedExpense: 5,
   EverydayTransaction: 6,
+  UncategorisedIncome: 7,
 } as const;
 
 // A kind belongs to one *event* on one date. It carries intent the movements
@@ -467,6 +468,7 @@ export const DefaultAccountPurposeLabels: Record<number, string> = {
   [DefaultAccountPurpose.SalesRevenue]: "sales_revenue",
   [DefaultAccountPurpose.UncategorisedExpense]: "uncategorised_expense",
   [DefaultAccountPurpose.EverydayTransaction]: "everyday_transaction",
+  [DefaultAccountPurpose.UncategorisedIncome]: "uncategorised_income",
 };
 
 export const DefaultAccountPurposeTypes: Record<
@@ -479,6 +481,7 @@ export const DefaultAccountPurposeTypes: Record<
   [DefaultAccountPurpose.SalesRevenue]: AccountType.Revenue,
   [DefaultAccountPurpose.UncategorisedExpense]: AccountType.Expense,
   [DefaultAccountPurpose.EverydayTransaction]: AccountType.Asset,
+  [DefaultAccountPurpose.UncategorisedIncome]: AccountType.Revenue,
 };
 
 export const LedgerRecordKindLabels: Record<number, string> = {

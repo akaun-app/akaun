@@ -21,6 +21,7 @@ export const ACCOUNT_DEFAULT_PURPOSES = [
   DefaultAccountPurpose.SalesRevenue,
   DefaultAccountPurpose.UncategorisedExpense,
   DefaultAccountPurpose.EverydayTransaction,
+  DefaultAccountPurpose.UncategorisedIncome,
 ] as const satisfies readonly DefaultAccountPurposeCode[];
 
 function invalidReason(purpose: DefaultAccountPurposeCode): string {

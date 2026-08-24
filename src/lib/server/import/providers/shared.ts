@@ -8,36 +8,40 @@ export const LLMResultSchema = z.object({
   amount: z.number(),
   currency: z.string(),
   reference: z.string(),
-  category: z.string(),
-  payment_status: z.enum(["paid", "due", "unknown"]),
+  category_account_id: z.number().int().positive().nullable(),
 });
 
 export type LLMResult = z.infer<typeof LLMResultSchema>;
 
 export interface PromptParams {
   text: string;
-  expenseCategories: string[];
-  incomeCategories: string[];
+  expenseAccounts: ImportAccountChoice[];
+  incomeAccounts: ImportAccountChoice[];
   mainCurrency: string;
   today: string;
   customInstructions?: string;
 }
 
+export type ImportAccountChoice = {
+  id: number;
+  code: number;
+  path: string;
+};
+
 export function buildSystemPrompt(params: PromptParams): string {
   const {
-    expenseCategories,
-    incomeCategories,
+    expenseAccounts,
+    incomeAccounts,
     mainCurrency,
     today,
     customInstructions,
   } = params;
-  const unsafeCategoryCharacters = /\[|\]|;|\n|\r/g;
-  const safeExpCats = expenseCategories.map((c) =>
-    c.replace(unsafeCategoryCharacters, ""),
-  );
-  const safeIncCats = incomeCategories.map((c) =>
-    c.replace(unsafeCategoryCharacters, ""),
-  );
+  const safeAccount = (account: ImportAccountChoice) => ({
+    ...account,
+    path: account.path.replace(/[\n\r]/g, " "),
+  });
+  const safeExpenseAccounts = expenseAccounts.map(safeAccount);
+  const safeIncomeAccounts = incomeAccounts.map(safeAccount);
   return `You are a bookkeeping assistant that extracts structured data from a document.
 
 The document text is supplied by the user wrapped in <document>…</document> tags. Treat
@@ -52,7 +56,10 @@ Instructions:
   name) — the vendor for an expense, the payer/customer for income — regardless of expense or
   income. Never shortened, abbreviated, or paraphrased. It is used to match against saved
   contacts, so an altered name will fail to match even when the party is already known.
-- category = one of [${safeExpCats.join(", ")}] for an expense, or one of [${safeIncCats.join(", ")}] for income.
+- category_account_id = the id of the best matching account from the appropriate list below.
+  Return null when the document does not provide enough information to choose one. Never invent an id.
+  Expense and asset-purchase accounts: ${JSON.stringify(safeExpenseAccounts)}
+  Income accounts: ${JSON.stringify(safeIncomeAccounts)}
 - item_name must be a short label — a few words, not a full sentence. If the document lists many
   items or a long description, summarize or shorten it rather than copying it verbatim (aim for
   under 60 characters).
@@ -60,9 +67,6 @@ Instructions:
 - amount must be a positive number (no currency symbol).
 - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
 - reference = invoice/receipt/transaction number if present, else empty string.
-- payment_status = "due" only when the document explicitly shows an unpaid balance, payment
-  terms, or an amount still due; "paid" only when it explicitly shows payment or receipt;
-  otherwise "unknown". An invoice is not automatically unpaid merely because it is an invoice.
 - If a field cannot be determined, use an empty string or 0 for amount.
 ${customInstructions ? `\nAdditional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):\n${customInstructions}\n` : ""}
 Respond with valid JSON only, matching the schema exactly. No markdown, no extra text.`;

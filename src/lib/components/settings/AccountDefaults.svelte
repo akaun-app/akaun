@@ -41,6 +41,10 @@
       title: "Default transaction account",
       help: "The account new income and expenses default to.",
     },
+    7: {
+      title: "Uncategorised income",
+      help: "Used when an imported income document has no matching revenue account.",
+    },
   };
   // svelte-ignore state_referenced_locally
   let selected = $state<Record<number, number>>(

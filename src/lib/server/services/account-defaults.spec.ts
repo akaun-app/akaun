@@ -26,6 +26,7 @@ const PURPOSES: readonly [DefaultAccountPurposeCode, AccountTypeCode][] = [
   [DefaultAccountPurpose.SalesRevenue, AccountType.Revenue],
   [DefaultAccountPurpose.UncategorisedExpense, AccountType.Expense],
   [DefaultAccountPurpose.EverydayTransaction, AccountType.Asset],
+  [DefaultAccountPurpose.UncategorisedIncome, AccountType.Revenue],
 ];
 
 beforeEach(() => {
@@ -118,7 +119,7 @@ function validInputs() {
 }
 
 describe("saved account defaults", () => {
-  it("atomically saves and returns all six compatible active leaves", () => {
+  it("atomically saves and returns all seven compatible active leaves", () => {
     const inputs = validInputs();
     expect(replaceAccountDefaults(db, 7, inputs).ok).toBe(true);
     expect(
@@ -135,13 +136,13 @@ describe("saved account defaults", () => {
           []
         >("SELECT count(*) AS n FROM audit_log WHERE record_type = 'account' AND action = 'update'")
         .get()!.n,
-    ).toBe(6);
+    ).toBe(7);
   });
 
   it("refuses a missing purpose without changing existing defaults", () => {
     const initial = validInputs();
     expect(replaceAccountDefaults(db, 7, initial).ok).toBe(true);
-    const result = replaceAccountDefaults(db, 7, initial.slice(0, 5));
+    const result = replaceAccountDefaults(db, 7, initial.slice(0, 6));
     expect(result.ok).toBe(false);
     expect(getAccountDefaults(db).map((item) => item.account?.id)).toEqual(
       initial.map((item) => item.accountId),
@@ -150,7 +151,7 @@ describe("saved account defaults", () => {
       sqlite
         .query<{ n: number }, []>("SELECT count(*) AS n FROM audit_log")
         .get()!.n,
-    ).toBe(6);
+    ).toBe(7);
   });
 
   it("refuses the wrong type, inactive accounts, and headings", () => {
@@ -210,6 +211,7 @@ describe("saved account defaults", () => {
       replaceAccountDefaults(db, 7, [
         ...base.slice(0, 5),
         { ...base[5], accountId: inventory },
+        ...base.slice(6),
       ]).ok,
     ).toBe(false);
   });

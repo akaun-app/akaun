@@ -5,7 +5,8 @@
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
-	import AccountSelect from '$lib/components/ledger/AccountSelect.svelte';
+	import ImportSourceAccountSelect from '$lib/components/import/ImportSourceAccountSelect.svelte';
+	import ImportCategoryAccountSelect from '$lib/components/import/ImportCategoryAccountSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
@@ -13,6 +14,12 @@
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
 	import { AccountType, Role, importStateEnum, documentTypeEnum } from '$lib/enums.js';
+	import {
+		defaultTargetForImportSource,
+		importSourceIsIncome,
+		syncImportAccountSelection,
+		targetAccountsForImportSource,
+	} from '$lib/import-account-groups.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
 	import type { PageData } from './$types.js';
@@ -46,6 +53,7 @@
 		exchangeRate: number | null;
 		reference: string | null;
 		category: string | null;
+		categoryAccountId: number | null;
 		remark: string | null;
 		// Which account paid for this / received it, as the worker pre-filled it.
 		accountId: number | null;
@@ -89,6 +97,7 @@
 			exchangeRate: j.exchangeRate ?? null,
 			reference: j.reference,
 			category: j.category,
+			categoryAccountId: j.categoryAccountId ?? null,
 			remark: j.remark,
 			accountId: j.accountId ?? null,
 			duplicateOf: j.duplicateOf,
@@ -103,24 +112,29 @@
 	// svelte-ignore state_referenced_locally
 	let jobs = $state<Job[]>(data.jobs.map(normalizeJob));
 
-	// Which account paid for / received each job, keyed by job id. Seeded from what
-	// the worker pre-filled; AccountSelect falls back to the default account, so a
-	// user with one account is never asked (FR-011).
+	// Source determines direction. Target is always the narrowed other side.
 	// svelte-ignore state_referenced_locally
-	let accountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(data.jobs.map((j) => [j.id, j.accountId ?? null])),
+	let sourceAccountByJob = $state<Record<string, number | null>>(
+		Object.fromEntries(data.jobs.map((j) => [j.id, initialSourceAccountId(j)])),
 	);
-	// The other side is stored by account id in the review state. Older queued
-	// jobs only carry the extracted account name, so resolve that once on load.
 	// svelte-ignore state_referenced_locally
-	let categoryAccountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(data.jobs.map((j) => [j.id, initialCategoryAccountId(j)])),
+	let targetAccountByJob = $state<Record<string, number | null>>(
+		Object.fromEntries(data.jobs.map((j) => [j.id, initialTargetAccountId(j)])),
 	);
+	let sourceAccountTouched = $state<Record<string, boolean>>({});
+	let targetAccountTouched = $state<Record<string, boolean>>({});
 
 	function initialCategoryAccountId(job: {
 		category?: string | null;
+		categoryAccountId?: number | null;
 		documentType?: number | string | null;
 	}): number | null {
+		if (
+			job.categoryAccountId != null &&
+			data.categoryAccounts.some((account) => account.id === job.categoryAccountId)
+		) {
+			return job.categoryAccountId;
+		}
 		const wanted = (job.category ?? '').trim().toLowerCase();
 		if (!wanted) return null;
 		const documentLabel =
@@ -128,11 +142,34 @@
 		const candidates = data.categoryAccounts.filter(
 			(account) =>
 				account.name.trim().toLowerCase() === wanted &&
-				(documentLabel === 'income'
-					? account.type === AccountType.Revenue
-					: account.type !== AccountType.Revenue),
+				(documentLabel === 'income' ? account.type === AccountType.Revenue : account.type !== AccountType.Revenue),
 		);
 		return candidates[0]?.id ?? null;
+	}
+
+	function initialSourceAccountId(job: {
+		accountId?: number | null;
+		category?: string | null;
+		categoryAccountId?: number | null;
+		documentType?: number | string | null;
+	}): number | null {
+		const documentLabel =
+			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
+		return documentLabel === 'income'
+			? (initialCategoryAccountId(job) ?? data.uncategorisedIncomeAccountId)
+			: (data.payableAccountId ?? job.accountId ?? null);
+	}
+
+	function initialTargetAccountId(job: {
+		accountId?: number | null;
+		category?: string | null;
+		categoryAccountId?: number | null;
+		documentType?: number | string | null;
+	}): number | null {
+		const documentLabel =
+			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
+		if (documentLabel === 'income') return data.receivableAccountId ?? job.accountId ?? null;
+		return initialCategoryAccountId(job) ?? data.uncategorisedAccountId;
 	}
 
 	// Store original file references for retry
@@ -196,9 +233,7 @@
 	const failed = $derived(jobs.filter((j) => j.state === 'failed'));
 	const review = $derived(jobs.filter((j) => j.state === 'pending_review'));
 	const history = $derived(jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state)));
-	const confirmable = $derived(
-		review.filter((j) => !j.duplicateOf && !jobAccountMissing(j) && !jobCategoryMissing(j)).length,
-	);
+	const confirmable = $derived(review.filter((j) => !j.duplicateOf && !jobAccountMissing(j)).length);
 	let _es: EventSource | null = null;
 
 	// onMount/onDestroy guarantee exactly one connection per page visit — no reactive re-runs
@@ -244,10 +279,19 @@
 			jobs = [...brandNew, ...jobs];
 		}
 
-		// Never overwrite an account the reviewer has already picked here.
+		// Live extraction may replace an automatic fallback. Only an actual reviewer
+		// choice is protected from subsequent server updates.
 		for (const j of incoming) {
-			if (!(j.id in accountByJob)) accountByJob[j.id] = j.accountId ?? null;
-			if (!(j.id in categoryAccountByJob)) categoryAccountByJob[j.id] = initialCategoryAccountId(j);
+			sourceAccountByJob[j.id] = syncImportAccountSelection(
+				sourceAccountByJob[j.id],
+				initialSourceAccountId(j),
+				sourceAccountTouched[j.id] === true,
+			);
+			targetAccountByJob[j.id] = syncImportAccountSelection(
+				targetAccountByJob[j.id],
+				initialTargetAccountId(j),
+				targetAccountTouched[j.id] === true,
+			);
 		}
 	}
 
@@ -307,21 +351,14 @@
 		// A record has to say which account paid for it or received it.
 		if (jobAccountMissing(job)) return;
 
-		// No more manual toggle — the kind sent to the server always follows whichever
-		// category is currently selected (see jobIsIncome).
 		const isIncome = jobIsIncome(job);
-		const categoryAccountId = categoryAccountByJob[jobId];
-		if (isIncome && categoryAccountId == null) return;
+		const fromAccountId = sourceAccountByJob[jobId];
+		const toAccountId = targetAccountByJob[jobId];
+		if (fromAccountId == null || toAccountId == null) return;
 		const body = {
 			...(job._edits ?? {}),
-			document_type: isIncome ? 'income' : 'expense',
-			accountId: accountByJob[jobId],
-			...(categoryAccountId == null
-				? {}
-				: {
-						fromAccountId: isIncome ? categoryAccountId : accountByJob[jobId],
-						toAccountId: isIncome ? accountByJob[jobId] : categoryAccountId,
-					}),
+			fromAccountId,
+			toAccountId,
 		};
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
 			method: 'POST',
@@ -343,6 +380,7 @@
 				? {
 						...j,
 						state: 'confirmed' as JobState,
+						documentType: isIncome ? 'income' : 'expense',
 						_uncategorised: !!result.uncategorised,
 					}
 				: j,
@@ -354,7 +392,7 @@
 	}
 
 	async function confirmAll() {
-		const toConfirm = review.filter((j) => !j.duplicateOf && !jobAccountMissing(j) && !jobCategoryMissing(j));
+		const toConfirm = review.filter((j) => !j.duplicateOf && !jobAccountMissing(j));
 		await Promise.all(toConfirm.map((j) => confirmJob(j.id)));
 	}
 
@@ -407,28 +445,50 @@
 		});
 	}
 
-	// The record's kind now follows whichever category the reviewer picked (no more
-	// manual Expense/Income toggle) — mirrors how RecordForm derives contactRole from
-	// the chosen account's type with no upfront kind picker.
 	function jobIsIncome(job: Job): boolean {
-		const account = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[job.id]);
-		if (account) return account.type === AccountType.Revenue;
-		return job.documentType === 'income';
+		const source = sourceAccountByJob[job.id];
+		return source == null ? job.documentType === 'income' : importSourceIsIncome(data.allAccounts, source);
 	}
 
-	function setCategoryAccount(jobId: string, raw: string): void {
+	function setSourceAccount(jobId: string, value: number): void {
 		const job = jobs.find((candidate) => candidate.id === jobId);
 		const wasIncome = job ? jobIsIncome(job) : false;
-		const value = Number(raw);
-		categoryAccountByJob[jobId] = Number.isInteger(value) && value > 0 ? value : null;
-		const selected = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[jobId]);
-		const isIncome = selected ? selected.type === AccountType.Revenue : wasIncome;
-		if (isIncome !== wasIncome) accountByJob[jobId] = null;
+		sourceAccountByJob[jobId] = value;
+		sourceAccountTouched[jobId] = true;
+		targetAccountTouched[jobId] = true;
+		const isIncome = importSourceIsIncome(data.allAccounts, value);
+		const targets = targetAccountsForJob(jobId);
+		if (!targets.some((account) => account.id === targetAccountByJob[jobId])) {
+			const defaultTarget = defaultTargetForImportSource(
+				data.allAccounts,
+				value,
+				data.receivableAccountId,
+				data.uncategorisedAccountId,
+			);
+			targetAccountByJob[jobId] = targets.some((account) => account.id === defaultTarget) ? defaultTarget : null;
+		}
+		if (job && isIncome !== wasIncome) {
+			// Matches and suggestions were resolved using the LLM's original role.
+			// Do not silently carry one across an Expense/Income correction.
+			jobs = jobs.map((candidate) =>
+				candidate.id === jobId ? { ...candidate, matchedContactId: null, matchCandidates: [] } : candidate,
+			);
+		}
 	}
 
-	function categoryLabel(jobId: string): string {
-		const account = data.categoryAccounts.find((candidate) => candidate.id === categoryAccountByJob[jobId]);
-		return account ? `${account.code} · ${(account.path ?? [account.name]).join(' › ')}` : 'Select account';
+	function setTargetAccount(jobId: string, raw: string): void {
+		const value = Number(raw);
+		targetAccountByJob[jobId] = Number.isInteger(value) && value > 0 ? value : null;
+		targetAccountTouched[jobId] = true;
+	}
+
+	function targetAccountsForJob(jobId: string) {
+		return targetAccountsForImportSource(
+			data.allAccounts,
+			sourceAccountByJob[jobId],
+			data.payableAccountId,
+			data.receivableAccountId,
+		);
 	}
 
 	function editedValue(job: Job, key: string): string | number {
@@ -460,10 +520,7 @@
 		return jobIsForeign(job) && !(parseFloat(jobRateStr(job)) > 0);
 	}
 	function jobAccountMissing(job: Job): boolean {
-		return accountByJob[job.id] == null;
-	}
-	function jobCategoryMissing(job: Job): boolean {
-		return jobIsIncome(job) && categoryAccountByJob[job.id] == null;
+		return sourceAccountByJob[job.id] == null || targetAccountByJob[job.id] == null;
 	}
 	function jobConverted(job: Job): number | null {
 		const a = parseFloat(String(editedValue(job, 'amount')));
@@ -830,105 +887,29 @@
 									</div>
 								{/if}
 
-								<!-- The two account sides always read Source, then Target, whichever
-								     kind this is (mirrors EntryBlock's from-then-to order) -->
-								{#if isIncome}
-									<!-- Source: the category account the earning is booked from.
-									     Both category lists are offered together — picking one from
-									     the other list re-derives isIncome and flips this layout. -->
-									<div class="rfield">
-										<span class="rfield-label">
-											Source account
-											{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
-										</span>
-										<Select.Root
-											type="single"
-											value={categoryAccountByJob[job.id] == null ? '' : String(categoryAccountByJob[job.id])}
-											onValueChange={(v) => setCategoryAccount(job.id, v)}
-										>
-											<Select.Trigger class="rinput w-full">
-												{categoryLabel(job.id)}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Group>
-													<Select.GroupHeading>Income</Select.GroupHeading>
-											{#each data.categoryAccounts.filter((account) => account.type === AccountType.Revenue) as account (account.id)}
-														<Select.Item
-															value={String(account.id)}
-															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
-														/>
-													{/each}
-												</Select.Group>
-												<Select.Group>
-													<Select.GroupHeading>Expense</Select.GroupHeading>
-											{#each data.categoryAccounts.filter((account) => account.type !== AccountType.Revenue) as account (account.id)}
-														<Select.Item
-															value={String(account.id)}
-															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
-														/>
-													{/each}
-												</Select.Group>
-											</Select.Content>
-										</Select.Root>
-									</div>
-
-									<!-- Target: the account the money was received into -->
-									<AccountSelect
-										accounts={data.accounts}
-										bind:value={accountByJob[job.id]}
-										name="account-{job.id}"
-										label="Target account"
-										defaultAccountId={data.defaultAccountId}
+								<!-- Source establishes direction; Target is then narrowed by policy. -->
+								<div class="rfield">
+									<span class="rfield-label">Source account</span>
+									<ImportSourceAccountSelect
+										accounts={data.allAccounts}
+										payableAccountId={data.payableAccountId}
+										value={sourceAccountByJob[job.id]}
+										incomeFirst={isIncome}
+										onChange={(value) => setSourceAccount(job.id, value)}
 									/>
-								{:else}
-									<!-- Source: the account the money was paid from -->
-									<AccountSelect
-										accounts={data.expensePaymentAccounts}
-										bind:value={accountByJob[job.id]}
-										name="account-{job.id}"
-										label="Source account"
-										defaultAccountId={data.defaultAccountId}
-									/>
+								</div>
 
-									<!-- Target: the category account the expense is booked to.
-									     Both category lists are offered together — picking one from
-									     the other list re-derives isIncome and flips this layout. -->
-									<div class="rfield">
-										<span class="rfield-label">
-											Target account
-											{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
-										</span>
-										<Select.Root
-											type="single"
-											value={categoryAccountByJob[job.id] == null ? '' : String(categoryAccountByJob[job.id])}
-											onValueChange={(v) => setCategoryAccount(job.id, v)}
-										>
-											<Select.Trigger class="rinput w-full">
-												{categoryLabel(job.id)}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Group>
-													<Select.GroupHeading>Expense</Select.GroupHeading>
-											{#each data.categoryAccounts.filter((account) => account.type !== AccountType.Revenue) as account (account.id)}
-														<Select.Item
-															value={String(account.id)}
-															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
-														/>
-													{/each}
-												</Select.Group>
-												<Select.Group>
-													<Select.GroupHeading>Income</Select.GroupHeading>
-											{#each data.categoryAccounts.filter((account) => account.type === AccountType.Revenue) as account (account.id)}
-														<Select.Item
-															value={String(account.id)}
-															label={`${account.code} · ${(account.path ?? [account.name]).join(' › ')}`}
-														/>
-													{/each}
-												</Select.Group>
-											</Select.Content>
-										</Select.Root>
-									</div>
-								{/if}
+								<div class="rfield">
+									<span class="rfield-label">
+										Target account
+										{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
+									</span>
+									<ImportCategoryAccountSelect
+										accounts={targetAccountsForJob(job.id)}
+										value={targetAccountByJob[job.id]}
+										onChange={(value) => setTargetAccount(job.id, value)}
+									/>
+								</div>
 
 								<!-- Date -->
 								<div class="rfield">
@@ -968,10 +949,8 @@
 									{#if confirmErrors[job.id]}
 										{confirmErrors[job.id]}
 									{:else if jobAccountMissing(job)}
-										Say which account {isIncome ? 'received this' : 'paid for this'} before importing it.
-									{:else if jobCategoryMissing(job)}
-										Choose the account this document should be recorded against.
-									{:else if !isIncome && accountByJob[job.id] === data.payableAccountId}
+										Choose both the source and target account before importing it.
+									{:else if !isIncome && sourceAccountByJob[job.id] === data.payableAccountId}
 										Marked as paid personally — owed to the contact above until reimbursed.
 									{:else if numEdits > 0}
 										{numEdits} field{numEdits > 1 ? 's' : ''} edited — only these override the AI values
@@ -983,7 +962,7 @@
 									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
 									<Button
 										size="sm"
-										disabled={jobRateMissing(job) || jobAccountMissing(job) || jobCategoryMissing(job)}
+										disabled={jobRateMissing(job) || jobAccountMissing(job)}
 										onclick={() => confirmJob(job.id)}
 									>
 										<Check size={15} />

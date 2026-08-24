@@ -6,6 +6,8 @@ import {
   isImportIncomeTarget,
   isImportPurchaseSource,
   isImportPurchaseTarget,
+  importKindForSource,
+  validateImportAccountPair,
 } from "./account-policy.js";
 
 function account(
@@ -82,6 +84,34 @@ describe("auto-import account policy", () => {
       isImportPurchaseTarget(
         account(20, AccountType.Asset, AccountSubType.FixedAsset, false),
       ),
+    ).toBe(false);
+  });
+
+  it("derives the record kind from the source account", () => {
+    expect(importKindForSource(revenue, payable.id)).toBe("income");
+    expect(importKindForSource(bank, payable.id)).toBe("expense");
+    expect(importKindForSource(payable, payable.id)).toBe("expense");
+    expect(importKindForSource(loan, payable.id)).toBeNull();
+  });
+
+  it("validates complete direction-driven account pairs", () => {
+    expect(
+      validateImportAccountPair(revenue, bank, payable.id, receivable.id),
+    ).toEqual({
+      ok: true,
+      kind: "income",
+    });
+    expect(
+      validateImportAccountPair(bank, expense, payable.id, receivable.id),
+    ).toEqual({
+      ok: true,
+      kind: "expense",
+    });
+    expect(
+      validateImportAccountPair(revenue, expense, payable.id, receivable.id).ok,
+    ).toBe(false);
+    expect(
+      validateImportAccountPair(bank, bank, payable.id, receivable.id).ok,
     ).toBe(false);
   });
 });

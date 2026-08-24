@@ -15,7 +15,12 @@ import type { LedgerDb } from "../ledger/types.js";
 
 export type DocumentKind = "expense" | "income";
 
-export type CategoryChoice = { id: number; name: string };
+export type CategoryChoice = {
+  id: number;
+  name: string;
+  code: number;
+  path: string;
+};
 
 /** What each kind of document calls a category — the same lists the two screens offer. */
 const CATEGORY_TYPES: Record<DocumentKind, AccountTypeCode> = {
@@ -41,32 +46,37 @@ export function categoryChoices(
     .map((a) => ({
       id: a.id,
       name: a.name,
+      code: a.code ?? a.id,
+      path: (a.path ?? [a.name]).join(" › "),
     }));
 }
 
 export function categoryAccountForImport(
   kind: DocumentKind,
   choices: CategoryChoice[],
-  name: string | null | undefined,
-  uncategorisedExpenseAccountId: number | null,
+  selectedAccountId: number | null | undefined,
+  uncategorisedAccountId: number | null,
 ):
   | { ok: true; value: { accountId: number; uncategorised: boolean } }
   | { ok: false; reason: string } {
-  const matched = matchCategoryAccount(choices, name);
-  if (matched !== null) {
-    return { ok: true, value: { accountId: matched, uncategorised: false } };
-  }
-  if (kind === "expense" && uncategorisedExpenseAccountId !== null) {
+  const selected = choices.find((choice) => choice.id === selectedAccountId);
+  if (selected) {
     return {
       ok: true,
-      value: { accountId: uncategorisedExpenseAccountId, uncategorised: true },
+      value: { accountId: selected.id, uncategorised: false },
+    };
+  }
+  if (uncategorisedAccountId !== null) {
+    return {
+      ok: true,
+      value: { accountId: uncategorisedAccountId, uncategorised: true },
     };
   }
   return {
     ok: false,
     reason:
       kind === "income"
-        ? "Choose a revenue account before importing this income."
+        ? "Choose a valid saved account for income whose category is not known."
         : "Choose a valid saved account for expenses whose category is not known.",
   };
 }
