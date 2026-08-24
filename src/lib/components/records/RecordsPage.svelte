@@ -4,7 +4,6 @@
   import { fly } from "svelte/transition";
   import {
     Calendar,
-    ChevronDown,
     ChevronRight,
     Lock,
     Plus,
@@ -49,6 +48,7 @@
     RecordView,
   } from "$lib/server/ledger/types.js";
   import type { loadRecordsPage } from "$lib/server/loaders/records.js";
+  import { useIsMobile } from "$lib/hooks/useIsMobile.svelte.js";
 
   /**
    * Everything that happened with money, in one list.
@@ -515,7 +515,10 @@
   };
 
   let owedItems = $state<OutstandingItem[]>([]);
-  let owedOpen = $state(true);
+  let owedSheetOpen = $state(false);
+  const owedScreen = useIsMobile();
+  const owedIsMobile = $derived(owedScreen.current);
+  const owedPanelSide = $derived(owedIsMobile ? "bottom" : "right");
 
   async function loadOwed() {
     const res = await fetch("/api/settlements?direction=we-owe");
@@ -869,82 +872,27 @@
       <!-- Who is owed, and how much is left -->
       {#if owedGroups.length > 0}
         <section class="owed-panel">
+          <div class="owed-head-main">
+            <span class="owed-head-title">Outstanding payables</span>
+            <span class="owed-head-sub">
+              {owedGroups.length}
+              {owedGroups.length === 1 ? "contact" : "contacts"} · paid for
+              things on the business's behalf
+            </span>
+          </div>
+          <span class="owed-head-total num">{formatMinor(owedTotal)}</span>
+          {#if data.perms.add && owedGroups.length > 1}
+            <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+            <a class="owed-pay-btn" href={payAllHref()}>Pay all outstanding</a>
+          {/if}
           <button
             type="button"
-            class="owed-head"
-            aria-expanded={owedOpen}
-            onclick={() => (owedOpen = !owedOpen)}
+            class="owed-view-btn"
+            onclick={() => (owedSheetOpen = true)}
           >
-            <span class="owed-head-main">
-              <span class="owed-head-title">Outstanding payables</span>
-              <span class="owed-head-sub">
-                {owedGroups.length}
-                {owedGroups.length === 1 ? "contact" : "contacts"} · paid for
-                things on the business's behalf
-              </span>
-            </span>
-            <span class="owed-head-total num">{formatMinor(owedTotal)}</span>
-            {#if owedOpen}<ChevronDown
-                size={15}
-                color="var(--muted-foreground)"
-              />{:else}<ChevronRight
-                size={15}
-                color="var(--muted-foreground)"
-              />{/if}
+            View details
+            <ChevronRight size={13} color="var(--muted-foreground)" />
           </button>
-
-          {#if owedOpen}
-            <div class="owed-body">
-              {#if data.perms.add && owedGroups.length > 1}
-                <div class="owed-all-row">
-                  <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
-                  <a class="owed-pay-btn" href={payAllHref()}>
-                    Pay all outstanding
-                  </a>
-                </div>
-              {/if}
-              {#each owedGroups as group (group.contactId)}
-                <div class="owed-group">
-                  <div class="owed-group-head">
-                    <span class="owed-group-name">{group.contactName}</span>
-                    <span class="owed-group-total num"
-                      >{formatMinor(group.totalMinor)}</span
-                    >
-                    {#if data.perms.add}
-                      <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
-                      <a class="owed-pay-btn" href={payHref(group)}>
-                        Record a payment
-                      </a>
-                    {/if}
-                  </div>
-                  {#each group.items as item (item.movementId)}
-                    <button
-                      type="button"
-                      class="owed-row related-link"
-                      onclick={() => openOwedItem(item)}
-                    >
-                      <span class="owed-row-main">
-                        <span class="owed-row-name"
-                          >{item.description || "Expense"}</span
-                        >
-                        <span class="owed-row-sub">
-                          {formatDateShort(item.date)}{item.recordNumber
-                            ? ` · ${item.recordNumber}`
-                            : ""}{item.daysOverdue > 0
-                            ? ` · ${item.daysOverdue} days`
-                            : ""}
-                        </span>
-                      </span>
-                      <span class="owed-row-amt num"
-                        >{formatMinor(item.outstandingMinor)}</span
-                      >
-                      <ChevronRight size={13} color="var(--muted-foreground)" />
-                    </button>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          {/if}
         </section>
       {/if}
 
@@ -1566,6 +1514,76 @@
   <input type="hidden" name="ids" value={[...selected].join(",")} />
 </form>
 
+<!-- Outstanding payables sheet -->
+<Sheet.Root bind:open={owedSheetOpen}>
+  <Sheet.Content
+    side={owedPanelSide}
+    style={owedIsMobile
+      ? "height:100dvh; border-radius:0; border-top:none; display:flex; flex-direction:column; overflow:hidden; gap:0;"
+      : "width:500px; max-width:95vw; display:flex; flex-direction:column; overflow:hidden; gap:0;"}
+  >
+    <div
+      style="padding:22px 22px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;"
+    >
+      <div>
+        <div class="sheet-eyebrow">Records</div>
+        <div class="sheet-title-text">Outstanding payables</div>
+      </div>
+      <Sheet.Close class="sheet-close"><X size={16} /></Sheet.Close>
+    </div>
+    <div style="flex:1; overflow-y:auto; padding:20px 22px;">
+      <div class="owed-body">
+        {#if data.perms.add && owedGroups.length > 1}
+          <div class="owed-all-row">
+            <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+            <a class="owed-pay-btn" href={payAllHref()}>Pay all outstanding</a>
+          </div>
+        {/if}
+        {#each owedGroups as group (group.contactId)}
+          <div class="owed-group">
+            <div class="owed-group-head">
+              <span class="owed-group-name">{group.contactName}</span>
+              <span class="owed-group-total num"
+                >{formatMinor(group.totalMinor)}</span
+              >
+              {#if data.perms.add}
+                <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
+                <a class="owed-pay-btn" href={payHref(group)}>
+                  Record a payment
+                </a>
+              {/if}
+            </div>
+            {#each group.items as item (item.movementId)}
+              <button
+                type="button"
+                class="owed-row related-link"
+                onclick={() => openOwedItem(item)}
+              >
+                <span class="owed-row-main">
+                  <span class="owed-row-name"
+                    >{item.description || "Expense"}</span
+                  >
+                  <span class="owed-row-sub">
+                    {formatDateShort(item.date)}{item.recordNumber
+                      ? ` · ${item.recordNumber}`
+                      : ""}{item.daysOverdue > 0
+                      ? ` · ${item.daysOverdue} days`
+                      : ""}
+                  </span>
+                </span>
+                <span class="owed-row-amt num"
+                  >{formatMinor(item.outstandingMinor)}</span
+                >
+                <ChevronRight size={13} color="var(--muted-foreground)" />
+              </button>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    </div>
+  </Sheet.Content>
+</Sheet.Root>
+
 <!-- Mobile filter sheet -->
 <Sheet.Root bind:open={mobileFilterOpen}>
     <Sheet.Content
@@ -1905,26 +1923,19 @@
     color: var(--muted-foreground);
   }
 
-  /* Who is owed, and how much is left */
+  /* Who is owed, and how much is left — a fixed-height banner; the full
+     per-contact breakdown lives in the sheet, not stacked inline, so this
+     never grows and steals height from the table below it. */
   .owed-panel {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--card);
     margin-bottom: 12px;
-    overflow: hidden;
-  }
-  .owed-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 12px 14px;
-    border: none;
-    background: none;
-    font-family: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
+    padding: 10px 14px;
   }
   .owed-head-main {
     display: flex;
@@ -1946,11 +1957,24 @@
     font-weight: 600;
     white-space: nowrap;
   }
+  .owed-view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+    white-space: nowrap;
+    padding: 3px 2px;
+  }
   .owed-body {
     display: flex;
     flex-direction: column;
     gap: 14px;
-    padding: 0 14px 14px;
   }
   .owed-all-row {
     display: flex;
