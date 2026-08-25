@@ -141,6 +141,13 @@
   // --- Filter and sort state ---------------------------------------------
   let searchRaw = $state("");
   let search = $state("");
+  // Which ids the server matched for the current search term — server-side
+  // because the search text (including OCR'd attachment content) lives in
+  // `record_search_text`, not on the record rows already loaded into the
+  // browser. `null` means no search is active, so every other filter below
+  // still runs over the full loaded batch exactly as before.
+  let searchMatchedIds = $state<Set<number> | null>(null);
+  let searchTotal = $state<number | null>(null);
   let statusTab = $state("all");
   let selectedCats = $state<number[]>([]);
   // One list of every kind, so which kinds to show is a filter rather than a
@@ -190,6 +197,35 @@
     const v = searchRaw;
     const t = setTimeout(() => (search = v), 300);
     return () => clearTimeout(t);
+  });
+
+  // A keyword can live anywhere `record_search_text` reaches — an OCR'd
+  // attachment, a reference number typed years ago — none of which is in the
+  // rows already loaded into the browser, so the term goes to the server
+  // instead of a client-only field check (mirrors `ContactSelect.svelte`).
+  $effect(() => {
+    const term = search.trim();
+    if (!term) {
+      searchMatchedIds = null;
+      searchTotal = null;
+      return;
+    }
+    fetch(`/api/records?search=${encodeURIComponent(term)}&limit=500`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { records: RecordView[]; total: number } | null) => {
+        if (!body) {
+          searchMatchedIds = new Set();
+          searchTotal = null;
+          return;
+        }
+        records = mergeById(records, body.records);
+        searchMatchedIds = new Set(body.records.map((r) => r.id));
+        searchTotal = body.total;
+      })
+      .catch(() => {
+        searchMatchedIds = new Set();
+        searchTotal = null;
+      });
   });
 
   // --- Derived ------------------------------------------------------------
@@ -267,16 +303,9 @@
     if (mx != null) rows = rows.filter((r) => r.amountMinor <= mx);
     if (dateFrom) rows = rows.filter((r) => r.date >= dateFrom);
     if (dateTo) rows = rows.filter((r) => r.date <= dateTo);
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      rows = rows.filter(
-        (r) =>
-          r.description.toLowerCase().includes(q) ||
-          (r.contactName ?? "").toLowerCase().includes(q) ||
-          (r.recordNumber ?? "").toLowerCase().includes(q) ||
-          r.reference.toLowerCase().includes(q) ||
-          categoryName(r).toLowerCase().includes(q),
-      );
+    if (searchMatchedIds) {
+      const matched = searchMatchedIds;
+      rows = rows.filter((r) => matched.has(r.id));
     }
 
     const key = sort.key;
@@ -1452,7 +1481,15 @@
       </div>
       <div class="table-foot">
         <span>{filtered.length} of {counts.all} records</span>
-        {#if data.total > records.length}
+        {#if searchMatchedIds}
+          {#if searchTotal !== null && searchTotal > searchMatchedIds.size}
+            <span class="muted"
+              >Showing {searchMatchedIds.size} of {searchTotal} matches</span
+            >
+          {:else}
+            <span class="muted">Updated just now</span>
+          {/if}
+        {:else if data.total > records.length}
           <span class="muted"
             >Showing the {records.length} most recent of {data.total}</span
           >

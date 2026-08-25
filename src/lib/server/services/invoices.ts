@@ -8,6 +8,7 @@ import {
   type InvoicePatch,
 } from "$lib/server/queries/invoices.js";
 import { createRecord } from "$lib/server/services/ledger.js";
+import { reindexRecord } from "$lib/server/queries/ledger.js";
 import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { invoiceEvents } from "$lib/server/finance/events.js";
 import { DefaultAccountPurpose, InvoiceStatus } from "$lib/enums.js";
@@ -104,6 +105,10 @@ export function issueInvoice(
     ledgerRecordId: record.value.id,
     incomeAccountId,
   });
+  // The record was reindexed at creation, before this invoice was linked back
+  // to it — its own notes/terms/lines only become findable now that
+  // `reindexRecord` (queries/ledger.ts) can look the invoice back up by id.
+  reindexRecord(db as LedgerDb, record.value.id);
   invoiceEvents.emit("invoice-update", { item: issued });
   return { ok: true, value: issued };
 }
