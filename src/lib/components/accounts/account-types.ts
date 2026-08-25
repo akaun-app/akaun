@@ -15,26 +15,19 @@ export type AccountView = {
    * Expense/Revenue, `null` defaults safely to Operating.
    */
   subType: AccountSubTypeCode | null;
-  parentId: number | null;
   active: boolean;
-  hasChildren: boolean;
   postingEligible: boolean;
-  directBalanceMinor: number;
-  rolledUpBalanceMinor: number;
-  path: string[];
 };
 
 export type AccountCreateInput = {
   name: string;
   type: AccountTypeCode;
-  parentId?: number | null;
   subType?: AccountSubTypeCode;
 };
 
 export type AccountUpdateInput = Partial<{
   name: string;
   type: AccountTypeCode;
-  parentId: number | null;
   active: boolean;
   subType: AccountSubTypeCode;
 }>;

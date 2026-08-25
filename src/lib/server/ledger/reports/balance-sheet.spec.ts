@@ -42,7 +42,6 @@ function totalsIn(
         code: m.accountId,
         accountName: m.accountName,
         type: accountTypeFor(m.role),
-        parentId: null,
         role: m.role,
         subType: null,
         contactId: null,
@@ -175,7 +174,7 @@ describe("what the business owns, owes, and what the owners have in it", () => {
   });
 });
 
-describe("fixed types and hierarchy", () => {
+describe("fixed types", () => {
   it("classifies direct fixed types and uses their normal display signs", () => {
     const sheet = balanceSheet({
       asAt: "2026-03-31",
@@ -218,27 +217,15 @@ describe("fixed types and hierarchy", () => {
     ).toBe(500);
   });
 
-  it("shows parent subtotals but counts each leaf only once in section totals", () => {
+  it("gives each account its own line, with the section total the plain sum", () => {
     const sheet = balanceSheet({
       asAt: "2026-03-31",
       totals: [
-        {
-          accountId: 90,
-          code: 1000,
-          accountName: "Current assets",
-          type: AccountType.Asset,
-          parentId: null,
-          role: AccountRole.Bank,
-          subType: null,
-          contactId: null,
-          amountMinor: 0,
-        },
         {
           accountId: 91,
           code: 1010,
           accountName: "Bank",
           type: AccountType.Asset,
-          parentId: 90,
           role: AccountRole.Bank,
           subType: null,
           contactId: null,
@@ -249,7 +236,6 @@ describe("fixed types and hierarchy", () => {
           code: 1020,
           accountName: "Cash",
           type: AccountType.Asset,
-          parentId: 90,
           role: AccountRole.Bank,
           subType: null,
           contactId: null,
@@ -260,7 +246,6 @@ describe("fixed types and hierarchy", () => {
           code: 2000,
           accountName: "Payable",
           type: AccountType.Liability,
-          parentId: null,
           role: AccountRole.Payable,
           subType: null,
           contactId: null,
@@ -268,9 +253,9 @@ describe("fixed types and hierarchy", () => {
         },
       ],
     });
-    expect(
-      sheet.owned.lines.find((line) => line.accountId === 90),
-    ).toMatchObject({ amountMinor: 1_000, isSubtotal: true });
+    expect(sheet.owned.lines.map((line) => line.accountId).sort()).toEqual([
+      91, 92,
+    ]);
     expect(sheet.owned.totalMinor).toBe(1_000);
   });
 });
@@ -457,7 +442,6 @@ function totalOf(
     code,
     accountName,
     type,
-    parentId: null,
     role: AccountRole.Bank,
     subType,
     contactId: null,

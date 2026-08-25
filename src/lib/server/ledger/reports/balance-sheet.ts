@@ -55,9 +55,7 @@ function sectionFrom(
 ): BalanceSheetSection {
   return {
     lines,
-    totalMinor: lines
-      .filter((line) => !line.isSubtotal)
-      .reduce((running, line) => running + line.amountMinor, 0),
+    totalMinor: lines.reduce((running, line) => running + line.amountMinor, 0),
     ...(subsections ? { subsections } : {}),
   };
 }
@@ -72,11 +70,8 @@ const SUBSECTION_ORDER: {
 ];
 
 /**
- * Buckets a flat, already-filtered `lines` list (one account type, depth 0
- * upward) into Current / Non-current / Needs review, using each top-level
- * account's own leaf descendants to decide. A heading whose leaves span more
- * than one bucket lands in "Needs review" rather than guessing — a rule
- * worth revisiting once tested against a real multi-level chart.
+ * Buckets a flat `lines` list (one account type) into Current / Non-current /
+ * Needs review, by each account's own `subType`.
  */
 function subsectionsFor(
   lines: ReportLine[],
@@ -85,49 +80,11 @@ function subsectionsFor(
     subType: AccountSubTypeCode | null,
   ) => "current" | "nonCurrent" | "needsReview",
 ): BalanceSheetSubsection[] {
-  const byId = new Map(lines.map((line) => [line.accountId, line]));
-  const childrenById = new Map<number, ReportLine[]>();
-  for (const line of lines) {
-    if (line.parentId == null || !byId.has(line.parentId)) continue;
-    const siblings = childrenById.get(line.parentId) ?? [];
-    siblings.push(line);
-    childrenById.set(line.parentId, siblings);
-  }
-
-  const leafBuckets = (
-    id: number,
-    seen = new Set<number>(),
-  ): Set<"current" | "nonCurrent" | "needsReview"> => {
-    if (seen.has(id)) return new Set();
-    seen.add(id);
-    const kids = childrenById.get(id) ?? [];
-    if (kids.length === 0) {
-      return new Set([bucketFor(subTypeById.get(id) ?? null)]);
-    }
-    const result = new Set<"current" | "nonCurrent" | "needsReview">();
-    for (const child of kids) {
-      for (const bucket of leafBuckets(child.accountId, new Set(seen))) {
-        result.add(bucket);
-      }
-    }
-    return result;
-  };
-
   const groups = new Map<string, ReportLine[]>();
-  for (const line of lines.filter((l) => l.depth === 0)) {
-    const distinct = leafBuckets(line.accountId);
-    const bucket = distinct.size === 1 ? [...distinct][0] : "needsReview";
+  for (const line of lines) {
+    const bucket = bucketFor(subTypeById.get(line.accountId) ?? null);
     const group = groups.get(bucket) ?? [];
-    const collect = (id: number, seen = new Set<number>()): void => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      const self = byId.get(id);
-      if (self) group.push(self);
-      for (const child of childrenById.get(id) ?? []) {
-        collect(child.accountId, seen);
-      }
-    };
-    collect(line.accountId);
+    group.push(line);
     groups.set(bucket, group);
   }
 
@@ -137,72 +94,21 @@ function subsectionsFor(
       return {
         label,
         lines: groupLines,
-        totalMinor: groupLines
-          .filter((line) => !line.isSubtotal)
-          .reduce((sum, line) => sum + line.amountMinor, 0),
+        totalMinor: groupLines.reduce((sum, line) => sum + line.amountMinor, 0),
       };
     },
   );
 }
 
 function reportLines(totals: AccountTotal[], type: number): ReportLine[] {
-  const typed = totals.filter((total) => total.type === type);
-  const byId = new Map(typed.map((total) => [total.accountId, total]));
-  const children = new Map<number, AccountTotal[]>();
-  for (const total of typed) {
-    if (total.parentId === null || !byId.has(total.parentId)) continue;
-    const siblings = children.get(total.parentId) ?? [];
-    siblings.push(total);
-    children.set(total.parentId, siblings);
-  }
-  const rolled = (id: number, seen = new Set<number>()): Minor => {
-    if (seen.has(id)) return 0;
-    seen.add(id);
-    return (
-      (byId.get(id)?.amountMinor ?? 0) +
-      (children.get(id) ?? []).reduce(
-        (sum, child) => sum + rolled(child.accountId, new Set(seen)),
-        0,
-      )
-    );
-  };
-  const depth = (total: AccountTotal): number => {
-    let value = 0;
-    let parentId = total.parentId;
-    const seen = new Set([total.accountId]);
-    while (parentId !== null && byId.has(parentId) && !seen.has(parentId)) {
-      seen.add(parentId);
-      value += 1;
-      parentId = byId.get(parentId)!.parentId;
-    }
-    return value;
-  };
-  const subtreeHasActivity = (id: number, seen = new Set<number>()): boolean => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return (
-      (byId.get(id)?.amountMinor ?? 0) !== 0 ||
-      (children.get(id) ?? []).some((child) =>
-        subtreeHasActivity(child.accountId, new Set(seen)),
-      )
-    );
-  };
   const sign = type === AccountType.Asset ? 1 : -1;
-  return typed.flatMap((total) => {
-    const signedAmount = rolled(total.accountId) * sign;
-    const amountMinor = signedAmount === 0 ? 0 : signedAmount;
-    if (!subtreeHasActivity(total.accountId)) return [];
-    return [
-      {
-        accountId: total.accountId,
-        accountName: total.accountName,
-        amountMinor,
-        parentId: total.parentId,
-        depth: depth(total),
-        isSubtotal: (children.get(total.accountId)?.length ?? 0) > 0,
-      },
-    ];
-  });
+  return totals
+    .filter((total) => total.type === type && total.amountMinor !== 0)
+    .map((total) => ({
+      accountId: total.accountId,
+      accountName: total.accountName,
+      amountMinor: total.amountMinor * sign,
+    }));
 }
 
 export function balanceSheet(input: BalanceSheetInput): BalanceSheetReport {

@@ -12,11 +12,7 @@ import {
   users,
 } from "../db/schema.js";
 import { createAccount } from "../services/accounts.js";
-import {
-  canonicalAccountId,
-  listAccounts,
-  openingBalanceFor,
-} from "../queries/accounts.js";
+import { canonicalAccountId, openingBalanceFor } from "../queries/accounts.js";
 import { getRecord, listRecords } from "../queries/ledger.js";
 
 /**
@@ -161,27 +157,6 @@ describe("account detail", () => {
     expect(canonicalAccountId(db, merged.value.id)).toBe(survivor.value.id);
     expect(canonicalAccountId(db, survivor.value.id)).toBe(survivor.value.id);
     expect(canonicalAccountId(db, 9999)).toBeNull();
-  });
-
-  it("Children_ShouldComeFromTheOneChartRead", () => {
-    const parent = createAccount(db, 1, {
-      name: "Current assets",
-      type: AccountType.Asset,
-      subType: AccountSubType.Bank,
-    });
-    if (!parent.ok) return;
-    const child = createAccount(db, 1, {
-      name: "Maybank",
-      type: AccountType.Asset,
-      subType: AccountSubType.Bank,
-      parentId: parent.value.id,
-    });
-    if (!child.ok) return;
-
-    const chart = listAccounts(db, { includeArchived: true });
-    expect(
-      chart.filter((a) => a.parentId === parent.value.id).map((a) => a.id),
-    ).toEqual([child.value.id]);
   });
 
   it("OpeningBalanceFor_WhenNoneIsSet_ShouldBeNull", () => {

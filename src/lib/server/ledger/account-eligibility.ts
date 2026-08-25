@@ -2,17 +2,14 @@ import type { Allowed } from "./types.js";
 
 export type PostingEligibilityState = {
   active: boolean;
-  hasChildren: boolean;
 };
 
 /** Counts supplied by account queries before a lifecycle mutation is attempted. */
 export type AccountDependencyState = {
   movementCount: number;
-  childCount: number;
   statementCount: number;
   defaultCount: number;
   otherDependencyCount: number;
-  activeDescendantCount: number;
 };
 
 const allowed: Allowed = { ok: true };
@@ -22,14 +19,11 @@ function refused(reason: string): Allowed {
 }
 
 export function isPostingEligible(state: PostingEligibilityState): boolean {
-  return state.active && !state.hasChildren;
+  return state.active;
 }
 
 export function postingEligibility(state: PostingEligibilityState): Allowed {
   if (!state.active) return refused("This account is inactive.");
-  if (state.hasChildren) {
-    return refused("This account is a heading and cannot receive movements.");
-  }
   return allowed;
 }
 
@@ -69,14 +63,35 @@ export function canChangeAccountSubType(state: AccountEditLockState): Allowed {
   return allowed;
 }
 
+/**
+ * Whether an existing account's code may be changed.
+ *
+ * Same edit-lock shape as `canChangeAccountSubType` — a code has no
+ * movement/child/statement/default dependency of its own to check, but a
+ * system account's code is load-bearing: `seedAccounts()` re-runs on every
+ * server start and looks accounts up by their seeded code, so renumbering one
+ * away would make the next restart insert a duplicate.
+ */
+export function canChangeAccountCode(state: AccountEditLockState): Allowed {
+  if (!state.canChange) {
+    return refused("You do not have permission to change this account.");
+  }
+  if (state.isSystem) {
+    return refused(
+      "This is one of the accounts the app needs to work, so its code cannot be changed.",
+    );
+  }
+  if (state.archived) {
+    return refused("This account is archived, so its code cannot be changed.");
+  }
+  return allowed;
+}
+
 export function canChangeAccountType(state: AccountDependencyState): Allowed {
   if (state.movementCount > 0) {
     return refused(
       "This account has movements, so its type cannot be changed.",
     );
-  }
-  if (state.childCount > 0) {
-    return refused("This account has children, so its type cannot be changed.");
   }
   if (state.statementCount > 0) {
     return refused(
@@ -91,31 +106,11 @@ export function canChangeAccountType(state: AccountDependencyState): Allowed {
   return allowed;
 }
 
-export function canAddAccountChild(state: AccountDependencyState): Allowed {
-  if (state.movementCount > 0) {
-    return refused("This account has movements and cannot become a heading.");
-  }
-  if (state.statementCount > 0) {
-    return refused(
-      "This account has statement history and cannot become a heading.",
-    );
-  }
-  if (state.defaultCount > 0) {
-    return refused(
-      "Choose a replacement saved default before making this account a heading.",
-    );
-  }
-  return allowed;
-}
-
 export function canDeactivateAccount(state: AccountDependencyState): Allowed {
   if (state.defaultCount > 0) {
     return refused(
       "Choose a replacement saved default before deactivating this account.",
     );
-  }
-  if (state.activeDescendantCount > 0) {
-    return refused("Deactivate this account's children first.");
   }
   return allowed;
 }
@@ -125,9 +120,6 @@ export function canDeleteAccount(state: AccountDependencyState): Allowed {
     return refused(
       "This account has movements and must be deactivated instead.",
     );
-  }
-  if (state.childCount > 0) {
-    return refused("Move or delete this account's children first.");
   }
   if (state.statementCount > 0) {
     return refused(

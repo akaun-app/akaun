@@ -129,7 +129,7 @@ function requirePostingAccount(db: ReconciliationDb, accountId: number) {
   );
   if (!account)
     throw new ReconciliationError(
-      "Choose an active account without children for this statement.",
+      "Choose an active account for this statement.",
       409,
     );
   return account;

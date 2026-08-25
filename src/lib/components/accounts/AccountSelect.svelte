@@ -10,7 +10,7 @@
   <select id={`account-${name}`} {name} bind:value {required} class="account-select">
     {#if !required}<option value={null}>None</option>{/if}
     {#each choices as account (account.id)}
-      <option value={account.id}>{account.code} · {account.path.join(' › ')}</option>
+      <option value={account.id}>{account.code} · {account.name}</option>
     {/each}
   </select>
 </div>

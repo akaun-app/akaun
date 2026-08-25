@@ -70,13 +70,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     name: account.name,
     type: account.type,
     subType: account.subType,
-    parentId: account.parentId ?? null,
     active: account.active ?? false,
-    hasChildren: account.hasChildren ?? false,
     postingEligible: account.postingEligible ?? false,
-    directBalanceMinor: account.directBalanceMinor ?? 0,
-    rolledUpBalanceMinor: account.rolledUpBalanceMinor ?? 0,
-    path: account.path ?? [account.name],
   }));
 
   // What the one-off update to the new way of recording did, and whether the

@@ -52,20 +52,14 @@
 	<tr>
 		<td>
 			{#if line.accountId === NOTHING_TO_OPEN}
-				<span
-					style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
-					class:font-semibold={line.isSubtotal}>{line.accountName}</span
-				>
+				<span>{line.accountName}</span>
 			{:else}
 				<button
 					type="button"
 					class="rep-open related-link"
 					onclick={() => openAccountHistory(line.accountId)}
 				>
-					<span
-						style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`}
-						class:font-semibold={line.isSubtotal}>{line.accountName}</span
-					>
+					<span>{line.accountName}</span>
 					<ChevronRight size={13} />
 				</button>
 			{/if}

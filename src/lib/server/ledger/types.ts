@@ -60,7 +60,6 @@ export type AccountRow = {
   /** Meaningful only when `type === Asset`. `null` means "needs review". */
   subType: AccountSubTypeCode | null;
   name: string;
-  parentId?: number | null;
   mergedIntoAccountId?: number | null;
   contactId: number | null;
   isSystem: boolean;
@@ -71,12 +70,8 @@ export type AccountRow = {
 /** Account query view. Legacy fields remain until every UI consumer is migrated. */
 export type AccountView = AccountRow & {
   active?: boolean;
-  hasChildren?: boolean;
   postingEligible?: boolean;
   owedContactRequired?: boolean;
-  directBalanceMinor?: Minor;
-  rolledUpBalanceMinor?: Minor;
-  path?: string[];
   balanceMinor: Minor;
   movementCount: number;
   canDelete: boolean;
@@ -90,7 +85,6 @@ export type AccountRef = { id: number; type: AccountTypeCode };
 export type AccountCreate = {
   name: string;
   type: AccountTypeCode;
-  parentId?: number | null;
   /**
    * Required by the service layer for `type === Asset` or `Liability`
    * (no safe default); optional for `Expense`/`Revenue` (defaults to
@@ -101,9 +95,9 @@ export type AccountCreate = {
 export type AccountPatch = {
   name?: string;
   type?: AccountTypeCode;
-  parentId?: number | null;
   active?: boolean;
   subType?: AccountSubTypeCode;
+  code?: number;
 };
 
 /** The system accounts the upgrade seeds, resolved once per request. */
@@ -487,9 +481,6 @@ export type ReportLine = {
   accountId: number;
   accountName: string;
   amountMinor: Minor;
-  parentId?: number | null;
-  depth?: number;
-  isSubtotal?: boolean;
 };
 
 export type ProfitLossReport = {
@@ -627,7 +618,6 @@ export type AccountTotal = {
   code: number;
   accountName: string;
   type: AccountTypeCode;
-  parentId: number | null;
   role: AccountRoleCode;
   /**
    * Absent for Equity. For Asset/Liability, `null` means "needs review". For

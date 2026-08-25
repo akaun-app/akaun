@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { cn, focusRingClass, focusRingOpenClass } from '$lib/utils.js';
 	import XIcon from '@lucide/svelte/icons/x';
 
@@ -42,27 +43,38 @@
 	let rootEl: HTMLDivElement;
 
 	// Debounce the search term (mirrors the SearchInput 300ms pattern).
+	// `query` must be read synchronously here, not inside the setTimeout callback —
+	// Svelte only tracks dependencies from reads made during the effect's own
+	// (synchronous) execution, so a read inside the async callback never re-triggers it.
 	$effect(() => {
-		const t = setTimeout(() => (debounced = query), 300);
+		const v = query;
+		const t = setTimeout(() => (debounced = v), 300);
 		return () => clearTimeout(t);
 	});
 
 	$effect(() => {
 		const term = debounced.trim();
 		if (!open) return;
+		// Abort a still-in-flight request from a stale search term so its response can't
+		// land after (and overwrite results with) a more recent, narrower search.
+		const controller = new AbortController();
 		const url = `/api/contacts?role=${role}${term ? `&search=${encodeURIComponent(term)}` : ''}`;
-		fetch(url)
+		fetch(url, { signal: controller.signal })
 			.then((r) => (r.ok ? r.json() : []))
 			.then((rows: Candidate[]) => {
 				results = rows.map((r) => ({ id: r.id, legalName: r.legalName }));
 			})
-			.catch(() => (results = []));
+			.catch((err) => {
+				if (err instanceof DOMException && err.name === 'AbortError') return;
+				results = [];
+			});
+		return () => controller.abort();
 	});
 
 	// Merge fuzzy suggestions ahead of live results (dedup by id). Suggestions keep their
 	// score order (relevant "did you mean" hints); the rest is sorted alphabetically.
 	const shown = $derived.by(() => {
-		const seen = new Set<number>();
+		const seen = new SvelteSet<number>();
 		const suggested: Candidate[] = [];
 		for (const c of suggestions) {
 			if (seen.has(c.id)) continue;

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AccountSubType, AccountType, LiabilitySubType } from "$lib/enums.js";
 import * as schema from "../db/schema.js";
 import { users } from "../db/schema.js";
-import { createAccount } from "./accounts.js";
+import { createAccount, patchAccount } from "./accounts.js";
 import { createStatement, ReconciliationError } from "./reconciliation.js";
 
 let sqlite: Database; let db: any;
@@ -21,9 +21,9 @@ describe("statement account eligibility",()=>{
       expect(createStatement(db,locals,{originalFilename:`${type}.pdf`,storedFilePath:`${type}.pdf`,accountId:account.value.id}).accountId).toBe(account.value.id);
     }
   });
-  it("Create_WhenAccountIsAParent_ShouldRefusePlainly",()=>{
-    const parent=createAccount(db,1,{name:"Heading",type:AccountType.Asset,subType:AccountSubType.Bank}); expect(parent.ok).toBe(true); if(!parent.ok)return;
-    expect(createAccount(db,1,{name:"Leaf",type:AccountType.Asset,subType:AccountSubType.Bank,parentId:parent.value.id}).ok).toBe(true);
-    expect(()=>createStatement(db,locals,{originalFilename:"x.pdf",storedFilePath:"x.pdf",accountId:parent.value.id})).toThrowError(new ReconciliationError("Choose an active account without children for this statement.",409));
+  it("Create_WhenAccountIsInactive_ShouldRefusePlainly",()=>{
+    const account=createAccount(db,1,{name:"Old bank",type:AccountType.Asset,subType:AccountSubType.Bank}); expect(account.ok).toBe(true); if(!account.ok)return;
+    expect(patchAccount(db,account.value.id,1,{active:false}).ok).toBe(true);
+    expect(()=>createStatement(db,locals,{originalFilename:"x.pdf",storedFilePath:"x.pdf",accountId:account.value.id})).toThrowError(new ReconciliationError("Choose an active account for this statement.",409));
   });
 });

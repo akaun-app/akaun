@@ -65,28 +65,6 @@ describe("account service", () => {
     expect(changed.ok && changed.value.code).toBe(2000);
   });
 
-  it("Delete_WhenAccountHasChild_ShouldRefuse", () => {
-    const parent = createAccount(db, 1, {
-      name: "Cash",
-      type: AccountType.Asset,
-      subType: AccountSubType.Cash,
-    });
-    expect(parent.ok).toBe(true);
-    if (!parent.ok) return;
-    expect(
-      createAccount(db, 1, {
-        name: "Till",
-        type: AccountType.Asset,
-        subType: AccountSubType.Cash,
-        parentId: parent.value.id,
-      }).ok,
-    ).toBe(true);
-    expect(removeAccount(db, parent.value.id, 1)).toEqual({
-      ok: false,
-      reason: "Move or delete this account's children first.",
-    });
-  });
-
   it("Delete_WhenEventEmits_ShouldHaveCommittedAudit", () => {
     const created = createAccount(db, 1, {
       name: "Temporary",

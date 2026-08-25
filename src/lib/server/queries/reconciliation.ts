@@ -233,11 +233,7 @@ export const listReconciliableAccounts = (db: ReconciliationDb) => {
     type: accounts.type, code: accounts.code, archivedAt: accounts.archivedAt,
     mergedIntoAccountId: accounts.mergedIntoAccountId,
   }).from(accounts).orderBy(asc(accounts.type), asc(accounts.code)).all();
-  const parentIds = new Set(
-    db.select({ parentId: accounts.parentId }).from(accounts).all()
-      .flatMap((row) => row.parentId == null ? [] : [row.parentId]),
-  );
-  return rows.filter((row) => row.type != null && row.code != null && row.archivedAt == null && row.mergedIntoAccountId == null && !parentIds.has(row.id)) as {
+  return rows.filter((row) => row.type != null && row.code != null && row.archivedAt == null && row.mergedIntoAccountId == null) as {
     id: number; name: string; type: AccountTypeCode; code: number;
   }[];
 };

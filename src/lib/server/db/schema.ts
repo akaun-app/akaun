@@ -638,8 +638,8 @@ export const reconciliationAllocations = sqliteTable(
 // ---------------------------------------------------------------------------
 
 // One line in the Chart of Accounts. Type and code become required after the
-// explicit conversion has populated every legacy row; parent and merge links
-// preserve hierarchy and old deep links.
+// explicit conversion has populated every legacy row; the merge link preserves
+// old deep links.
 export const accounts = sqliteTable(
   "accounts",
   {
@@ -656,10 +656,6 @@ export const accounts = sqliteTable(
     subType: integer("sub_type"),
     code: integer("code"),
     name: text("name").notNull(),
-    parentId: integer("parent_id").references(
-      (): AnySQLiteColumn => accounts.id,
-      { onDelete: "restrict" },
-    ),
     mergedIntoAccountId: integer("merged_into_account_id").references(
       (): AnySQLiteColumn => accounts.id,
       { onDelete: "restrict" },
@@ -694,8 +690,6 @@ export const accounts = sqliteTable(
     // Names are intentionally not unique: code is the stable identity.
     index("accounts_role_name_idx").on(t.role, t.name),
     uniqueIndex("accounts_code_idx").on(t.code),
-    index("accounts_type_parent_code_idx").on(t.type, t.parentId, t.code),
-    index("accounts_parent_idx").on(t.parentId),
     index("accounts_merged_into_idx").on(t.mergedIntoAccountId),
   ],
 );

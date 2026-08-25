@@ -66,13 +66,8 @@ function toDefaultAccount(account: ReturnType<typeof accountViews>[number]) {
     name: account.name,
     type: account.type,
     subType: account.subType,
-    parentId: account.parentId ?? null,
     active: account.active ?? false,
-    hasChildren: account.hasChildren ?? false,
     postingEligible: account.postingEligible ?? false,
-    directBalanceMinor: account.directBalanceMinor ?? 0,
-    rolledUpBalanceMinor: account.rolledUpBalanceMinor ?? 0,
-    path: account.path ?? [account.name],
   };
 }
 

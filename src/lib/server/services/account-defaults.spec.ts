@@ -41,7 +41,6 @@ beforeEach(() => {
       sub_type INTEGER,
       code INTEGER,
       name TEXT NOT NULL,
-      parent_id INTEGER REFERENCES accounts(id),
       merged_into_account_id INTEGER REFERENCES accounts(id),
       contact_id INTEGER,
       is_system INTEGER NOT NULL DEFAULT 0,
@@ -154,7 +153,7 @@ describe("saved account defaults", () => {
     ).toBe(7);
   });
 
-  it("refuses the wrong type, inactive accounts, and headings", () => {
+  it("refuses the wrong type and inactive accounts", () => {
     const base = validInputs();
     const wrongType = account(AccountType.Expense, "Wrong type");
     expect(
@@ -168,18 +167,6 @@ describe("saved account defaults", () => {
     expect(
       replaceAccountDefaults(db, 7, [
         { ...base[0], accountId: inactive },
-        ...base.slice(1),
-      ]).ok,
-    ).toBe(false);
-
-    const heading = account(AccountType.Asset, "Heading");
-    sqlite.run("UPDATE accounts SET parent_id = ? WHERE id = ?", [
-      heading,
-      base[0].accountId,
-    ]);
-    expect(
-      replaceAccountDefaults(db, 7, [
-        { ...base[0], accountId: heading },
         ...base.slice(1),
       ]).ok,
     ).toBe(false);

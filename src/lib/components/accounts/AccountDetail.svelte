@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ChevronRight, Landmark, ListTree, Scale, Trash2, Wallet } from '@lucide/svelte';
+	import { ChevronRight, Landmark, Scale, Trash2, Wallet } from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -12,6 +12,7 @@
 	import { createResourceStream } from '$lib/sse.js';
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import {
+		AccountCodeRanges,
 		AccountSubTypeDisplayLabels,
 		AccountSubTypesByType,
 		AccountType,
@@ -31,19 +32,18 @@
 	 * One account, on its own page.
 	 *
 	 * An account is the entity with the most around it and the least in it. Three
-	 * fields name it; its balance, its children, what has moved through it and
-	 * what it still has to reconcile are the reasons anyone opens it. A 500px
-	 * drawer could hold the three fields, so for a while the three fields were
-	 * all the app showed — the balance, the reconciliation card and the way
-	 * through to the movements were dropped when the chart was standardised, and
-	 * their data went on being loaded for a card that no longer rendered.
+	 * fields name it; its balance, what has moved through it and what it still
+	 * has to reconcile are the reasons anyone opens it. A 500px drawer could
+	 * hold the three fields, so for a while the three fields were all the app
+	 * showed — the balance, the reconciliation card and the way through to the
+	 * movements were dropped when the chart was standardised, and their data
+	 * went on being loaded for a card that no longer rendered.
 	 */
 	let { data, form }: { data: Awaited<ReturnType<typeof loadAccountDetail>>; form: { error?: string } | null } =
 		$props();
 
 	let chart = $derived<AccountView[]>(data.accounts);
 	const account = $derived(chart.find((a) => a.id === data.account.id) ?? data.account);
-	const children = $derived(chart.filter((a) => a.parentId === account.id));
 
 	const types = Object.values(AccountType).filter(
 		(v): v is AccountTypeCode => typeof v === 'number'
@@ -51,9 +51,9 @@
 
 	// --- The fields that name it ---------------------------------------------
 	let name = $state('');
+	let code = $state(0);
 	let selectedType = $state<AccountTypeCode>(AccountType.Asset);
 	let subType = $state<AccountSubTypeCode | null>(null);
-	let parentId = $state<number | null>(null);
 	let snapshot = $state('');
 	let saving = $state(false);
 	let error = $state('');
@@ -61,14 +61,14 @@
 	const subTypes = $derived(AccountSubTypesByType[selectedType] ?? []);
 
 	function fingerprint(): string {
-		return JSON.stringify([name, selectedType, subType, parentId]);
+		return JSON.stringify([name, code, selectedType, subType]);
 	}
 
 	function seed() {
 		name = account.name;
+		code = account.code ?? account.id;
 		selectedType = account.type;
 		subType = account.subType ?? null;
-		parentId = account.parentId ?? null;
 		snapshot = fingerprint();
 		error = '';
 	}
@@ -83,16 +83,11 @@
 	const dirty = $derived(snapshot !== '' && fingerprint() !== snapshot);
 	const canEdit = $derived(data.perms.change && !account.isSystem);
 
-	/** A heading can only sit above an account of its own type. */
-	const parents = $derived(
-		chart.filter((a) => a.id !== account.id && a.type === selectedType && a.active)
-	);
-
 	async function save() {
 		if (saving) return;
 		saving = true;
 		error = '';
-		const body: Record<string, unknown> = { name, type: selectedType, parentId };
+		const body: Record<string, unknown> = { name, code, type: selectedType };
 		// `subType` stays absent (never `null`) until a "needs review" account is
 		// given one: the PATCH schema accepts a number or nothing, never null.
 		if (AccountSubTypesByType[selectedType] !== undefined && subType != null) {
@@ -135,8 +130,8 @@
 	/**
 	 * Whether reconciling is offered at all (FR-049).
 	 *
-	 * An inactive account and a heading have nothing to match a bank line
-	 * against, so the card would point at a surface with nothing on it.
+	 * An inactive account has nothing to match a bank line against, so the
+	 * card would point at a surface with nothing on it.
 	 */
 	const canReconcile = $derived(
 		data.perms.reconcile && account.active && account.postingEligible
@@ -183,6 +178,13 @@
 				<Trash2 size={14} /> Delete
 			</button>
 		{/if}
+		{#if canReconcile}
+			<a href={reconcileHref} class="sheet-btn">
+				<Scale size={14} />
+				Reconcile{#if data.unfinishedStatements > 0}
+					&nbsp;· {data.unfinishedStatements} open{/if}
+			</a>
+		{/if}
 		{#if canEdit}
 			<form method="POST" action="?/update" use:enhance style="display:contents;">
 				<input type="hidden" name="id" value={account.id} />
@@ -207,24 +209,15 @@
 				<span>·</span>
 				<span>{AccountSubTypeDisplayLabels[account.subType]}</span>
 			{/if}
-			{#if account.hasChildren}<span>·</span><span>Heading</span>{/if}
 			{#if !account.active}<span>·</span><span>Inactive</span>{/if}
 			{#if account.id === data.defaultAccountId}<span>·</span><span>Used by default</span>{/if}
 		</div>
 		<h1 class="detail-hero-title">{account.name}</h1>
 		<div class="detail-hero-figure">
 			<span class="detail-hero-amount">
-				{formatMinor(account.rolledUpBalanceMinor ?? account.balanceMinor)}
+				{formatMinor(account.balanceMinor)}
 			</span>
-			{#if account.hasChildren}
-				<span class="detail-hero-note">
-					{formatMinor(account.directBalanceMinor ?? 0)} on this account itself
-				</span>
-			{/if}
 		</div>
-		{#if account.path && account.path.length > 1}
-			<p class="detail-hero-note">{account.path.join(' › ')}</p>
-		{/if}
 		{#if error || form?.error}<p class="hero-error">{error || form?.error}</p>{/if}
 	{/snippet}
 
@@ -274,6 +267,23 @@
 			</div>
 
 			<div class="field">
+				<label class="field-label" for="acc-code">Code *</label>
+				<Input
+					id="acc-code"
+					type="number"
+					bind:value={code}
+					min={AccountCodeRanges[selectedType].start}
+					max={AccountCodeRanges[selectedType].end}
+					disabled={!canEdit}
+					class="w-full"
+				/>
+				<p class="field-hint">
+					{AccountCodeRanges[selectedType].start}–{AccountCodeRanges[selectedType].end} for
+					{AccountTypeDisplayLabels[selectedType].toLowerCase()} accounts.
+				</p>
+			</div>
+
+			<div class="field">
 				<label class="field-label" for="acc-type">Account type *</label>
 				<select id="acc-type" bind:value={selectedType} class="plain-select" disabled={!canEdit}>
 					{#each types as type (type)}
@@ -314,16 +324,6 @@
 					</p>
 				</div>
 			{/if}
-
-			<div class="field" style="margin-bottom:0;">
-				<label class="field-label" for="acc-parent">Parent heading</label>
-				<select id="acc-parent" bind:value={parentId} class="plain-select" disabled={!canEdit}>
-					<option value={null}>None</option>
-					{#each parents as parent (parent.id)}
-						<option value={parent.id}>{parent.code} · {parent.path?.join(' › ')}</option>
-					{/each}
-				</select>
-			</div>
 		</section>
 	{/snippet}
 
@@ -345,52 +345,6 @@
 				<ChevronRight size={14} color="var(--muted-foreground)" />
 			</button>
 		</section>
-
-		{#if children.length > 0}
-			<section class="detail-card">
-				<div class="detail-card-head">
-					<span class="detail-card-title">Accounts under this</span>
-				</div>
-				<div class="child-list">
-					{#each children as child (child.id)}
-						<a
-							class="related-link ob-card"
-							href={resolve('/(app)/accounts/[id]', { id: String(child.id) })}
-						>
-							<span class="ob-icon"><ListTree size={15} /></span>
-							<span class="ob-main">
-								<span class="ob-title">{child.name}</span>
-								<span class="ob-sub">
-									{child.code} · {formatMinor(child.rolledUpBalanceMinor ?? child.balanceMinor)}
-								</span>
-							</span>
-							<ChevronRight size={14} color="var(--muted-foreground)" />
-						</a>
-					{/each}
-				</div>
-			</section>
-		{/if}
-
-		{#if canReconcile}
-			<!-- There is no top-level Reconciliation list any more. If the only way
-			     in is through the account, the account has to say whether there is
-			     anything waiting (FR-053). -->
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Bank reconciliation</span></div>
-				<a class="related-link ob-card" href={reconcileHref}>
-					<span class="ob-icon"><Scale size={15} /></span>
-					<span class="ob-main">
-						<span class="ob-title">
-							{data.unfinishedStatements > 0
-								? `${data.unfinishedStatements} statement${data.unfinishedStatements === 1 ? '' : 's'} still open`
-								: 'Statements'}
-						</span>
-						<span class="ob-sub">Match this account against what the bank says.</span>
-					</span>
-					<ChevronRight size={14} color="var(--muted-foreground)" />
-				</a>
-			</section>
-		{/if}
 
 		<section class="detail-card">
 			<div class="detail-card-head"><span class="detail-card-title">Every movement</span></div>
@@ -453,8 +407,7 @@
 		line-height: 1.5;
 		margin: 10px 0 0;
 	}
-	.mv-list,
-	.child-list {
+	.mv-list {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
