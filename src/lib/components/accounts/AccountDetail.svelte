@@ -178,6 +178,13 @@
 				<Trash2 size={14} /> Delete
 			</button>
 		{/if}
+		{#if canReconcile}
+			<a href={reconcileHref} class="sheet-btn">
+				<Scale size={14} />
+				Reconcile{#if data.unfinishedStatements > 0}
+					&nbsp;· {data.unfinishedStatements} open{/if}
+			</a>
+		{/if}
 		{#if canEdit}
 			<form method="POST" action="?/update" use:enhance style="display:contents;">
 				<input type="hidden" name="id" value={account.id} />
@@ -338,27 +345,6 @@
 				<ChevronRight size={14} color="var(--muted-foreground)" />
 			</button>
 		</section>
-
-		{#if canReconcile}
-			<!-- There is no top-level Reconciliation list any more. If the only way
-			     in is through the account, the account has to say whether there is
-			     anything waiting (FR-053). -->
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Bank reconciliation</span></div>
-				<a class="related-link ob-card" href={reconcileHref}>
-					<span class="ob-icon"><Scale size={15} /></span>
-					<span class="ob-main">
-						<span class="ob-title">
-							{data.unfinishedStatements > 0
-								? `${data.unfinishedStatements} statement${data.unfinishedStatements === 1 ? '' : 's'} still open`
-								: 'Statements'}
-						</span>
-						<span class="ob-sub">Match this account against what the bank says.</span>
-					</span>
-					<ChevronRight size={14} color="var(--muted-foreground)" />
-				</a>
-			</section>
-		{/if}
 
 		<section class="detail-card">
 			<div class="detail-card-head"><span class="detail-card-title">Every movement</span></div>

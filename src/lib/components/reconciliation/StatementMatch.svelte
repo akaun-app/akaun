@@ -392,6 +392,7 @@
       return false;
     }
     savedDrafts = [...drafts];
+    initialDrafts = [...drafts];
     toast.success("Allocations saved");
     await invalidateAll();
     return true;
@@ -862,8 +863,8 @@
                       disabled={!data.permissions.change}
                       onchange={(event) =>
                         editLine(line, "direction", event.currentTarget.value)}
-                      ><option value={StatementDirection.In}>Debit</option
-                      ><option value={StatementDirection.Out}>Credit</option
+                      ><option value={StatementDirection.In}>Credit</option
+                      ><option value={StatementDirection.Out}>Debit</option
                       ></select
                     ></label
                   ><label class="wide"
@@ -1052,7 +1053,7 @@
           <div>
             <h3>Compatible Statement Lines</h3>
             <p>
-              {movesIn ? "Debit" : "Credit"} transactions on
+              {movesIn ? "Credit" : "Debit"} transactions on
               {selectedMovement.accountName ?? "this account"}
             </p>
           </div>
@@ -1104,7 +1105,7 @@
               </div>
             </div>{/each}{#if availableLines.length === 0}<EmptyState
               title="No compatible transactions"
-              sub={`Upload a statement for ${selectedMovement.accountName ?? "this account"} containing ${movesIn ? "debit" : "credit"} transactions with an available balance.`}
+              sub={`Upload a statement for ${selectedMovement.accountName ?? "this account"} containing ${movesIn ? "credit" : "debit"} transactions with an available balance.`}
               >{#snippet icon()}<Banknote size={20} />{/snippet}</EmptyState
             >{/if}
         </div>
@@ -1404,6 +1405,7 @@
   .composer-foot strong,
   .remaining {
     color: var(--amber);
+    font-variant-numeric: tabular-nums;
   }
   .type-chip {
     display: inline-flex;
@@ -1530,7 +1532,12 @@
   .error {
     color: var(--red) !important;
   }
-  .composer-body,
+  .composer-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
   .suggestion {
     display: flex;
     align-items: center;
@@ -1973,8 +1980,7 @@
     .filename {
       max-width: 210px;
     }
-    :global(.mobile-composer-sheet),
-    :global(.statement-sheet) {
+    :global(.recon-sheet) {
       width: 100vw !important;
       max-width: 100vw !important;
     }
@@ -1982,7 +1988,7 @@
       padding-top: calc(18px + env(safe-area-inset-top));
     }
     .composer-foot,
-    :global(.statement-sheet .sheet-foot) {
+    :global(.recon-sheet .sheet-foot) {
       padding-bottom: calc(13px + env(safe-area-inset-bottom));
     }
     .amount-strip div {

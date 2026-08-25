@@ -6,6 +6,7 @@
   import {
     ChevronRight,
     FileText,
+    MoreHorizontal,
     Plus,
     Search,
     SlidersHorizontal,
@@ -162,13 +163,14 @@
   }
 
   /** Matching this statement's lines — its own page, its own address (FR-052). */
+  function matchHref(statement: Statement) {
+    return resolve("/(app)/accounts/[id]/reconcile/[statementId]", {
+      id: String(data.account.id),
+      statementId: String(statement.id),
+    });
+  }
   function openMatch(statement: Statement) {
-    void goto(
-      resolve("/(app)/accounts/[id]/reconcile/[statementId]", {
-        id: String(data.account.id),
-        statementId: String(statement.id),
-      }),
-    );
+    void goto(matchHref(statement));
   }
 
   function openStatementActions(statement: Statement) {
@@ -406,17 +408,14 @@
               {#each visibleStatements as statement (statement.id)}
                 <tr
                   class="exp-row"
-                  tabindex="0"
-                  onclick={() => openMatch(statement)}
-                  onkeydown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      openMatch(statement);
-                    }
+                  onclick={(event) => {
+                    if ((event.target as HTMLElement).closest("a")) return;
+                    openMatch(statement);
                   }}
                 >
                   <td class="td-primary">
-                    <div class="cell-item">
+                    <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve() via matchHref(). -->
+                    <a class="cell-item row-link" href={matchHref(statement)}>
                       <span
                         class="cell-itemname filename"
                         title={statement.originalFilename}
@@ -425,7 +424,7 @@
                       <span class="cell-itemnum"
                         >Uploaded {formatDate(statement.createdAt.slice(0, 10))}</span
                       >
-                    </div>
+                    </a>
                   </td>
                   <td class="td-date" data-label="Date Range">
                     {statement.dateFrom && statement.dateTo
@@ -453,7 +452,7 @@
                       onclick={(event) => {
                         event.stopPropagation();
                         openStatementActions(statement);
-                      }}>⋯</button
+                      }}><MoreHorizontal size={15} /></button
                     >
                     <ChevronRight size={15} aria-hidden="true" />
                   </td>
@@ -475,17 +474,6 @@
                         : "Upload a statement from your bank to check this account against it."}
                     >
                       {#snippet icon()}<FileText size={20} />{/snippet}
-                      {#snippet action()}
-                        {#if singleStatementStatus !== "completed" && canAddStatement}
-                          <button
-                            class="sheet-btn-primary compact"
-                            type="button"
-                            onclick={openUpload}
-                          >
-                            <Plus size={14} />Upload Statement
-                          </button>
-                        {/if}
-                      {/snippet}
                     </EmptyState>
                   </td>
                 </tr>
@@ -519,11 +507,19 @@
   >
     <div class="filter-mobile-head">
       <span>Filters</span>
-      <button class="filter-mobile-clear" type="button" onclick={clearFilters}
-        >Clear</button
-      >
+      <Sheet.Close class="sheet-close" aria-label="Close filters">
+        <X size={16} />
+      </Sheet.Close>
     </div>
     <div class="filter-checklist">
+      <div class="filter-checklist-head">
+        <span>Status</span>
+        <button
+          class="filter-mobile-clear"
+          type="button"
+          onclick={clearFilters}>Clear</button
+        >
+      </div>
       <label class="filter-check">
         <input
           type="checkbox"
@@ -556,7 +552,9 @@
   <Sheet.Content
     side={panelSide}
     class="recon-sheet"
-    style="gap:0; width:500px; max-width:95vw; height:100dvh; border-radius:0;"
+    style={isMobile
+      ? "gap:0; height:100dvh; border-radius:0;"
+      : "gap:0; width:500px; max-width:95vw;"}
   >
     {#if selectedStatement}
       <div class="sheet-head">
@@ -622,6 +620,13 @@
         <button
           type="button"
           class="sheet-btn-primary"
+          disabled={selectedStatement.totalLines === 0}
+          title={selectedStatement.totalLines === 0
+            ? selectedStatement.extractionState ===
+                StatementExtractionState.Extracting
+              ? "Still extracting transactions from this statement."
+              : "No transactions were extracted from this statement."
+            : undefined}
           onclick={() => openMatch(selectedStatement)}
         >
           Match this statement
@@ -666,7 +671,9 @@
   <Sheet.Content
     side={panelSide}
     class="recon-sheet"
-    style="gap:0; width:500px; max-width:95vw; height:100dvh; border-radius:0;"
+    style={isMobile
+      ? "gap:0; height:100dvh; border-radius:0;"
+      : "gap:0; width:500px; max-width:95vw;"}
   >
     <div class="sheet-head">
       <div>
@@ -729,6 +736,18 @@
 <style>
   .reconciliation-screen {
     min-height: 0;
+  }
+  .row-link {
+    color: inherit;
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .row-link:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
   .recon-search input {
     width: 100%;
@@ -798,6 +817,17 @@
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
+  }
+  .filter-checklist-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    color: var(--muted-foreground);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
   .statement-pane {
     min-width: 0;
@@ -929,11 +959,6 @@
     color: var(--muted-foreground);
   }
   .sheet-btn-delete {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .compact {
     display: inline-flex;
     align-items: center;
     gap: 6px;
