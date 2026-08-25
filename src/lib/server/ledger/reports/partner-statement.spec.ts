@@ -16,7 +16,6 @@ function total(
     code: accountId,
     accountName,
     type: accountTypeFor(role),
-    parentId: null,
     role,
     subType: null,
     contactId,

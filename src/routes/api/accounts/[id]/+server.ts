@@ -37,8 +37,8 @@ const patchSchema = z
         Object.values(AccountType).includes(value as AccountTypeCode),
       )
       .optional(),
-    parentId: z.number().int().positive().nullable().optional(),
     active: z.boolean().optional(),
+    code: z.number().int().positive().optional(),
     subType: z
       .number()
       .int()

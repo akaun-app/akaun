@@ -56,7 +56,6 @@ function toAccountRow(row: typeof accounts.$inferSelect): AccountRow {
     subType: row.subType as AccountSubTypeCode | null,
     code: row.code ?? row.id,
     name: row.name,
-    parentId: row.parentId,
     mergedIntoAccountId: row.mergedIntoAccountId,
     contactId: row.contactId,
     isSystem: row.isSystem,
@@ -155,60 +154,19 @@ export function listAccounts(
       .map((row) => row.accountId),
   );
   const accountRows = rows.map(toAccountRow);
-  const rowById = new Map(accountRows.map((row) => [row.id, row]));
-  const childrenByParent = new Map<number, AccountRow[]>();
-  for (const row of accountRows) {
-    if (row.parentId == null) continue;
-    const children = childrenByParent.get(row.parentId) ?? [];
-    children.push(row);
-    childrenByParent.set(row.parentId, children);
-  }
-  const pathFor = (row: AccountRow): string[] => {
-    const path = [row.name];
-    const seen = new Set([row.id]);
-    let parentId = row.parentId ?? null;
-    while (parentId !== null) {
-      if (seen.has(parentId)) break;
-      seen.add(parentId);
-      const parent = rowById.get(parentId);
-      if (!parent) break;
-      path.unshift(parent.name);
-      parentId = parent.parentId ?? null;
-    }
-    return path;
-  };
-  const rolledUpFor = (id: number, seen = new Set<number>()): number => {
-    if (seen.has(id)) return 0;
-    seen.add(id);
-    const direct = totalsById.get(id)?.balanceMinor ?? 0;
-    return (
-      direct +
-      (childrenByParent.get(id) ?? []).reduce(
-        (sum, child) => sum + rolledUpFor(child.id, new Set(seen)),
-        0,
-      )
-    );
-  };
 
   const views = accountRows.map((row) => {
     const totalsFor = totalsById.get(row.id);
     const movementCount = totalsFor?.movementCount ?? 0;
     const reason = cannotDeleteReason(row, movementCount);
-    const hasChildren = (childrenByParent.get(row.id)?.length ?? 0) > 0;
-    const directBalanceMinor = totalsFor?.balanceMinor ?? 0;
+    const balanceMinor = totalsFor?.balanceMinor ?? 0;
     return {
       ...row,
       active: row.archivedAt === null && row.mergedIntoAccountId === null,
-      hasChildren,
       postingEligible:
-        row.archivedAt === null &&
-        row.mergedIntoAccountId === null &&
-        !hasChildren,
+        row.archivedAt === null && row.mergedIntoAccountId === null,
       owedContactRequired: owedAccountIds.has(row.id),
-      directBalanceMinor,
-      rolledUpBalanceMinor: rolledUpFor(row.id),
-      path: pathFor(row),
-      balanceMinor: directBalanceMinor,
+      balanceMinor,
       movementCount,
       canDelete: reason === null,
       cannotDeleteReason: reason,
@@ -219,8 +177,7 @@ export function listAccounts(
   return views.filter(
     (view) =>
       String(view.code).includes(term) ||
-      view.name.toLocaleLowerCase().includes(term) ||
-      view.path.some((part) => part.toLocaleLowerCase().includes(term)),
+      view.name.toLocaleLowerCase().includes(term),
   );
 }
 

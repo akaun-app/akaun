@@ -17,18 +17,16 @@ let sqlite: Database; let db: any;
 beforeEach(() => { sqlite=new Database(":memory:"); db=drizzle(sqlite,{schema}); migrate(db,{migrationsFolder:"drizzle"}); db.insert(users).values({email:"q@test",username:"q",passwordHash:"x"}).run(); });
 afterEach(()=>sqlite.close());
 
-describe("account hierarchy queries",()=>{
-  it("Search_WhenChildMatches_ShouldIncludeItsFullAncestorPath",()=>{
-    const parent=createAccount(db,1,{name:"Operations",type:AccountType.Expense}); expect(parent.ok).toBe(true); if(!parent.ok)return;
-    const child=createAccount(db,1,{name:"Fuel",type:AccountType.Expense,parentId:parent.value.id}); expect(child.ok).toBe(true);
-    expect(listAccounts(db,{search:"fuel"})[0].path).toEqual(["Operations","Fuel"]);
+describe("account queries",()=>{
+  it("Search_WhenNameMatches_ShouldIncludeIt",()=>{
+    const account=createAccount(db,1,{name:"Fuel",type:AccountType.Expense}); expect(account.ok).toBe(true); if(!account.ok)return;
+    expect(listAccounts(db,{search:"fuel"})[0].name).toBe("Fuel");
   });
-  it("Rollup_WhenNested_ShouldCountEachLeafMovementOnce",()=>{
-    const parent=createAccount(db,1,{name:"Cash",type:AccountType.Asset,subType:AccountSubType.Cash}); expect(parent.ok).toBe(true); if(!parent.ok)return;
-    const first=createAccount(db,1,{name:"Till",type:AccountType.Asset,subType:AccountSubType.Cash,parentId:parent.value.id}); const second=createAccount(db,1,{name:"Safe",type:AccountType.Asset,subType:AccountSubType.Cash,parentId:parent.value.id}); if(!first.ok||!second.ok)return;
+  it("Balance_ShouldSumItsOwnMovementsOnly",()=>{
+    const account=createAccount(db,1,{name:"Cash",type:AccountType.Asset,subType:AccountSubType.Cash}); expect(account.ok).toBe(true); if(!account.ok)return;
     const record=db.insert(ledgerRecords).values({kind:LedgerRecordKind.Journal,date:"2026-01-01",description:"test",amount:0,createdBy:1,updatedBy:1}).returning().get();
-    db.insert(ledgerMovements).values([{recordId:record.id,accountId:first.value.id,amountMinor:250,sortOrder:0},{recordId:record.id,accountId:second.value.id,amountMinor:-50,sortOrder:1}]).run();
-    const rows=listAccounts(db); expect(rows.find((a)=>a.id===parent.value.id)?.directBalanceMinor).toBe(0); expect(rows.find((a)=>a.id===parent.value.id)?.rolledUpBalanceMinor).toBe(200);
+    db.insert(ledgerMovements).values([{recordId:record.id,accountId:account.value.id,amountMinor:250,sortOrder:0}]).run();
+    expect(listAccounts(db).find((a)=>a.id===account.value.id)?.balanceMinor).toBe(250);
   });
 });
 

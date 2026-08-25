@@ -134,6 +134,13 @@
       "when": 1787573290887,
       "tag": "0018_low_marrow",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1787641306944,
+      "tag": "0019_omniscient_scorpion",
+      "breakpoints": true
     }
   ]
 }

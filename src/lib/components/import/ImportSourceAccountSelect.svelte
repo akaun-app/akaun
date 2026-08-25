@@ -33,7 +33,7 @@
   );
 
   function label(account: AccountView): string {
-    return `${account.code} · ${(account.path ?? [account.name]).join(" › ")}`;
+    return `${account.code} · ${account.name}`;
   }
 </script>
 

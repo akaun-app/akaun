@@ -48,63 +48,14 @@ function linesForType(
   totals: AccountTotal[],
   type: AccountTypeCode,
 ): ReportLine[] {
-  const typed = totals.filter((total) => total.type === type);
-  const byId = new Map(typed.map((total) => [total.accountId, total]));
-  const children = new Map<number, AccountTotal[]>();
-  for (const total of typed) {
-    if (total.parentId === null || !byId.has(total.parentId)) continue;
-    const siblings = children.get(total.parentId) ?? [];
-    siblings.push(total);
-    children.set(total.parentId, siblings);
-  }
-  const rolled = (id: number, seen = new Set<number>()): Minor => {
-    if (seen.has(id)) return 0;
-    seen.add(id);
-    const own = byId.get(id)?.amountMinor ?? 0;
-    return (
-      own +
-      (children.get(id) ?? []).reduce(
-        (sum, child) => sum + rolled(child.accountId, new Set(seen)),
-        0,
-      )
-    );
-  };
-  const depth = (total: AccountTotal): number => {
-    let value = 0;
-    let parentId = total.parentId;
-    const seen = new Set([total.accountId]);
-    while (parentId !== null && byId.has(parentId) && !seen.has(parentId)) {
-      seen.add(parentId);
-      value += 1;
-      parentId = byId.get(parentId)!.parentId;
-    }
-    return value;
-  };
-  const subtreeHasActivity = (id: number, seen = new Set<number>()): boolean => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return (
-      (byId.get(id)?.amountMinor ?? 0) !== 0 ||
-      (children.get(id) ?? []).some((child) =>
-        subtreeHasActivity(child.accountId, new Set(seen)),
-      )
-    );
-  };
-  return typed.flatMap((total) => {
-    const signedAmount = rolled(total.accountId) * signFor(type);
-    const amountMinor = signedAmount === 0 ? 0 : signedAmount;
-    if (!subtreeHasActivity(total.accountId)) return [];
-    return [
-      {
-        accountId: total.accountId,
-        accountName: total.accountName,
-        amountMinor,
-        parentId: total.parentId,
-        depth: depth(total),
-        isSubtotal: (children.get(total.accountId)?.length ?? 0) > 0,
-      },
-    ];
-  });
+  const sign = signFor(type);
+  return totals
+    .filter((total) => total.type === type && total.amountMinor !== 0)
+    .map((total) => ({
+      accountId: total.accountId,
+      accountName: total.accountName,
+      amountMinor: total.amountMinor * sign,
+    }));
 }
 
 function sum(lines: ReportLine[]): Minor {
@@ -114,10 +65,8 @@ function sum(lines: ReportLine[]): Minor {
 export function profitLoss(input: ProfitLossInput): ProfitLossReport {
   const income = linesForType(input.totals, AccountType.Revenue);
   const expenses = linesForType(input.totals, AccountType.Expense);
-  const leafLines = (lines: ReportLine[]) =>
-    lines.filter((line) => !line.isSubtotal);
-  const totalIncomeMinor = sum(leafLines(income));
-  const totalExpensesMinor = sum(leafLines(expenses));
+  const totalIncomeMinor = sum(income);
+  const totalExpensesMinor = sum(expenses);
 
   const subTypeById = new Map(
     input.totals.map((total) => [total.accountId, total.subType]),
@@ -125,15 +74,15 @@ export function profitLoss(input: ProfitLossInput): ProfitLossReport {
   const subTypeOf = (line: ReportLine) => subTypeById.get(line.accountId) ?? null;
 
   const cogsMinor = sum(
-    leafLines(expenses).filter((line) => expenseBucket(subTypeOf(line)) === "cogs"),
+    expenses.filter((line) => expenseBucket(subTypeOf(line)) === "cogs"),
   );
   const operatingExpenseMinor = sum(
-    leafLines(expenses).filter(
+    expenses.filter(
       (line) => expenseBucket(subTypeOf(line)) === "operating",
     ),
   );
   const operatingRevenueMinor = sum(
-    leafLines(income).filter(
+    income.filter(
       (line) => revenueBucket(subTypeOf(line)) === "operating",
     ),
   );

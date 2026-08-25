@@ -56,10 +56,7 @@
 		return accounts.filter(
 			(a) =>
 				(showInactive || a.active) &&
-				(!q ||
-					String(a.code ?? '').includes(q) ||
-					a.name.toLowerCase().includes(q) ||
-					(a.path?.some((p) => p.toLowerCase().includes(q)) ?? false))
+				(!q || String(a.code ?? '').includes(q) || a.name.toLowerCase().includes(q))
 		);
 	});
 
@@ -76,23 +73,11 @@
 					.filter((a) => a.type === type)
 					.slice()
 					.sort((a, b) => (a.code ?? 0) - (b.code ?? 0));
-				// A group total adds the top of each visible branch only. Every
-				// child is already inside its parent's rolled-up figure, so adding
-				// both would count it twice. A search can hide a parent and keep a
-				// child, which is why this asks whether the parent is on screen
-				// rather than whether the row has one.
-				const shown = new Set(inType.map((a) => a.id));
-				const totalMinor = inType
-					.filter((a) => a.parentId == null || !shown.has(a.parentId))
-					.reduce((sum, a) => sum + (a.rolledUpBalanceMinor ?? a.balanceMinor), 0);
+				const totalMinor = inType.reduce((sum, a) => sum + a.balanceMinor, 0);
 				return { type, rows: inType, totalMinor };
 			})
 			.filter((g) => g.rows.length > 0)
 	);
-
-	function depthOf(account: AccountView): number {
-		return Math.max(0, (account.path?.length ?? 1) - 1);
-	}
 
 	function clearFilters() {
 		searchRaw = '';
@@ -171,7 +156,7 @@
 					</span>
 					<Input
 						type="search"
-						placeholder="Search code, name or path…"
+						placeholder="Search code or name…"
 						bind:value={searchRaw}
 						class="h-[34px] pl-8 text-[13px]"
 					/>
@@ -291,19 +276,14 @@
 										openAccount(account);
 									}}
 								>
-									<td
-										class="td-primary tree"
-										data-label="Account"
-										style={`--depth:${depthOf(account)}`}
-									>
+									<td class="td-primary" data-label="Account">
 										<!-- A real link, so hover preloads it and Cmd-click opens
 										     it in a tab. -->
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the href comes from resolve(); the rule cannot see through the helper call. -->
 										<a class="cell-item row-link" href={accountHref(account.id)}>
 											<span class="cell-itemname">{account.name}</span>
 											<span class="cell-itemnum">
-												{account.code}{#if account.hasChildren}
-													· Heading{/if}{#if !account.active}
+												{account.code}{#if !account.active}
 													· Inactive{/if}{#if account.id === data.defaultAccountId}
 													· Used by default{/if}
 											</span>
@@ -315,13 +295,8 @@
 									</td>
 									<td class="td-amount" data-label="Balance">
 										<span class="amount-num">
-											{formatMinor(account.rolledUpBalanceMinor ?? account.balanceMinor)}
+											{formatMinor(account.balanceMinor)}
 										</span>
-										{#if account.hasChildren}
-											<span class="amount-direct"
-												>Direct {formatMinor(account.directBalanceMinor ?? 0)}</span
-											>
-										{/if}
 									</td>
 								</tr>
 							{/each}
@@ -372,12 +347,7 @@
 	</div>
 </div>
 
-<AccountSheet
-	bind:open={sheetOpen}
-	{accounts}
-	error={form?.error ?? ''}
-	onclose={() => (sheetOpen = false)}
-/>
+<AccountSheet bind:open={sheetOpen} error={form?.error ?? ''} onclose={() => (sheetOpen = false)} />
 
 <style>
 	.row-link {
@@ -392,19 +362,6 @@
 		outline-offset: 2px;
 		border-radius: 4px;
 	}
-	/* Depth of the account inside its type, on the one cell that carries the
-	   name. Kept as a CSS variable rather than an inline padding so the mobile
-	   card layout can drop it — a card has no column to indent within. */
-	.td-primary.tree {
-		padding-left: calc(14px + var(--depth, 0) * 20px);
-	}
-	.amount-direct {
-		display: block;
-		font-size: 11px;
-		font-weight: 400;
-		color: var(--muted-foreground);
-		margin-top: 2px;
-	}
 	.page-error {
 		background: var(--red-soft);
 		color: var(--red);
@@ -415,12 +372,6 @@
 	}
 
 	@media (max-width: 767px) {
-		/* Cards, not columns: no indent, and the type band is a plain divider
-		   rather than a sticky header (the thead it would stick under is hidden,
-		   and `.main` is the scroll container on mobile). */
-		.td-primary.tree {
-			padding-left: 0;
-		}
 		.group-row td {
 			position: static;
 			border-radius: var(--radius);

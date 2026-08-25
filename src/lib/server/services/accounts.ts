@@ -11,16 +11,15 @@ import { diffRecords, recordAudit } from "../audit.js";
 import { accountEvents } from "../ledger/events.js";
 import { buildMovements } from "../ledger/entry-builder.js";
 import { rankAfter } from "../ledger/rank.js";
-import { lowestFreeAccountCode } from "../ledger/account-code.js";
+import { accountCodeRangeFor, lowestFreeAccountCode } from "../ledger/account-code.js";
 import { legacyRoleForAccountType, NEEDS_REVIEW_TYPES } from "../ledger/account-type.js";
 import {
-  canAddAccountChild,
+  canChangeAccountCode,
   canChangeAccountSubType,
   canChangeAccountType,
   canDeactivateAccount,
   canDeleteAccount as deletionEligibility,
 } from "../ledger/account-eligibility.js";
-import { descendantsOf, validateAccountParent } from "../ledger/account-hierarchy.js";
 import { fromMinor } from "../ledger/money.js";
 import { mainCurrencyCode } from "../currency/form.js";
 import type { AccountCreate, AccountPatch, AccountView, LedgerDb, Minor, Refusable } from "../ledger/types.js";
@@ -73,34 +72,6 @@ export function createAccount(db: LedgerDb, actingUserId: number, data: AccountC
   let row: typeof accounts.$inferSelect;
   try {
     row = db.transaction((tx) => {
-      const hierarchy = tx
-        .select({
-          id: accounts.id,
-          type: accounts.type,
-          parentId: accounts.parentId,
-        })
-        .from(accounts)
-        .all()
-        .filter(
-          (
-            item,
-          ): item is {
-            id: number;
-            type: AccountTypeCode;
-            parentId: number | null;
-          } => item.type != null,
-        );
-      const temporaryId = -1;
-      const parentCheck = validateAccountParent(
-        [...hierarchy, { id: temporaryId, type: data.type, parentId: null }],
-        temporaryId,
-        data.parentId ?? null,
-      );
-      if (!parentCheck.ok) throw new AccountRefusal(parentCheck.reason);
-      if (data.parentId != null) {
-        const eligibility = canAddAccountChild(dependencyState(tx, data.parentId));
-        if (!eligibility.ok) throw new AccountRefusal(eligibility.reason);
-      }
       const codes = tx
         .select({ code: accounts.code })
         .from(accounts)
@@ -114,7 +85,6 @@ export function createAccount(db: LedgerDb, actingUserId: number, data: AccountC
           subType: AccountSubTypesByType[data.type] !== undefined ? (data.subType ?? null) : null,
           code: lowestFreeAccountCode(data.type, codes),
           name,
-          parentId: data.parentId ?? null,
           rank: rankAfter(null),
           createdBy: actingUserId,
           updatedBy: actingUserId,
@@ -210,21 +180,34 @@ export function patchAccount(
     const check = canDeactivateAccount(state);
     if (!check.ok) return check;
   }
-  const hierarchy = hierarchyRows(db);
-  if (patch.parentId !== undefined) {
-    const check = validateAccountParent(hierarchy, id, patch.parentId);
+  if (patch.code !== undefined && patch.code !== existing.code) {
+    const check = canChangeAccountCode({
+      canChange: true,
+      isSystem: existing.isSystem,
+      archived: existing.archivedAt !== null,
+    });
     if (!check.ok) return check;
-    if (patch.parentId != null) {
-      const parentState = dependencyState(db, patch.parentId);
-      const parentCheck = canAddAccountChild(parentState);
-      if (!parentCheck.ok) return parentCheck;
+    const range = accountCodeRangeFor(effectiveType);
+    if (!Number.isInteger(patch.code) || patch.code < range.start || patch.code > range.end) {
+      return {
+        ok: false,
+        reason: `Code must be between ${range.start} and ${range.end} for this account type.`,
+      };
     }
   }
 
   try {
     db.transaction((tx) => {
       let code = existing.code;
-      if (patch.type !== undefined && patch.type !== existing.type) {
+      if (patch.code !== undefined && patch.code !== existing.code) {
+        const clash = tx
+          .select({ id: accounts.id })
+          .from(accounts)
+          .where(eq(accounts.code, patch.code))
+          .get();
+        if (clash && clash.id !== id) throw new AccountRefusal("That code is already in use.");
+        code = patch.code;
+      } else if (patch.type !== undefined && patch.type !== existing.type) {
         const codes = tx
           .select({ code: accounts.code })
           .from(accounts)
@@ -242,9 +225,10 @@ export function patchAccount(
                 role: legacyRoleForAccountType(patch.type),
                 code,
               }
-            : {}),
+            : patch.code !== undefined && patch.code !== existing.code
+              ? { code }
+              : {}),
           ...(patch.subType !== undefined ? { subType: patch.subType } : staleSubType ? { subType: null } : {}),
-          ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
           ...(patch.active !== undefined ? { archivedAt: patch.active ? null : new Date().toISOString() } : {}),
           updatedBy: actingUserId,
           updatedAt: new Date().toISOString(),
@@ -266,8 +250,8 @@ export function patchAccount(
   }
 
   const account = emitAccount(db, id)!;
-  if (patch.parentId !== undefined || (patch.type !== undefined && patch.type !== existing.type)) {
-    accountEvents.emit("accounts-refresh", { reason: "hierarchy" });
+  if (patch.type !== undefined && patch.type !== existing.type) {
+    accountEvents.emit("accounts-refresh", { reason: "type-change" });
   }
   return { ok: true, value: account };
 }
@@ -304,38 +288,7 @@ export function removeAccount(db: LedgerDb, id: number, actingUserId: number): R
 
 class AccountRefusal extends Error {}
 
-function hierarchyRows(db: LedgerDb) {
-  return db
-    .select({
-      id: accounts.id,
-      type: accounts.type,
-      parentId: accounts.parentId,
-    })
-    .from(accounts)
-    .all()
-    .filter(
-      (
-        row,
-      ): row is {
-        id: number;
-        type: AccountTypeCode;
-        parentId: number | null;
-      } => row.type != null,
-    );
-}
-
 function dependencyState(db: LedgerDb, id: number) {
-  const hierarchy = hierarchyRows(db);
-  const descendants = descendantsOf(hierarchy, id);
-  const childCount = hierarchy.filter((row) => row.parentId === id).length;
-  const activeDescendantCount = descendants.filter((descendantId) => {
-    const row = db
-      .select({ archivedAt: accounts.archivedAt })
-      .from(accounts)
-      .where(eq(accounts.id, descendantId))
-      .get();
-    return row?.archivedAt == null;
-  }).length;
   return {
     movementCount:
       db
@@ -343,7 +296,6 @@ function dependencyState(db: LedgerDb, id: number) {
         .from(ledgerMovements)
         .where(eq(ledgerMovements.accountId, id))
         .get()?.n ?? 0,
-    childCount,
     statementCount:
       db
         .select({ n: sql<number>`count(*)` })
@@ -357,7 +309,6 @@ function dependencyState(db: LedgerDb, id: number) {
         .where(eq(accountDefaults.accountId, id))
         .get()?.n ?? 0,
     otherDependencyCount: 0,
-    activeDescendantCount,
   };
 }
 

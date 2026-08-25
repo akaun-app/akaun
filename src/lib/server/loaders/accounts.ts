@@ -31,13 +31,8 @@ function toRoleFreeAccount(account: ReturnType<typeof listAccounts>[number]): Ac
     name: account.name,
     type: account.type,
     subType: account.subType,
-    parentId: account.parentId ?? null,
     active: account.active!,
-    hasChildren: account.hasChildren!,
     postingEligible: account.postingEligible!,
-    directBalanceMinor: account.directBalanceMinor!,
-    rolledUpBalanceMinor: account.rolledUpBalanceMinor!,
-    path: account.path!,
   };
 }
 
@@ -90,8 +85,6 @@ export function loadAccountDetail(locals: App.Locals, requestedId: number) {
   if (canonical === null) throw redirect(302, LIST_PATH);
   if (canonical !== requestedId) throw redirect(302, `/accounts/${canonical}`);
 
-  // One read of the chart: the account, its children and the parent picker all
-  // come out of it.
   const chart = listAccounts(db, { includeArchived: true });
   const account = chart.find((a) => a.id === canonical);
   if (!account) throw redirect(302, LIST_PATH);
@@ -121,8 +114,6 @@ export function loadAccountDetail(locals: App.Locals, requestedId: number) {
 
   return {
     account,
-    children: chart.filter((a) => a.parentId === canonical),
-    // The parent picker needs the chart; the page shows only this account.
     accounts: chart,
     openingBalance: openingBalanceFor(db, canonical),
     unfinishedStatements,
@@ -151,7 +142,6 @@ export const accountsActions: Actions = {
     const result = createAccount(db, locals.user!.id, {
       type,
       name,
-      parentId: data.get("parentId") ? parseInt(String(data.get("parentId"))) : null,
       subType: data.get("subType")
         ? (parseInt(String(data.get("subType"))) as AccountSubTypeCode)
         : undefined,
@@ -173,11 +163,11 @@ export const accountsActions: Actions = {
         ? String(data.get("name") ?? "").trim()
         : undefined,
       type: data.has("type") ? parseInt(String(data.get("type"))) as AccountTypeCode : undefined,
-      parentId: data.has("parentId") ? (data.get("parentId") ? parseInt(String(data.get("parentId"))) : null) : undefined,
       active: activeRaw === null ? undefined : activeRaw === "true",
       subType: data.has("subType")
         ? (parseInt(String(data.get("subType"))) as AccountSubTypeCode)
         : undefined,
+      code: data.has("code") ? parseInt(String(data.get("code"))) : undefined,
     });
     if (!result.ok) return fail(409, { error: result.reason });
     return { success: true, id };

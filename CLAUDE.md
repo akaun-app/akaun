@@ -107,6 +107,15 @@ own.
 - **A category is an account**, with the role `ExpenseCategory` or `IncomeCategory`. The
   screens keep the word "category". The `categories` table is deprecated and nothing reads
   it.
+- **Accounts have no hierarchy.** `parentId` (002/004: a user-built heading tree with
+  rollups, one account per heading) predates `subType` (005: a fixed classification enum —
+  Cash/Bank/Receivable/... — used only to bucket a report's Current/Non-current or
+  COGS/Operating/Other lines). No real chart ever used `parentId`, and the two were never
+  substitutes for each other, so it was removed outright — the column, the eligibility rule
+  that blocked postings to a "heading", and the recursive rollup/depth code in the balance
+  sheet and P&L, which are flat maps now. Report grouping is `subType` alone
+  (`assetBucket`/`liabilityBucket`/`expenseBucket`/`revenueBucket` in
+  `ledger/account-type.ts`). Do not reintroduce a parent/child concept for accounts.
 - **One emitter for all record kinds**: `ledgerEvents` (`record-update`, `record-deleted`,
   `settlement-changed`), plus `accountEvents`. Both are in
   `$lib/server/ledger/events.ts`. One list of every kind means one stream too:

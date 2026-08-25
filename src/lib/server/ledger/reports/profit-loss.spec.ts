@@ -27,7 +27,6 @@ function total(
     code: accountId,
     accountName,
     type: accountTypeFor(role),
-    parentId: null,
     role,
     subType,
     contactId: null,
@@ -123,7 +122,7 @@ describe("lines grouped by category account", () => {
   });
 });
 
-describe("fixed types and hierarchy", () => {
+describe("fixed types", () => {
   it("classifies Revenue and Expense by fixed type even when a transitional role disagrees", () => {
     const report = profitLoss({
       dateFrom: "2026-01-01",
@@ -144,28 +143,16 @@ describe("fixed types and hierarchy", () => {
     expect(report.resultMinor).toBe(1_500);
   });
 
-  it("shows hierarchy subtotals while net profit counts each leaf once", () => {
+  it("gives each account its own line, with the total the plain sum", () => {
     const report = profitLoss({
       dateFrom: "2026-01-01",
       dateTo: "2026-01-31",
       totals: [
         {
-          accountId: 80,
-          code: 4000,
-          accountName: "Sales",
-          type: AccountType.Revenue,
-          parentId: null,
-          role: AccountRole.IncomeCategory,
-          subType: null,
-          contactId: null,
-          amountMinor: 0,
-        },
-        {
           accountId: 81,
           code: 4010,
           accountName: "Online",
           type: AccountType.Revenue,
-          parentId: 80,
           role: AccountRole.IncomeCategory,
           subType: null,
           contactId: null,
@@ -176,7 +163,6 @@ describe("fixed types and hierarchy", () => {
           code: 4020,
           accountName: "Retail",
           type: AccountType.Revenue,
-          parentId: 80,
           role: AccountRole.IncomeCategory,
           subType: null,
           contactId: null,
@@ -187,7 +173,6 @@ describe("fixed types and hierarchy", () => {
           code: 5000,
           accountName: "Fees",
           type: AccountType.Expense,
-          parentId: null,
           role: AccountRole.ExpenseCategory,
           subType: null,
           contactId: null,
@@ -195,15 +180,12 @@ describe("fixed types and hierarchy", () => {
         },
       ],
     });
-    expect(report.income.find((line) => line.accountId === 80)).toMatchObject({
-      amountMinor: 1_500,
-      isSubtotal: true,
-    });
+    expect(report.income.map((line) => line.accountId)).toEqual([81, 82]);
     expect(report.totalIncomeMinor).toBe(1_500);
     expect(report.resultMinor).toBe(1_300);
   });
 
-  it("keeps a zero parent subtotal visible when active children cancel out", () => {
+  it("drops an account whose active balance nets to zero", () => {
     const report = profitLoss({
       dateFrom: "2026-01-01",
       dateTo: "2026-01-31",
@@ -215,22 +197,15 @@ describe("fixed types and hierarchy", () => {
         {
           ...total(91, "Gain", AccountRole.IncomeCategory, -500),
           type: AccountType.Revenue,
-          parentId: 90,
         },
         {
           ...total(92, "Refund", AccountRole.IncomeCategory, 500),
           type: AccountType.Revenue,
-          parentId: 90,
         },
       ],
     });
 
-    expect(report.income[0]).toMatchObject({
-      accountId: 90,
-      amountMinor: 0,
-      isSubtotal: true,
-    });
-    expect(report.income).toHaveLength(3);
+    expect(report.income.map((line) => line.accountId)).toEqual([91, 92]);
     expect(report.totalIncomeMinor).toBe(0);
   });
 });

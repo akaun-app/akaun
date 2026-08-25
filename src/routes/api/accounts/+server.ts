@@ -31,7 +31,6 @@ const createSchema = z
         message: "Choose one of the five account types.",
       }),
     name: z.string().trim().min(1).max(120),
-    parentId: z.number().int().positive().nullable().optional(),
     subType: z.number().int().optional() as z.ZodType<AccountSubTypeCode | undefined>,
   })
   .strict()
@@ -88,7 +87,6 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const result = createAccount(db, locals.user!.id, {
     type: parsed.data.type,
     name: parsed.data.name,
-    parentId: parsed.data.parentId,
     subType: parsed.data.subType,
   });
   if (!result.ok) return refused(result.reason);

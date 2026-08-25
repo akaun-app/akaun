@@ -86,7 +86,7 @@
   const id = $derived(`account-select-${name}`);
 
   function accountLabel(account: AccountView): string {
-    return `${account.code} · ${(account.path ?? [account.name]).join(" › ")} · ${AccountTypeDisplayLabels[account.type]}`;
+    return `${account.code} · ${account.name} · ${AccountTypeDisplayLabels[account.type]}`;
   }
 
   function selectAccount(next: string | null): void {

@@ -128,9 +128,7 @@
         >
           <option value={0}>Choose an account</option>
           {#each accounts.filter( (account) => eligible(item, account), ) as account (account.id)}
-            <option value={account.id}
-              >{account.code} — {account.path.join(" › ")}</option
-            >
+            <option value={account.id}>{account.code} — {account.name}</option>
           {/each}
         </select>
       </label>

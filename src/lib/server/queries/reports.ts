@@ -81,7 +81,6 @@ function accountTotals(
       code: accounts.code,
       accountName: accounts.name,
       type: accounts.type,
-      parentId: accounts.parentId,
       role: accounts.role,
       subType: accounts.subType,
       contactId: accounts.contactId,

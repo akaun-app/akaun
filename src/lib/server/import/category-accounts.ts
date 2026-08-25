@@ -47,7 +47,7 @@ export function categoryChoices(
       id: a.id,
       name: a.name,
       code: a.code ?? a.id,
-      path: (a.path ?? [a.name]).join(" › "),
+      path: a.name,
     }));
 }
 

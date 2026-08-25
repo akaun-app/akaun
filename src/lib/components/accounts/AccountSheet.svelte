@@ -11,8 +11,6 @@
 		AccountTypeDisplayLabels,
 		type AccountTypeCode
 	} from '$lib/enums.js';
-	import type { AccountView } from '$lib/server/ledger/types.js';
-
 	// Mirrors src/lib/server/ledger/account-type.ts's NEEDS_REVIEW_TYPES — an
 	// account of one of these types has no safe default classification, so a
 	// sub-type must be chosen at creation rather than left "needs review".
@@ -23,17 +21,15 @@
 	 *
 	 * Create only. Editing an existing account happens in place on
 	 * `/accounts/[id]` — a page can show what an account *is* (its balance, its
-	 * children, its movements, what it still has to reconcile) beside the three
-	 * fields that name it, which a 500px panel never could.
+	 * movements, what it still has to reconcile) beside the three fields that
+	 * name it, which a 500px panel never could.
 	 */
 	let {
 		open = $bindable(false),
-		accounts = [],
 		error = '',
 		onclose
 	}: {
 		open?: boolean;
-		accounts?: AccountView[];
 		error?: string;
 		onclose: () => void;
 	} = $props();
@@ -50,9 +46,6 @@
 
 	const subTypes = $derived(AccountSubTypesByType[selectedType] ?? []);
 	const subTypeRequired = $derived(REQUIRES_SUB_TYPE.includes(selectedType));
-
-	/** A heading can only sit above an account of its own type. */
-	const parents = $derived(accounts.filter((a) => a.type === selectedType && a.active));
 </script>
 
 <Sheet.Root
@@ -126,16 +119,6 @@
 						</p>
 					</div>
 				{/if}
-
-				<div class="field">
-					<label class="field-label" for="account-parent">Parent heading</label>
-					<select id="account-parent" name="parentId" class="plain-select">
-						<option value="">None</option>
-						{#each parents as parent (parent.id)}
-							<option value={parent.id}>{parent.code} · {parent.path?.join(' › ')}</option>
-						{/each}
-					</select>
-				</div>
 			</div>
 
 			<footer class="sheet-foot">

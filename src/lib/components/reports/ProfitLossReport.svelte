@@ -79,7 +79,7 @@
 											class="rep-open related-link"
 											onclick={() => openCategory(line.accountId)}
 										>
-											<span style={`padding-left: ${(line.depth ?? 0) * 1.25}rem`} class:font-semibold={line.isSubtotal}>{line.accountName}</span>
+											<span>{line.accountName}</span>
 											<ChevronRight size={13} />
 										</button>
 									</td>
