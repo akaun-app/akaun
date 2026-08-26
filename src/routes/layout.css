@@ -1352,17 +1352,6 @@ th.sortable:hover .th-idle { opacity: .5; }
 }
 .detail-savebar-note { margin-right: auto; font-size: 12.5px; color: var(--muted-foreground); }
 
-/* ===================== Shared form controls ===================== */
-/* Was duplicated, scoped, in RecordSheet and PaymentSheet. */
-.plain-select {
-  width: 100%; height: 36px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--card); color: var(--foreground);
-  font-family: inherit; font-size: 13.5px;
-}
-.plain-select:focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px var(--primary-soft); }
-.plain-select:disabled { opacity: 0.6; cursor: not-allowed; }
-
 /* ===================== Motion ===================== */
 /* The layout wraps every navigation in startViewTransition, so list → detail
    animates. Honour the user's setting: view transitions are not covered by the

@@ -16,6 +16,7 @@
   } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
   import ConfirmDialog from "$lib/components/ui/ConfirmDialog.svelte";
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
   import FilterDropdown from "$lib/components/ui/FilterDropdown.svelte";
@@ -583,18 +584,27 @@
             <span class="field-label">Account this statement belongs to</span>
             <!-- Moving a statement uploaded against the wrong account
                  (FR-054). -->
-            <select
-              aria-label="Account this statement belongs to"
-              value={selectedStatement.accountId ?? ""}
-              onchange={(event) => {
-                const next = Number(event.currentTarget.value) || null;
-                if (next) void reassignStatement(next);
+            <Select.Root
+              type="single"
+              value={selectedStatement.accountId != null ? String(selectedStatement.accountId) : ""}
+              onValueChange={(next) => {
+                const accountId = next ? Number(next) : null;
+                if (accountId) void reassignStatement(accountId);
               }}
             >
-              {#each data.accounts as account (account.id)}
-                <option value={account.id}>{account.name}</option>
-              {/each}
-            </select>
+              <Select.Trigger
+                aria-label="Account this statement belongs to"
+                class="w-full justify-between"
+              >
+                {data.accounts.find((account) => account.id === selectedStatement.accountId)
+                  ?.name ?? "Choose an account"}
+              </Select.Trigger>
+              <Select.Content>
+                {#each data.accounts as account (account.id)}
+                  <Select.Item value={String(account.id)} label={account.name} />
+                {/each}
+              </Select.Content>
+            </Select.Root>
           </div>
         {/if}
 
@@ -904,17 +914,6 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-  }
-  .statement-account select {
-    width: 100%;
-    height: 36px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--card);
-    color: var(--foreground);
-    font-family: inherit;
-    font-size: 13.5px;
   }
   .statement-stats {
     display: grid;

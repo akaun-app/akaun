@@ -268,12 +268,28 @@
 			<div class="entry-line extra">
 				<span class="entry-code">{codeOf(side.accountId)}</span>
 				<div class="entry-account">
-					<select bind:value={side.accountId} class="plain-select" disabled={extraSidesReadOnly}>
-						<option value={null} disabled>Choose an account</option>
-						{#each canAdjust ? allAccounts : extraSideAccountChoices as account (account.id)}
-							<option value={account.id}>{account.code} · {account.name}</option>
-						{/each}
-					</select>
+					<Select.Root
+						type="single"
+						value={side.accountId === null ? '' : String(side.accountId)}
+						onValueChange={(next) => (side.accountId = next ? Number(next) : null)}
+					>
+						<Select.Trigger
+							class="w-full justify-between"
+							aria-label="Choose an account"
+							disabled={extraSidesReadOnly}
+						>
+							{#if side.accountId === null}
+								Choose an account
+							{:else}
+								{codeOf(side.accountId)} · {allAccounts.find((a) => a.id === side.accountId)?.name}
+							{/if}
+						</Select.Trigger>
+						<Select.Content>
+							{#each canAdjust ? allAccounts : extraSideAccountChoices as account (account.id)}
+								<Select.Item value={String(account.id)} label={`${account.code} · ${account.name}`} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 				{#if canAdjust}
 					<Select.Root type="single" value={side.direction} onValueChange={(next) => selectDirection(side, next)}>

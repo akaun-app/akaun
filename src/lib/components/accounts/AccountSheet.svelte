@@ -3,12 +3,14 @@
 	import { X } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import {
 		AccountSubTypeDisplayLabels,
 		AccountSubTypesByType,
 		AccountType,
 		AccountTypeDisplayLabels,
+		type AccountSubTypeCode,
 		type AccountTypeCode
 	} from '$lib/enums.js';
 	// Mirrors src/lib/server/ledger/account-type.ts's NEEDS_REVIEW_TYPES — an
@@ -43,9 +45,29 @@
 	);
 
 	let selectedType = $state<AccountTypeCode>(AccountType.Asset);
+	let selectedSubType = $state<number | null>(null);
 
 	const subTypes = $derived(AccountSubTypesByType[selectedType] ?? []);
 	const subTypeRequired = $derived(REQUIRES_SUB_TYPE.includes(selectedType));
+
+	// A sub-type from the previous type's list is meaningless once the type
+	// itself changes — the native select used to lose it as a side effect of
+	// its `<option>`s re-rendering; a controlled Select needs it done on purpose.
+	// When a sub-type is required, the native select also always had *some*
+	// option selected (the browser picks the first by default) — matched here
+	// by defaulting to the first choice rather than leaving it unset.
+	$effect(() => {
+		if (selectedSubType != null && !subTypes.includes(selectedSubType as never)) {
+			selectedSubType = null;
+		}
+		if (selectedSubType == null && subTypeRequired && subTypes.length > 0) {
+			selectedSubType = subTypes[0];
+		}
+	});
+
+	// bits-ui's Select treats an empty string as "no selection", so the "not
+	// yet classified" item needs a real sentinel (mirrors ledger/AccountSelect.svelte's NONE_VALUE).
+	const NONE_SUB_TYPE = '__none__';
 </script>
 
 <Sheet.Root
@@ -81,11 +103,21 @@
 
 				<div class="field">
 					<label class="field-label" for="account-type">Account type *</label>
-					<select id="account-type" name="type" bind:value={selectedType} class="plain-select">
-						{#each types as type (type)}
-							<option value={type}>{AccountTypeDisplayLabels[type]}</option>
-						{/each}
-					</select>
+					<Select.Root
+						type="single"
+						value={String(selectedType)}
+						onValueChange={(next) => next && (selectedType = Number(next) as AccountTypeCode)}
+					>
+						<Select.Trigger id="account-type" class="w-full justify-between">
+							{AccountTypeDisplayLabels[selectedType]}
+						</Select.Trigger>
+						<Select.Content>
+							{#each types as type (type)}
+								<Select.Item value={String(type)} label={AccountTypeDisplayLabels[type]} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<input type="hidden" name="type" value={selectedType} />
 					<p class="field-hint">
 						The type decides which report the account appears on, and it cannot be changed
 						once the account has movements.
@@ -97,19 +129,29 @@
 						<label class="field-label" for="account-sub-type">
 							Sub-type {subTypeRequired ? '*' : ''}
 						</label>
-						<select
-							id="account-sub-type"
-							name="subType"
-							required={subTypeRequired}
-							class="plain-select"
+						<Select.Root
+							type="single"
+							value={selectedSubType == null ? NONE_SUB_TYPE : String(selectedSubType)}
+							onValueChange={(next) => {
+								selectedSubType =
+									next && next !== NONE_SUB_TYPE ? (Number(next) as AccountSubTypeCode) : null;
+							}}
 						>
-							{#if !subTypeRequired}
-								<option value="">Not yet classified</option>
-							{/if}
-							{#each subTypes as subType (subType)}
-								<option value={subType}>{AccountSubTypeDisplayLabels[subType]}</option>
-							{/each}
-						</select>
+							<Select.Trigger id="account-sub-type" class="w-full justify-between">
+								{selectedSubType == null
+									? 'Not yet classified'
+									: AccountSubTypeDisplayLabels[selectedSubType]}
+							</Select.Trigger>
+							<Select.Content>
+								{#if !subTypeRequired}
+									<Select.Item value={NONE_SUB_TYPE} label="Not yet classified" />
+								{/if}
+								{#each subTypes as subType (subType)}
+									<Select.Item value={String(subType)} label={AccountSubTypeDisplayLabels[subType]} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						<input type="hidden" name="subType" value={selectedSubType ?? ''} />
 						<p class="field-hint">
 							{#if subTypeRequired}
 								What kind of {AccountTypeDisplayLabels[selectedType].toLowerCase()} this is.

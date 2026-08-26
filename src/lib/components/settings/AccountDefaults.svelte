@@ -1,5 +1,6 @@
 <script lang="ts">
   import { toast } from "svelte-sonner";
+  import * as Select from "$lib/components/ui/select/index.js";
   import type {
     AccountDefaultView,
     AccountView,
@@ -121,16 +122,26 @@
         <span class="text-xs text-muted-foreground"
           >{labels[item.purpose].help}</span
         >
-        <select
-          class="h-10 rounded-md border border-input bg-background px-3"
-          bind:value={selected[item.purpose]}
-          disabled={disabled || saving}
+        <Select.Root
+          type="single"
+          value={String(selected[item.purpose] ?? 0)}
+          onValueChange={(next) => next && (selected[item.purpose] = Number(next))}
         >
-          <option value={0}>Choose an account</option>
-          {#each accounts.filter( (account) => eligible(item, account), ) as account (account.id)}
-            <option value={account.id}>{account.code} — {account.name}</option>
-          {/each}
-        </select>
+          <Select.Trigger class="w-full justify-between" disabled={disabled || saving}>
+            {#if !selected[item.purpose]}
+              Choose an account
+            {:else}
+              {@const chosen = accounts.find((account) => account.id === selected[item.purpose])}
+              {chosen ? `${chosen.code} — ${chosen.name}` : "Choose an account"}
+            {/if}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="0" label="Choose an account" />
+            {#each accounts.filter((account) => eligible(item, account)) as account (account.id)}
+              <Select.Item value={String(account.id)} label={`${account.code} — ${account.name}`} />
+            {/each}
+          </Select.Content>
+        </Select.Root>
       </label>
     {/each}
   </div>

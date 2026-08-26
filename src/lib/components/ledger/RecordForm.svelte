@@ -2,6 +2,7 @@
 	import { tick } from 'svelte';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import { X } from '@lucide/svelte';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
@@ -772,16 +773,21 @@
 
 			<div class="field">
 				<label class="field-label" for="rec-currency">Currency</label>
-				<select
-					id="rec-currency"
-					bind:value={entryCurrency}
-					disabled={readOnly}
-					class="plain-select"
+				<Select.Root
+					type="single"
+					value={entryCurrency}
+					onValueChange={(next) => next && (entryCurrency = next)}
 				>
-					{#each CURRENCIES as c (c.code)}
-						<option value={c.code}>{c.code} — {c.name}</option>
-					{/each}
-				</select>
+					<Select.Trigger id="rec-currency" class="w-full justify-between" disabled={readOnly}>
+						{@const c = CURRENCIES.find((c) => c.code === entryCurrency)}
+						{c ? `${c.code} — ${c.name}` : 'Select currency'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each CURRENCIES as c (c.code)}
+							<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 
 			<div class="field">

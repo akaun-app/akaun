@@ -8,6 +8,7 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import OpeningBalanceSheet from './OpeningBalanceSheet.svelte';
 	import { createResourceStream } from '$lib/sse.js';
 	import { formatDate, formatMinor } from '$lib/format.js';
@@ -27,6 +28,11 @@
 	// account of one of these types has no safe default classification, so it
 	// shows "Needs review" rather than a silently-assumed sub-type.
 	const NEEDS_REVIEW_TYPES: AccountTypeCode[] = [AccountType.Asset, AccountType.Liability];
+
+	// Sentinel for the sub-type Select's "unset" item — bits-ui's Select treats
+	// an empty string as no selection, so a real sentinel is used instead
+	// (mirrors ledger/AccountSelect.svelte's NONE_VALUE).
+	const NONE_SUB_TYPE = '__none__';
 
 	/**
 	 * One account, on its own page.
@@ -285,11 +291,20 @@
 
 			<div class="field">
 				<label class="field-label" for="acc-type">Account type *</label>
-				<select id="acc-type" bind:value={selectedType} class="plain-select" disabled={!canEdit}>
-					{#each types as type (type)}
-						<option value={type}>{AccountTypeDisplayLabels[type]}</option>
-					{/each}
-				</select>
+				<Select.Root
+					type="single"
+					value={String(selectedType)}
+					onValueChange={(next) => next && (selectedType = Number(next) as AccountTypeCode)}
+				>
+					<Select.Trigger id="acc-type" class="w-full justify-between" disabled={!canEdit}>
+						{AccountTypeDisplayLabels[selectedType]}
+					</Select.Trigger>
+					<Select.Content>
+						{#each types as type (type)}
+							<Select.Item value={String(type)} label={AccountTypeDisplayLabels[type]} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
 				<p class="field-hint">
 					The type decides which report this appears on and which direction its balance
 					normally runs.
@@ -302,23 +317,32 @@
 					<label class="field-label" for="acc-sub-type">
 						Sub-type {needsReview ? '*' : ''}
 					</label>
-					<select
-						id="acc-sub-type"
-						class="plain-select"
-						disabled={!canEdit}
-						value={subType ?? ''}
-						onchange={(e) => {
-							const raw = e.currentTarget.value;
-							subType = raw ? (Number(raw) as AccountSubTypeCode) : null;
+					<Select.Root
+						type="single"
+						value={subType == null ? NONE_SUB_TYPE : String(subType)}
+						onValueChange={(next) => {
+							subType = next && next !== NONE_SUB_TYPE ? (Number(next) as AccountSubTypeCode) : null;
 						}}
 					>
-						{#if subType == null}
-							<option value="">{needsReview ? 'Needs review' : 'Not yet classified'}</option>
-						{/if}
-						{#each subTypes as st (st)}
-							<option value={st}>{AccountSubTypeDisplayLabels[st]}</option>
-						{/each}
-					</select>
+						<Select.Trigger id="acc-sub-type" class="w-full justify-between" disabled={!canEdit}>
+							{subType == null
+								? needsReview
+									? 'Needs review'
+									: 'Not yet classified'
+								: AccountSubTypeDisplayLabels[subType]}
+						</Select.Trigger>
+						<Select.Content>
+							{#if subType == null}
+								<Select.Item
+									value={NONE_SUB_TYPE}
+									label={needsReview ? 'Needs review' : 'Not yet classified'}
+								/>
+							{/if}
+							{#each subTypes as st (st)}
+								<Select.Item value={String(st)} label={AccountSubTypeDisplayLabels[st]} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
 					<p class="field-hint">
 						What kind of {AccountTypeDisplayLabels[selectedType].toLowerCase()} this is.
 					</p>

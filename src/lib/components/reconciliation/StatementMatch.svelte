@@ -21,6 +21,7 @@
   } from "@lucide/svelte";
   import { toast } from "svelte-sonner";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
   import ConfirmDialog from "$lib/components/ui/ConfirmDialog.svelte";
   import DatePicker from "$lib/components/ui/date-picker/DatePicker.svelte";
   import EmptyState from "$lib/components/ui/EmptyState.svelte";
@@ -857,15 +858,25 @@
                         editLine(line, "amount", event.currentTarget.value)}
                     /></label
                   ><label
-                    ><span>Direction</span><select
-                      name={`line-direction-${line.id}`}
-                      value={line.direction}
-                      disabled={!data.permissions.change}
-                      onchange={(event) =>
-                        editLine(line, "direction", event.currentTarget.value)}
-                      ><option value={StatementDirection.In}>Credit</option
-                      ><option value={StatementDirection.Out}>Debit</option
-                      ></select
+                    ><span>Direction</span><Select.Root
+                      type="single"
+                      value={String(line.direction)}
+                      onValueChange={(next) => next && editLine(line, "direction", next)}
+                      ><Select.Trigger
+                        aria-label="Direction"
+                        class="w-full justify-between"
+                        size="sm"
+                        disabled={!data.permissions.change}
+                        >{line.direction === StatementDirection.In
+                          ? "Credit"
+                          : "Debit"}</Select.Trigger
+                      ><Select.Content
+                        ><Select.Item value={String(StatementDirection.In)} label="Credit"
+                        ></Select.Item><Select.Item
+                          value={String(StatementDirection.Out)}
+                          label="Debit"
+                        ></Select.Item></Select.Content
+                      ></Select.Root
                     ></label
                   ><label class="wide"
                     ><span>Note</span><input
@@ -1184,17 +1195,24 @@
               ? "From account"
               : "To account"}</span
           >
-          <select
-            name="transfer-account"
-            aria-label="The other account in this transfer"
-            value={transferAccountId ?? ""}
-            onchange={(event) =>
-              (transferAccountId = Number(event.currentTarget.value) || null)}
-            >{#if transferTargets.length === 0}<option value=""
-                >No other account to choose from</option
-              >{/if}{#each transferTargets as account (account.id)}<option
-                value={account.id}>{account.name}</option
-              >{/each}</select
+          <Select.Root
+            type="single"
+            value={transferAccountId != null ? String(transferAccountId) : ""}
+            onValueChange={(next) => (transferAccountId = next ? Number(next) : null)}
+            ><Select.Trigger
+              aria-label="The other account in this transfer"
+              class="w-full justify-between"
+              disabled={transferTargets.length === 0}
+              >{transferTargets.length === 0
+                ? "No other account to choose from"
+                : (transferTargets.find((account) => account.id === transferAccountId)
+                    ?.name ?? "Choose an account")}</Select.Trigger
+            ><Select.Content
+              >{#each transferTargets as account (account.id)}<Select.Item
+                  value={String(account.id)}
+                  label={account.name}
+                ></Select.Item>{/each}</Select.Content
+            ></Select.Root
           >
         </div>
         <div class="field">
@@ -1312,7 +1330,6 @@
   }
   .recon-search input:focus-visible,
   input:focus-visible,
-  select:focus-visible,
   button:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
@@ -1854,8 +1871,7 @@
   .line-edit label.wide {
     grid-column: 1/-1;
   }
-  .line-edit input,
-  .line-edit select {
+  .line-edit input {
     width: 100%;
     min-width: 0;
     height: 32px;
@@ -1893,7 +1909,6 @@
     overflow-y: auto;
     padding: 20px 22px;
   }
-  .upload-body select,
   .upload-body input {
     width: 100%;
     height: 34px;

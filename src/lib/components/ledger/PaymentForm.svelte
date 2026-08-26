@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
+	import * as Select from '$lib/components/ui/select/index.js';
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import AccountSelect from './AccountSelect.svelte';
@@ -323,12 +324,24 @@
 	{#if mode === 'single'}
 		<div class="field">
 			<label class="field-label" for="pay-contact">{contactLabel}</label>
-			<select id="pay-contact" bind:value={contactId} required class="plain-select">
-				<option value={null} disabled>Choose a person</option>
-				{#each contacts as contact (contact.id)}
-					<option value={contact.id}>{contact.legalName}</option>
-				{/each}
-			</select>
+			<Select.Root
+				type="single"
+				value={contactId === null ? '' : String(contactId)}
+				onValueChange={(next) => (contactId = next ? Number(next) : null)}
+			>
+				<Select.Trigger id="pay-contact" class="w-full justify-between">
+					{#if contactId === null}
+						Choose a person
+					{:else}
+						{contacts.find((contact) => contact.id === contactId)?.legalName ?? 'Choose a person'}
+					{/if}
+				</Select.Trigger>
+				<Select.Content>
+					{#each contacts as contact (contact.id)}
+						<Select.Item value={String(contact.id)} label={contact.legalName} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		</div>
 	{:else}
 		<p class="covers-note" style="margin-bottom:0;">
