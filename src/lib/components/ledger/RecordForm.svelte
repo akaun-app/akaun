@@ -474,7 +474,7 @@
 		// own typed number — seeded from what it already showed, so nothing
 		// visibly changes until the user actually edits either figure.
 		if (extraSides.length === 0) categoryAmount = (mainAmountMinor / 100).toFixed(2);
-		const direction = canAdjust ? 'out' : (extraSideDirection ?? 'out');
+		const direction = canAdjust ? 'in' : (extraSideDirection ?? 'in');
 		extraSides = [...extraSides, { key: nextSideKey++, accountId: null, direction, amount: '' }];
 	}
 

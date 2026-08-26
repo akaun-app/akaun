@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { X } from '@lucide/svelte';
+	import { X, CornerDownLeft } from '@lucide/svelte';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { formatMinor } from '$lib/format.js';
+	import * as Select from '$lib/components/ui/select/index.js';
+	import { formatMinor, formatMinorAmount } from '$lib/format.js';
 	import AccountSelect from './AccountSelect.svelte';
 	import { differenceMinor, sideMinor, type SideDraft } from './journal-rules.js';
 	import type { AccountView } from '$lib/server/ledger/types.js';
@@ -146,6 +147,33 @@
 		if (accountId === null) return '';
 		return String(allAccounts.find((a) => a.id === accountId)?.code ?? '');
 	}
+
+	/**
+	 * What this side's amount would need to be, in cents and in its own
+	 * current direction, for the whole entry to balance — ignoring what it
+	 * currently holds. Reuses `differenceMinor` over every other side, so it
+	 * can never disagree with the "Balanced" / "X.XX apart" pill above.
+	 *
+	 * Clamped to zero rather than going negative: a negative result means this
+	 * side's direction is the wrong one to absorb the remainder, only
+	 * reachable with `canAdjust` (a free direction choice) — the everyday
+	 * path always has every extra side sharing one fixed direction with the
+	 * category, so it never happens there.
+	 */
+	function targetAmountMinor(side: SideDraft): number {
+		const others = allSides.filter((s) => s.key !== side.key);
+		const neededSigned = -differenceMinor(others);
+		const forDirection = side.direction === 'in' ? neededSigned : -neededSigned;
+		return Math.max(forDirection, 0);
+	}
+
+	function fillRemaining(side: SideDraft) {
+		side.amount = (targetAmountMinor(side) / 100).toFixed(2);
+	}
+
+	function selectDirection(side: SideDraft, next: string | null): void {
+		if (next === 'in' || next === 'out') side.direction = next;
+	}
 </script>
 
 <section class="detail-card entry">
@@ -235,7 +263,8 @@
 		<!-- A third and later side. Free with `adjustments`; otherwise an
 		     everyday same-type category only, and the server refuses anything
 		     else regardless of what this offers (FR-010, FR-031c). -->
-		{#each extraSides as side (side.key)}
+		{#each extraSides as side, i (side.key)}
+			{@const isLastLine = i === extraSides.length - 1}
 			<div class="entry-line extra">
 				<span class="entry-code">{codeOf(side.accountId)}</span>
 				<div class="entry-account">
@@ -247,22 +276,47 @@
 					</select>
 				</div>
 				{#if canAdjust}
-					<select bind:value={side.direction} class="plain-select entry-dir-select" disabled={extraSidesReadOnly}>
-						<option value="out">out of</option>
-						<option value="in">into</option>
-					</select>
+					<Select.Root type="single" value={side.direction} onValueChange={(next) => selectDirection(side, next)}>
+						<Select.Trigger
+							class="entry-dir-select w-full justify-between"
+							aria-label="Direction"
+							disabled={extraSidesReadOnly}
+						>
+							{side.direction === 'in' ? 'into' : 'out of'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="in" label="into" />
+							<Select.Item value="out" label="out of" />
+						</Select.Content>
+					</Select.Root>
 				{:else}
 					<span class="entry-dir">{side.direction === 'in' ? 'into' : 'out of'}</span>
 				{/if}
 				<div class="entry-amount-field">
-					<Input
-						type="text"
-						inputmode="decimal"
-						bind:value={side.amount}
-						placeholder="0.00"
-						disabled={extraSidesReadOnly}
-						class="w-full text-right"
-					/>
+					<div class="entry-amount-wrap">
+						<Input
+							type="text"
+							inputmode="decimal"
+							bind:value={side.amount}
+							placeholder="0.00"
+							disabled={extraSidesReadOnly}
+							class="w-full text-right {isLastLine ? 'pr-7' : ''}"
+						/>
+						{#if isLastLine && !extraSidesReadOnly}
+							{@const remaining = targetAmountMinor(side)}
+							{#if remaining > 0}
+								<button
+									type="button"
+									class="entry-fill-icon"
+									onclick={() => fillRemaining(side)}
+									title={`Use the remaining ${formatMinorAmount(remaining)}`}
+									aria-label={`Use the remaining ${formatMinorAmount(remaining)}`}
+								>
+									<CornerDownLeft size={13} />
+								</button>
+							{/if}
+						{/if}
+					</div>
 				</div>
 				<span class="entry-gutter">
 					{#if !extraSidesReadOnly}
@@ -343,7 +397,10 @@
 		font-size: 12.5px;
 		color: var(--muted-foreground);
 	}
-	.entry-dir-select {
+	/* Passed as a class into Select.Trigger (a child component's own DOM
+	   node), so it needs :global — Svelte's scoping hash never reaches an
+	   element outside this component's own template. */
+	:global(.entry-dir-select) {
 		width: 82px;
 	}
 	.entry-amount {
@@ -358,6 +415,29 @@
 	}
 	.entry-amount-field {
 		min-width: 0;
+	}
+	.entry-amount-wrap {
+		position: relative;
+		min-width: 0;
+	}
+	.entry-fill-icon {
+		position: absolute;
+		top: 50%;
+		right: 4px;
+		transform: translateY(-50%);
+		display: grid;
+		place-items: center;
+		width: 20px;
+		height: 20px;
+		border: none;
+		background: none;
+		border-radius: 5px;
+		color: var(--muted-foreground);
+		cursor: pointer;
+	}
+	.entry-fill-icon:hover {
+		background: var(--accent);
+		color: var(--primary);
 	}
 	.entry-gutter {
 		display: flex;
@@ -416,7 +496,7 @@
 		.entry-amount {
 			text-align: left;
 		}
-		.entry-dir-select {
+		:global(.entry-dir-select) {
 			width: 100%;
 		}
 		.entry-foot {
