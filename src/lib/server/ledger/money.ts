@@ -36,6 +36,18 @@ export function fromMinor(minor: Minor): number {
 }
 
 /**
+ * What is left for the one category a caller already knows about, once every
+ * other typed category (`extraAmounts`, each a signed movement) has taken its
+ * own share of `total`. Whether zero-or-less is worth refusing, and in what
+ * words, is the caller's — this only does the arithmetic (data-model.md
+ * invariant 6: a record's movements must add up to its own figure).
+ */
+export function remainderMinor(total: Minor, extraAmounts: Minor[]): Minor {
+  const extraTotal = extraAmounts.reduce((sum, m) => sum + Math.abs(m), 0);
+  return total - extraTotal;
+}
+
+/**
  * Splits `total` in proportion to `weights` so the parts sum to exactly
  * `total`. Whole division rarely comes out even in cents, so the remainder is
  * handed out one cent at a time to the largest weights first — the largest

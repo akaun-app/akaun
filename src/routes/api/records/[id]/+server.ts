@@ -46,6 +46,10 @@ const patchSchema = z
     receivedIntoAccountId: accountId.optional(),
     fromAccountId: accountId.optional(),
     toAccountId: accountId.optional(),
+    extraSides: z
+      .array(z.object({ accountId, amountMinor: z.number().int() }))
+      .optional(),
+    categoryAmountMinor: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -108,6 +112,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
         ),
         contactId:
           patch.contactId !== undefined ? patch.contactId : existing.contactId,
+        extraSides: patch.extraSides,
+        categoryAmountMinor: patch.categoryAmountMinor,
       },
       {
         accountById: (accountId) => {

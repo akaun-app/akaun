@@ -87,6 +87,14 @@
 	// Third and later sides, shown only with `adjustments` (FR-010).
 	let extraSides = $state<SideDraft[]>([]);
 	let nextSideKey = 0;
+	/**
+	 * The named category's own typed amount, once there is more than one —
+	 * before that it simply follows the Amount field, the way it always has.
+	 * A plain typed number, not a formula: the user is free to put whatever
+	 * they want here, and the running difference (not this field) says
+	 * whether it and the extra sides still add up to the Amount total.
+	 */
+	let categoryAmount = $state('');
 
 	// --- Foreign currency, hidden until asked for --------------------------
 	// A record keeps the amount exactly as it was typed, in the currency it was
@@ -144,10 +152,23 @@
 				direction: m.amountMinor >= 0 ? ('in' as const) : ('out' as const),
 				amount: (Math.abs(m.amountMinor) / 100).toFixed(2)
 			}));
+			// Expense's category is `into`; Income's is `outOf` (see `sidesFor`).
+			// Kept even with no extra sides yet — harmless, since it is only shown
+			// once there is more than one category.
+			const categoryMovement =
+				source.kind === LedgerRecordKind.Expense
+					? into
+					: source.kind === LedgerRecordKind.Income
+						? outOf
+						: null;
+			categoryAmount = categoryMovement
+				? (Math.abs(categoryMovement.amountMinor) / 100).toFixed(2)
+				: '';
 		} else {
 			fromAccountId = null;
 			toAccountId = null;
 			extraSides = [];
+			categoryAmount = '';
 		}
 		// AccountSelect fills a blank from/to with its default the moment it
 		// mounts (FR-011) — wait for that pending update to land before taking
@@ -172,6 +193,7 @@
 			contactName,
 			fromAccountId,
 			toAccountId,
+			categoryAmount,
 			extraSides.map((s) => [s.accountId, s.direction, s.amount])
 		]);
 	}
@@ -319,6 +341,40 @@
 	);
 
 	/**
+	 * Without `adjustments`, a third line may still be added — but only a same-
+	 * type category, and never a genuine adjustment. `sides-from-accounts.ts`'s
+	 * `everydayKindFor` already treats "one money side and every other side a
+	 * category of the same kind" as an ordinary Expense or Income (FR-031c);
+	 * offering exactly that shape here, and nothing else, is what keeps the
+	 * server from ever refusing what this control lets someone build.
+	 *
+	 * Direction follows `entry-builder.ts`'s `twoSided()`: an expense's category
+	 * is the positive/"into" side, an income's is the negative/"out of" side —
+	 * so it is fixed rather than asked, the same way the two named sides' own
+	 * direction already is.
+	 */
+	const extraSideDirection = $derived<'in' | 'out' | null>(
+		predictedKind === LedgerRecordKind.Expense
+			? 'in'
+			: predictedKind === LedgerRecordKind.Income
+				? 'out'
+				: null
+	);
+
+	const extraSideAccountChoices = $derived.by((): AccountView[] => {
+		if (canAdjust) return allAccounts;
+		if (extraSideDirection === null) return [];
+		const wantType =
+			extraSideDirection === 'in' ? AccountType.Expense : AccountType.Revenue;
+		const used = new Set(
+			[fromAccountId, toAccountId, ...extraSides.map((s) => s.accountId)].filter(
+				(id): id is number => id !== null
+			)
+		);
+		return categories.filter((a) => a.type === wantType && !used.has(a.id));
+	});
+
+	/**
 	 * Per-kind memory, so a supplier paid abroad and a customer billed abroad
 	 * each keep their own last-used currency, mirroring the server's own split
 	 * (`USER_PREF_KEYS.lastForeignCurrencyExpense` / `...Income`).
@@ -357,6 +413,13 @@
 		readOnly && !(categoryUnlockable && record?.kind === LedgerRecordKind.Expense)
 	);
 
+	/**
+	 * A category is not itself settled or reconciled, whether it is the one
+	 * named side or a third and later one — `categoryUnlockable`'s reasoning
+	 * extends to every line the money was split across, not only the first.
+	 */
+	const extraSidesReadOnly = $derived(readOnly && !categoryUnlockable);
+
 	// --- The running difference, live (FR-010) -------------------------------
 	// The two named sides always cancel — the builder fills them from the
 	// record's own figure — so only the extra sides can push it away from zero.
@@ -372,11 +435,24 @@
 	/** The record's own figure in cents — what both named sides are worth. */
 	const mainAmountMinor = $derived(Math.round(Math.abs(typedAmount || 0) * 100));
 
+	/**
+	 * The named category's own typed share once extras exist — `categoryAmount`
+	 * itself, not derived from the total. The other named side is always the
+	 * money side and keeps the record's whole figure.
+	 */
+	const typedCategoryAmount = $derived(parseFloat(categoryAmount || '0'));
+	const primaryAmountMinor = $derived(
+		extraSides.length > 0
+			? Math.round(Math.abs(typedCategoryAmount || 0) * 100)
+			: mainAmountMinor
+	);
+
 	const allSides = $derived.by((): SideDraft[] => {
-		const main = (mainAmountMinor / 100).toFixed(2);
+		const fromMinor = extraSideDirection === 'out' ? primaryAmountMinor : mainAmountMinor;
+		const toMinor = extraSideDirection === 'in' ? primaryAmountMinor : mainAmountMinor;
 		return [
-			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: main },
-			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: main },
+			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: (fromMinor / 100).toFixed(2) },
+			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: (toMinor / 100).toFixed(2) },
 			...extraSides
 		];
 	});
@@ -393,7 +469,13 @@
 	}
 
 	function addSide() {
-		extraSides = [...extraSides, { key: nextSideKey++, accountId: null, direction: 'out', amount: '' }];
+		// The first line the named category still gets the whole Amount, so
+		// this is the moment it stops following that field and starts being its
+		// own typed number — seeded from what it already showed, so nothing
+		// visibly changes until the user actually edits either figure.
+		if (extraSides.length === 0) categoryAmount = (mainAmountMinor / 100).toFixed(2);
+		const direction = canAdjust ? 'out' : (extraSideDirection ?? 'out');
+		extraSides = [...extraSides, { key: nextSideKey++, accountId: null, direction, amount: '' }];
 	}
 
 	function removeSide(key: number) {
@@ -475,7 +557,8 @@
 						extraSides: extraSides.map((side) => ({
 							accountId: side.accountId,
 							amountMinor: sideMinor(side)
-						}))
+						})),
+						categoryAmountMinor: primaryAmountMinor
 					}
 				: {})
 		};
@@ -491,13 +574,18 @@
 		if (locked || isPayment) {
 			// The category side is not itself settled or reconciled — only the
 			// money side is — so it stays editable, and a corrected
-			// miscategorization is sent on its own rather than restating both
-			// accounts (FR-017a).
+			// miscategorization (or a first split, or a bigger or smaller one) is
+			// sent on its own rather than restating both accounts (FR-017a).
 			if (categoryUnlockable) {
 				return {
 					...everyday,
 					categoryAccountId:
-						record?.kind === LedgerRecordKind.Expense ? toAccountId : fromAccountId
+						record?.kind === LedgerRecordKind.Expense ? toAccountId : fromAccountId,
+					extraSides: extraSides.map((side) => ({
+						accountId: side.accountId,
+						amountMinor: sideMinor(side)
+					})),
+					categoryAmountMinor: primaryAmountMinor
 				};
 			}
 			return everyday;
@@ -512,7 +600,19 @@
 			// Both accounts, so the server re-derives the kind: an expense whose
 			// paying side becomes another bank account really is a transfer now.
 			fromAccountId,
-			toAccountId
+			toAccountId,
+			// Restated here too, or a record split across more than one category
+			// would lose every line but the first, and the category's own typed
+			// share, the moment anything else about it was edited.
+			...(extraSides.length > 0
+				? {
+						extraSides: extraSides.map((side) => ({
+							accountId: side.accountId,
+							amountMinor: sideMinor(side)
+						})),
+						categoryAmountMinor: primaryAmountMinor
+					}
+				: {})
 		};
 	}
 
@@ -735,10 +835,15 @@
 	bind:fromAccountId
 	bind:toAccountId
 	bind:extraSides
+	bind:categoryAmount
 	{sideChoices}
 	{toAccountChoices}
 	{allAccounts}
 	{canAdjust}
+	canAddSide={canAdjust || looksLikeExpenseOrIncome}
+	{extraSidesReadOnly}
+	{extraSideAccountChoices}
+	{extraSideDirection}
 	{defaultAccountId}
 	{readOnly}
 	fromDisabled={fromReadOnly}

@@ -107,6 +107,17 @@
   }
 
   /**
+   * Every category side a record has, not just the first — a record split
+   * across more than one category (a bill covering fuel and paper) has one
+   * movement per category, and the Category filter has to match any of them,
+   * not only whichever `categoryOf` happens to find first.
+   */
+  function categoriesOf(record: RecordView) {
+    const sides = record.movements.filter(isCategorySide);
+    return sides.length ? sides : record.movements.filter((m) => m.amountMinor > 0);
+  }
+
+  /**
    * Which way the money went, decided by the record's own sides.
    *
    * This is the rule the `+` prefix and the green amount hang off, and it is
@@ -280,10 +291,9 @@
       rows = rows.filter((r) => statusLabelFor(r) === statusTab);
     }
     if (selectedCats.length) {
-      rows = rows.filter((r) => {
-        const category = categoryOf(r);
-        return category !== null && selectedCats.includes(category.accountId);
-      });
+      rows = rows.filter((r) =>
+        categoriesOf(r).some((category) => selectedCats.includes(category.accountId)),
+      );
     }
     if (selectedKinds.length) {
       rows = rows.filter((r) => selectedKinds.includes(r.kind));

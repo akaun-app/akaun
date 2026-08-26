@@ -3,7 +3,7 @@ import { diffRecords, recordAudit } from "../audit.js";
 import { buildMovements } from "../ledger/entry-builder.js";
 import { ledgerEvents } from "../ledger/events.js";
 import { canDeleteRecord, canEditField } from "../ledger/locking.js";
-import { toMinor } from "../ledger/money.js";
+import { remainderMinor, toMinor } from "../ledger/money.js";
 import type {
   BuildInput,
   BuildContext,
@@ -341,6 +341,7 @@ const MONEY_FIELDS: (keyof RecordPatch)[] = [
   "receivedIntoAccountId",
   "fromAccountId",
   "toAccountId",
+  "extraSides",
 ];
 
 function touchesMoney(patch: RecordPatch): boolean {
@@ -395,6 +396,8 @@ function sidesFor(
         amountMinor: toMinor(base.amount, base.exchangeRate),
         contactId:
           patch.contactId !== undefined ? patch.contactId : existing.contactId,
+        extraSides: patch.extraSides,
+        categoryAmountMinor: patch.categoryAmountMinor,
       },
       {
         accountById: (id) => {
@@ -426,6 +429,103 @@ function sidesFor(
       ok: false,
       reason:
         "This record's sides cannot be worked out automatically. Edit it on the journal screen instead.",
+    };
+  }
+
+  // A bill that spans more than one category is handled here — restating the
+  // primary category, adding or resizing its extra lines, or dropping back to
+  // one, all without needing both accounts named (which the branch above
+  // handles instead, and is the only patch this record's money side ever
+  // refuses). Locked or not: a settlement or a bank match points at the money
+  // side, never a category, so splitting what an already-settled record was
+  // *for* into more than one line is exactly as safe as correcting its one
+  // category already was (`locking.ts`'s `LOCKED_FIELDS`).
+  const extraMovements = existing.movements.filter(
+    (m) => m !== into && m !== outOf,
+  );
+  const extraSides =
+    patch.extraSides ??
+    extraMovements.map((m) => ({
+      accountId: m.accountId,
+      amountMinor: m.amountMinor,
+    }));
+  if (
+    extraSides.length > 0 &&
+    patch.amount === undefined &&
+    patch.exchangeRate === undefined &&
+    (existing.kind === LedgerRecordKind.Expense ||
+      existing.kind === LedgerRecordKind.Income)
+  ) {
+    const isExpense = existing.kind === LedgerRecordKind.Expense;
+    let moneyAccountId: number;
+    if (isExpense && patch.paidFromAccountId === null) {
+      const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
+      if (!payable.ok) return payable;
+      moneyAccountId = payable.value;
+    } else if (isExpense) {
+      moneyAccountId = patch.paidFromAccountId ?? outOf.accountId;
+    } else {
+      moneyAccountId = patch.receivedIntoAccountId ?? into.accountId;
+    }
+    const categoryAccountId =
+      patch.categoryAccountId ?? (isExpense ? into.accountId : outOf.accountId);
+    const moneyMovement = isExpense ? outOf : into;
+    const primaryCategoryMovement = isExpense ? into : outOf;
+
+    // The named category's own typed figure, when given — same convention as
+    // `sides-from-accounts.ts`'s `levelPrimarySide`: whether it actually
+    // cancels with the money side and the extras is `buildMovements`'s
+    // zero-sum check below, not a rule enforced here. Absent it, the money
+    // side never moves, so the total it names is what the category lines
+    // must add up to, and that much is worth refusing early with a clearer
+    // reason than "does not cancel out".
+    let categoryMagnitude: number;
+    if (patch.categoryAmountMinor !== undefined) {
+      categoryMagnitude = Math.abs(patch.categoryAmountMinor);
+    } else {
+      categoryMagnitude = remainderMinor(
+        Math.abs(moneyMovement.amountMinor),
+        extraSides.map((side) => side.amountMinor),
+      );
+      if (categoryMagnitude <= 0) {
+        return {
+          ok: false,
+          reason:
+            "The other lines already account for the whole amount, or more of it. Reduce them, or increase the total.",
+        };
+      }
+    }
+
+    const moneyValue = {
+      accountId: moneyAccountId,
+      amountMinor: moneyMovement.amountMinor,
+    };
+    const primaryCategoryValue = {
+      accountId: categoryAccountId,
+      amountMinor: isExpense ? categoryMagnitude : -categoryMagnitude,
+    };
+    // `replaceMovements` (queries/ledger.ts) matches an existing row to a new
+    // one by position, not by account — so the money movement has to land
+    // back in the same slot it already occupies, or the settlement/bank match
+    // that points at its id would end up pointing at the category's row
+    // instead. Which position that is depends on how the record was first
+    // built: `expense`/`income` puts the category first, a split built
+    // through `extraSides` puts the money side first.
+    const moneyGoesFirst =
+      existing.movements.indexOf(moneyMovement) <
+      existing.movements.indexOf(primaryCategoryMovement);
+    const namedPair = moneyGoesFirst
+      ? [moneyValue, primaryCategoryValue]
+      : [primaryCategoryValue, moneyValue];
+
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind: "journal",
+        movements: [...namedPair, ...extraSides],
+        storedKind: existing.kind,
+      },
     };
   }
 

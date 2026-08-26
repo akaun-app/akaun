@@ -21,22 +21,30 @@
 	 * quietly reverse what the row says", so an amount box here only ever holds a
 	 * positive figure and the signed column is derived.
 	 *
-	 * The two named sides carry the record's own figure and cannot be typed into
-	 * here — they follow the Amount field, which is what the entry builder does
-	 * with them. Only a third and later side has an amount of its own (FR-010).
+	 * The two named sides carry the record's own figure and follow the Amount
+	 * field, which is what the entry builder does with them — until a third
+	 * side exists, at which point whichever named side is the category has an
+	 * amount of its own to type too, the same as a third and later side always
+	 * has (FR-010). The other named side is always the money side, and never
+	 * gets typed into.
 	 */
 	let {
 		fromAccountId = $bindable(null),
 		toAccountId = $bindable(null),
 		extraSides = $bindable([]),
+		categoryAmount = $bindable(''),
 		sideChoices,
 		toAccountChoices,
 		allAccounts = [],
 		canAdjust = false,
+		canAddSide = canAdjust,
+		extraSideAccountChoices = allAccounts,
+		extraSideDirection = null,
 		defaultAccountId = null,
 		readOnly = false,
 		fromDisabled = readOnly,
 		toDisabled = readOnly,
+		extraSidesReadOnly = readOnly,
 		mainAmountMinor = 0,
 		onaddside,
 		onremoveside
@@ -44,17 +52,42 @@
 		fromAccountId?: number | null;
 		toAccountId?: number | null;
 		extraSides?: SideDraft[];
+		/**
+		 * The named category's own typed amount, once `extraSides` is non-empty
+		 * — a plain decimal string, like an extra side's own `amount`. Unused
+		 * (and not shown) with no extra sides yet, when the category still
+		 * simply matches `mainAmountMinor`.
+		 */
+		categoryAmount?: string;
 		sideChoices: AccountView[];
 		toAccountChoices: AccountView[];
 		allAccounts?: AccountView[];
 		canAdjust?: boolean;
+		/** Whether a third line may be added at all — a free choice with `adjustments` (FR-031), or an everyday same-type category without it. */
+		canAddSide?: boolean;
+		/** Without `adjustments`, the accounts a new or existing extra line may name — same-type categories only, so the result is always the everyday shape `sides-from-accounts.ts` accepts without the ability. Ignored when `canAdjust`. */
+		extraSideAccountChoices?: AccountView[];
+		/** Without `adjustments`, the one direction every extra line must keep (FR-031c's everyday pattern needs every category side pointing the same way). `null` when `canAdjust`, or when no kind is known yet. */
+		extraSideDirection?: 'in' | 'out' | null;
 		defaultAccountId?: number | null;
 		readOnly?: boolean;
 		/** Overrides `readOnly` for just the "money came out of" side. */
 		fromDisabled?: boolean;
 		/** Overrides `readOnly` for just the "and went into" side. */
 		toDisabled?: boolean;
-		/** The record's own figure in cents — what the two named sides are worth. */
+		/**
+		 * Overrides `readOnly` for the third and later sides — a category is not
+		 * itself settled or reconciled, so a locked record's category can still
+		 * be split, resized or merged back into one (`RecordForm.svelte`'s
+		 * `categoryUnlockable`).
+		 */
+		extraSidesReadOnly?: boolean;
+		/**
+		 * The record's own figure in cents — what the money side is worth. The
+		 * category side matches it too, until there is more than one, at which
+		 * point it is `categoryAmount` instead — see the running difference,
+		 * which is what actually says whether the two still add up.
+		 */
 		mainAmountMinor?: number;
 		onaddside?: () => void;
 		onremoveside?: (key: number) => void;
@@ -67,11 +100,42 @@
 	// clears back to null, and AccountSelect picks it again: an infinite loop.
 	const toAllAccounts = $derived(allAccounts.filter((a) => a.id !== fromAccountId));
 
+	/**
+	 * The named category's own typed share once extras exist — `categoryAmount`
+	 * itself, not derived from the total. The other named side is always the
+	 * money side and keeps the record's whole figure.
+	 */
+	const primaryAmountMinor = $derived(
+		extraSides.length > 0
+			? Math.round(Math.abs(parseFloat(categoryAmount || '0') || 0) * 100)
+			: mainAmountMinor
+	);
+	const fromAmountMinor = $derived(
+		extraSideDirection === 'out' ? primaryAmountMinor : mainAmountMinor
+	);
+	const toAmountMinor = $derived(
+		extraSideDirection === 'in' ? primaryAmountMinor : mainAmountMinor
+	);
+	// Which named side is the category the user can now type an amount for —
+	// the other is always the money side and stays exactly as it was, a
+	// figure shown rather than typed.
+	const fromIsCategory = $derived(extraSideDirection === 'out' && extraSides.length > 0);
+	const toIsCategory = $derived(extraSideDirection === 'in' && extraSides.length > 0);
+
 	const allSides = $derived.by((): SideDraft[] => {
-		const main = (Math.abs(mainAmountMinor) / 100).toFixed(2);
 		return [
-			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: main },
-			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: main },
+			{
+				key: -1,
+				accountId: fromAccountId,
+				direction: 'out' as const,
+				amount: (fromAmountMinor / 100).toFixed(2)
+			},
+			{
+				key: -2,
+				accountId: toAccountId,
+				direction: 'in' as const,
+				amount: (toAmountMinor / 100).toFixed(2)
+			},
 			...extraSides
 		];
 	});
@@ -111,7 +175,20 @@
 				/>
 			</div>
 			<span class="entry-dir">out of</span>
-			<span class="entry-amount out">{formatMinor(-Math.abs(mainAmountMinor))}</span>
+			{#if fromIsCategory}
+				<div class="entry-amount-field">
+					<Input
+						type="text"
+						inputmode="decimal"
+						bind:value={categoryAmount}
+						placeholder="0.00"
+						disabled={extraSidesReadOnly}
+						class="w-full text-right"
+					/>
+				</div>
+			{:else}
+				<span class="entry-amount out">{formatMinor(-Math.abs(fromAmountMinor))}</span>
+			{/if}
 			<span class="entry-gutter"></span>
 		</div>
 
@@ -138,39 +215,57 @@
 				{/if}
 			</div>
 			<span class="entry-dir">into</span>
-			<span class="entry-amount">{formatMinor(Math.abs(mainAmountMinor))}</span>
+			{#if toIsCategory}
+				<div class="entry-amount-field">
+					<Input
+						type="text"
+						inputmode="decimal"
+						bind:value={categoryAmount}
+						placeholder="0.00"
+						disabled={extraSidesReadOnly}
+						class="w-full text-right"
+					/>
+				</div>
+			{:else}
+				<span class="entry-amount">{formatMinor(Math.abs(toAmountMinor))}</span>
+			{/if}
 			<span class="entry-gutter"></span>
 		</div>
 
-		<!-- A third and later side. Only with `adjustments`, and the server
-		     refuses it regardless of what this offers (FR-010, FR-031c). -->
+		<!-- A third and later side. Free with `adjustments`; otherwise an
+		     everyday same-type category only, and the server refuses anything
+		     else regardless of what this offers (FR-010, FR-031c). -->
 		{#each extraSides as side (side.key)}
 			<div class="entry-line extra">
 				<span class="entry-code">{codeOf(side.accountId)}</span>
 				<div class="entry-account">
-					<select bind:value={side.accountId} class="plain-select" disabled={readOnly}>
+					<select bind:value={side.accountId} class="plain-select" disabled={extraSidesReadOnly}>
 						<option value={null} disabled>Choose an account</option>
-						{#each allAccounts as account (account.id)}
+						{#each canAdjust ? allAccounts : extraSideAccountChoices as account (account.id)}
 							<option value={account.id}>{account.code} · {account.name}</option>
 						{/each}
 					</select>
 				</div>
-				<select bind:value={side.direction} class="plain-select entry-dir-select" disabled={readOnly}>
-					<option value="out">out of</option>
-					<option value="in">into</option>
-				</select>
+				{#if canAdjust}
+					<select bind:value={side.direction} class="plain-select entry-dir-select" disabled={extraSidesReadOnly}>
+						<option value="out">out of</option>
+						<option value="in">into</option>
+					</select>
+				{:else}
+					<span class="entry-dir">{side.direction === 'in' ? 'into' : 'out of'}</span>
+				{/if}
 				<div class="entry-amount-field">
 					<Input
 						type="text"
 						inputmode="decimal"
 						bind:value={side.amount}
 						placeholder="0.00"
-						disabled={readOnly}
+						disabled={extraSidesReadOnly}
 						class="w-full text-right"
 					/>
 				</div>
 				<span class="entry-gutter">
-					{#if !readOnly}
+					{#if !extraSidesReadOnly}
 						<button
 							type="button"
 							class="entry-remove"
@@ -197,7 +292,7 @@
 	</div>
 
 	<div class="entry-foot">
-		{#if canAdjust && !readOnly}
+		{#if canAddSide && !extraSidesReadOnly}
 			<button type="button" class="detail-card-action" onclick={() => onaddside?.()}>
 				+ Add a line
 			</button>

@@ -15,10 +15,14 @@ import type { Allowed, LockResult, LockState } from "./types.js";
 /**
  * Fixed while the record is settled or reconciled.
  *
- * `categoryAccountId` is deliberately not here: a settlement or a bank match
- * always points at the money side (a receivable/payable or a money-pot
- * movement), never at a category account, so correcting what an already-paid
- * or already-matched record was *for* cannot make either wrong.
+ * `categoryAccountId` and `extraSides` are deliberately not here: a
+ * settlement or a bank match always points at the money side (a
+ * receivable/payable or a money-pot movement), never at a category account,
+ * so correcting what an already-paid or already-matched record was *for* —
+ * whether that is swapping its one category or splitting it into several —
+ * cannot make either wrong. `services/ledger.ts`'s `sidesFor` keeps the
+ * money-side movement itself untouched (same id, same account, same amount)
+ * regardless of how many category lines the patch names.
  */
 export const LOCKED_FIELDS = [
   "amount",

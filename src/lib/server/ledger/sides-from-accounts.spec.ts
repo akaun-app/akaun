@@ -477,4 +477,74 @@ describe("a bill spanning several categories", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toBe("Say who this is owed to or by.");
   });
+
+  // "Amount" is the bill's whole 100.00 (data-model.md invariant 6: it must
+  // equal what the movements add up to on the category side), so the named
+  // category — fuel — cannot also keep the full 100.00 once paper has typed a
+  // 30.00 share of its own, or the two would never cancel.
+  it("gives the named category what the extra sides leave, not the whole amount", () => {
+    const result = sidesFromAccounts(petronasBill(), ctx({ canAdjust: false }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected the bill to be allowed");
+    expect(result.value.kind === "journal" && result.value.movements).toEqual([
+      { accountId: ACCOUNTS.payable.id, amountMinor: -10_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 7_000 },
+      { accountId: ACCOUNTS.paper.id, amountMinor: 3_000 },
+    ]);
+  });
+
+  it("refuses when the extra sides already account for the whole amount", () => {
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.payable.id, ACCOUNTS.fuel.id, {
+        contactId: 42,
+        extraSides: [{ accountId: ACCOUNTS.paper.id, amountMinor: 10_000 }],
+      }),
+      ctx({ canAdjust: false }),
+    );
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toMatch(
+      /reduce them|increase the total/i,
+    );
+  });
+
+  it("uses the category's own typed amount instead of the remainder, when given", () => {
+    // Whether this actually cancels is entry-builder.ts's question, not this
+    // module's (same as an extra side's typed amount) — 50.00 + 30.00 here
+    // deliberately does not equal the 100.00 total, and this module still
+    // hands it through as typed.
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.payable.id, ACCOUNTS.fuel.id, {
+        contactId: 42,
+        extraSides: [{ accountId: ACCOUNTS.paper.id, amountMinor: 3_000 }],
+        categoryAmountMinor: 5_000,
+      }),
+      ctx({ canAdjust: false }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected the bill to be allowed");
+    expect(result.value.kind === "journal" && result.value.movements).toEqual([
+      { accountId: ACCOUNTS.payable.id, amountMinor: -10_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 5_000 },
+      { accountId: ACCOUNTS.paper.id, amountMinor: 3_000 },
+    ]);
+  });
+
+  it("does not touch the named category on a real adjustment, which balances by hand", () => {
+    // Same shape sidesFromAccounts would otherwise "level" — but capital→fuel
+    // is not an everyday bill, so the figures stay exactly as typed and it is
+    // on the user (and the running difference) to make them cancel.
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.capital.id, ACCOUNTS.fuel.id, {
+        extraSides: [{ accountId: ACCOUNTS.cash.id, amountMinor: -500 }],
+      }),
+      ctx({ canAdjust: true }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected the adjustment to be allowed");
+    expect(result.value.kind === "journal" && result.value.movements).toEqual([
+      { accountId: ACCOUNTS.capital.id, amountMinor: -10_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 10_000 },
+      { accountId: ACCOUNTS.cash.id, amountMinor: -500 },
+    ]);
+  });
 });

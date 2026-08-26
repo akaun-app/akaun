@@ -288,6 +288,8 @@ export type RecordCreateFromSides = {
   toAccountId: number;
   /** Third and later sides. Requires the `adjustments` ability (FR-031). */
   extraSides?: { accountId: number; amountMinor: Minor }[];
+  /** The named category's own typed amount, alongside `extraSides`. */
+  categoryAmountMinor?: Minor;
 };
 
 /** Only the fields a `PATCH /api/records/[id]` may carry. */
@@ -305,6 +307,15 @@ export type RecordPatch = {
   receivedIntoAccountId?: number;
   fromAccountId?: number;
   toAccountId?: number;
+  /** Third and later sides. Requires the `adjustments` ability, same as on create (FR-031). */
+  extraSides?: { accountId: number; amountMinor: Minor }[];
+  /**
+   * The named category's own typed amount, alongside `extraSides` or
+   * `categoryAccountId`. Always a positive magnitude. Absent means "whatever
+   * the extra sides leave" — see `services/ledger.ts`'s `sidesFor` and
+   * `sides-from-accounts.ts`'s `levelPrimarySide`.
+   */
+  categoryAmountMinor?: Minor;
 };
 
 /** Every filter `GET /api/records` accepts. */

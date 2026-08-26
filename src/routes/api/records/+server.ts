@@ -120,6 +120,8 @@ const fromSidesSchema = z.object({
   extraSides: z
     .array(z.object({ accountId, amountMinor: z.number().int() }))
     .optional(),
+  /** The named category's own typed amount, alongside `extraSides`. */
+  categoryAmountMinor: z.number().int().positive().optional(),
 });
 
 const bodySchema = z.union([createSchema, fromSidesSchema]);
@@ -235,6 +237,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
         amountMinor: toMinor(raw.amount, raw.exchangeRate),
         contactId: raw.contactId ?? null,
         extraSides: raw.extraSides,
+        categoryAmountMinor: raw.categoryAmountMinor,
       },
       {
         accountById: (id) => {

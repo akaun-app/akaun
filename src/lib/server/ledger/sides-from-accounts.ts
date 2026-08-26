@@ -6,6 +6,7 @@ import {
   type LedgerRecordKindCode,
 } from "$lib/enums.js";
 import { isMoneyPotAccount, isPurchaseAssetAccount } from "./account-type.js";
+import { remainderMinor } from "./money.js";
 import type { Minor, RecordCreateSides, Refusable } from "./types.js";
 
 /**
@@ -58,6 +59,15 @@ export type SidesInput = {
   contactId?: number | null;
   /** Third and later sides. Their presence alone makes it a journal entry. */
   extraSides?: { accountId: number; amountMinor: Minor }[];
+  /**
+   * The named category's own typed amount, on an everyday split
+   * (`extraSides` present and the shape ends up filed as Expense/Income).
+   * Always a positive magnitude — `levelPrimarySide` applies the sign, the
+   * same way an extra side's own direction does. Absent means "whatever the
+   * extra sides leave" — see `levelPrimarySide`. Ignored on a real
+   * adjustment, which balances by hand like every other side already does.
+   */
+  categoryAmountMinor?: Minor;
 };
 
 export type SidesContext = {
@@ -215,11 +225,70 @@ export function sidesFromAccounts(
     if (everyday === null && !ctx.canAdjust) {
       return { ok: false, reason: NEEDS_ADJUSTMENTS };
     }
-    if (everyday !== null)
-      return { ok: true, value: { ...sides, storedKind: everyday } };
+    if (everyday !== null) {
+      const leveled = levelPrimarySide(sides.movements, from, input, ctx);
+      if (!leveled.ok) return leveled;
+      return {
+        ok: true,
+        value: { ...sides, movements: leveled.value, storedKind: everyday },
+      };
+    }
   }
 
   return { ok: true, value: sides };
+}
+
+/**
+ * Gives the named category its own share of the bill, once extra sides make
+ * this an everyday split rather than a free-form adjustment.
+ *
+ * `journalOf` gives the named category the record's whole figure and adds
+ * every extra side on top, which is right for a real adjustment — the user
+ * balances it by hand, the same way the running difference already asks them
+ * to. An everyday bill is different: the named category has its own figure
+ * too, once there is more than one — `categoryAmountMinor`, when the caller
+ * typed it directly, or otherwise whatever the typed extra sides leave of the
+ * total (data-model.md invariant 6). Whether the result actually cancels is
+ * `entry-builder.ts`'s question either way, exactly as for a real adjustment
+ * — this only decides what figure the named category gets, never whether it
+ * is a valid one.
+ */
+function levelPrimarySide(
+  movements: { accountId: number; amountMinor: Minor }[],
+  from: SidesAccount,
+  input: SidesInput,
+  ctx: SidesContext,
+): Refusable<{ accountId: number; amountMinor: Minor }[]> {
+  let magnitude: number;
+  if (input.categoryAmountMinor !== undefined) {
+    magnitude = Math.abs(input.categoryAmountMinor);
+  } else {
+    magnitude = remainderMinor(
+      input.amountMinor,
+      (input.extraSides ?? []).map((side) => side.amountMinor),
+    );
+    if (magnitude <= 0) {
+      return {
+        ok: false,
+        reason:
+          "The other lines already account for the whole amount, or more of it. Reduce them, or increase the total.",
+      };
+    }
+  }
+
+  // `journalOf` always puts `from` first and `to` second — whichever of the
+  // two is not the money side is the one to level.
+  const moneyIsFrom = isMoneyPot(from) || isOwedAccount(from, ctx);
+  const primaryIndex = moneyIsFrom ? 1 : 0;
+  const primarySign = moneyIsFrom ? 1 : -1;
+  return {
+    ok: true,
+    value: movements.map((movement, i) =>
+      i === primaryIndex
+        ? { ...movement, amountMinor: primarySign * magnitude }
+        : movement,
+    ),
+  };
 }
 
 function derive(
