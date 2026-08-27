@@ -21,6 +21,11 @@ const shutdownToken = process.env.SHUTDOWN_TOKEN || '';
 // process gracefully instead of a hard kill, which has no portable equivalent
 // across Windows/macOS/Linux.
 function requestListener(req, res) {
+	if (req.method === 'GET' && req.url === '/health') {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ status: 'ok', time: new Date().toISOString() }));
+		return;
+	}
 	if (shutdownToken && req.method === 'POST' && req.url === '/__akaun/shutdown') {
 		if (req.headers['x-shutdown-token'] === shutdownToken) {
 			res.writeHead(200).end('ok');
