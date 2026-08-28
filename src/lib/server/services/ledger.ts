@@ -398,6 +398,7 @@ function sidesFor(
           patch.contactId !== undefined ? patch.contactId : existing.contactId,
         extraSides: patch.extraSides,
         categoryAmountMinor: patch.categoryAmountMinor,
+        categoryLabel: patch.categoryLabel,
       },
       {
         accountById: (id) => {
@@ -448,6 +449,7 @@ function sidesFor(
     extraMovements.map((m) => ({
       accountId: m.accountId,
       amountMinor: m.amountMinor,
+      label: m.label,
     }));
   if (
     extraSides.length > 0 &&
@@ -496,13 +498,24 @@ function sidesFor(
       }
     }
 
+    // Preserved when the patch doesn't explicitly restate it — same
+    // convention as `categoryAccountId`/`paidFromAccountId` above, so editing
+    // something unrelated (the date, the description) never silently drops a
+    // label the user already set.
+    const categoryLabel =
+      patch.categoryLabel !== undefined
+        ? patch.categoryLabel
+        : primaryCategoryMovement.label;
+
     const moneyValue = {
       accountId: moneyAccountId,
       amountMinor: moneyMovement.amountMinor,
+      label: moneyMovement.label,
     };
     const primaryCategoryValue = {
       accountId: categoryAccountId,
       amountMinor: isExpense ? categoryMagnitude : -categoryMagnitude,
+      label: categoryLabel,
     };
     // `replaceMovements` (queries/ledger.ts) matches an existing row to a new
     // one by position, not by account — so the money movement has to land

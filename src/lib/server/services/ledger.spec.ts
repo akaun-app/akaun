@@ -353,6 +353,42 @@ describe("a split Expense (one bill, two categories)", () => {
     ).toBe(true);
   });
 
+  it("keeps its per-line labels when only the description changes", () => {
+    seedMoneyDefaults();
+    const bank = bankAccount("Main Bank");
+    const fuel = categoryAccount("Fuel");
+    const paper = categoryAccount("Paper");
+    const created = createRecord(db, userId, {
+      kind: "journal",
+      date: "2026-08-01",
+      description: "Scissors and paper",
+      amount: 50,
+      currency: "USD",
+      exchangeRate: 1,
+      movements: [
+        { accountId: bank, amountMinor: -5000 },
+        { accountId: fuel, amountMinor: 3000, label: "Scissors" },
+        { accountId: paper, amountMinor: 2000, label: "Paper" },
+      ],
+      storedKind: LedgerRecordKind.Expense,
+    });
+    if (!created.ok) throw new Error(created.reason);
+    const record = created.value;
+
+    const patched = patchRecord(db, record.id, userId, {
+      description: "Office supplies",
+    });
+    expect(patched.ok).toBe(true);
+    if (!patched.ok) return;
+
+    expect(
+      patched.value.movements.find((m) => m.accountId === fuel)?.label,
+    ).toBe("Scissors");
+    expect(
+      patched.value.movements.find((m) => m.accountId === paper)?.label,
+    ).toBe("Paper");
+  });
+
   it("keeps its extra category line when it is settled and only the primary category is corrected", () => {
     seedMoneyDefaults();
     const bank = bankAccount("Main Bank");

@@ -822,6 +822,11 @@ export const ledgerMovements = sqliteTable(
     amountMinor: integer("amount_minor").notNull(),
     // Stable display order of the sides on the journal screen.
     sortOrder: integer("sort_order").notNull().default(0),
+    // The user's own name for this line, when the record's description alone
+    // does not tell two category lines apart (e.g. "Scissors" vs "Paper" on
+    // one bill). Null means "use the record's description" — resolved once,
+    // in accountHistory(), never a second copy of the record's own field.
+    label: text("label"),
   },
   (t) => [
     // The balance check and every record read.
