@@ -24,6 +24,8 @@ export type SideDraft = {
   direction: SideDirection;
   /** Exactly what was typed. Turned into cents only by `sideMinor`. */
   amount: string;
+  /** This line's own name. Blank means "fall back to the record's description". */
+  label: string;
 };
 
 // Mirrors src/lib/server/ledger/money.ts's toMinor at a rate of 1 — binary

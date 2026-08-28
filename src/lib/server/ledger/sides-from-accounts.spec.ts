@@ -488,8 +488,28 @@ describe("a bill spanning several categories", () => {
     if (!result.ok) throw new Error("expected the bill to be allowed");
     expect(result.value.kind === "journal" && result.value.movements).toEqual([
       { accountId: ACCOUNTS.payable.id, amountMinor: -10_000 },
-      { accountId: ACCOUNTS.fuel.id, amountMinor: 7_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 7_000, label: null },
       { accountId: ACCOUNTS.paper.id, amountMinor: 3_000 },
+    ]);
+  });
+
+  it("gives the named category its own label, and an extra side keeps its own", () => {
+    const result = sidesFromAccounts(
+      input(ACCOUNTS.payable.id, ACCOUNTS.fuel.id, {
+        contactId: 42,
+        extraSides: [
+          { accountId: ACCOUNTS.paper.id, amountMinor: 3_000, label: "Paper" },
+        ],
+        categoryLabel: "Fuel",
+      }),
+      ctx({ canAdjust: false }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected the bill to be allowed");
+    expect(result.value.kind === "journal" && result.value.movements).toEqual([
+      { accountId: ACCOUNTS.payable.id, amountMinor: -10_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 7_000, label: "Fuel" },
+      { accountId: ACCOUNTS.paper.id, amountMinor: 3_000, label: "Paper" },
     ]);
   });
 
@@ -524,7 +544,7 @@ describe("a bill spanning several categories", () => {
     if (!result.ok) throw new Error("expected the bill to be allowed");
     expect(result.value.kind === "journal" && result.value.movements).toEqual([
       { accountId: ACCOUNTS.payable.id, amountMinor: -10_000 },
-      { accountId: ACCOUNTS.fuel.id, amountMinor: 5_000 },
+      { accountId: ACCOUNTS.fuel.id, amountMinor: 5_000, label: null },
       { accountId: ACCOUNTS.paper.id, amountMinor: 3_000 },
     ]);
   });

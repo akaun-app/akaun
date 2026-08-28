@@ -11,7 +11,7 @@ import {
 import * as schema from "../db/schema.js";
 import { contacts, ledgerMovements, ledgerRecords, users } from "../db/schema.js";
 import { createAccount } from "../services/accounts.js";
-import { listAccounts, lastPaymentAccountForContact } from "./accounts.js";
+import { listAccounts, lastPaymentAccountForContact, accountHistory } from "./accounts.js";
 
 let sqlite: Database; let db: any;
 beforeEach(() => { sqlite=new Database(":memory:"); db=drizzle(sqlite,{schema}); migrate(db,{migrationsFolder:"drizzle"}); db.insert(users).values({email:"q@test",username:"q",passwordHash:"x"}).run(); });
@@ -27,6 +27,24 @@ describe("account queries",()=>{
     const record=db.insert(ledgerRecords).values({kind:LedgerRecordKind.Journal,date:"2026-01-01",description:"test",amount:0,createdBy:1,updatedBy:1}).returning().get();
     db.insert(ledgerMovements).values([{recordId:record.id,accountId:account.value.id,amountMinor:250,sortOrder:0}]).run();
     expect(listAccounts(db).find((a)=>a.id===account.value.id)?.balanceMinor).toBe(250);
+  });
+});
+
+describe("accountHistory — a movement's own label",()=>{
+  it("Labeled_ShouldShowTheLabelInsteadOfTheRecordDescription",()=>{
+    const account=createAccount(db,1,{name:"Fuel",type:AccountType.Expense}); expect(account.ok).toBe(true); if(!account.ok)return;
+    const record=db.insert(ledgerRecords).values({kind:LedgerRecordKind.Journal,date:"2026-01-01",description:"Scissors and paper",amount:0,createdBy:1,updatedBy:1}).returning().get();
+    db.insert(ledgerMovements).values([{recordId:record.id,accountId:account.value.id,amountMinor:250,sortOrder:0,label:"Scissors"}]).run();
+    const history=accountHistory(db,account.value.id);
+    expect(history?.entries[0].description).toBe("Scissors");
+  });
+
+  it("Unlabeled_ShouldFallBackToTheRecordDescription",()=>{
+    const account=createAccount(db,1,{name:"Fuel",type:AccountType.Expense}); expect(account.ok).toBe(true); if(!account.ok)return;
+    const record=db.insert(ledgerRecords).values({kind:LedgerRecordKind.Journal,date:"2026-01-01",description:"Scissors and paper",amount:0,createdBy:1,updatedBy:1}).returning().get();
+    db.insert(ledgerMovements).values([{recordId:record.id,accountId:account.value.id,amountMinor:250,sortOrder:0}]).run();
+    const history=accountHistory(db,account.value.id);
+    expect(history?.entries[0].description).toBe("Scissors and paper");
   });
 });
 

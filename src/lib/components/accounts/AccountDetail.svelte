@@ -249,7 +249,7 @@
 							href={resolve('/(app)/records/[id]', { id: String(r.id) })}
 						>
 							<span class="mv-date">{formatDate(r.date)}</span>
-							<span class="mv-desc">{r.description}</span>
+							<span class="mv-desc">{side?.displayLabel ?? r.description}</span>
 							<span class="mv-amount" class:out={(side?.amountMinor ?? 0) < 0}>
 								{formatMinor(side?.amountMinor ?? 0)}
 							</span>

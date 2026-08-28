@@ -35,6 +35,7 @@ import { lockStateOf } from "../ledger/locking.js";
 import { toMinor } from "../ledger/money.js";
 import { coverageFor } from "../ledger/coverage.js";
 import { recordSettlementState } from "../ledger/settlement-rules.js";
+import { resolveMovementLabel } from "../ledger/movement-label.js";
 import type {
   LedgerDb,
   LedgerRecordRow,
@@ -359,6 +360,11 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountId: ledgerMovements.accountId,
       amountMinor: ledgerMovements.amountMinor,
       sortOrder: ledgerMovements.sortOrder,
+      label: ledgerMovements.label,
+      // Only for `displayLabel` below — a movement stores no description of
+      // its own, and this is the one place `MovementView` is built, so the
+      // fallback is resolved here rather than left for every reader to redo.
+      recordDescription: ledgerRecords.description,
       accountName: accounts.name,
       accountType: accounts.type,
       accountRole: accounts.role,
@@ -366,6 +372,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
     })
     .from(ledgerMovements)
     .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
     .where(inArray(ledgerMovements.recordId, recordIds))
     .orderBy(asc(ledgerMovements.sortOrder), asc(ledgerMovements.id))
     .all();
@@ -407,6 +414,8 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountRole: m.accountRole,
       accountSubType: m.accountSubType as AccountSubTypeCode | null,
       amountMinor: m.amountMinor,
+      label: m.label,
+      displayLabel: resolveMovementLabel(m.label, m.recordDescription),
     });
 
     if (owedAccountIds.has(m.accountId)) {
@@ -753,7 +762,11 @@ function replaceMovements(
     const existingId = existingBySortOrder.get(m.sortOrder);
     if (existingId === undefined) continue;
     db.update(ledgerMovements)
-      .set({ accountId: m.accountId, amountMinor: m.amountMinor })
+      .set({
+        accountId: m.accountId,
+        amountMinor: m.amountMinor,
+        label: m.label,
+      })
       .where(eq(ledgerMovements.id, existingId))
       .run();
   }
@@ -769,6 +782,7 @@ function replaceMovements(
           accountId: m.accountId,
           amountMinor: m.amountMinor,
           sortOrder: m.sortOrder,
+          label: m.label,
         })),
       )
       .run();
