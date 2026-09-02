@@ -177,8 +177,8 @@ export const contactSearchText = sqliteTable("contact_search_text", {
 // refuses to start a server whose records have not been converted yet.
 
 // Document types that get an auto-generated running number. A local enum (not
-// $lib/enums.ts's unrelated `DocumentType`/`TemplateDocumentType`) to avoid
-// import collisions in files that touch both areas.
+// $lib/enums.ts's unrelated `DocumentType`) to avoid import collisions in
+// files that touch both areas.
 export const SEQUENCE_DOCUMENT_TYPE = {
   expense: 0,
   income: 1,
@@ -446,34 +446,6 @@ export const invoiceSearchText = sqliteTable("invoice_search_text", {
     .primaryKey()
     .references(() => invoices.id, { onDelete: "cascade" }),
   text: text("text").notNull(),
-});
-
-// --- document templates (Phase 7.5) ---
-// Stores PDF layout JSON + theme. Active template per document type resolved via settings keys.
-export const documentTemplates = sqliteTable("document_templates", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  uuid: text("uuid").notNull().unique(),
-  name: text("name").notNull(),
-  // TemplateDocumentType code: 1=Quotation, 2=Invoice, 3=Both. See enums.ts.
-  documentType: integer("document_type").notNull(),
-  // 1 = this template is the default for its document_type. App layer enforces one-per-type.
-  isDefault: integer("is_default").notNull().default(0),
-  themeColor: text("theme_color").notNull().default("#1a56db"),
-  // TemplateFont code: 1=Inter(Helvetica), 2=Roboto(Helvetica), 3=Lato(Helvetica), 4=Merriweather(Times). See enums.ts.
-  themeFont: integer("theme_font").notNull().default(1),
-  layoutJson: text("layout_json").notNull(),
-  createdBy: integer("created_by").references(() => users.id, {
-    onDelete: "set null",
-  }),
-  updatedBy: integer("updated_by").references(() => users.id, {
-    onDelete: "set null",
-  }),
-  createdAt: text("created_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
-  updatedAt: text("updated_at")
-    .notNull()
-    .default(sql`(datetime('now'))`),
 });
 
 // ---------------------------------------------------------------------------

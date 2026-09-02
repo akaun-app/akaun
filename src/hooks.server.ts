@@ -5,7 +5,6 @@ import {
   db,
   ensureDefaultAdmin,
   ensureGroupSeed,
-  ensureDefaultTemplate,
   applyRecordsPermission,
 } from "$lib/server/db/client.js";
 import { seedAccounts } from "$lib/server/db/seed-accounts.js";
@@ -30,7 +29,6 @@ export const init = async () => {
   // renames a legacy account onto each seeded name or creates the seed — so this
   // is a no-op there and only does work on a fresh install (research.md R-06).
   seedAccounts(db);
-  ensureDefaultTemplate();
   // `ensureLedgerUpgrade()` was called here, and the conversion is self-running
   // again — but it cannot run from `init()`. `migrate()` applies 0015, which drops
   // the tables the conversion reads, and that happens at module load in
