@@ -3,17 +3,21 @@ import type {
   UpgradeState,
   VerifyResult,
 } from "$lib/server/ledger/types.js";
-import { AccountType } from "$lib/enums.js";
+import { AccountType, TemplateFont } from "$lib/enums.js";
 import type { PageServerLoad, Actions } from "./$types.js";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
-import { listTemplates } from "$lib/server/queries/templates.js";
 import {
   getSetting,
   setSetting,
   SETTING_KEYS,
   hasAnyDocuments,
 } from "$lib/server/settings.js";
+import {
+  LAYOUT_CATALOG,
+  DEFAULT_LAYOUT_KEY,
+  isLayoutKey,
+} from "$lib/pdf/layout-catalog.js";
 import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
@@ -148,6 +152,16 @@ export const load: PageServerLoad = async ({ locals }) => {
     apiKey: "", // never send actual key to browser
   }));
 
+  const pdfInvoiceLayoutKey =
+    getSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey) ?? DEFAULT_LAYOUT_KEY;
+  const pdfQuotationLayoutKey =
+    getSetting(db, SETTING_KEYS.pdfQuotationLayoutKey) ?? DEFAULT_LAYOUT_KEY;
+  const pdfThemeColor = getSetting(db, SETTING_KEYS.pdfThemeColor) ?? "#1a56db";
+  const pdfThemeFont = parseInt(
+    getSetting(db, SETTING_KEYS.pdfThemeFont) ?? String(TemplateFont.Inter),
+    10,
+  );
+
   return {
     canManageAccounts,
     moneyAccounts,
@@ -170,7 +184,11 @@ export const load: PageServerLoad = async ({ locals }) => {
     companyRegistrationNo,
     companyLogoUrl,
     providers,
-    templates: listTemplates(db),
+    layoutCatalog: LAYOUT_CATALOG,
+    pdfInvoiceLayoutKey,
+    pdfQuotationLayoutKey,
+    pdfThemeColor,
+    pdfThemeFont,
   };
 };
 
@@ -257,6 +275,31 @@ export const actions: Actions = {
     setSetting(db, SETTING_KEYS.companyRegistrationNo, companyRegistrationNo);
 
     return { success: true, action: "saveCompany" };
+  },
+
+  savePdfTemplate: async ({ request }) => {
+    const data = await request.formData();
+    const invoiceLayoutKey = String(data.get("invoiceLayoutKey") ?? "");
+    const quotationLayoutKey = String(data.get("quotationLayoutKey") ?? "");
+    const themeColor = String(data.get("themeColor") ?? "").trim();
+    const themeFont = parseInt(String(data.get("themeFont") ?? ""), 10);
+
+    if (!isLayoutKey(invoiceLayoutKey) || !isLayoutKey(quotationLayoutKey)) {
+      return fail(400, { error: "Choose a valid layout." });
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(themeColor)) {
+      return fail(400, { error: "Choose a valid accent color." });
+    }
+    if (!(Object.values(TemplateFont) as number[]).includes(themeFont)) {
+      return fail(400, { error: "Choose a valid font." });
+    }
+
+    setSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey, invoiceLayoutKey);
+    setSetting(db, SETTING_KEYS.pdfQuotationLayoutKey, quotationLayoutKey);
+    setSetting(db, SETTING_KEYS.pdfThemeColor, themeColor);
+    setSetting(db, SETTING_KEYS.pdfThemeFont, String(themeFont));
+
+    return { success: true, action: "savePdfTemplate" };
   },
 
   saveSequenceTemplate: async ({ request }) => {

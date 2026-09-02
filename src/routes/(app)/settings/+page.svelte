@@ -18,11 +18,8 @@
 	import { draggable, droppable } from '@thisux/sveltednd';
 	import type { DragDropState } from '@thisux/sveltednd';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
-	import TemplateList from '$lib/components/templates/TemplateList.svelte';
-	import TemplateDesigner from '$lib/components/templates/TemplateDesigner.svelte';
-	import { makeDefaultLayout } from '$lib/pdf/template-types.js';
-	import { TemplateDocumentType } from '$lib/enums.js';
-	import type { TemplateRow } from '$lib/pdf/template-types.js';
+	import ThemeEditor from '$lib/components/pdf/ThemeEditor.svelte';
+	import { LAYOUT_CATALOG } from '$lib/pdf/layout-catalog.js';
 	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
 	import AccountDefaults from '$lib/components/settings/AccountDefaults.svelte';
@@ -510,6 +507,16 @@
 	// svelte-ignore state_referenced_locally
 	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
 
+	// --- PDF template tab state ---
+	// svelte-ignore state_referenced_locally
+	let pdfInvoiceLayoutKey = $state(data.pdfInvoiceLayoutKey);
+	// svelte-ignore state_referenced_locally
+	let pdfQuotationLayoutKey = $state(data.pdfQuotationLayoutKey);
+	// svelte-ignore state_referenced_locally
+	let pdfThemeColor = $state(data.pdfThemeColor);
+	// svelte-ignore state_referenced_locally
+	let pdfThemeFont = $state(data.pdfThemeFont);
+
 	// --- Books tab: check the books, and what the one-off update decided ---
 
 	/**
@@ -948,7 +955,11 @@
 		aiParallelTasks !== data.autoImportParallelTasks ||
 		aiCategoryHints !== data.autoImportCategoryHints ||
 		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
-		aiCustomInstructions !== data.autoImportCustomInstructions
+		aiCustomInstructions !== data.autoImportCustomInstructions ||
+		pdfInvoiceLayoutKey !== data.pdfInvoiceLayoutKey ||
+		pdfQuotationLayoutKey !== data.pdfQuotationLayoutKey ||
+		pdfThemeColor !== data.pdfThemeColor ||
+		pdfThemeFont !== data.pdfThemeFont
 	);
 
 	function resetAllUnsaved() {
@@ -968,6 +979,10 @@
 		aiCategoryHints = data.autoImportCategoryHints;
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
 		aiCustomInstructions = data.autoImportCustomInstructions;
+		pdfInvoiceLayoutKey = data.pdfInvoiceLayoutKey;
+		pdfQuotationLayoutKey = data.pdfQuotationLayoutKey;
+		pdfThemeColor = data.pdfThemeColor;
+		pdfThemeFont = data.pdfThemeFont;
 		sheetOpen = false;
 	}
 
@@ -1013,33 +1028,6 @@
 		allowNavigation = false;
 	});
 
-	// --- Template tab state ---
-	// svelte-ignore state_referenced_locally
-	let templates = $state<TemplateRow[]>([...(data.templates as TemplateRow[])]);
-	// svelte-ignore state_referenced_locally
-	let selectedTemplate = $state<TemplateRow | null>(templates[0] ?? null);
-	let creatingTemplate = $state(false);
-
-	async function createNewTemplate() {
-		try {
-			const res = await fetch('/api/templates', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					name: 'New Template',
-					documentType: TemplateDocumentType.Both,
-					layout: makeDefaultLayout()
-				})
-			});
-			if (!res.ok) throw new Error(await res.text());
-			const created = (await res.json()) as TemplateRow;
-			templates = [created, ...templates];
-			selectedTemplate = created;
-		} catch {
-			// ignore — toast shown in API error path
-		}
-	}
-
 	// Derived rather than fixed only because the Books tab is there or not
 	// depending on whether this user may see the reports side of things.
 	const TABS: { id: Tab; label: string }[] = $derived([
@@ -1079,7 +1067,7 @@
 		</nav>
 
 		<!-- Content -->
-		<div class="set-content" style={activeTab === 'templates' ? 'overflow:hidden;padding:0;display:flex;flex-direction:column;' : ''}>
+		<div class="set-content">
 			{#if activeTab === 'general'}
 				<div class="set-section">
 					<div class="set-section-head">
@@ -1671,36 +1659,64 @@
 				</div>
 
 			{:else if activeTab === 'templates'}
-				<div class="set-section tpl-section">
-					<div class="tpl-split">
-						<aside class="tpl-sidebar">
-							<TemplateList
-								{templates}
-								selectedId={selectedTemplate?.id ?? null}
-								onSelect={(t) => (selectedTemplate = t)}
-								onCreate={createNewTemplate}
-							/>
-						</aside>
-						<main class="tpl-main">
-							{#if selectedTemplate}
-								<TemplateDesigner
-									template={selectedTemplate}
-									onSave={(updated) => {
-										templates = templates.map((t) => (t.id === updated.id ? updated : t));
-										selectedTemplate = updated;
-									}}
-									onDelete={(id) => {
-										templates = templates.filter((t) => t.id !== id);
-										selectedTemplate = templates[0] ?? null;
-									}}
-								/>
-							{:else}
-								<div class="tpl-empty">
-									<p>No template selected. Create one to get started.</p>
-								</div>
-							{/if}
-						</main>
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Templates</h2>
+						<p class="set-section-sub">Pick a layout and theme for printed quotations and invoices</p>
 					</div>
+					<form method="POST" action="?/savePdfTemplate" use:enhance={() => ({ update }) => update({ reset: false })}>
+						{#if form?.error}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+						{/if}
+						<div class="set-rows">
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Invoice layout</div>
+								<div class="layout-picker">
+									{#each LAYOUT_CATALOG as opt (opt.key)}
+										<button
+											type="button"
+											class="layout-option"
+											class:active={pdfInvoiceLayoutKey === opt.key}
+											onclick={() => (pdfInvoiceLayoutKey = opt.key)}
+										>
+											<span class="layout-option-name">{opt.label}</span>
+											<span class="layout-option-desc">{opt.description}</span>
+										</button>
+									{/each}
+								</div>
+								<input type="hidden" name="invoiceLayoutKey" value={pdfInvoiceLayoutKey} />
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Quotation layout</div>
+								<div class="layout-picker">
+									{#each LAYOUT_CATALOG as opt (opt.key)}
+										<button
+											type="button"
+											class="layout-option"
+											class:active={pdfQuotationLayoutKey === opt.key}
+											onclick={() => (pdfQuotationLayoutKey = opt.key)}
+										>
+											<span class="layout-option-name">{opt.label}</span>
+											<span class="layout-option-desc">{opt.description}</span>
+										</button>
+									{/each}
+								</div>
+								<input type="hidden" name="quotationLayoutKey" value={pdfQuotationLayoutKey} />
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Theme</div>
+								<ThemeEditor
+									color={pdfThemeColor}
+									font={pdfThemeFont}
+									onColorChange={(c) => (pdfThemeColor = c)}
+									onFontChange={(f) => (pdfThemeFont = f)}
+								/>
+								<input type="hidden" name="themeColor" value={pdfThemeColor} />
+								<input type="hidden" name="themeFont" value={pdfThemeFont} />
+							</div>
+						</div>
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
 				</div>
 
 			{:else if activeTab === 'advanced'}
@@ -2349,38 +2365,25 @@
 	}
 
 	/* Templates tab */
-	.tpl-section {
-		padding: 0;
-		flex: 1;
-		overflow: hidden;
-		max-width: none;
+	.layout-picker {
 		display: flex;
 		flex-direction: column;
+		gap: 8px;
 	}
-	.tpl-split {
-		display: flex;
-		flex: 1;
-		overflow: hidden;
-	}
-	.tpl-sidebar {
-		width: 220px;
-		flex-shrink: 0;
-		border-right: 1px solid var(--border);
-		overflow-y: auto;
-		padding: 8px 0;
-	}
-	.tpl-main {
-		flex: 1;
+	.layout-option {
 		display: flex;
 		flex-direction: column;
-		overflow: hidden;
+		gap: 2px;
+		align-items: flex-start;
+		text-align: left;
+		padding: 10px 12px;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: none;
+		cursor: pointer;
 	}
-	.tpl-empty {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex: 1;
-		color: var(--muted-foreground);
-		font-size: 14px;
-	}
+	.layout-option:hover { border-color: var(--primary); background: var(--accent); }
+	.layout-option.active { border-color: var(--primary); background: var(--accent); }
+	.layout-option-name { font-size: 13px; font-weight: 600; color: var(--foreground); }
+	.layout-option-desc { font-size: 12px; color: var(--muted-foreground); }
 </style>

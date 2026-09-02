@@ -28,8 +28,10 @@ export const SETTING_KEYS = {
   companyAddress: "company.address",
   companyRegistrationNo: "company.registrationNo",
   companyLogoPath: "company.logoPath",
-  templateQuotationDefaultId: "template.quotation.defaultId",
-  templateInvoiceDefaultId: "template.invoice.defaultId",
+  pdfInvoiceLayoutKey: "pdf.invoiceLayoutKey",
+  pdfQuotationLayoutKey: "pdf.quotationLayoutKey",
+  pdfThemeColor: "pdf.themeColor",
+  pdfThemeFont: "pdf.themeFont",
   sequenceTemplate: "documentNumbers.template",
 } as const;
 

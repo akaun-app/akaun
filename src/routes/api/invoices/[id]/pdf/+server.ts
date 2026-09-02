@@ -2,12 +2,9 @@ import { redirect } from "@sveltejs/kit";
 import type { RequestHandler } from "./$types";
 import { db } from "$lib/server/db/client.js";
 import { getInvoice } from "$lib/server/queries/invoices.js";
-import { getSetting } from "$lib/server/settings.js";
-import { getActiveTemplate } from "$lib/server/queries/templates.js";
-import { buildPdfFromTemplate } from "$lib/server/pdf/renderer.js";
-import { buildInvoicePdf } from "$lib/server/pdf/invoice.js";
-import { TemplateDocumentType } from "$lib/enums.js";
-import type { TemplateLayout } from "$lib/server/pdf/template-types.js";
+import { getSetting, SETTING_KEYS } from "$lib/server/settings.js";
+import { getLayout } from "$lib/server/pdf/layouts/index.js";
+import { TemplateFont } from "$lib/enums.js";
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   if (!locals.user) throw redirect(302, "/login");
@@ -17,37 +14,38 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (!invoice) throw redirect(302, "/invoices");
 
   const settings = {
-    companyName: getSetting(db, "company.name") ?? "",
-    companyAddress: getSetting(db, "company.address") ?? "",
-    companyRegistrationNo: getSetting(db, "company.registrationNo") ?? "",
-    companyLogoPath: getSetting(db, "company.logoPath") ?? "",
+    companyName: getSetting(db, SETTING_KEYS.companyName) ?? "",
+    companyAddress: getSetting(db, SETTING_KEYS.companyAddress) ?? "",
+    companyRegistrationNo:
+      getSetting(db, SETTING_KEYS.companyRegistrationNo) ?? "",
+    companyLogoPath: getSetting(db, SETTING_KEYS.companyLogoPath) ?? "",
+  };
+  const theme = {
+    color: getSetting(db, SETTING_KEYS.pdfThemeColor) ?? "#1a56db",
+    font: parseInt(
+      getSetting(db, SETTING_KEYS.pdfThemeFont) ?? String(TemplateFont.Inter),
+      10,
+    ),
   };
 
   try {
-    const templateRow = getActiveTemplate(db, TemplateDocumentType.Invoice);
-    let buffer: Buffer;
-    if (templateRow) {
-      const layout = JSON.parse(templateRow.layoutJson) as TemplateLayout;
-      buffer = await buildPdfFromTemplate(
-        layout,
-        { color: templateRow.themeColor, font: templateRow.themeFont },
-        {
-          document: {
-            ...invoice,
-            contactName: invoice.contactName ?? null,
-            contactAddress: invoice.contactAddress ?? null,
-            contactRegistrationNo: invoice.contactRegistrationNo ?? null,
-            contactPhone: invoice.contactPhone ?? null,
-            paidAt: invoice.paidMinor > 0 ? "paid" : null,
-          },
-          settings,
-          docTypeLabel: "INVOICE",
+    const render = getLayout(getSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey));
+    const buffer = await render(
+      {
+        document: {
+          ...invoice,
+          contactName: invoice.contactName ?? null,
+          contactAddress: invoice.contactAddress ?? null,
+          contactRegistrationNo: invoice.contactRegistrationNo ?? null,
+          contactPhone: invoice.contactPhone ?? null,
+          paidMinor: invoice.paidMinor,
         },
-        invoice.invoiceNumber,
-      );
-    } else {
-      buffer = await buildInvoicePdf(invoice, settings);
-    }
+        settings,
+        docTypeLabel: "INVOICE",
+      },
+      theme,
+      invoice.invoiceNumber,
+    );
     return new Response(new Uint8Array(buffer), {
       headers: {
         "Content-Type": "application/pdf",

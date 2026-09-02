@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { hash } from "argon2";
-import { count, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { DATABASE_PATH } from "../env.js";
@@ -23,15 +23,12 @@ import {
   groupPermissions,
   userPermissions,
   userGroups,
-  documentTemplates,
 } from "./schema.js";
 import {
   mergeRecordsPermissions,
   type PermissionRow,
 } from "../permissions/merge-records.js";
 import { getSetting, setSetting, SETTING_KEYS } from "../settings.js";
-import { TemplateDocumentType, TemplateFont } from "$lib/enums.js";
-import { makeDefaultLayout } from "../pdf/template-types.js";
 
 const log = createLogger("db");
 
@@ -352,24 +349,6 @@ const SEED_GROUPS = [
     },
   },
 ];
-
-export function ensureDefaultTemplate(): void {
-  const total = (
-    db.select({ n: count() }).from(documentTemplates).get() as { n: number }
-  ).n;
-  if (total > 0) return;
-  db.insert(documentTemplates)
-    .values({
-      uuid: crypto.randomUUID(),
-      name: "Default",
-      documentType: TemplateDocumentType.Both,
-      isDefault: 1,
-      themeColor: "#1a56db",
-      themeFont: TemplateFont.Inter,
-      layoutJson: JSON.stringify(makeDefaultLayout()),
-    })
-    .run();
-}
 
 /**
  * Collapses the `expenses` and `income` permissions into one `records`
