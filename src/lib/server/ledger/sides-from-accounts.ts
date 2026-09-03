@@ -58,7 +58,11 @@ export type SidesInput = {
   /** Who it is owed to or by, when a side is a shared owed account. */
   contactId?: number | null;
   /** Third and later sides. Their presence alone makes it a journal entry. */
-  extraSides?: { accountId: number; amountMinor: Minor }[];
+  extraSides?: {
+    accountId: number;
+    amountMinor: Minor;
+    label?: string | null;
+  }[];
   /**
    * The named category's own typed amount, on an everyday split
    * (`extraSides` present and the shape ends up filed as Expense/Income).
@@ -68,6 +72,12 @@ export type SidesInput = {
    * adjustment, which balances by hand like every other side already does.
    */
   categoryAmountMinor?: Minor;
+  /**
+   * The named category's own name, alongside `categoryAmountMinor`. Absent or
+   * null falls back to the record's description, the same as an extra side's
+   * own `label`.
+   */
+  categoryLabel?: string | null;
 };
 
 export type SidesContext = {
@@ -254,11 +264,13 @@ export function sidesFromAccounts(
  * is a valid one.
  */
 function levelPrimarySide(
-  movements: { accountId: number; amountMinor: Minor }[],
+  movements: { accountId: number; amountMinor: Minor; label?: string | null }[],
   from: SidesAccount,
   input: SidesInput,
   ctx: SidesContext,
-): Refusable<{ accountId: number; amountMinor: Minor }[]> {
+): Refusable<
+  { accountId: number; amountMinor: Minor; label?: string | null }[]
+> {
   let magnitude: number;
   if (input.categoryAmountMinor !== undefined) {
     magnitude = Math.abs(input.categoryAmountMinor);
@@ -285,7 +297,11 @@ function levelPrimarySide(
     ok: true,
     value: movements.map((movement, i) =>
       i === primaryIndex
-        ? { ...movement, amountMinor: primarySign * magnitude }
+        ? {
+            ...movement,
+            amountMinor: primarySign * magnitude,
+            label: input.categoryLabel ?? null,
+          }
         : movement,
     ),
   };

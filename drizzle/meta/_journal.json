@@ -141,6 +141,20 @@
       "when": 1787641306944,
       "tag": "0019_omniscient_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787905907200,
+      "tag": "0020_plain_tinkerer",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1788333150601,
+      "tag": "0021_fat_swarm",
+      "breakpoints": true
     }
   ]
 }

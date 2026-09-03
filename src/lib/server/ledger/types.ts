@@ -138,6 +138,8 @@ export type MovementRow = {
   accountId: number;
   amountMinor: Minor;
   sortOrder: number;
+  /** The line's own name, or null to fall back to the record's description. */
+  label: string | null;
 };
 
 /** One side of a record before it has an id — what `entry-builder.ts` produces. */
@@ -145,6 +147,7 @@ export type MovementDraft = {
   accountId: number;
   amountMinor: Minor;
   sortOrder: number;
+  label: string | null;
 };
 
 /** One side of a record as a screen shows it. */
@@ -164,6 +167,21 @@ export type MovementView = {
   /** Meaningful only when `accountType === Asset`. `null` means "needs review". */
   accountSubType: AccountSubTypeCode | null;
   amountMinor: Minor;
+  /**
+   * The line's own name, raw — null when it has none. This is what an edit
+   * form must read: never the record's description filled in as a fallback,
+   * or re-saving would freeze that text onto the line as a permanent
+   * override.
+   */
+  label: string | null;
+  /**
+   * What this line is called on screen — `label`, or the record's own
+   * description when it has none. Resolved once by `toRecordView` in
+   * `queries/ledger.ts` (`ledger/movement-label.ts`'s `resolveMovementLabel`),
+   * so any screen that only displays a movement's name reads this and never
+   * writes its own copy of the fallback.
+   */
+  displayLabel: string;
 };
 
 /** What `GET /api/records` returns for one record. */
@@ -252,7 +270,12 @@ export type RecordCreateSides =
   | { kind: "invoice-issue"; incomeAccountId: number }
   | {
       kind: "journal";
-      movements: { accountId: number; amountMinor: Minor }[];
+      movements: {
+        accountId: number;
+        amountMinor: Minor;
+        /** This line's own name. Absent or null falls back to the record's description. */
+        label?: string | null;
+      }[];
       /**
        * What this record really was, when its sides are an everyday purchase or
        * sale that happens to span several categories.
@@ -287,9 +310,15 @@ export type RecordCreateFromSides = {
   /** The account money went to. */
   toAccountId: number;
   /** Third and later sides. Requires the `adjustments` ability (FR-031). */
-  extraSides?: { accountId: number; amountMinor: Minor }[];
+  extraSides?: {
+    accountId: number;
+    amountMinor: Minor;
+    label?: string | null;
+  }[];
   /** The named category's own typed amount, alongside `extraSides`. */
   categoryAmountMinor?: Minor;
+  /** The named category's own name, alongside `extraSides`. Absent or null falls back to the record's description. */
+  categoryLabel?: string | null;
 };
 
 /** Only the fields a `PATCH /api/records/[id]` may carry. */
@@ -308,7 +337,11 @@ export type RecordPatch = {
   fromAccountId?: number;
   toAccountId?: number;
   /** Third and later sides. Requires the `adjustments` ability, same as on create (FR-031). */
-  extraSides?: { accountId: number; amountMinor: Minor }[];
+  extraSides?: {
+    accountId: number;
+    amountMinor: Minor;
+    label?: string | null;
+  }[];
   /**
    * The named category's own typed amount, alongside `extraSides` or
    * `categoryAccountId`. Always a positive magnitude. Absent means "whatever
@@ -316,6 +349,13 @@ export type RecordPatch = {
    * `sides-from-accounts.ts`'s `levelPrimarySide`.
    */
   categoryAmountMinor?: Minor;
+  /**
+   * The named category's own name, alongside `extraSides` or
+   * `categoryAccountId`. Absent means "leave whatever it already had" — see
+   * `services/ledger.ts`'s `sidesFor`. Null means "clear it back to the
+   * record's description".
+   */
+  categoryLabel?: string | null;
 };
 
 /** Every filter `GET /api/records` accepts. */

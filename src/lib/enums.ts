@@ -149,22 +149,6 @@ export const InvoiceStatusLabels: Record<number, string> = {
 };
 export const invoiceStatusEnum = makeEnum(InvoiceStatusLabels);
 
-// --- document templates ---
-export const TemplateDocumentType = {
-  Quotation: 1,
-  Invoice: 2,
-  Both: 3,
-} as const;
-// reserved: per-document override (future — no stored status change)
-export type TemplateDocumentTypeCode =
-  (typeof TemplateDocumentType)[keyof typeof TemplateDocumentType];
-export const TemplateDocumentTypeLabels: Record<number, string> = {
-  [TemplateDocumentType.Quotation]: "quotation",
-  [TemplateDocumentType.Invoice]: "invoice",
-  [TemplateDocumentType.Both]: "both",
-};
-export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
-
 // --- reconciliation ---
 // RETIRED, RESERVED. Which ledger table a polymorphic reconciliation reference
 // used to point at, before an allocation began pointing at a ledger movement

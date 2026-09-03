@@ -96,6 +96,12 @@
 	 * whether it and the extra sides still add up to the Amount total.
 	 */
 	let categoryAmount = $state('');
+	/**
+	 * The named category's own name, once there is more than one — blank means
+	 * "fall back to the record's description", the same convention as an
+	 * extra side's own `label`.
+	 */
+	let categoryLabel = $state('');
 
 	// --- Foreign currency, hidden until asked for --------------------------
 	// A record keeps the amount exactly as it was typed, in the currency it was
@@ -151,7 +157,8 @@
 				key: nextSideKey++,
 				accountId: m.accountId,
 				direction: m.amountMinor >= 0 ? ('in' as const) : ('out' as const),
-				amount: (Math.abs(m.amountMinor) / 100).toFixed(2)
+				amount: (Math.abs(m.amountMinor) / 100).toFixed(2),
+				label: m.label ?? ''
 			}));
 			// Expense's category is `into`; Income's is `outOf` (see `sidesFor`).
 			// Kept even with no extra sides yet — harmless, since it is only shown
@@ -165,11 +172,13 @@
 			categoryAmount = categoryMovement
 				? (Math.abs(categoryMovement.amountMinor) / 100).toFixed(2)
 				: '';
+			categoryLabel = categoryMovement?.label ?? '';
 		} else {
 			fromAccountId = null;
 			toAccountId = null;
 			extraSides = [];
 			categoryAmount = '';
+			categoryLabel = '';
 		}
 		// AccountSelect fills a blank from/to with its default the moment it
 		// mounts (FR-011) — wait for that pending update to land before taking
@@ -195,7 +204,8 @@
 			fromAccountId,
 			toAccountId,
 			categoryAmount,
-			extraSides.map((s) => [s.accountId, s.direction, s.amount])
+			categoryLabel,
+			extraSides.map((s) => [s.accountId, s.direction, s.amount, s.label])
 		]);
 	}
 
@@ -452,8 +462,8 @@
 		const fromMinor = extraSideDirection === 'out' ? primaryAmountMinor : mainAmountMinor;
 		const toMinor = extraSideDirection === 'in' ? primaryAmountMinor : mainAmountMinor;
 		return [
-			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: (fromMinor / 100).toFixed(2) },
-			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: (toMinor / 100).toFixed(2) },
+			{ key: -1, accountId: fromAccountId, direction: 'out' as const, amount: (fromMinor / 100).toFixed(2), label: '' },
+			{ key: -2, accountId: toAccountId, direction: 'in' as const, amount: (toMinor / 100).toFixed(2), label: '' },
 			...extraSides
 		];
 	});
@@ -476,7 +486,7 @@
 		// visibly changes until the user actually edits either figure.
 		if (extraSides.length === 0) categoryAmount = (mainAmountMinor / 100).toFixed(2);
 		const direction = canAdjust ? 'in' : (extraSideDirection ?? 'in');
-		extraSides = [...extraSides, { key: nextSideKey++, accountId: null, direction, amount: '' }];
+		extraSides = [...extraSides, { key: nextSideKey++, accountId: null, direction, amount: '', label: '' }];
 	}
 
 	function removeSide(key: number) {
@@ -557,9 +567,11 @@
 				? {
 						extraSides: extraSides.map((side) => ({
 							accountId: side.accountId,
-							amountMinor: sideMinor(side)
+							amountMinor: sideMinor(side),
+							label: side.label.trim() || null
 						})),
-						categoryAmountMinor: primaryAmountMinor
+						categoryAmountMinor: primaryAmountMinor,
+						categoryLabel: categoryLabel.trim() || null
 					}
 				: {})
 		};
@@ -584,9 +596,11 @@
 						record?.kind === LedgerRecordKind.Expense ? toAccountId : fromAccountId,
 					extraSides: extraSides.map((side) => ({
 						accountId: side.accountId,
-						amountMinor: sideMinor(side)
+						amountMinor: sideMinor(side),
+						label: side.label.trim() || null
 					})),
-					categoryAmountMinor: primaryAmountMinor
+					categoryAmountMinor: primaryAmountMinor,
+					categoryLabel: categoryLabel.trim() || null
 				};
 			}
 			return everyday;
@@ -609,9 +623,11 @@
 				? {
 						extraSides: extraSides.map((side) => ({
 							accountId: side.accountId,
-							amountMinor: sideMinor(side)
+							amountMinor: sideMinor(side),
+							label: side.label.trim() || null
 						})),
-						categoryAmountMinor: primaryAmountMinor
+						categoryAmountMinor: primaryAmountMinor,
+						categoryLabel: categoryLabel.trim() || null
 					}
 				: {})
 		};
@@ -842,6 +858,7 @@
 	bind:toAccountId
 	bind:extraSides
 	bind:categoryAmount
+	bind:categoryLabel
 	{sideChoices}
 	{toAccountChoices}
 	{allAccounts}

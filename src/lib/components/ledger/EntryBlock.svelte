@@ -34,6 +34,7 @@
 		toAccountId = $bindable(null),
 		extraSides = $bindable([]),
 		categoryAmount = $bindable(''),
+		categoryLabel = $bindable(''),
 		sideChoices,
 		toAccountChoices,
 		allAccounts = [],
@@ -60,6 +61,12 @@
 		 * simply matches `mainAmountMinor`.
 		 */
 		categoryAmount?: string;
+		/**
+		 * The named category's own name, once `extraSides` is non-empty. Blank
+		 * means "fall back to the record's description" — the same convention
+		 * as an extra side's own `label`.
+		 */
+		categoryLabel?: string;
 		sideChoices: AccountView[];
 		toAccountChoices: AccountView[];
 		allAccounts?: AccountView[];
@@ -129,13 +136,15 @@
 				key: -1,
 				accountId: fromAccountId,
 				direction: 'out' as const,
-				amount: (fromAmountMinor / 100).toFixed(2)
+				amount: (fromAmountMinor / 100).toFixed(2),
+				label: fromIsCategory ? categoryLabel : ''
 			},
 			{
 				key: -2,
 				accountId: toAccountId,
 				direction: 'in' as const,
-				amount: (toAmountMinor / 100).toFixed(2)
+				amount: (toAmountMinor / 100).toFixed(2),
+				label: toIsCategory ? categoryLabel : ''
 			},
 			...extraSides
 		];
@@ -219,6 +228,23 @@
 			{/if}
 			<span class="entry-gutter"></span>
 		</div>
+		{#if fromIsCategory}
+			<div class="entry-line signed">
+				<span class="entry-code"></span>
+				<div class="entry-account">
+					<Input
+						type="text"
+						bind:value={categoryLabel}
+						placeholder="Label (optional) — defaults to the description"
+						disabled={extraSidesReadOnly}
+						class="w-full"
+					/>
+				</div>
+				<span class="entry-dir"></span>
+				<span class="entry-amount"></span>
+				<span class="entry-gutter"></span>
+			</div>
+		{/if}
 
 		<div class="entry-line">
 			<span class="entry-code">{codeOf(toAccountId)}</span>
@@ -259,6 +285,23 @@
 			{/if}
 			<span class="entry-gutter"></span>
 		</div>
+		{#if toIsCategory}
+			<div class="entry-line signed">
+				<span class="entry-code"></span>
+				<div class="entry-account">
+					<Input
+						type="text"
+						bind:value={categoryLabel}
+						placeholder="Label (optional) — defaults to the description"
+						disabled={extraSidesReadOnly}
+						class="w-full"
+					/>
+				</div>
+				<span class="entry-dir"></span>
+				<span class="entry-amount"></span>
+				<span class="entry-gutter"></span>
+			</div>
+		{/if}
 
 		<!-- A third and later side. Free with `adjustments`; otherwise an
 		     everyday same-type category only, and the server refuses anything
@@ -350,7 +393,15 @@
 			{#if side.accountId !== null}
 				<div class="entry-line signed">
 					<span class="entry-code"></span>
-					<span class="entry-account"></span>
+					<div class="entry-account">
+						<Input
+							type="text"
+							bind:value={side.label}
+							placeholder="Label (optional) — defaults to the description"
+							disabled={extraSidesReadOnly}
+							class="w-full"
+						/>
+					</div>
 					<span class="entry-dir"></span>
 					<span class="entry-amount" class:out={sideMinor(side) < 0}>
 						{formatMinor(sideMinor(side))}
