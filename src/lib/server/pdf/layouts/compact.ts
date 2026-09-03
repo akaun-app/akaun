@@ -2,7 +2,7 @@ import PDFDocument from "pdfkit";
 import { fromMinor } from "$lib/server/ledger/money.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
 import { fontsForTheme } from "../fonts.js";
-import { M, CW, C, fmt, fmtDate } from "../layout.js";
+import { M, CW, C, cleanText, fmt, fmtDate } from "../layout.js";
 
 // Column layout for the tighter, single-line-per-row table below.
 const QTY_W = 40;
@@ -40,7 +40,9 @@ export function renderCompact(
     .font(fonts.bold)
     .fontSize(15)
     .fillColor(C.dark)
-    .text(settings.companyName || "Company", M, y, { width: CW * 0.6 });
+    .text(cleanText(settings.companyName) || "Company", M, y, {
+      width: CW * 0.6,
+    });
   doc
     .font(fonts.bold)
     .fontSize(13)
@@ -52,8 +54,9 @@ export function renderCompact(
   y = doc.y + 3;
 
   const subtitleParts = [
-    settings.companyAddress,
-    settings.companyRegistrationNo && `Reg. ${settings.companyRegistrationNo}`,
+    settings.companyAddress && cleanText(settings.companyAddress),
+    settings.companyRegistrationNo &&
+      `Reg. ${cleanText(settings.companyRegistrationNo)}`,
   ]
     .filter(Boolean)
     .join("   ·   ");
@@ -70,7 +73,7 @@ export function renderCompact(
     docu.dueDate &&
       `Due ${fmtDate(docu.dueDate)}${docu.isOverdue ? " (overdue)" : ""}`,
     docu.expiryDate && `Valid until ${fmtDate(docu.expiryDate)}`,
-    docu.reference && `Ref ${docu.reference}`,
+    docu.reference && `Ref ${cleanText(docu.reference)}`,
   ]
     .filter(Boolean)
     .join("   ·   ");
@@ -101,7 +104,7 @@ export function renderCompact(
       .fontSize(9)
       .fillColor(C.dark)
       .text(
-        `  ${docu.contactName}${docu.contactAddress ? ", " + docu.contactAddress : ""}`,
+        `  ${cleanText(docu.contactName)}${docu.contactAddress ? ", " + cleanText(docu.contactAddress) : ""}`,
         { width: CW - 50 },
       );
     y = doc.y + 8;
@@ -131,7 +134,7 @@ export function renderCompact(
     const rowH = 16;
     if (i % 2 === 1) doc.rect(M, y - 2, CW, rowH).fill("#f7f7f7");
     doc.font(fonts.regular).fontSize(9).fillColor(C.body);
-    doc.text(line.description, M + 4, y, { width: DESC_W - 4 });
+    doc.text(cleanText(line.description), M + 4, y, { width: DESC_W - 4 });
     doc.text(String(line.quantity), QTY_X, y, {
       width: QTY_W,
       align: "center",
@@ -201,7 +204,7 @@ export function renderCompact(
       .font(fonts.regular)
       .fontSize(8)
       .fillColor(C.subtle)
-      .text(docu.notes, M, doc.y + 2, { width: CW });
+      .text(cleanText(docu.notes), M, doc.y + 2, { width: CW });
     y = doc.y + 8;
   }
   if (docu.terms) {
@@ -214,7 +217,7 @@ export function renderCompact(
       .font(fonts.regular)
       .fontSize(8)
       .fillColor(C.subtle)
-      .text(docu.terms, M, doc.y + 2, { width: CW });
+      .text(cleanText(docu.terms), M, doc.y + 2, { width: CW });
   }
 
   return new Promise((resolve, reject) => {

@@ -24,6 +24,16 @@ export const C = {
   green: "#166534",
 } as const;
 
+/** Normalizes line endings before handing free text to PDFKit. A CRLF or lone-CR
+ * input (a browser textarea, a CSV import) leaves a stray \r glyph that PDFKit's
+ * line wrapper doesn't split on — it stays attached to the end of the previous
+ * line, and since our embedded Inter subset has no glyph for it, it renders as
+ * a visible missing-glyph box instead of vanishing quietly. */
+export function cleanText(s: string | null | undefined): string {
+  if (!s) return "";
+  return s.replace(/\r\n?/g, "\n");
+}
+
 export function fmt(n: number): string {
   return new Intl.NumberFormat("en-MY", {
     minimumFractionDigits: 2,
