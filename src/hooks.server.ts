@@ -12,10 +12,37 @@ import { seedAccounts } from "$lib/server/db/seed-accounts.js";
 import { getSessionUser } from "$lib/server/auth.js";
 import { users } from "$lib/server/db/schema.js";
 import { getEffectivePermissions } from "$lib/server/permissions.js";
-import { setLogLevel } from "$lib/server/logger.js";
+import { setLogLevel, createLogger } from "$lib/server/logger.js";
 import { startImportWorker } from "$lib/server/import/worker.js";
+import { ENCRYPTION_KEY } from "$lib/server/env.js";
+import { getAllProviders, updateProvider } from "$lib/server/llmProviders.js";
+import { looksEncrypted } from "$lib/server/crypto/secret-box.js";
 
 if (env.LOG_LEVEL) setLogLevel(env.LOG_LEVEL);
+
+const log = createLogger("startup");
+
+/**
+ * Re-encrypts any `llmProviders.apiKey` still in plaintext, once `ENCRYPTION_KEY`
+ * is configured — the app's existing "books upgrade themselves on first start"
+ * convention (`db/auto-upgrade.ts`), applied to this one table. A no-op once
+ * every row is already encrypted, so it is safe to run on every boot.
+ */
+function reEncryptProviderKeys(): void {
+  if (!ENCRYPTION_KEY) return;
+  const plaintext = getAllProviders(db).filter(
+    (p) => p.apiKey && !looksEncrypted(p.apiKey),
+  );
+  for (const provider of plaintext) {
+    updateProvider(db, provider.id, { apiKey: provider.apiKey });
+  }
+  if (plaintext.length > 0) {
+    log.info(
+      { count: plaintext.length },
+      "Encrypted previously-plaintext LLM provider keys",
+    );
+  }
+}
 
 export const init = async () => {
   await ensureDefaultAdmin();
@@ -31,6 +58,7 @@ export const init = async () => {
   // is a no-op there and only does work on a fresh install (research.md R-06).
   seedAccounts(db);
   ensureDefaultTemplate();
+  reEncryptProviderKeys();
   // `ensureLedgerUpgrade()` was called here, and the conversion is self-running
   // again — but it cannot run from `init()`. `migrate()` applies 0015, which drops
   // the tables the conversion reads, and that happens at module load in

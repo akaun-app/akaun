@@ -12,13 +12,17 @@ const ALLOWED_KEYS = new Set<string>(Object.values(SETTING_KEYS));
 // bypass of that UI.
 const LOCKED_KEYS = new Set<string>([SETTING_KEYS.currencyCode, SETTING_KEYS.sequenceTemplate]);
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ locals }) => {
+	if (!locals.isSuperuser) return new Response('Forbidden', { status: 403 });
+
 	const rows = db.select({ key: settings.key, value: settings.value }).from(settings).all();
 	const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
 	return Response.json(map);
 };
 
-export const PATCH: RequestHandler = async ({ request }) => {
+export const PATCH: RequestHandler = async ({ locals, request }) => {
+	if (!locals.isSuperuser) return new Response('Forbidden', { status: 403 });
+
 	const body = await request.json();
 
 	if (body === null || typeof body !== 'object' || Array.isArray(body)) {

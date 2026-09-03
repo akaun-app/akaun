@@ -5,7 +5,10 @@ import { hasPermission } from "$lib/server/permissions.js";
 import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
 import { getRecord, listRecords } from "$lib/server/queries/ledger.js";
 import { getAccount } from "$lib/server/queries/accounts.js";
-import { sidesFromAccounts } from "$lib/server/ledger/sides-from-accounts.js";
+import {
+  sidesFromAccounts,
+  NEEDS_ADJUSTMENTS,
+} from "$lib/server/ledger/sides-from-accounts.js";
 import { toMinor } from "$lib/server/ledger/money.js";
 import { createRecord, removeRecord } from "$lib/server/services/ledger.js";
 import { createSettlements } from "$lib/server/services/settlements.js";
@@ -221,6 +224,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // derived from them rather than asked for (D-01).
   let body: RecordCreate;
   if ("kind" in raw) {
+    // A journal names its own sides outright, so it is the one shape here that
+    // never passes through `sidesFromAccounts` — which is where the no-kind
+    // branch below applies this same gate. Checked here instead, or a journal
+    // body would reach `createRecord` ungated (FR-031c).
+    if (raw.kind === "journal" && !hasPermission(locals, "adjustments", "add")) {
+      return refused(NEEDS_ADJUSTMENTS);
+    }
     body = raw as RecordCreate;
   } else {
     const receivable = requireAccountDefault(db, DefaultAccountPurpose.Receivable);

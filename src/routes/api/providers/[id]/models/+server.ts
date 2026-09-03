@@ -1,7 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
-import { llmProviders } from '$lib/server/db/schema.js';
+import { getProvider } from '$lib/server/llmProviders.js';
 import type { RequestHandler } from './$types.js';
 
 interface ModelInfo {
@@ -11,9 +10,9 @@ interface ModelInfo {
 }
 
 export const GET: RequestHandler = async ({ params, locals, fetch }) => {
-	if (!locals.user) return new Response('Unauthorized', { status: 401 });
+	if (!locals.isSuperuser) return new Response('Forbidden', { status: 403 });
 
-	const provider = db.select().from(llmProviders).where(eq(llmProviders.id, params.id)).get();
+	const provider = getProvider(db, params.id);
 	if (!provider) return new Response('Not found', { status: 404 });
 	if (!provider.apiKey) return json({ models: [] });
 

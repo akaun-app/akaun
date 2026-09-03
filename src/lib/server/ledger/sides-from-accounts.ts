@@ -82,7 +82,13 @@ export type SidesContext = {
 const SAME_ACCOUNT =
   "Money cannot move from an account to itself. Choose two different accounts.";
 const NEEDS_CONTACT = "Say who this is owed to or by.";
-const NEEDS_ADJUSTMENTS =
+/**
+ * Also the message a caller outside this module refuses with when it names a
+ * `journal` record directly, rather than deriving one from two accounts — see
+ * `routes/api/records/+server.ts`'s `POST`, which is the one shape that can
+ * reach `createRecord` without ever calling `sidesFromAccounts`.
+ */
+export const NEEDS_ADJUSTMENTS =
   "These two accounts need the Adjustments ability. Ask an administrator for it, or choose an everyday account on each side.";
 
 function isMoneyPot(account: SidesAccount): boolean {
