@@ -7,7 +7,6 @@ import {
   type StructuredTextItem,
 } from "unpdf";
 import { OPS } from "unpdf/pdfjs";
-import { TemplateFont } from "$lib/enums.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
 import { renderClassic } from "./classic.js";
 
@@ -198,7 +197,7 @@ const fixture: LayoutRenderData = {
   docTypeLabel: "INVOICE",
 };
 
-const theme: ThemeData = { color: "#1a56db", font: TemplateFont.Inter };
+const theme: ThemeData = { color: "#1a56db" };
 
 const referencePath = fileURLToPath(
   new URL("./__fixtures__/reference-invoice.pdf", import.meta.url),

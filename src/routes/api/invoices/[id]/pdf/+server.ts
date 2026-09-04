@@ -4,7 +4,6 @@ import { db } from "$lib/server/db/client.js";
 import { getInvoice } from "$lib/server/queries/invoices.js";
 import { getSetting, SETTING_KEYS } from "$lib/server/settings.js";
 import { getLayout } from "$lib/server/pdf/layouts/index.js";
-import { TemplateFont } from "$lib/enums.js";
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   if (!locals.user) throw redirect(302, "/login");
@@ -22,10 +21,6 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   };
   const theme = {
     color: getSetting(db, SETTING_KEYS.pdfThemeColor) ?? "#1a56db",
-    font: parseInt(
-      getSetting(db, SETTING_KEYS.pdfThemeFont) ?? String(TemplateFont.Inter),
-      10,
-    ),
   };
 
   try {

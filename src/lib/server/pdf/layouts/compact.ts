@@ -1,7 +1,7 @@
 import PDFDocument from "pdfkit";
 import { fromMinor } from "$lib/server/ledger/money.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
-import { fontsForTheme } from "../fonts.js";
+import { registerPdfFonts } from "../fonts.js";
 import { M, CW, C, cleanText, fmt, fmtDate } from "../layout.js";
 
 // Column layout for the tighter, single-line-per-row table below.
@@ -25,7 +25,7 @@ export function renderCompact(
     margin: 0,
     info: { Title: title },
   });
-  const fonts = fontsForTheme(doc, theme);
+  const fonts = registerPdfFonts(doc);
   const { document: docu, settings, docTypeLabel } = data;
 
   // A colored accent band down the left margin gives the theme color a strong

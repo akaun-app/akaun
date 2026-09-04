@@ -514,8 +514,6 @@
 	let pdfQuotationLayoutKey = $state(data.pdfQuotationLayoutKey);
 	// svelte-ignore state_referenced_locally
 	let pdfThemeColor = $state(data.pdfThemeColor);
-	// svelte-ignore state_referenced_locally
-	let pdfThemeFont = $state(data.pdfThemeFont);
 
 	// --- Books tab: check the books, and what the one-off update decided ---
 
@@ -958,8 +956,7 @@
 		aiCustomInstructions !== data.autoImportCustomInstructions ||
 		pdfInvoiceLayoutKey !== data.pdfInvoiceLayoutKey ||
 		pdfQuotationLayoutKey !== data.pdfQuotationLayoutKey ||
-		pdfThemeColor !== data.pdfThemeColor ||
-		pdfThemeFont !== data.pdfThemeFont
+		pdfThemeColor !== data.pdfThemeColor
 	);
 
 	function resetAllUnsaved() {
@@ -982,7 +979,6 @@
 		pdfInvoiceLayoutKey = data.pdfInvoiceLayoutKey;
 		pdfQuotationLayoutKey = data.pdfQuotationLayoutKey;
 		pdfThemeColor = data.pdfThemeColor;
-		pdfThemeFont = data.pdfThemeFont;
 		sheetOpen = false;
 	}
 
@@ -1707,12 +1703,9 @@
 								<div class="set-row-label">Theme</div>
 								<ThemeEditor
 									color={pdfThemeColor}
-									font={pdfThemeFont}
 									onColorChange={(c) => (pdfThemeColor = c)}
-									onFontChange={(f) => (pdfThemeFont = f)}
 								/>
 								<input type="hidden" name="themeColor" value={pdfThemeColor} />
-								<input type="hidden" name="themeFont" value={pdfThemeFont} />
 							</div>
 						</div>
 						<Button type="submit" class="mt-4">Save</Button>

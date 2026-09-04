@@ -4,7 +4,7 @@ import { join } from "path";
 import { STORAGE_PATH } from "$lib/server/env.js";
 import { fromMinor } from "$lib/server/ledger/money.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
-import { fontsForTheme } from "../fonts.js";
+import { registerPdfFonts } from "../fonts.js";
 import { C, cleanText, fmt, fmtDate } from "../layout.js";
 
 // Page geometry — US Letter, matching the reference invoice this layout is
@@ -47,7 +47,7 @@ export function renderClassic(
     margin: 0,
     info: { Title: title },
   });
-  const fonts = fontsForTheme(doc, theme);
+  const fonts = registerPdfFonts(doc);
   const { document: docu, settings, docTypeLabel } = data;
   const isInvoice = docTypeLabel === "INVOICE";
   const docNumber = docu.invoiceNumber ?? docu.quotationNumber ?? "";
@@ -67,7 +67,7 @@ export function renderClassic(
   doc
     .font(fonts.bold)
     .fontSize(18)
-    .fillColor(C.dark)
+    .fillColor(C.muted)
     .text(cleanText(settings.companyName) || "Company", M, y, {
       width: CW,
       align: "right",
