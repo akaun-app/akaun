@@ -490,18 +490,3 @@ export const accountSubTypeEnum = {
 };
 export const defaultAccountPurposeEnum = makeEnum(DefaultAccountPurposeLabels);
 export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
-
-export const TemplateFont = {
-  Inter: 1,
-  Roboto: 2,
-  Lato: 3,
-  Merriweather: 4,
-} as const;
-export type TemplateFontCode = (typeof TemplateFont)[keyof typeof TemplateFont];
-export const TemplateFontLabels: Record<number, string> = {
-  [TemplateFont.Inter]: "Inter",
-  [TemplateFont.Roboto]: "Roboto",
-  [TemplateFont.Lato]: "Lato",
-  [TemplateFont.Merriweather]: "Merriweather",
-};
-export const templateFontEnum = makeEnum(TemplateFontLabels);

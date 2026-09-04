@@ -1,11 +1,10 @@
 // Shared PDF render types — safe to import in both server and browser code.
-// The theme is the only user-set knob (font + accent color); everything else
-// about a document's appearance is decided by the layout function it's routed
-// to (see $lib/server/pdf/layouts/).
+// The theme is the only user-set knob (accent color; the font is always
+// Inter); everything else about a document's appearance is decided by the
+// layout function it's routed to (see $lib/server/pdf/layouts/).
 
 export type ThemeData = {
   color: string;
-  font: number;
 };
 
 export type LayoutLineItem = {

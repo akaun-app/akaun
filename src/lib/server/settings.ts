@@ -31,7 +31,6 @@ export const SETTING_KEYS = {
   pdfInvoiceLayoutKey: "pdf.invoiceLayoutKey",
   pdfQuotationLayoutKey: "pdf.quotationLayoutKey",
   pdfThemeColor: "pdf.themeColor",
-  pdfThemeFont: "pdf.themeFont",
   sequenceTemplate: "documentNumbers.template",
 } as const;
 
