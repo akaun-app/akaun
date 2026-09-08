@@ -18,8 +18,9 @@
 	import { draggable, droppable } from '@thisux/sveltednd';
 	import type { DragDropState } from '@thisux/sveltednd';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
-	import ThemeEditor from '$lib/components/pdf/ThemeEditor.svelte';
-	import { LAYOUT_CATALOG } from '$lib/pdf/layout-catalog.js';
+	import ColorPicker from '$lib/components/ui/ColorPicker.svelte';
+	import { LAYOUT_CATALOG, DEFAULT_LAYOUT_KEY } from '$lib/pdf/layout-catalog.js';
+	import { PDF_THEME_PRESETS } from '$lib/pdf/theme-presets.js';
 	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
 	import AccountDefaults from '$lib/components/settings/AccountDefaults.svelte';
@@ -508,12 +509,12 @@
 	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
 
 	// --- PDF template tab state ---
-	// svelte-ignore state_referenced_locally
-	let pdfInvoiceLayoutKey = $state(data.pdfInvoiceLayoutKey);
-	// svelte-ignore state_referenced_locally
-	let pdfQuotationLayoutKey = $state(data.pdfQuotationLayoutKey);
+	// Layout is fixed to the standard layout for now (see DEFAULT_LAYOUT_KEY) —
+	// only the accent color is user-editable.
 	// svelte-ignore state_referenced_locally
 	let pdfThemeColor = $state(data.pdfThemeColor);
+	const standardLayoutDescription =
+		LAYOUT_CATALOG.find((l) => l.key === DEFAULT_LAYOUT_KEY)?.description ?? '';
 
 	// --- Books tab: check the books, and what the one-off update decided ---
 
@@ -954,8 +955,6 @@
 		aiCategoryHints !== data.autoImportCategoryHints ||
 		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
 		aiCustomInstructions !== data.autoImportCustomInstructions ||
-		pdfInvoiceLayoutKey !== data.pdfInvoiceLayoutKey ||
-		pdfQuotationLayoutKey !== data.pdfQuotationLayoutKey ||
 		pdfThemeColor !== data.pdfThemeColor
 	);
 
@@ -976,8 +975,6 @@
 		aiCategoryHints = data.autoImportCategoryHints;
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
 		aiCustomInstructions = data.autoImportCustomInstructions;
-		pdfInvoiceLayoutKey = data.pdfInvoiceLayoutKey;
-		pdfQuotationLayoutKey = data.pdfQuotationLayoutKey;
 		pdfThemeColor = data.pdfThemeColor;
 		sheetOpen = false;
 	}
@@ -1658,7 +1655,7 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Templates</h2>
-						<p class="set-section-sub">Pick a layout and theme for printed quotations and invoices</p>
+						<p class="set-section-sub">Set an accent color for printed quotations and invoices</p>
 					</div>
 					<form method="POST" action="?/savePdfTemplate" use:enhance={() => ({ update }) => update({ reset: false })}>
 						{#if form?.error}
@@ -1666,48 +1663,24 @@
 						{/if}
 						<div class="set-rows">
 							<div class="set-row set-row-col">
-								<div class="set-row-label">Invoice layout</div>
-								<div class="layout-picker">
-									{#each LAYOUT_CATALOG as opt (opt.key)}
-										<button
-											type="button"
-											class="layout-option"
-											class:active={pdfInvoiceLayoutKey === opt.key}
-											onclick={() => (pdfInvoiceLayoutKey = opt.key)}
-										>
-											<span class="layout-option-name">{opt.label}</span>
-											<span class="layout-option-desc">{opt.description}</span>
-										</button>
-									{/each}
+								<div class="set-row-label">Layout</div>
+								<div class="layout-static">
+									<span class="layout-static-name">Standard</span>
+									<span class="layout-static-desc">{standardLayoutDescription}</span>
 								</div>
-								<input type="hidden" name="invoiceLayoutKey" value={pdfInvoiceLayoutKey} />
 							</div>
 							<div class="set-row set-row-col">
-								<div class="set-row-label">Quotation layout</div>
-								<div class="layout-picker">
-									{#each LAYOUT_CATALOG as opt (opt.key)}
-										<button
-											type="button"
-											class="layout-option"
-											class:active={pdfQuotationLayoutKey === opt.key}
-											onclick={() => (pdfQuotationLayoutKey = opt.key)}
-										>
-											<span class="layout-option-name">{opt.label}</span>
-											<span class="layout-option-desc">{opt.description}</span>
-										</button>
-									{/each}
-								</div>
-								<input type="hidden" name="quotationLayoutKey" value={pdfQuotationLayoutKey} />
-							</div>
-							<div class="set-row set-row-col">
-								<div class="set-row-label">Theme</div>
-								<ThemeEditor
-									color={pdfThemeColor}
-									onColorChange={(c) => (pdfThemeColor = c)}
+								<div class="set-row-label">Accent color</div>
+								<ColorPicker
+									value={pdfThemeColor}
+									onValueChange={(c) => (pdfThemeColor = c)}
+									presets={PDF_THEME_PRESETS}
 								/>
 								<input type="hidden" name="themeColor" value={pdfThemeColor} />
 							</div>
 						</div>
+						<input type="hidden" name="invoiceLayoutKey" value={DEFAULT_LAYOUT_KEY} />
+						<input type="hidden" name="quotationLayoutKey" value={DEFAULT_LAYOUT_KEY} />
 						<Button type="submit" class="mt-4">Save</Button>
 					</form>
 				</div>
@@ -2358,25 +2331,15 @@
 	}
 
 	/* Templates tab */
-	.layout-picker {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	.layout-option {
+	.layout-static {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		align-items: flex-start;
-		text-align: left;
 		padding: 10px 12px;
 		border-radius: 8px;
 		border: 1px solid var(--border);
-		background: none;
-		cursor: pointer;
+		background: var(--muted);
 	}
-	.layout-option:hover { border-color: var(--primary); background: var(--accent); }
-	.layout-option.active { border-color: var(--primary); background: var(--accent); }
-	.layout-option-name { font-size: 13px; font-weight: 600; color: var(--foreground); }
-	.layout-option-desc { font-size: 12px; color: var(--muted-foreground); }
+	.layout-static-name { font-size: 13px; font-weight: 600; color: var(--foreground); }
+	.layout-static-desc { font-size: 12px; color: var(--muted-foreground); }
 </style>

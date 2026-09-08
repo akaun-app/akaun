@@ -18,6 +18,7 @@ import {
   DEFAULT_LAYOUT_KEY,
   isLayoutKey,
 } from "$lib/pdf/layout-catalog.js";
+import { DEFAULT_PDF_THEME_COLOR } from "$lib/pdf/theme-presets.js";
 import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
@@ -156,7 +157,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     getSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey) ?? DEFAULT_LAYOUT_KEY;
   const pdfQuotationLayoutKey =
     getSetting(db, SETTING_KEYS.pdfQuotationLayoutKey) ?? DEFAULT_LAYOUT_KEY;
-  const pdfThemeColor = getSetting(db, SETTING_KEYS.pdfThemeColor) ?? "#1a56db";
+  const pdfThemeColor =
+    getSetting(db, SETTING_KEYS.pdfThemeColor) ?? DEFAULT_PDF_THEME_COLOR;
 
   return {
     canManageAccounts,
