@@ -236,7 +236,7 @@
 				maxlength="7"
 				spellcheck="false"
 				class={cn(
-					'border-input h-8 flex-1 rounded-md border bg-card px-2 text-[13px] outline-none',
+					'border-input h-8 min-w-0 flex-1 rounded-md border bg-card px-2 text-[13px] outline-none',
 					focusRingClass
 				)}
 			/>

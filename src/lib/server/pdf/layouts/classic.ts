@@ -35,7 +35,7 @@ const QTY_X = M + DESC_W;
 const PRICE_X = QTY_X + QTY_W;
 const AMOUNT_X = PRICE_X + PRICE_W;
 
-/** A tight, receipt-style layout: bold title + bold company name, label/value meta rows, two address columns, a bold total headline, and a compact line-items table. All text is black — emphasis comes from bold vs. regular weight, never from color. */
+/** A tight, receipt-style layout: bold title, label/value meta rows, two address columns, a bold total headline, and a compact line-items table. Within each address column the name (own company / "Bill to" contact) stays regular weight but near-black (C.dark), while the address lines beneath it drop to a dark grey (C.subtle) — color, not weight, is what separates the two there. */
 export function renderClassic(
   data: LayoutRenderData,
   theme: ThemeData,
@@ -137,7 +137,7 @@ export function renderClassic(
     }
   }
   doc
-    .font(fonts.bold)
+    .font(fonts.regular)
     .fontSize(9)
     .fillColor(C.dark)
     .text(cleanText(settings.companyName) || "Company", M, leftY, {
@@ -148,7 +148,7 @@ export function renderClassic(
     doc
       .font(fonts.regular)
       .fontSize(9)
-      .fillColor(C.dark)
+      .fillColor(C.subtle)
       .text(cleanText(settings.companyAddress), M, leftY, { width: leftColW });
     leftY = doc.y + 2;
   }
@@ -156,7 +156,7 @@ export function renderClassic(
     doc
       .font(fonts.regular)
       .fontSize(8)
-      .fillColor(C.dark)
+      .fillColor(C.subtle)
       .text("Reg. No: " + cleanText(settings.companyRegistrationNo), M, leftY, {
         width: leftColW,
       });
@@ -172,7 +172,7 @@ export function renderClassic(
       .text("Bill to", rightX, rightY, { width: rightColW });
     rightY = doc.y + 2;
     doc
-      .font(fonts.bold)
+      .font(fonts.regular)
       .fontSize(9)
       .fillColor(C.dark)
       .text(cleanText(docu.contactName), rightX, rightY, { width: rightColW });
@@ -181,7 +181,7 @@ export function renderClassic(
       doc
         .font(fonts.regular)
         .fontSize(9)
-        .fillColor(C.dark)
+        .fillColor(C.subtle)
         .text(cleanText(docu.contactAddress), rightX, rightY, {
           width: rightColW,
         });
@@ -191,7 +191,7 @@ export function renderClassic(
       doc
         .font(fonts.regular)
         .fontSize(8)
-        .fillColor(C.dark)
+        .fillColor(C.subtle)
         .text(
           "Reg. No: " + cleanText(docu.contactRegistrationNo),
           rightX,
@@ -204,7 +204,7 @@ export function renderClassic(
       doc
         .font(fonts.regular)
         .fontSize(8)
-        .fillColor(C.dark)
+        .fillColor(C.subtle)
         .text(cleanText(docu.contactPhone), rightX, rightY, {
           width: rightColW,
         });
