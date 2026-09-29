@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Multi-record Auto Import
+# Specification Quality Checklist: Multi-record Auto Import and Import Profiles
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-09-29
@@ -31,9 +31,9 @@
 
 ## Notes
 
-- Validated in two passes. The first pass found ten requirements without an acceptance scenario (unrecognised document type, over-long document, foreign currency, discarding a document, refused confirm, permissions, audit, live update, phone width, searchable content). Scenarios were added to User Stories 1, 4 and 5, and SC-005 and FR-019/FR-020 were tightened on the source file.
-- "JSON Schema" appears only in the later-phase glossary entry. It is the user-facing format the maintainer asked for, not an implementation choice. The requirements call it the "item layout".
-- FR-034 is a boundary inherited from `001-bank-reconciliation` FR-012, which carries its own acceptance criteria.
-- SC-002 and SC-003 depend on 3–5 real sample documents supplied by the maintainer. The text-only reading limit is recorded in Assumptions and is to be tested in planning research before any screen is built.
-- Zero [NEEDS CLARIFICATION] markers: every open point had a reasonable default and is recorded under Assumptions or Out of Scope.
+- The spec was rewritten after the maintainer's update (marketplace income statements with a summary and a transaction table, choosing one or the other, profiles, detection with the standard reading as fallback). It now has 9 user stories, 84 acceptance scenarios, FR-001 to FR-049 and SC-001 to SC-013.
+- Mechanical checks passed: zero [NEEDS CLARIFICATION] markers, FR numbering continuous, every FR referenced in prose is defined.
+- Traceability: every requirement maps to at least one scenario or success criterion, except FR-048 (upgrade changes nothing, covered by SC-005) and FR-049 (boundary inherited from `001-bank-reconciliation` FR-012, which carries its own acceptance criteria).
+- "JSON Schema" appears only in the glossary and FR-035 as the user-facing format the maintainer asked for. The maintainer's verbatim update, quoted under Input, mentions an "agentic loop" and "tool call"; the spec states behaviour only. The mechanism is recorded in the design brief for `/speckit-plan`.
+- Points to settle in planning research: how well text-only reading copes with a real marketplace statement; the initial limits (200,000 characters, 1,000 items); detection accuracy on the maintainer's samples.
 - Ready for `/speckit-clarify` or `/speckit-plan`.
