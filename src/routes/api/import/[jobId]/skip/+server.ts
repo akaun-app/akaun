@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { deleteFile } from '$lib/server/file-storage.js';
+import { releaseIfUnreferenced } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
@@ -19,11 +19,13 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 		return json({ error: 'Job is not in pending_review state' }, { status: 400 });
 	}
 
-	deleteFile(row.tempFilePath);
 	db.update(importQueue)
 		.set({ state: ImportState.Skipped })
 		.where(eq(importQueue.id, params.jobId))
 		.run();
+	// After the state change, so this job no longer counts as using the file.
+	// Another job or a record that shares the file keeps it.
+	releaseIfUnreferenced(db, row.tempFilePath);
 
 	const updated = db.select().from(importQueue).where(eq(importQueue.id, params.jobId)).get();
 	importEvents.emit('job-update', { userId: locals.user.id, job: updated });

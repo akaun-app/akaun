@@ -1,7 +1,7 @@
 import { inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { deleteFile } from '$lib/server/file-storage.js';
+import { releaseIfUnreferenced } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
@@ -20,8 +20,13 @@ export const DELETE: RequestHandler = async ({ locals }) => {
 		.where(inArray(importQueue.state, HISTORY_STATES))
 		.all();
 
-	for (const row of rows) deleteFile(row.tempFilePath);
 	db.delete(importQueue).where(inArray(importQueue.state, HISTORY_STATES)).run();
+	// An imported job's temp path is not updated when its file moves. If the move
+	// failed, the record's attachment still points at that temp path, and a plain
+	// delete here would remove the record's receipt. Release checks for that.
+	for (const path of new Set(rows.map((row) => row.tempFilePath))) {
+		releaseIfUnreferenced(db, path);
+	}
 
 	for (const row of rows) {
 		importEvents.emit('job-deleted', { userId: row.createdBy, jobId: row.id });

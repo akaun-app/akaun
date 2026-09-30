@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { deleteFile } from '$lib/server/file-storage.js';
+import { releaseIfUnreferenced } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
@@ -31,8 +31,9 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
 	}
 
 	importEvents.emit('job-deleted', { userId: row.createdBy, jobId: params.jobId });
-	deleteFile(row.tempFilePath);
 	db.delete(importQueue).where(eq(importQueue.id, params.jobId)).run();
+	// After the row is gone, so it no longer counts as using the file.
+	releaseIfUnreferenced(db, row.tempFilePath);
 
 	return new Response(null, { status: 204 });
 };

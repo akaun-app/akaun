@@ -11,7 +11,11 @@ import {
 import { dirname, basename, extname, join, resolve, sep } from "path";
 import { existsSync } from "fs";
 import { createHash, randomUUID } from "crypto";
+import { and, eq, notInArray } from "drizzle-orm";
+import { ImportState } from "$lib/enums.js";
 import { STORAGE_PATH } from "./env.js";
+import { importQueue, recordAttachments } from "./db/schema.js";
+import type { LedgerDb } from "./ledger/types.js";
 
 /** Largest accepted upload, in bytes. */
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
@@ -146,16 +150,30 @@ export function recordAttachmentPath(
   return `records/${year}/${month}/${basename(filename)}`;
 }
 
-/** Moves an uploaded temp file into `records/YYYY/MM/`. */
+/**
+ * Moves an uploaded temp file into `records/YYYY/MM/`.
+ *
+ * Safe to call twice for the same file. When the temp file is already gone
+ * but the file is at its destination, an earlier call moved it, so the
+ * destination is returned. Several records made from one document call this
+ * with the same temp path, and only the first one finds it there. The
+ * destination is built from `documentDate`, so every such call must pass the
+ * same date (the document's, not each record's own), or a later call looks in
+ * a different month and misses the file. When the file is in neither place
+ * this throws: returning the temp path would attach a file that does not exist.
+ */
 export function moveToRecordStorage(
   tempRelPath: string,
   documentDate: string,
+  root = STORAGE_PATH,
 ): string {
   const rel = recordAttachmentPath(tempRelPath, documentDate);
-  const dest = join(STORAGE_PATH, rel);
-  assertInsideStorage(dest);
+  const src = join(root, tempRelPath);
+  const dest = join(root, rel);
+  assertInsideStorage(dest, root);
+  if (!existsSync(src) && existsSync(dest)) return rel;
   mkdirSync(dirname(dest), { recursive: true });
-  renameSync(join(STORAGE_PATH, tempRelPath), dest);
+  renameSync(src, dest);
   return rel;
 }
 
@@ -297,6 +315,65 @@ export function deleteFile(relativePath: string, root = STORAGE_PATH): void {
   } catch {
     // ignore missing files
   }
+}
+
+/**
+ * Import states in which a queue row no longer needs its temp file. Imported
+ * means the file was moved to the record (or attached where it lay), and
+ * Skipped means the user said no. Every other state still reads the file:
+ * it waits to be processed, waits for review, or is part-way through confirm
+ * (Confirmed is set before the file is moved), and a Failed job still shows
+ * its file until it is discarded.
+ */
+const IMPORT_STATES_DONE_WITH_FILE: number[] = [
+  ImportState.Imported,
+  ImportState.Skipped,
+];
+
+/**
+ * Deletes a stored file, but only when nothing still uses it. A file is in use
+ * while a record attachment points at it, or while an import job that is not
+ * done with it (see above) has it as its temp file.
+ *
+ * Call it after the row that used the file has been deleted or marked done, so
+ * that row does not count. Returns false when the file was kept because
+ * something uses it, and true when nothing does and the delete was tried.
+ * `deleteFile` ignores errors, so true does not prove the file is gone.
+ *
+ * This is how one file can be shared safely: an import that makes several
+ * records from one document gives each the same file, and removing one of them
+ * must not delete the file the others still show.
+ */
+export function releaseIfUnreferenced(
+  db: LedgerDb,
+  relativePath: string,
+  root = STORAGE_PATH,
+): boolean {
+  // A path that points outside storage is never ours to delete.
+  if (!resolve(root, relativePath).startsWith(resolve(root) + sep)) {
+    return false;
+  }
+  const attached = db
+    .select({ id: recordAttachments.id })
+    .from(recordAttachments)
+    .where(eq(recordAttachments.filename, relativePath))
+    .limit(1)
+    .get();
+  if (attached) return false;
+  const pending = db
+    .select({ id: importQueue.id })
+    .from(importQueue)
+    .where(
+      and(
+        eq(importQueue.tempFilePath, relativePath),
+        notInArray(importQueue.state, IMPORT_STATES_DONE_WITH_FILE),
+      ),
+    )
+    .limit(1)
+    .get();
+  if (pending) return false;
+  deleteFile(relativePath, root);
+  return true;
 }
 
 export function deleteReconciliationFolder(statementId: number): void {
