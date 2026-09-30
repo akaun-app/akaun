@@ -1,7 +1,7 @@
 // Global in-process gate: ensures no two outbound LLM requests (across all
 // concurrently-processing import jobs) start closer together than intervalMs.
-// State resets on server restart — same tradeoff as jsonSchemaUnsupportedModels
-// in providers/index.ts.
+// State resets on server restart — same tradeoff as structuredUnsupported
+// in structured-call.ts.
 let lastCallAt = 0;
 let queue: Promise<void> = Promise.resolve();
 
