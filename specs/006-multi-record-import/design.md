@@ -146,6 +146,28 @@ If the table comes out scrambled, US8 is blocked, so this must run before any UI
 - **Auto-detect:** the router above.
 - **"Read again":** delete the pending items and requeue, guarded by "no item is Imported".
 
+## S0.5 research results (2026-09-30)
+
+Samples: a Shopee monthly Income Statement (3 pages), a Shopee ads e-invoice (2 lines plus tax), and a Shopify bill in USD. Model: `gemma-4-31b-it` on Google AI Studio (what the book uses). OpenRouter's `google/gemma-4-31b-it:free` returned 429 from the shared free pool for every attempt over 6 minutes, so it gave no results. The research script used only `unpdf` and the SDK, not app modules and not the database.
+
+| Case | Result |
+|---|---|
+| Ads invoice, several items | Exact: 732.87 and 1,080.00 (amounts including tax); stated total 1,812.87. |
+| Shopee statement, Summary, 15 fee types | Exact: 15 of 15 leaf lines, each with a distinct fee type and none null; they sum to 13,732.56 to the cent, matching Total Payout Released. The 4 group subtotals were left out. 90 s, 7.3k tokens in, 0.9k out. |
+| Shopify bill, standard | Values correct, but Gemma wrapped the JSON in a ``` fence, so strict parsing failed. The text fallback in `structured-call.ts` covers this. |
+| Shopee daily payout table, page 1 (6 rows × 15 columns) | All 90 cells correct, including cells the PDF split across lines (`719.1` / `7`) and the U+2212 minus sign. **Every row total the model added up itself was wrong** (381.10 against the true 470.22). 88 s for 2k output tokens. |
+| Same table, all 31 rows | Stopped by Bun's default 300 s fetch timeout. |
+
+**What this changes**
+
+- **Code does all the arithmetic.** The model transcribes and code adds up. This is already true of the control total. Never ask the model for a derived figure.
+- **Every transaction is not built for now** (user decision). The Shopee table is one row per day with 15 amount columns, not one transaction per line, so it would need one row to produce several records. Summary covers the real case exactly. US8 and FR-043 (pieces) are deferred. FR-010 still applies: an over-long document fails with the limit named, and is never cut short.
+- **Output speed is the limit, not input size.** About 10–20 tokens/s on this model. Any later piece plan must size pieces by expected output tokens and keep each call well under 300 s, because Bun's `fetch` times out at 300 s.
+- **Text:** `unpdf` with `mergePages: true` returns the text on one line with no line breaks. Several-items and profile readings use `mergePages: false`, joined with line breaks and L-numbers. The receipt path is left as it is (FR-004).
+- **The structured-to-text fallback is required, not optional,** for Gemma on Google.
+
+**Revised S3:** auto-detect (recognition phrases, then one detect call) and Read again. The piece reader waits for a document type that needs it.
+
 ## Critical files
 
 - **LLM:** `src/lib/server/llm/structured-call.ts` (new), `import/providers/{index,shared}.ts`, `reconciliation/statement-llm.ts`

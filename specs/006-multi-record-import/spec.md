@@ -199,7 +199,9 @@ A marketplace pays out a period's sales in one statement: a summary (sales, seve
 
 ---
 
-### User Story 8 - Import every transaction of a marketplace statement (Priority: P3)
+### User Story 8 - Import every transaction of a marketplace statement (Priority: P3, deferred)
+
+**Deferred 2026-09-30.** On the maintainer's marketplace statement the transaction table has one row per day with fifteen amount columns, so each row would have to become several records, which is out of scope. Summary covers the real case. This story waits for a document whose table has one transaction per line. See `design.md` § S0.5.
 
 Some users want every transaction on the statement as its own record, and none of the summary. Each row of the transaction table becomes one income or expense record. The table can run to hundreds of rows, so all of them must be read, and reviewing them must stay practical.
 
