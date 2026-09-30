@@ -5,6 +5,7 @@ import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { jobForEvent } from '$lib/server/import/job-event.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -98,7 +99,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		.run();
 
 	const newJob = db.select().from(importQueue).where(eq(importQueue.id, jobId)).get();
-	importEvents.emit('job-update', { userId: locals.user.id, job: newJob });
+	if (newJob) importEvents.emit('job-update', { userId: locals.user.id, job: jobForEvent(newJob) });
 
 	return json({ jobId }, { status: 202 });
 };

@@ -2,6 +2,7 @@ import { not, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { jobForEvent, type ImportJobEvent } from '$lib/server/import/job-event.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -26,10 +27,11 @@ export const GET: RequestHandler = ({ locals }) => {
 				.select()
 				.from(importQueue)
 				.where(not(inArray(importQueue.state, TERMINAL_STATES)))
-				.all();
+				.all()
+				.map(jobForEvent);
 			controller.enqueue(encodeEvent({ type: 'snapshot', jobs: currentJobs }));
 
-			const updateHandler = ({ job }: { job: unknown }) => {
+			const updateHandler = ({ job }: { job: ImportJobEvent }) => {
 				try {
 					controller.enqueue(encodeEvent({ type: 'job-update', job }));
 				} catch {

@@ -290,6 +290,9 @@ describe("confirmImportRow", () => {
       job: { state: number };
     };
     expect(sent.state).toBe(ImportState.Imported);
+    // The document text stays in the table and is not sent to every open tab.
+    expect(sent).not.toHaveProperty("extractedText");
+    expect(sent).not.toHaveProperty("preExtractedText");
   });
 
   it("puts the file back when the transaction fails after the move", () => {

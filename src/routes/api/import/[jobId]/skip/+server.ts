@@ -4,6 +4,7 @@ import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { releaseIfUnreferenced } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { jobForEvent } from '$lib/server/import/job-event.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -28,7 +29,7 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 	releaseIfUnreferenced(db, row.tempFilePath);
 
 	const updated = db.select().from(importQueue).where(eq(importQueue.id, params.jobId)).get();
-	importEvents.emit('job-update', { userId: locals.user.id, job: updated });
+	if (updated) importEvents.emit('job-update', { userId: locals.user.id, job: jobForEvent(updated) });
 
 	return new Response(null, { status: 204 });
 };

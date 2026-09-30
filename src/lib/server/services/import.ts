@@ -21,6 +21,7 @@ import {
   resolvePaidFromAccountId,
 } from "../import/category-accounts.js";
 import { importEvents } from "../import/events.js";
+import { jobForEvent } from "../import/job-event.js";
 import type {
   LedgerDb,
   RecordCreate,
@@ -411,5 +412,5 @@ function emitJobUpdate(db: LedgerDb, jobId: string, userId: number) {
     .from(importQueue)
     .where(eq(importQueue.id, jobId))
     .get();
-  if (job) importEvents.emit("job-update", { userId, job });
+  if (job) importEvents.emit("job-update", { userId, job: jobForEvent(job) });
 }
