@@ -119,6 +119,18 @@ function emitRecord(db: LedgerDb, id: number): RecordView | null {
   return record;
 }
 
+/**
+ * Emits a caller holds back until its own transaction commits.
+ *
+ * An emit tells every open tab that something was saved. Sent from inside a
+ * transaction, it would reach them before the save is final, and a rollback
+ * afterwards would leave them showing a record that was never kept. A caller
+ * that wraps `createRecord` in a transaction passes an empty list, and runs
+ * each entry once the transaction has committed. When it rolls back, the
+ * caller drops the list and nothing is sent.
+ */
+export type DeferredEmits = (() => void)[];
+
 export function createRecord(
   db: LedgerDb,
   actingUserId: number,
@@ -128,6 +140,7 @@ export function createRecord(
     legacyKind?: "expense" | "income" | "claim" | null;
     legacyId?: number | null;
   },
+  deferredEmits?: DeferredEmits,
 ): Refusable<RecordView> {
   // A foreign currency is offered on an expense or income only — see
   // `RecordForm.svelte`'s `looksLikeExpenseOrIncome`. Checked here, the one
@@ -194,6 +207,12 @@ export function createRecord(
     action: "create",
   });
 
+  if (deferredEmits) {
+    // Read now, emit later: by the time the caller runs this, the record may
+    // have more on it (an attachment), and the emit reads it again then.
+    deferredEmits.push(() => emitRecord(db, row.id));
+    return { ok: true, value: getRecord(db, row.id)! };
+  }
   return { ok: true, value: emitRecord(db, row.id)! };
 }
 

@@ -2,38 +2,15 @@ import { json } from "@sveltejs/kit";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
-import { createLogger } from "$lib/server/logger.js";
-import { importEvents } from "$lib/server/import/events.js";
 import { importQueue } from "$lib/server/db/schema.js";
 import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
-import { moveToRecordStorage, displayName } from "$lib/server/file-storage.js";
 import { normalizeDate } from "$lib/server/date.js";
-import { createRecord, emitRecordUpdate } from "$lib/server/services/ledger.js";
-import { addAttachment } from "$lib/server/queries/ledger.js";
-import { defaultAccountId, getAccount } from "$lib/server/queries/accounts.js";
-import {
-  categoryAccountForImport,
-  categoryChoices,
-  matchCategoryAccount,
-  resolvePaidFromAccountId,
-} from "$lib/server/import/category-accounts.js";
-import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
-import { resolveOrCreateContact } from "$lib/server/queries/contacts.js";
+import { confirmImportRow } from "$lib/server/services/import.js";
 import { getExchangeRate } from "$lib/server/currency/rates.js";
 import { mainCurrencyCode } from "$lib/server/currency/form.js";
-import {
-  ImportState,
-  DocumentType,
-  DefaultAccountPurpose,
-  Role,
-  documentTypeEnum,
-} from "$lib/enums.js";
-import type { RecordCreate } from "$lib/server/ledger/types.js";
+import { ImportState, DocumentType, documentTypeEnum } from "$lib/enums.js";
 import type { RequestHandler } from "./$types.js";
 import { hasPermission } from "$lib/server/permissions.js";
-import { validateImportAccountPair } from "$lib/server/import/account-policy.js";
-
-const log = createLogger("import:confirm");
 
 /**
  * Turning a reviewed document into a record.
@@ -42,12 +19,16 @@ const log = createLogger("import:confirm");
  * left alone keeps what was read off the document. The result is one ledger
  * record with the account that paid or received it on one side and the category
  * on the other — the same shape the expenses and income screens write.
+ *
+ * This route reads and checks the request, and looks up an exchange rate when
+ * one is missing, which can take a moment. `confirmImportRow` then does every
+ * write in one transaction.
  */
 const overridesSchema = z.object({
   // A label ("expense"/"income") from the review screen, or a code.
   document_type: z.union([z.number().int(), z.string()]).optional(),
   // item_name = the description; supplier = the other party's name — always, regardless
-  // of expense or income (see partyRawName / sides.description below).
+  // of expense or income (see partyName / description below).
   item_name: z.string().optional(),
   supplier: z.string().optional(),
   date: z.string().optional(),
@@ -78,6 +59,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     .get();
 
   if (!row) return new Response("Not found", { status: 404 });
+  // An early answer for the usual case. The final check is the claim inside
+  // `confirmImportRow`, because the job can change while this route waits.
   if (row.state !== ImportState.PendingReview) {
     return json(
       { error: "Job is not in pending_review state" },
@@ -106,7 +89,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       row.documentType ??
       DocumentType.Expense;
   else docCode = row.documentType ?? DocumentType.Expense;
-  let isIncome = docCode === DocumentType.Income;
 
   // Merge: start from queue row, apply only the overridden fields
   const itemName = overrides.item_name ?? row.itemName ?? "";
@@ -145,9 +127,6 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 
   // Which account paid for this / received it. The review screen pre-selects one,
   // but a document that reached review before any account existed still has none.
-  const explicitSides =
-    overrides.fromAccountId !== undefined &&
-    overrides.toAccountId !== undefined;
   if (
     (overrides.fromAccountId === undefined) !==
     (overrides.toAccountId === undefined)
@@ -156,215 +135,51 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       "Choose both the source and target account before importing.",
     );
   }
+  const sides =
+    overrides.fromAccountId !== undefined && overrides.toAccountId !== undefined
+      ? {
+          fromAccountId: overrides.fromAccountId,
+          toAccountId: overrides.toAccountId,
+        }
+      : null;
 
-  const payableDefault = requireAccountDefault(
+  const confirmed = confirmImportRow(
     db,
-    DefaultAccountPurpose.Payable,
-  );
-  const payableAccountId = payableDefault.ok ? payableDefault.value : null;
-
-  // A category that could not be read lands on Uncategorised and is flagged, the
-  // same way the upgrade treats a record it could not place: a document that was
-  // paid for is still a document that was paid for (spec edge case, FR-019).
-  const uncategorisedExpenseDefault = requireAccountDefault(
-    db,
-    DefaultAccountPurpose.UncategorisedExpense,
-  );
-  const uncategorisedIncomeDefault = requireAccountDefault(
-    db,
-    DefaultAccountPurpose.UncategorisedIncome,
-  );
-  let categoryAccountId: number;
-  let uncategorised = false;
-  if (explicitSides) {
-    const from = getAccount(db, overrides.fromAccountId!);
-    const to = getAccount(db, overrides.toAccountId!);
-    if (!from || !to)
-      return refused("Choose accounts that are still available.");
-    const receivableDefault = requireAccountDefault(
-      db,
-      DefaultAccountPurpose.Receivable,
-    );
-    const pair = validateImportAccountPair(
-      from,
-      to,
-      payableAccountId,
-      receivableDefault.ok ? receivableDefault.value : null,
-    );
-    if (!pair.ok) return refused(pair.reason);
-    docCode =
-      pair.kind === "income" ? DocumentType.Income : DocumentType.Expense;
-    isIncome = docCode === DocumentType.Income;
-    categoryAccountId = isIncome ? from.id : to.id;
-    const categoryDefault = isIncome
-      ? uncategorisedIncomeDefault
-      : uncategorisedExpenseDefault;
-    uncategorised =
-      categoryDefault.ok && categoryAccountId === categoryDefault.value;
-  } else {
-    const kind = isIncome ? "income" : "expense";
-    const choices = categoryChoices(db, kind);
-    const categoryDefault = isIncome
-      ? uncategorisedIncomeDefault
-      : uncategorisedExpenseDefault;
-    const selectedAccountId =
-      row.categoryAccountId ?? matchCategoryAccount(choices, category);
-    const selectedCategory = categoryAccountForImport(
-      kind,
-      choices,
-      selectedAccountId,
-      categoryDefault.ok ? categoryDefault.value : null,
-    );
-    if (!selectedCategory.ok) return refused(selectedCategory.reason);
-    categoryAccountId = selectedCategory.value.accountId;
-    uncategorised = selectedCategory.value.uncategorised;
-  }
-
-  const accountId = explicitSides
-    ? isIncome
-      ? overrides.toAccountId!
-      : overrides.fromAccountId!
-    : (overrides.accountId ?? row.accountId ?? defaultAccountId(db));
-  if (accountId == null) {
-    return refused(
-      isIncome
-        ? "Say which account received this before importing it."
-        : "Say which account paid for this before importing it.",
-    );
-  }
-
-  const paidFromAccountId = resolvePaidFromAccountId(
-    accountId,
-    isIncome,
-    payableAccountId,
-  );
-
-  // Resolve the contact party. createdBy = the uploader (audit), not the confirmer.
-  // Priority: explicit contactId → typed new name → confident match → raw extracted name.
-  // `supplier` always carries the other party's name, regardless of kind — only which
-  // contact bucket to search (Supplier vs Customer) depends on isIncome.
-  const role = isIncome ? Role.Customer : Role.Supplier;
-  const partyRawName = supplier;
-  // If the user edited the party name as free text, don't let a stale fuzzy match win.
-  const partyEdited = overrides.supplier !== undefined;
-  const uploader = row.createdBy;
-  let contactId: number | null = null;
-  if (typeof overrides.contactId === "number") {
-    contactId = overrides.contactId;
-  } else if (
-    typeof overrides.newContactName === "string" &&
-    overrides.newContactName.trim()
-  ) {
-    contactId = resolveOrCreateContact(
-      db,
-      overrides.newContactName,
-      role,
-      uploader,
-    );
-  } else if (
-    row.matchedContactId &&
-    !partyEdited &&
-    row.documentType === docCode
-  ) {
-    contactId = row.matchedContactId;
-  } else if (partyRawName.trim()) {
-    contactId = resolveOrCreateContact(db, partyRawName, role, uploader);
-  }
-
-  // Mark as confirmed before the write, so a second click on a slow connection
-  // finds the job out of pending_review rather than importing it twice.
-  db.update(importQueue)
-    .set({
-      state: ImportState.Confirmed,
-      accountId,
+    {
+      jobId: params.jobId,
+      uploadedBy: row.createdBy,
+      tempFilePath: row.tempFilePath,
+      extractedText: row.extractedText,
+    },
+    {
       documentType: docCode,
-      confirmedAt: new Date().toISOString(),
-    })
-    .where(eq(importQueue.id, params.jobId))
-    .run();
+      description: itemName,
+      partyName: supplier,
+      // If the user edited the party name as free text, don't let a stale fuzzy match win.
+      partyEdited: overrides.supplier !== undefined,
+      date,
+      amount,
+      currency,
+      exchangeRate,
+      reference,
+      category,
+      categoryAccountId: row.categoryAccountId,
+      remark,
+      accountId: overrides.accountId ?? row.accountId ?? null,
+      sides,
+      contactId: overrides.contactId,
+      newContactName: overrides.newContactName,
+      matchedContact: row.matchedContactId
+        ? { id: row.matchedContactId, documentType: row.documentType }
+        : null,
+    },
+    { actingUserId: locals.user.id },
+  );
+  if (!confirmed.ok) return refused(confirmed.reason);
 
-  const sides: RecordCreate = isIncome
-    ? {
-        kind: "income",
-        categoryAccountId,
-        receivedIntoAccountId: accountId,
-        date,
-        description: itemName,
-        amount,
-        currency,
-        exchangeRate,
-        contactId,
-        reference,
-        remark,
-        extractedText: row.extractedText,
-      }
-    : {
-        kind: "expense",
-        categoryAccountId,
-        paidFromAccountId,
-        date,
-        description: itemName,
-        amount,
-        currency,
-        exchangeRate,
-        contactId,
-        reference,
-        remark,
-        extractedText: row.extractedText,
-      };
-
-  const created = createRecord(db, uploader, sides);
-  if (!created.ok) {
-    // Nothing was written, so the job goes back to the reviewer with the sentence
-    // that refused it rather than sitting confirmed against no record.
-    db.update(importQueue)
-      .set({ state: ImportState.PendingReview, confirmedAt: null })
-      .where(eq(importQueue.id, params.jobId))
-      .run();
-    emitJobUpdate(params.jobId, locals.user.id);
-    return refused(created.reason);
-  }
-
-  const resultId = created.value.id;
-
-  // Move the file out of temp and attach it to the record. A failed move leaves
-  // the temp file where it is and still attaches it, so nothing is lost.
-  let attachmentPath = row.tempFilePath;
-  try {
-    attachmentPath = moveToRecordStorage(row.tempFilePath, date);
-  } catch (err) {
-    log.error(
-      { err, jobId: params.jobId },
-      "File move failed (temp file remains recoverable)",
-    );
-  }
-  addAttachment(db, resultId, attachmentPath, displayName(attachmentPath));
-  // The record was emitted before it had its receipt, so say it again — this is
-  // the same thing adding an attachment by hand does.
-  emitRecordUpdate(db, resultId);
-
-  db.update(importQueue)
-    .set({
-      state: ImportState.Imported,
-      resultId,
-      resultType: docCode,
-      completedAt: new Date().toISOString(),
-    })
-    .where(eq(importQueue.id, params.jobId))
-    .run();
-  emitJobUpdate(params.jobId, locals.user.id);
-
+  const { record, uncategorised } = confirmed.value;
   return json(
-    { id: resultId, number: created.value.recordNumber ?? "", uncategorised },
+    { id: record.id, number: record.recordNumber ?? "", uncategorised },
     { status: 201 },
   );
 };
-
-function emitJobUpdate(jobId: string, userId: number) {
-  const job = db
-    .select()
-    .from(importQueue)
-    .where(eq(importQueue.id, jobId))
-    .get();
-  if (job) importEvents.emit("job-update", { userId, job });
-}

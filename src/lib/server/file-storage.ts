@@ -178,6 +178,28 @@ export function moveToRecordStorage(
 }
 
 /**
+ * Puts a file that `moveToRecordStorage` moved back where it came from.
+ *
+ * For a save that moved the file and then did not commit: the import job is
+ * still waiting for review, so its file must be at its temp path again. Does
+ * nothing when the temp path is already taken or the moved file is not there.
+ * Only call it for a move this same save made. A file that was already in
+ * `records/` before the save may belong to a record another save made.
+ */
+export function returnToTemp(
+  recordRelPath: string,
+  tempRelPath: string,
+  root = STORAGE_PATH,
+): void {
+  const src = join(root, recordRelPath);
+  const dest = join(root, tempRelPath);
+  assertInsideStorage(dest, root);
+  if (existsSync(dest) || !existsSync(src)) return;
+  mkdirSync(dirname(dest), { recursive: true });
+  renameSync(src, dest);
+}
+
+/**
  * Every helper below takes the storage root it should work under, defaulting to
  * the configured one.
  *
