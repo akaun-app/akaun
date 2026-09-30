@@ -32,6 +32,10 @@ export const ImportState = {
   Imported: 6,
   Skipped: 7,
   Failed: 8,
+  // A document read as several items. Its items are reviewed on their own
+  // (import_items); the queue row stays to hold the file and the group, and is
+  // neither in review nor done while any item is still waiting.
+  Grouped: 9,
 } as const;
 // DocumentType is also used for import_queue.result_type
 export const DocumentType = { Expense: 1, Income: 2 } as const;
@@ -71,6 +75,7 @@ export const ImportStateLabels: Record<number, string> = {
   [ImportState.Imported]: "imported",
   [ImportState.Skipped]: "skipped",
   [ImportState.Failed]: "failed",
+  [ImportState.Grouped]: "grouped",
 };
 
 export const DocumentTypeLabels: Record<number, string> = {

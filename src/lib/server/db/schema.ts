@@ -253,6 +253,76 @@ export const llmProviders = sqliteTable("llm_providers", {
     .default(sql`(datetime('now'))`),
 });
 
+/**
+ * The fields a person reviews before an imported document becomes a record:
+ * what was read off it, the contact and category matched to it, the duplicate
+ * warning, and the account that paid or received it.
+ *
+ * A receipt keeps them on its queue row. A document with several items keeps
+ * one set per item, in `import_items`. Both tables take their columns from this
+ * one function, so a field added for review reaches both, and the two can never
+ * disagree about a name or a type. It is a function because a table needs its
+ * own column objects: two tables cannot share one.
+ *
+ * The queue row's columns were here long before items were, and their names
+ * and types are fixed by the rows already stored. Change them only with a
+ * migration that keeps those rows as they are.
+ */
+function reviewColumns() {
+  return {
+    // DocumentType code (1 = expense, 2 = income). See enums.ts. On an item it
+    // is the item's kind: set by its section, or by the sign of its amount.
+    documentType: integer("document_type"),
+    itemName: text("item_name"),
+    // RAW extracted name string (entity tables carry no text name).
+    supplier: text("supplier"),
+    // Set only on a confident exact-normalized match against contacts.legal_name.
+    matchedContactId: integer("matched_contact_id").references(
+      () => contacts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    // JSON array of ranked fuzzy candidates [{id, legalName, score}].
+    matchCandidates: text("match_candidates"),
+    date: text("date"),
+    amount: real("amount"),
+    // Detected currency (ISO-4217) and its rate to the main currency. Null until the
+    // LLM/worker resolve them; rate stays null when no API key (manual entry at review).
+    currency: text("currency"),
+    exchangeRate: real("exchange_rate"),
+    reference: text("reference"),
+    category: text("category"),
+    categoryAccountId: integer("category_account_id").references(
+      () => accounts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    remark: text("remark"),
+    duplicateOf: integer("duplicate_of"),
+    // 0-100 weighted-match confidence; set only when duplicateOf is set. See duplicate-detector.ts.
+    duplicateConfidence: integer("duplicate_confidence"),
+    // JSON array of contributing signal labels (e.g. ["reference","content"]), highest-weight first.
+    duplicateReasons: text("duplicate_reasons"),
+    // Which account the imported record affected — "which account paid?" /
+    // "which account received it?" (FR-019, FR-011). Nullable because a queued
+    // document may reach review before the user has said; the review screen
+    // pre-selects the default account and confirm requires one.
+    accountId: integer("account_id").references(() => accounts.id, {
+      onDelete: "set null",
+    }),
+  };
+}
+
+/** The name of each review column, as the queue row and an item both have it. */
+export type ReviewColumnName = keyof ReturnType<typeof reviewColumns>;
+
+/** The review columns' names, in the order both tables list them. */
+export const REVIEW_COLUMN_NAMES = Object.keys(
+  reviewColumns(),
+) as ReviewColumnName[];
+
 export const importQueue = sqliteTable("import_queue", {
   id: text("id").primaryKey(),
   // Who uploaded the file; used for `created_by` on the resulting contact/record,
@@ -274,47 +344,9 @@ export const importQueue = sqliteTable("import_queue", {
   // server-side extraction result), carried through to the confirmed expense/income
   // row so it becomes searchable. See worker.ts processJob() and the confirm route.
   extractedText: text("extracted_text"),
-  // DocumentType code (1 = expense, 2 = income). See enums.ts.
-  documentType: integer("document_type"),
-  itemName: text("item_name"),
-  // RAW extracted name string (entity tables carry no text name).
-  supplier: text("supplier"),
-  // Set only on a confident exact-normalized match against contacts.legal_name.
-  matchedContactId: integer("matched_contact_id").references(
-    () => contacts.id,
-    {
-      onDelete: "set null",
-    },
-  ),
-  // JSON array of ranked fuzzy candidates [{id, legalName, score}].
-  matchCandidates: text("match_candidates"),
-  date: text("date"),
-  amount: real("amount"),
-  // Detected currency (ISO-4217) and its rate to the main currency. Null until the
-  // LLM/worker resolve them; rate stays null when no API key (manual entry at review).
-  currency: text("currency"),
-  exchangeRate: real("exchange_rate"),
-  reference: text("reference"),
-  category: text("category"),
-  categoryAccountId: integer("category_account_id").references(
-    () => accounts.id,
-    {
-      onDelete: "set null",
-    },
-  ),
-  remark: text("remark"),
-  duplicateOf: integer("duplicate_of"),
-  // 0-100 weighted-match confidence; set only when duplicateOf is set. See duplicate-detector.ts.
-  duplicateConfidence: integer("duplicate_confidence"),
-  // JSON array of contributing signal labels (e.g. ["reference","content"]), highest-weight first.
-  duplicateReasons: text("duplicate_reasons"),
-  // Which account the imported record affected — "which account paid?" /
-  // "which account received it?" (FR-019, FR-011). Nullable because a queued
-  // document may reach review before the user has said; the review screen
-  // pre-selects the default account and confirm requires one.
-  accountId: integer("account_id").references(() => accounts.id, {
-    onDelete: "set null",
-  }),
+  // What was read off the document, and what the reviewer changes before
+  // confirming. The same columns sit on each item of a group; see reviewColumns.
+  ...reviewColumns(),
   resultId: integer("result_id"),
   // DocumentType code, mirrors document_type post-confirm.
   resultType: integer("result_type"),
@@ -325,7 +357,94 @@ export const importQueue = sqliteTable("import_queue", {
   processedAt: text("processed_at"),
   confirmedAt: text("confirmed_at"),
   completedAt: text("completed_at"),
+
+  // How the document is to be read, and how it was read (006). Every column
+  // below is empty on a row uploaded before them, and an empty row is read the
+  // way every document was then: as one receipt or invoice.
+
+  // What the uploader chose under "Read as": an ImportReadAs value
+  // ($lib/import-reading.ts). Null on an older row, which means a receipt.
+  readAs: text("read_as"),
+  // The profile the document was read with, once one is known: the saved
+  // profile's id, or the id of a built-in reading such as several items. Null
+  // for the standard reading.
+  profileId: text("profile_id"),
+  // A copy of that profile as it was when this document was read, as JSON. A
+  // profile edited, disabled or deleted later does not change this group
+  // (FR-038), and "Read again" can say what the first reading used.
+  profileSnapshot: text("profile_snapshot"),
+  // Summary or every transaction: an ImportMode value. Only a reading with a
+  // profile uses it; null otherwise.
+  importMode: text("import_mode"),
+  // How the reading was picked: an ImportReadHow value (chosen, detected, or
+  // the standard reading as the fallback). The screen shows it (FR-041).
+  readHow: text("read_how"),
+  // What reading the document found besides its items, as JSON: the total the
+  // document states for them, the control total worked out from the items as
+  // read, and the lines it left out. See $lib/import-reading.ts.
+  extractionNotes: text("extraction_notes"),
+  // How far a long reading has got, for the queue to show. Null while nothing
+  // is counted, as for a receipt.
+  progressDone: integer("progress_done"),
+  progressTotal: integer("progress_total"),
+  // The Source account chosen once for a whole group. Each item takes it when
+  // it is chosen, and keeps its own copy in its account column, so changing
+  // one item later changes only that item (US4 scenario 4).
+  groupAccountId: integer("group_account_id").references(() => accounts.id, {
+    onDelete: "set null",
+  }),
 });
+
+/**
+ * One line of a document that is to become its own record: an item of a group.
+ *
+ * A group is a queue row that was read as several items. Its items live here
+ * and not as more queue rows, so the queue, its live updates and the history
+ * never have to tell a document from a line of one. Deleting the queue row
+ * deletes its items. A record made from an item is found through the item's
+ * result, just as a receipt's record is found through its queue row.
+ *
+ * The file is the queue row's; an item has none of its own. Nor does an item
+ * keep any document text, so the duplicate check and the record's search text
+ * never see the whole document (FR-025, FR-029).
+ */
+export const importItems = sqliteTable(
+  "import_items",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id")
+      .notNull()
+      .references(() => importQueue.id, { onDelete: "cascade" }),
+    // ImportState code. An item is born waiting for review, and ends Imported
+    // or Skipped. See enums.ts.
+    state: integer("state").notNull().default(4),
+    // Where the item stood among the document's items, from 0. The group page
+    // lists them in this order.
+    position: integer("position").notNull(),
+    // The numbered line of the document text the item was read from. Null when
+    // the reading did not say.
+    sourceLine: integer("source_line"),
+    // The section of the profile the item was read under, by its key. The
+    // several-items reading is a built-in profile with one section.
+    sectionKey: text("section_key").notNull(),
+    // The fee type the reader gave the line, when its section lists fee types.
+    feeType: text("fee_type"),
+    // The profile's extra fields for this line, as a JSON object of plain
+    // values. Null when the profile has none.
+    extrasJson: text("extras_json"),
+    ...reviewColumns(),
+    // The record this item became, and its DocumentType code, once imported.
+    resultId: integer("result_id"),
+    resultType: integer("result_type"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [index("import_items_job_state_idx").on(t.jobId, t.state)],
+);
 
 // ---------------------------------------------------------------------------
 // Phase 7 — Quotations & Invoicing
@@ -862,7 +981,12 @@ export const recordAttachments = sqliteTable(
     // legacy tables.
     legacyFilename: text("legacy_filename"),
   },
-  (t) => [index("record_attachments_record_idx").on(t.recordId)],
+  (t) => [
+    index("record_attachments_record_idx").on(t.recordId),
+    // A stored file may be shared by several records. Before one is deleted,
+    // the file's other users are looked up by this path.
+    index("record_attachments_filename_idx").on(t.filename),
+  ],
 );
 
 // Replaces expense_search_text and income_search_text, unchanged in shape.

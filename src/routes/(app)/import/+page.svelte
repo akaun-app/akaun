@@ -45,7 +45,10 @@
 		| 'confirmed'
 		| 'imported'
 		| 'skipped'
-		| 'failed';
+		| 'failed'
+		// A document read as several items. Named here so such a row is never taken
+		// for another state; this screen does not list it yet.
+		| 'grouped';
 
 	type Candidate = { id: number; legalName: string; score?: number };
 
