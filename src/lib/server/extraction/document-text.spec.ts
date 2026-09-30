@@ -12,8 +12,12 @@ vi.mock("$lib/server/env.js", () => ({
   OCR_CACHE_PATH: join(root, "ocr-cache"),
 }));
 
-const { extractNumberedText, extractText, numberDocumentLines } =
-  await import("./document-text.js");
+const {
+  extractNumberedText,
+  extractText,
+  numberDocumentLines,
+  stripLineNumbers,
+} = await import("./document-text.js");
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -35,6 +39,21 @@ async function writePdf(pages: string[][]): Promise<string> {
   writeFileSync(path, Buffer.concat(chunks));
   return path;
 }
+
+describe("stripLineNumbers", () => {
+  it("gives back only what the document prints", () => {
+    const pages = ["Invoice 12\n\nService fee 10.00", "Total  10.00"];
+    expect(stripLineNumbers(numberDocumentLines(pages))).toBe(
+      "Invoice 12\nService fee 10.00\nTotal  10.00",
+    );
+  });
+
+  it("keeps a printed line that only looks like a marker", () => {
+    expect(stripLineNumbers("L0001│L0002│x\nL0003│--- page 9 ---x")).toBe(
+      "L0002│x\n--- page 9 ---x",
+    );
+  });
+});
 
 describe("numberDocumentLines", () => {
   it("numbers every line across pages and marks each page", () => {

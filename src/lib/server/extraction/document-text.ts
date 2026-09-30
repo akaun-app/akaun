@@ -146,6 +146,20 @@ export function numberDocumentLines(pages: readonly string[]): string {
 }
 
 /**
+ * Numbered text back as plain text: the page markers dropped and each line's
+ * number taken off, so what is left is only what the document prints. Used
+ * where the text is kept to be searched, where "L0001" would be noise.
+ */
+export function stripLineNumbers(numbered: string): string {
+	const markers = /^--- page \d+ ---$/;
+	return numbered
+		.split('\n')
+		.filter((line) => !markers.test(line))
+		.map((line) => line.replace(/^L\d+│/, ''))
+		.join('\n');
+}
+
+/**
  * The document's text with its line breaks kept and every line numbered (see
  * `numberDocumentLines`), for the several-items reading. A text PDF is read a
  * page at a time; a scanned PDF and an image are read by OCR, and numbered the

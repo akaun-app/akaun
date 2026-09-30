@@ -16,6 +16,7 @@ import {
   AccountRole,
   DocumentType,
   EntityType,
+  ImportState,
   LedgerRecordKind,
 } from "$lib/enums.js";
 import { detectDuplicate } from "./duplicate-detector.js";
@@ -202,5 +203,42 @@ describe("detectDuplicate over the one record store", () => {
 
     expect(result).not.toBeNull();
     expect(result!.duplicateOf).toBe(id);
+  });
+
+  it("leaves the file name out when the job has none (006 FR-025)", () => {
+    const id = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 100,
+      amountMinor: 10_000,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2020-01-01",
+      reference: "OLD",
+    });
+    db.insert(schema.users)
+      .values({ id: 1, email: "u@test", username: "u", passwordHash: "x" })
+      .run();
+    db.insert(schema.importQueue)
+      .values({
+        id: "old-job",
+        createdBy: 1,
+        state: ImportState.Imported,
+        tempFilePath: "import/temp/old.pdf",
+        originalFilename: "fees.pdf",
+        resultId: id,
+        resultType: DocumentType.Expense,
+      })
+      .run();
+    const job = {
+      ...baseJob,
+      reference: null,
+      date: "2026-08-01",
+      originalFilename: "fees.pdf",
+    };
+
+    // Amount and supplier alone are under the threshold; the shared file name
+    // is what tips a receipt over it.
+    expect(detectDuplicate(db, job)?.reasons).toContain("filename");
+    expect(detectDuplicate(db, { ...job, originalFilename: null })).toBeNull();
   });
 });

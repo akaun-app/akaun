@@ -2,7 +2,11 @@ import { not, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { importEvents } from '$lib/server/import/events.js';
-import { jobForEvent, type ImportJobEvent } from '$lib/server/import/job-event.js';
+import {
+	jobForEvent,
+	type ImportItemEvent,
+	type ImportJobEvent
+} from '$lib/server/import/job-event.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -22,7 +26,10 @@ export const GET: RequestHandler = ({ locals }) => {
 
 	const stream = new ReadableStream({
 		start(controller) {
-			// Shared ledger — snapshot every active job, not just the caller's.
+			// Shared ledger — snapshot every active job, not just the caller's. The
+			// snapshot is of queue rows only, never of a group's items: a group can
+			// hold a thousand, and its page loads them itself. Items arrive as
+			// changes only, like any paginated list.
 			const currentJobs = db
 				.select()
 				.from(importQueue)
@@ -47,8 +54,26 @@ export const GET: RequestHandler = ({ locals }) => {
 				}
 			};
 
+			const itemUpdateHandler = ({ jobId, item }: { jobId: string; item: ImportItemEvent }) => {
+				try {
+					controller.enqueue(encodeEvent({ type: 'item-update', jobId, item }));
+				} catch {
+					// stream already closed
+				}
+			};
+
+			const itemDeleteHandler = ({ jobId, itemId }: { jobId: string; itemId: string }) => {
+				try {
+					controller.enqueue(encodeEvent({ type: 'item-deleted', jobId, itemId }));
+				} catch {
+					// stream already closed
+				}
+			};
+
 			importEvents.on('job-update', updateHandler);
 			importEvents.on('job-deleted', deleteHandler);
+			importEvents.on('item-update', itemUpdateHandler);
+			importEvents.on('item-deleted', itemDeleteHandler);
 
 			// Keep connection alive through proxies and dev server
 			const heartbeat = setInterval(() => {
@@ -63,6 +88,8 @@ export const GET: RequestHandler = ({ locals }) => {
 				clearInterval(heartbeat);
 				importEvents.off('job-update', updateHandler);
 				importEvents.off('job-deleted', deleteHandler);
+				importEvents.off('item-update', itemUpdateHandler);
+				importEvents.off('item-deleted', itemDeleteHandler);
 			};
 		},
 		cancel() {

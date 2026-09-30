@@ -9,7 +9,10 @@ import { getSetting, SETTING_KEYS } from '../settings.js';
 type Db = BunSQLiteDatabase<any>;
 
 type JobSnapshot = {
-	originalFilename: string;
+	// Null when the file name is no evidence: every item of one document shares
+	// it, and so does last month's document of the same kind (006 FR-025). The
+	// file name then neither finds candidates nor adds to a score.
+	originalFilename: string | null;
 	fileHash: string | null;
 	itemName: string | null;
 	supplier: string | null;
@@ -132,17 +135,20 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 		}
 	}
 
-	const filenameHits = db
-		.select({ resultId: importQueue.resultId })
-		.from(importQueue)
-		.where(
-			and(
-				eq(importQueue.originalFilename, job.originalFilename),
-				eq(importQueue.state, ImportState.Imported),
-				eq(importQueue.resultType, job.documentType)
-			)
-		)
-		.all();
+	const jobFilename = job.originalFilename;
+	const filenameHits = jobFilename
+		? db
+				.select({ resultId: importQueue.resultId })
+				.from(importQueue)
+				.where(
+					and(
+						eq(importQueue.originalFilename, jobFilename),
+						eq(importQueue.state, ImportState.Imported),
+						eq(importQueue.resultType, job.documentType)
+					)
+				)
+				.all()
+		: [];
 	const filenameIds = filenameHits.map((r) => r.resultId).filter((id): id is number => id != null);
 	if (filenameIds.length) {
 		for (const row of candidateQuery(inArray(ledgerRecords.id, filenameIds)).all()) {
@@ -153,7 +159,7 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	if (candidates.size === 0) return null;
 
 	const jobTokens = job.extractedText ? tokenSet(normalizeName(job.extractedText.slice(0, CONTENT_CHAR_LIMIT))) : null;
-	const jobFilenameTokens = tokenSet(normalizeName(stripExtension(job.originalFilename)));
+	const jobFilenameTokens = jobFilename ? tokenSet(normalizeName(stripExtension(jobFilename))) : null;
 	const jobSupplierNorm = job.supplier ? normalizeName(job.supplier) : null;
 	const jobSupplierTokens = jobSupplierNorm ? tokenSet(jobSupplierNorm) : null;
 
@@ -189,10 +195,10 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 			}
 		}
 
-		if (c.originalFilename) {
+		if (jobFilename && jobFilenameTokens && c.originalFilename) {
 			const candFilenameNorm = normalizeName(stripExtension(c.originalFilename));
 			const candFilenameTokens = tokenSet(candFilenameNorm);
-			const jobFilenameNorm = normalizeName(stripExtension(job.originalFilename));
+			const jobFilenameNorm = normalizeName(stripExtension(jobFilename));
 			if (jobFilenameNorm && candFilenameNorm === jobFilenameNorm) {
 				reasons.push({ label: 'filename', weight: 25 });
 			} else {

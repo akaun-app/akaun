@@ -1,4 +1,4 @@
-import type { importQueue } from "../db/schema.js";
+import type { importItems, importQueue } from "../db/schema.js";
 
 type ImportJobRow = typeof importQueue.$inferSelect;
 
@@ -20,4 +20,18 @@ export function jobForEvent(row: ImportJobRow): ImportJobEvent {
   delete job.extractedText;
   delete job.preExtractedText;
   return job as ImportJobEvent;
+}
+
+type ImportItemRow = typeof importItems.$inferSelect;
+
+/**
+ * One item of a group as the import screens receive it. An item keeps no
+ * document text, so it is sent whole; this type is the one name for that
+ * shape, so a column added to items later is a choice made here.
+ */
+export type ImportItemEvent = ImportItemRow;
+
+/** The shape of an item row that leaves the server as a live update. */
+export function itemForEvent(row: ImportItemRow): ImportItemEvent {
+  return { ...row };
 }

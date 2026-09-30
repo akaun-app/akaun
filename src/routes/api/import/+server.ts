@@ -6,6 +6,7 @@ import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { jobForEvent } from '$lib/server/import/job-event.js';
+import { readingForUpload } from '$lib/server/import/upload-reading.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -33,7 +34,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		return b.createdAt.localeCompare(a.createdAt);
 	});
 
-	return json(rows);
+	// The same shape as a live update: no document text, which can be tens of
+	// thousands of characters per row and which no screen reads from the list.
+	return json(rows.map(jobForEvent));
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -46,6 +49,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!(file instanceof File)) {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
+
+	// How to read it (FR-001). Checked before anything is stored, so a refused
+	// upload leaves no file and no queue row behind.
+	const reading = readingForUpload(formData.get('readAs'));
+	if (!reading.ok) return json({ error: reading.error }, { status: 400 });
 
 	// Optional: caller already ran its own OCR/extraction (e.g. Apple Vision Framework
 	// via a client-side Shortcut) and wants the server to skip its own OCR.
@@ -94,7 +102,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			tempFilePath,
 			originalFilename: file.name,
 			fileHash,
-			preExtractedText
+			preExtractedText,
+			readAs: reading.readAs,
+			readHow: reading.readHow
 		})
 		.run();
 
