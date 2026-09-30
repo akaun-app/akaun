@@ -1,7 +1,18 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { Upload, Clock, Receipt, Check, X, AlertTriangle, RotateCcw, Camera, ExternalLink } from '@lucide/svelte';
+	import {
+		Upload,
+		Clock,
+		Receipt,
+		Check,
+		X,
+		AlertTriangle,
+		RotateCcw,
+		Camera,
+		ExternalLink,
+		ChevronRight,
+	} from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
@@ -61,6 +72,9 @@
 		duplicateConfidence: number | null;
 		duplicateReasons: string[];
 		error: string | null;
+		// The record this document became, once it is imported. The history row links to it.
+		resultId: number | null;
+		resultType: number | null;
 		// client-side tracking
 		_edits?: Record<string, string | number>;
 		// Set from the confirm reply when no category could be read off the document.
@@ -104,6 +118,8 @@
 			duplicateConfidence: j.duplicateConfidence ?? null,
 			duplicateReasons: reasons,
 			error: j.error,
+			resultId: j.resultId ?? null,
+			resultType: j.resultType ?? null,
 			_edits: {},
 		};
 	}
@@ -381,6 +397,9 @@
 						...j,
 						state: 'confirmed' as JobState,
 						documentType: isIncome ? 'income' : 'expense',
+						// The reply names the new record, so the history row can link to it
+						// before the live update arrives.
+						resultId: typeof result.id === 'number' ? result.id : j.resultId,
 						_uncategorised: !!result.uncategorised,
 					}
 				: j,
@@ -999,7 +1018,17 @@
 							</div>
 						{:else}
 							{@const importing = job.state === 'confirmed'}
-							<div class="proc-row done" class:importing>
+							<!-- Once the record exists the whole row opens it. It has no other action. -->
+							<svelte:element
+								this={job.resultId != null ? 'a' : 'div'}
+								href={job.resultId != null
+									? resolve('/(app)/records/[id]', { id: String(job.resultId) })
+									: undefined}
+								class="proc-row done"
+								class:importing
+								class:related-link={job.resultId != null}
+								class:history-link={job.resultId != null}
+							>
 								<div class="proc-file">
 									{#if importing}
 										<span class="spinner sm"></span>
@@ -1026,7 +1055,10 @@
 									>{currencySymbol(job.currency)}
 									{formatMoney(job.amount)}</span
 								>
-							</div>
+								{#if job.resultId != null}
+									<ChevronRight size={14} color="var(--muted-foreground)" />
+								{/if}
+							</svelte:element>
 						{/if}
 					{/each}
 				</div>
@@ -1084,6 +1116,16 @@
 	}
 	.review-grid :global(.account-select) {
 		height: 34px;
+	}
+
+	/* A history row that opens its record: a link that still looks like the other rows. */
+	.history-link {
+		color: inherit;
+		text-decoration: none;
+	}
+	.history-link:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
 	}
 
 	.scan-fab {
