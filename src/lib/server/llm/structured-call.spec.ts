@@ -160,6 +160,26 @@ describe("callStructured", () => {
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
+  it("retries in text mode when the structured answer ended for another reason", async () => {
+    // A content filter or a provider's "other" is not a length limit, so it is
+    // not reported as truncated; the same call is made again without a schema.
+    const model = mockModel([
+      { text: JSON.stringify(thing), finishReason: "other" },
+      { text: JSON.stringify(thing) },
+    ]);
+    const config = provider("other-reason");
+
+    await expect(
+      callStructured(model, config, spec("thing@1")),
+    ).resolves.toEqual(thing);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(askedForSchema(model, 1)).toBe(false);
+
+    // It is not remembered: the next call asks for a schema again.
+    await callStructured(model, config, spec("thing@1"));
+    expect(askedForSchema(model, 2)).toBe(true);
+  });
+
   it("reports a cut-off text answer as truncated", async () => {
     const model = mockModel([
       { error: httpError(400) },

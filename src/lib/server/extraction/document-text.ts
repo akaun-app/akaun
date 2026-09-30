@@ -72,19 +72,29 @@ function imageObjectToPngBuffer(data: Uint8ClampedArray, width: number, height: 
 }
 
 async function extractFromScannedPdf(buffer: Buffer, totalPages: number): Promise<string> {
+	const pages = await ocrScannedPdfPages(buffer, totalPages);
+	return pages.flat().join('\n').trim();
+}
+
+// OCRs every image of a scanned PDF (one with no text layer), since
+// tesseract.js can't read PDF bytes directly. Returns, for each page, the text
+// of each of its images in order.
+async function ocrScannedPdfPages(buffer: Buffer, totalPages: number): Promise<string[][]> {
 	const pdf = await getDocumentProxy(new Uint8Array(buffer));
 	const worker = await createOcrWorker();
 	try {
-		const pageTexts: string[] = [];
+		const pages: string[][] = [];
 		for (let pageNumber = 1; pageNumber <= totalPages; pageNumber++) {
 			const images = await extractImages(pdf, pageNumber);
+			const texts: string[] = [];
 			for (const img of images) {
 				const png = imageObjectToPngBuffer(img.data, img.width, img.height, img.channels);
 				const { data } = await worker.recognize(png);
-				pageTexts.push(data.text.trim());
+				texts.push(data.text.trim());
 			}
+			pages.push(texts);
 		}
-		return pageTexts.join('\n').trim();
+		return pages;
 	} finally {
 		await worker.terminate();
 	}
@@ -98,4 +108,74 @@ async function extractFromImage(absPath: string): Promise<string> {
 	} finally {
 		await worker.terminate();
 	}
+}
+
+// ── Numbered text, for reading a document line by line ─────────────────────
+//
+// The receipt reading above sends the text as one run with no line breaks,
+// which is enough to find one total (006 FR-004 keeps it that way). A reading
+// that proposes one record per line needs the lines themselves, so this path
+// keeps each page's line breaks and numbers every line. The model then says
+// which line each item came from (`source_line`), and the reviewer can find it.
+
+/** Marks the start of a page in numbered text. */
+export function pageMarker(pageNumber: number): string {
+	return `--- page ${pageNumber} ---`;
+}
+
+/**
+ * Joins a document's pages into numbered text: each page starts with its
+ * marker line, and every line with text on it starts with its number, for
+ * example `L0001│Service fee 10.00`. Numbers run on across pages, so a number
+ * names one line of the whole document. Blank lines are left out and not
+ * numbered. Nothing is cut: every line of every page is kept.
+ */
+export function numberDocumentLines(pages: readonly string[]): string {
+	const out: string[] = [];
+	let lineNumber = 0;
+	pages.forEach((page, index) => {
+		out.push(pageMarker(index + 1));
+		for (const line of page.split(/\r\n|\r|\n/)) {
+			const text = line.trimEnd();
+			if (!text.trim()) continue;
+			lineNumber++;
+			out.push(`L${String(lineNumber).padStart(4, '0')}│${text}`);
+		}
+	});
+	return out.join('\n');
+}
+
+/**
+ * The document's text with its line breaks kept and every line numbered (see
+ * `numberDocumentLines`), for the several-items reading. A text PDF is read a
+ * page at a time; a scanned PDF and an image are read by OCR, and numbered the
+ * same way.
+ */
+export async function extractNumberedText(absPath: string, mimeType: string): Promise<string> {
+	return numberDocumentLines(await extractPages(absPath, mimeType));
+}
+
+async function extractPages(absPath: string, mimeType: string): Promise<string[]> {
+	if (mimeType === 'application/pdf' || absPath.toLowerCase().endsWith('.pdf')) {
+		const buffer = readFileSync(absPath);
+		const { text: pages, totalPages } = await pdfExtractText(new Uint8Array(buffer), {
+			mergePages: false
+		});
+		// The same test as the receipt path for a PDF with no text layer.
+		const length = pages.reduce((sum, page) => sum + page.length, 0);
+		const avgCharsPerPage = totalPages > 0 ? length / totalPages : length;
+		if (avgCharsPerPage < 50 && length < 200) {
+			const ocr = await ocrScannedPdfPages(buffer, totalPages);
+			return ocr.map((texts) => texts.join('\n'));
+		}
+		return pages;
+	}
+	if (
+		mimeType === 'image/jpeg' ||
+		mimeType === 'image/png' ||
+		/\.(jpe?g|png)$/i.test(absPath)
+	) {
+		return [await extractFromImage(absPath)];
+	}
+	throw new Error(`Unsupported file type. Please upload a PDF, JPG, or PNG.`);
 }

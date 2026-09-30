@@ -6,10 +6,12 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LLMProviderConfig } from "../model-factory.js";
 
 // One model reply: a finished answer, an answer cut off by the output length
-// limit, or an error thrown by the provider.
+// limit, an answer that ended for another reason (such as a content filter or
+// a provider that reports "other"), or an error thrown by the provider.
 export type Reply =
   | { text: string }
   | { truncated: string }
+  | { text: string; finishReason: "content-filter" | "other" | "error" }
   | { error: unknown };
 
 // A mock model that answers each call with the next reply in order, and keeps
@@ -21,13 +23,16 @@ export function mockModel(replies: Reply[]): MockLanguageModelV4 {
       const reply = replies[Math.min(call++, replies.length - 1)];
       if ("error" in reply) throw reply.error;
       const truncated = "truncated" in reply;
+      const unified = truncated
+        ? "length"
+        : "finishReason" in reply
+          ? reply.finishReason
+          : "stop";
       return {
         content: [
           { type: "text", text: truncated ? reply.truncated : reply.text },
         ],
-        finishReason: truncated
-          ? { unified: "length", raw: "length" }
-          : { unified: "stop", raw: "stop" },
+        finishReason: { unified, raw: unified },
         usage: {
           inputTokens: {
             total: 10,

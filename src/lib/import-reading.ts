@@ -41,6 +41,15 @@ export const ImportReadHow = {
 export type ImportReadHowValue =
   (typeof ImportReadHow)[keyof typeof ImportReadHow];
 
+/**
+ * The most document text one reading sends to the model, in characters,
+ * counted as the model receives it (with its line numbers). A longer document
+ * fails with this limit named; it is never cut short (006 FR-010).
+ */
+export const DOCUMENT_TEXT_MAX_CHARS = 200_000;
+/** The most items one document may yield. More fails with the limit named. */
+export const DOCUMENT_ITEMS_MAX = 1_000;
+
 /** At most this many ignored lines are kept for one document. */
 export const IGNORED_LINES_MAX = 20;
 /** Each ignored line is cut to this many characters. */
@@ -81,7 +90,7 @@ export type ExtractionNotes = {
 };
 
 /** Cuts the ignored lines to the kept number and length. */
-function capIgnored(lines: readonly unknown[]): string[] {
+export function capIgnored(lines: readonly unknown[]): string[] {
   const kept: string[] = [];
   for (const line of lines) {
     if (typeof line !== "string") continue;

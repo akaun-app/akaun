@@ -1,0 +1,142 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`compileProfile — built-in several items > compiles to the schema the providers receive 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "additionalProperties": false,
+      "properties": {
+        "counterparty": {
+          "description": "The other party's name exactly as printed on the document (the full legal or business name): the supplier for an expense, the customer for income. Never shortened, abbreviated or paraphrased. Null when none is printed.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "currency": {
+          "description": "The ISO-4217 code the amounts are in (for example USD, MYR, SGD, EUR), from any symbol or code on the document. Null when none is shown.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "date": {
+          "description": "The document's date as YYYY-MM-DD. Null when it is unclear.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "document_type": {
+          "description": "expense when the document is money the user pays out, income when it is money the user receives. The whole document is one kind.",
+          "enum": [
+            "expense",
+            "income",
+          ],
+          "type": "string",
+        },
+        "reference": {
+          "description": "The document's own invoice, statement or reference number. Null when there is none.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+      },
+      "required": [
+        "document_type",
+        "counterparty",
+        "date",
+        "reference",
+        "currency",
+      ],
+      "type": "object",
+    },
+    "ignored": {
+      "description": "A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "sections": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "description": "One entry for each charge line on the document.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "The amount on this line exactly as printed, as a number with no currency symbol and no thousands separators. Keep the minus sign when the line prints one, or prints the amount in brackets. Never work out or add up a figure yourself.",
+                "type": "number",
+              },
+              "category_account_id": {
+                "description": "The id of the best matching account from the lists in the instructions. Null when the line does not say enough to choose one. Never invent an id.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+              "date": {
+                "description": "This line's own date as YYYY-MM-DD, only when the line prints a date of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "description": {
+                "description": "A short label for this line in a few words (under 60 characters), taken from the line's own wording.",
+                "type": "string",
+              },
+              "reference": {
+                "description": "This line's own reference number, only when the line prints one of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "source_line": {
+                "description": "The number after L at the start of the line where this amount is printed, for example 12 for L0012.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+            },
+            "required": [
+              "description",
+              "amount",
+              "date",
+              "reference",
+              "source_line",
+              "category_account_id",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+      },
+      "required": [
+        "items",
+      ],
+      "type": "object",
+    },
+    "stated_total": {
+      "description": "The total the document prints for exactly the lines listed in sections.items, as printed, with no currency symbol, for example the total of charges. Never an amount due, a balance, or a grand total that includes other charges. Null when the document prints no such total.",
+      "type": [
+        "number",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "header",
+    "stated_total",
+    "sections",
+    "ignored",
+  ],
+  "type": "object",
+}
+`;

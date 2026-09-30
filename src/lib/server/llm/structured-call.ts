@@ -12,7 +12,6 @@
 import {
   APICallError,
   NoObjectGeneratedError,
-  NoOutputGeneratedError,
   Output,
   RetryError,
   generateText,
@@ -136,16 +135,31 @@ export async function callStructured<T>(
         temperature: 0,
         maxOutputTokens: spec.maxOutputTokens,
       });
-      const output = result.output;
-      log.trace(
-        { ...who, mode: "structured", response: output },
-        "LLM response",
-      );
-      return output;
-    } catch (error) {
-      if (NoOutputGeneratedError.isInstance(error)) {
-        throw new OutputTruncatedError({ cause: error });
+      // The SDK reads the answer only when the model finished normally, and
+      // otherwise throws NoOutputGeneratedError when `output` is read. So the
+      // reason the model stopped is checked first: only running out of output
+      // length means the answer was cut off. Any other reason (a content
+      // filter, or a provider that reports "other") says nothing about length,
+      // so this call is tried again in text mode below.
+      if (result.finishReason === "length") throw new OutputTruncatedError();
+      if (result.finishReason === "stop") {
+        const output = result.output;
+        log.trace(
+          { ...who, mode: "structured", response: output },
+          "LLM response",
+        );
+        return output;
       }
+      log.trace(
+        { ...who, mode: "structured", response: result.text },
+        "LLM unfinished structured response",
+      );
+      log.info(
+        { ...who, reason: "unfinished", finishReason: result.finishReason },
+        "Structured answer did not finish normally; retrying this call in text mode",
+      );
+    } catch (error) {
+      if (error instanceof OutputTruncatedError) throw error;
       if (isRejectedRequest(error)) {
         structuredUnsupported.add(key);
         log.info(
