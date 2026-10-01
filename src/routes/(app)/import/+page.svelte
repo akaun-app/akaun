@@ -27,6 +27,7 @@
 		type ReviewOptions,
 		type ReviewRow
 	} from '$lib/components/import/review-card.js';
+	import { ImportReadAs, profileReadAsValue } from '$lib/import-reading.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -75,6 +76,8 @@
 		// How the document was to be read, and how it was read (006 FR-001).
 		readAs: string | null;
 		readHow: string | null;
+		// The saved profile's id when it was read with one; else a built-in schema id or null.
+		profileId: string | null;
 		// The import profile it was read with, by name, when it was (FR-041).
 		profile: { name: string; mode: string } | null;
 		// The stated total, the items' sum and the lines left out, as JSON.
@@ -99,6 +102,7 @@
 			resultType: j.resultType ?? null,
 			readAs: j.readAs ?? null,
 			readHow: j.readHow ?? null,
+			profileId: j.profileId ?? null,
 			profile: j.profile ?? null,
 			extractionNotes: j.extractionNotes ?? null,
 			itemCounts: j.itemCounts ?? null,
@@ -405,7 +409,12 @@
 		if (!file) return;
 		// Read it again the way it was asked to be read the first time.
 		const job = jobs.find((j) => j.id === jobId);
-		const previousReadAs = job?.readAs ?? undefined;
+		// A row stores a profile reading as "profile" plus the id; the upload names it
+		// "profile:<id>". If the profile was turned off since, the upload refuses it by name.
+		const previousReadAs =
+			job?.readAs === ImportReadAs.Profile && job.profileId
+				? profileReadAsValue(job.profileId)
+				: (job?.readAs ?? undefined);
 
 		// Delete the old job
 		await fetch(`/api/import/${jobId}`, {

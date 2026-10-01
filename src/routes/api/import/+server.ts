@@ -8,6 +8,7 @@ import { importEvents } from '$lib/server/import/events.js';
 import { jobForEvent } from '$lib/server/import/job-event.js';
 import { jobEvents } from '$lib/server/import/group-state.js';
 import { readingForUpload } from '$lib/server/import/upload-reading.js';
+import { getImportProfile } from '$lib/server/services/import-profiles.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -53,8 +54,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 
 	// How to read it (FR-001). Checked before anything is stored, so a refused
-	// upload leaves no file and no queue row behind.
-	const reading = readingForUpload(formData.get('readAs'));
+	// upload leaves no file and no queue row behind. A saved profile needs only
+	// this upload permission, the same as every other way of reading (FR-045).
+	const reading = readingForUpload(formData.get('readAs'), (id) => getImportProfile(db, id));
 	if (!reading.ok) return json({ error: reading.error }, { status: 400 });
 
 	// Optional: caller already ran its own OCR/extraction (e.g. Apple Vision Framework
@@ -106,7 +108,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			fileHash,
 			preExtractedText,
 			readAs: reading.readAs,
-			readHow: reading.readHow
+			readHow: reading.readHow,
+			profileId: reading.profileId,
+			importMode: reading.importMode
 		})
 		.run();
 

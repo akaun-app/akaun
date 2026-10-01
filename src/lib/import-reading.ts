@@ -22,6 +22,20 @@ export const ImportReadAs = {
 export type ImportReadAsValue =
   (typeof ImportReadAs)[keyof typeof ImportReadAs];
 
+/**
+ * How an upload names a saved profile under "Read as": `profile:<id>`, with
+ * the profile's whole-number id. The row then stores `read_as` = "profile"
+ * and the id on its own in `profile_id`, so the word an upload sends and the
+ * words a row stores never mix (FR-048: an older row's `profile_id`, such as
+ * "builtin:items@1", is never read as a saved profile).
+ */
+export const PROFILE_READ_AS_PREFIX = "profile:";
+
+/** The "Read as" value that names a saved profile. */
+export function profileReadAsValue(id: number | string): string {
+  return `${PROFILE_READ_AS_PREFIX}${id}`;
+}
+
 /** Which part of a statement-like document is read (FR-002, FR-032). */
 export const ImportMode = {
   Summary: "summary",

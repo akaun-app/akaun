@@ -1,7 +1,7 @@
 import { redirect } from "@sveltejs/kit";
 import { desc, eq } from "drizzle-orm";
 import { DefaultAccountPurpose, ImportState } from "$lib/enums.js";
-import { ImportReadAs } from "$lib/import-reading.js";
+import { ImportReadAs, profileReadAsValue } from "$lib/import-reading.js";
 import { db } from "$lib/server/db/client.js";
 import { importQueue } from "$lib/server/db/schema.js";
 import {
@@ -19,6 +19,7 @@ import { hasPermission } from "$lib/server/permissions.js";
 import { getAccount, listAccounts } from "$lib/server/queries/accounts.js";
 import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { listGroupItems } from "$lib/server/services/import-items.js";
+import { listImportProfiles } from "$lib/server/services/import-profiles.js";
 
 /**
  * The loads behind `/import` (the queue) and `/import/[id]` (one document read
@@ -35,9 +36,9 @@ import { listGroupItems } from "$lib/server/services/import-items.js";
 const LIST_PATH = "/import";
 
 /**
- * The "Read as" choices the upload offers, in order (006 FR-001). The first is
- * the default. Sent from the server so that saved profiles can be added to the
- * list later without the screen knowing about them.
+ * The built-in "Read as" choices the upload offers, in order (006 FR-001). The
+ * first is the default. The enabled profiles follow them; see
+ * `readAsChoices`.
  */
 export const READ_AS_CHOICES: { value: string; label: string }[] = [
   { value: ImportReadAs.Auto, label: "Auto-detect" },
@@ -47,6 +48,25 @@ export const READ_AS_CHOICES: { value: string; label: string }[] = [
     label: "Document with several items (one record each)",
   },
 ];
+
+/**
+ * Every "Read as" choice the upload offers: the built-in ones, then each
+ * enabled profile by name (FR-001 AS1, US6 AS5). A disabled or deleted profile
+ * is not offered (US6 AS12), and the upload refuses it if it is named anyway.
+ * Sent from the server, so the screen needs no rule of its own: a choice it
+ * remembered that is no longer in this list is simply not restored.
+ */
+export function readAsChoices(
+  database: LedgerDb,
+): { value: string; label: string }[] {
+  const profiles = listImportProfiles(database, { enabledOnly: true }).map(
+    (profile) => ({
+      value: profileReadAsValue(profile.id),
+      label: profile.name,
+    }),
+  );
+  return [...READ_AS_CHOICES, ...profiles];
+}
 
 /** The queue: every job, newest first, with each group's item counts. */
 export function loadImportPage(locals: App.Locals, database: LedgerDb = db) {
@@ -67,7 +87,7 @@ export function loadImportPage(locals: App.Locals, database: LedgerDb = db) {
 
   return {
     jobs,
-    readAsChoices: READ_AS_CHOICES,
+    readAsChoices: readAsChoices(database),
     ...reviewOptions(database),
   };
 }
