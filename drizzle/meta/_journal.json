@@ -169,6 +169,13 @@
       "when": 1790818785587,
       "tag": "0023_clammy_black_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790823249823,
+      "tag": "0024_curvy_wolf_cub",
+      "breakpoints": true
     }
   ]
 }

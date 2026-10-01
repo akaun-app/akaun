@@ -446,6 +446,51 @@ export const importItems = sqliteTable(
   (t) => [index("import_items_job_state_idx").on(t.jobId, t.state)],
 );
 
+/**
+ * A saved way of reading one kind of document: an import profile (006 US6-7,
+ * FR-030 to FR-038). The user fills in a form and the server builds the schema
+ * sent to the model from it; the form's values are what is stored here, as
+ * checked by `$lib/import-profile-schema.ts`.
+ *
+ * A profile is deleted outright, not archived. A document already read with
+ * it keeps its own copy of the profile on its queue row
+ * (`import_queue.profile_snapshot`), so neither an edit nor a delete changes a
+ * group already read (FR-038). The id is never reused (AUTOINCREMENT), so an
+ * old queue row's profile id can never name a newer profile.
+ */
+export const importProfiles = sqliteTable("import_profiles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  // How to recognise the document, in plain words.
+  description: text("description").notNull().default(""),
+  // Text the document always prints, as a JSON list of strings.
+  phrasesJson: text("phrases_json").notNull().default("[]"),
+  // Replaces the general import instructions for this profile (FR-036).
+  instructions: text("instructions").notNull().default(""),
+  // The sections, as a JSON list of ProfileSection.
+  sectionsJson: text("sections_json").notNull().default("[]"),
+  // Which printed total each import mode compares against, as a JSON object
+  // keyed by mode ("summary"). Every transaction is deferred, so only the
+  // Summary key is written today.
+  statedTotalLabelsJson: text("stated_total_labels_json")
+    .notNull()
+    .default("{}"),
+  // A disabled profile is not offered under "Read as" (US6 AS12).
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdBy: integer("created_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  updatedBy: integer("updated_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+});
+
 // ---------------------------------------------------------------------------
 // Phase 7 — Quotations & Invoicing
 // sourceQuotationId / convertedInvoiceId are plain integers (no cross-FK) to
