@@ -64,6 +64,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
       uploadedBy: row.createdBy,
       tempFilePath: row.tempFilePath,
       extractedText: row.extractedText,
+      // Only the reading read above may be confirmed, not a newer one.
+      readAt: row.processedAt,
     },
     row,
     overrides,

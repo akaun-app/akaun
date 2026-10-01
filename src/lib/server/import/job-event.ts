@@ -1,6 +1,7 @@
 import type { ImportModeValue } from "$lib/import-reading.js";
 import type { importItems, importQueue } from "../db/schema.js";
 import { parseProfileSnapshot } from "./profile-snapshot.js";
+import { readAgainRefusal } from "./read-again.js";
 
 type ImportJobRow = typeof importQueue.$inferSelect;
 
@@ -33,11 +34,21 @@ export type ImportJobProfile = { name: string; mode: ImportModeValue };
  * or the copy of its profile. A job read as several items also carries its
  * item counts; a receipt has none. A job read with a profile carries the
  * profile's name and mode.
+ *
+ * Every job says whether it can be read again from its file, and if not, why
+ * (006 FR-023, US9 AS7), so the screen offers "Read again" only when the
+ * server would accept it and can say why when it would not.
  */
 export type ImportJobEvent = Omit<
   ImportJobRow,
   "extractedText" | "preExtractedText" | "profileSnapshot"
-> & { itemCounts?: ImportGroupCounts; profile?: ImportJobProfile };
+> & {
+  itemCounts?: ImportGroupCounts;
+  profile?: ImportJobProfile;
+  canReadAgain: boolean;
+  /** Why it cannot be read again, in words to show; null when it can. */
+  readAgainReason: string | null;
+};
 
 /**
  * The one shape of a job row that leaves the server as a live update or in the
@@ -60,6 +71,13 @@ export function jobForEvent(
   if (itemCounts) event.itemCounts = itemCounts;
   const snapshot = parseProfileSnapshot(row.profileSnapshot);
   if (snapshot) event.profile = { name: snapshot.name, mode: snapshot.mode };
+  // A group's counts are always given (see `jobEvents`); a job sent without
+  // them has no items, so none of them is confirmed.
+  event.readAgainReason = readAgainRefusal(
+    row.state,
+    itemCounts?.confirmed ?? 0,
+  );
+  event.canReadAgain = event.readAgainReason === null;
   return event;
 }
 

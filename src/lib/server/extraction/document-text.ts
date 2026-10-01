@@ -24,6 +24,26 @@ export function inferMimeType(filename: string): string {
 	return 'application/octet-stream';
 }
 
+/**
+ * Whether the text read from this file is kept on its queue row and used again
+ * when the same file is read once more: by "Read again", or after a restart
+ * (006 FR-023). Only an image's, because:
+ *
+ * - an image is read by OCR, which is the slow part, and
+ * - its text is the same whichever reading asks for it: the receipt reading
+ *   takes it as it is, and a reading of items numbers its lines as one page,
+ *   exactly as `extractNumberedText` and `extractPlainAndNumberedText` do.
+ *
+ * A PDF is not kept. A PDF with a text layer is quick to read again, and its
+ * text differs by reading (merged for a receipt, page by page for items), so a
+ * kept copy would not be what a fresh read gives. A scanned PDF is therefore
+ * read by OCR again.
+ */
+export function keepsReadText(filename: string): boolean {
+	const mimeType = inferMimeType(filename);
+	return mimeType === 'image/jpeg' || mimeType === 'image/png';
+}
+
 export async function extractText(absPath: string, mimeType: string): Promise<string> {
 	if (mimeType === 'application/pdf' || absPath.toLowerCase().endsWith('.pdf')) {
 		return extractFromPdf(absPath);

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import {
   DefaultAccountPurpose,
   DocumentType,
@@ -89,6 +89,14 @@ export type ImportJobSource = {
    * that month (see `moveToRecordStorage`).
    */
   fileDate?: string;
+  /**
+   * A receipt only: when the reading the reviewer confirmed was made (the
+   * row's `processedAt`). The claim matches only that reading. "Read again"
+   * can put the same job back in review with a new reading while a confirm
+   * waits on an exchange rate, and the confirm must then make no record from
+   * the old reading (FR-023). Left out, any reading in review matches.
+   */
+  readAt?: string | null;
 };
 
 /** What the record will say, after the reviewer's corrections are applied. */
@@ -245,6 +253,11 @@ function writeConfirmation(
           and(
             eq(importQueue.id, job.jobId),
             eq(importQueue.state, ImportState.PendingReview),
+            job.readAt === undefined
+              ? undefined
+              : job.readAt === null
+                ? isNull(importQueue.processedAt)
+                : eq(importQueue.processedAt, job.readAt),
           ),
         )
         .returning({ id: importQueue.id })
@@ -254,7 +267,7 @@ function writeConfirmation(
       ok: false,
       reason: job.itemId
         ? "This item is no longer waiting for review, so it was not imported again."
-        : "This document is no longer waiting for review, so it was not imported again.",
+        : "This document is no longer waiting for review as it was shown (it was imported, or read again), so nothing was imported.",
     };
   }
 

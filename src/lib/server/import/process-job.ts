@@ -49,6 +49,7 @@ import {
   extractPlainAndNumberedText,
   extractText,
   inferMimeType,
+  keepsReadText,
   numberDocumentLines,
   stripLineNumbers,
 } from "../extraction/document-text.js";
@@ -310,6 +311,8 @@ async function documentText<T>(
   storageRoot: string,
 ): Promise<T | null> {
   let text: T;
+  let extracted = false;
+  const kept = keptText(job);
   if (job.preExtractedText && job.preExtractedText.trim().length > 0) {
     // Caller already ran its own OCR/extraction — skip server-side extraction entirely.
     text = form.given(job.preExtractedText.trim());
@@ -317,7 +320,16 @@ async function documentText<T>(
       { jobId: job.id, textLength: form.printed(text).length },
       "Using caller-provided text (OCR bypassed)",
     );
+  } else if (kept !== null) {
+    // OCR already read this image, for an earlier reading of this job: it is
+    // being read again, or the server restarted while it was read.
+    text = form.given(kept);
+    log.debug(
+      { jobId: job.id, textLength: form.printed(text).length },
+      "Using the text read from this image before (OCR not repeated)",
+    );
   } else {
+    extracted = true;
     setState(db, job.id, userId, ImportState.Extracting);
 
     const absPath = join(storageRoot, job.tempFilePath);
@@ -347,6 +359,15 @@ async function documentText<T>(
     return null;
   }
 
+  // An image's text is kept as soon as OCR has read it, so a reading that
+  // fails after this, or is read again, never runs OCR on it twice.
+  if (extracted && keepsReadText(job.originalFilename)) {
+    db.update(importQueue)
+      .set({ extractedText: printed })
+      .where(eq(importQueue.id, job.id))
+      .run();
+  }
+
   log.debug(
     {
       jobId: job.id,
@@ -356,6 +377,16 @@ async function documentText<T>(
     "Text extracted",
   );
   return text;
+}
+
+/**
+ * The text OCR read from this job's image at an earlier reading, or null.
+ * Only an image's is used again; see `keepsReadText`.
+ */
+function keptText(job: ImportJob): string | null {
+  if (!keepsReadText(job.originalFilename)) return null;
+  const text = job.extractedText?.trim();
+  return text ? text : null;
 }
 
 /** Reads a job and leaves it for review, grouped, or failed. */

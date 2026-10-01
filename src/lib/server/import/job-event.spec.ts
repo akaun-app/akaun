@@ -18,6 +18,9 @@ describe("jobForEvent", () => {
       state: 4,
       originalFilename: "receipt.pdf",
       resultId: 7,
+      // A receipt waiting for review may be read again (006 FR-023).
+      canReadAgain: true,
+      readAgainReason: null,
     });
     // The row itself is left as it was.
     expect(row.extractedText).toBe("RECEIPT 12.50");
