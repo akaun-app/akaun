@@ -287,6 +287,9 @@ function writeConfirmation(
     created.value.id,
     attachmentPath,
     displayName(attachmentPath),
+    // An item's file is the whole document, so it is never searched as this
+    // record's own (FR-029).
+    { groupDocument: Boolean(job.itemId) },
   );
 
   if (job.itemId) {

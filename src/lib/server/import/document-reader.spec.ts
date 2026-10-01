@@ -41,7 +41,10 @@ import {
   IGNORED_LINE_MAX_CHARS,
   IGNORED_LINES_MAX,
 } from "$lib/import-reading.js";
+import { httpError } from "../llm/__fixtures__/mock-model.js";
 import {
+  DOCUMENT_READ_MAX_OUTPUT_TOKENS,
+  DOCUMENT_READ_TIMEOUT_MS,
   DocumentLimitError,
   readDocumentItems,
   readingFromEnvelope,
@@ -437,6 +440,89 @@ describe("readDocumentItems", () => {
       limit: "output",
     });
     await expect(failure).rejects.toThrow("output length limit");
+  });
+
+  it("caps each request's output length and time, under Bun's 300 s fetch timeout", async () => {
+    const { model } = await read([json(answer([]))]);
+
+    expect(model.doGenerateCalls[0].maxOutputTokens).toBe(
+      DOCUMENT_READ_MAX_OUTPUT_TOKENS,
+    );
+    expect(model.doGenerateCalls[0].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(DOCUMENT_READ_TIMEOUT_MS).toBeLessThan(300_000);
+  });
+
+  it("fails naming the time limit when every provider is too slow", async () => {
+    serve("first", [{ hang: true }]);
+    serve("second", [{ hang: true }]);
+
+    const failure = readDocumentItems(
+      params,
+      [provider("first"), provider("second")],
+      0,
+      { timeoutMs: 20 },
+    );
+
+    await expect(failure).rejects.toMatchObject({
+      name: "DocumentLimitError",
+      limit: "time",
+    });
+    await expect(failure).rejects.toThrow(
+      "longer to read than the limit of 0.02 seconds",
+    );
+  });
+
+  it("names the time limit in minutes", async () => {
+    serve("main", [{ hang: true }]);
+
+    // A real 4-minute wait is too long for a test, so the signal is made to
+    // fire at once; the message is worked out from the limit passed in.
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation(() =>
+        AbortSignal.abort(new DOMException("", "TimeoutError")),
+      );
+    try {
+      await expect(
+        readDocumentItems(params, [provider("main")]),
+      ).rejects.toThrow("than the limit of 4 minutes for one reading");
+      expect(timeout).toHaveBeenCalledWith(DOCUMENT_READ_TIMEOUT_MS);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("names the output limit when the first provider was cut off and the second failed otherwise", async () => {
+    const first = serve("first", [{ truncated: '{"header": {"document' }]);
+    const denied = httpError(401, "Invalid API key");
+    serve("second", [{ error: denied }]);
+
+    const failure = readDocumentItems(params, [
+      provider("first"),
+      provider("second"),
+    ]);
+
+    await expect(failure).rejects.toMatchObject({
+      name: "DocumentLimitError",
+      limit: "output",
+    });
+    await expect(failure).rejects.toThrow(
+      `output length limit of ${DOCUMENT_READ_MAX_OUTPUT_TOKENS.toLocaleString("en-US")} tokens`,
+    );
+    // The last provider's own error stays as the cause.
+    await failure.catch((error: Error) => expect(error.cause).toBe(denied));
+    expect(first.doGenerateCalls).toHaveLength(1);
+  });
+
+  it("names the time limit when the first provider was too slow and the second failed otherwise", async () => {
+    serve("first", [{ hang: true }]);
+    serve("second", [{ error: httpError(401, "Invalid API key") }]);
+
+    await expect(
+      readDocumentItems(params, [provider("first"), provider("second")], 0, {
+        timeoutMs: 20,
+      }),
+    ).rejects.toMatchObject({ name: "DocumentLimitError", limit: "time" });
   });
 
   it("reads the whole document again on the next provider when one fails", async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, FileText, Trash2 } from '@lucide/svelte';
@@ -215,17 +215,29 @@
 		if (filter !== 'all') q.set('show', filter);
 		if (currentPage > 1) q.set('page', String(currentPage));
 		const query = q.toString();
-		const next = query ? `?${query}` : page.url.pathname;
+		// The live address, not page.url: a shallow replaceState does not
+		// change page.url, so it still shows the address the page loaded with.
+		const current = location.search.replace(/^\?/, '');
+		if (query === current) return;
 		// replaceState, not a navigation: the items are already loaded and the
 		// live connection and the scroll position must survive a filter change.
-		if (next !== page.url.search || (!query && page.url.search)) {
-			history.replaceState(history.state, '', next);
-		}
+		// SvelteKit's own, so its router keeps track of the address. Untracked,
+		// so the page state it reads and writes does not run this again.
+		untrack(() => {
+			const path = resolve('/(app)/import/[id]', { id: job.id });
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- route is resolved above; only query state is appended.
+			replaceState(query ? `${path}?${query}` : path, page.state);
+		});
 	});
 
 	onMount(() => {
 		readFiltersFromUrl();
-		urlReady = true;
+		// One task later, not now: on a fresh load this runs before SvelteKit's
+		// router has started, and its replaceState refuses to run until then.
+		// An address that needs tidying on load (`?page=1`, an unknown `show`)
+		// would otherwise stop the page.
+		const timer = setTimeout(() => (urlReady = true));
+		return () => clearTimeout(timer);
 	});
 
 	// ── Selection ──────────────────────────────────────────────────────────────

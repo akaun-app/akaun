@@ -44,7 +44,26 @@
 		// group's own page, where its items are reviewed.
 		| 'grouped';
 
-	type ItemCounts = { ready: number; needsAttention: number; confirmed: number; skipped: number };
+	type ItemCounts = {
+		ready: number;
+		needsAttention: number;
+		confirmed: number;
+		// How many of the confirmed items are income; the rest are expenses.
+		confirmedIncome: number;
+		skipped: number;
+	};
+
+	/**
+	 * The chip tone of a finished group, from the records it made: income when
+	 * every one is income, expense when every one is an expense, and plain when
+	 * they are mixed or there are none.
+	 */
+	function groupTone(counts: ItemCounts): 'income' | 'expense' | 'mixed' {
+		if (counts.confirmed === 0) return 'mixed';
+		if (counts.confirmedIncome === counts.confirmed) return 'income';
+		if (counts.confirmedIncome === 0) return 'expense';
+		return 'mixed';
+	}
 
 	type Job = ReviewRow & {
 		state: JobState;
@@ -683,6 +702,7 @@
 					{#each history as job (job.id)}
 						{#if job.itemCounts}
 							{@const made = job.itemCounts.confirmed}
+							{@const tone = groupTone(job.itemCounts)}
 							<!-- A finished group: its page lists each item and links each
 							     confirmed one to its record (FR-021). -->
 							<a
@@ -697,7 +717,12 @@
 										<span class="ok-check"><Check size={11} strokeWidth={3} /></span>
 									{/if}
 									<span>{job.originalFilename}</span>
-									<span class="type-chip expense">{made} record{made === 1 ? '' : 's'}</span>
+									<span
+										class="type-chip"
+										class:income={tone === 'income'}
+										class:expense={tone === 'expense'}
+										class:mixed={tone === 'mixed'}>{made} record{made === 1 ? '' : 's'}</span
+									>
 								</div>
 								<span class="proc-type">
 									{job.itemCounts.confirmed} confirmed · {job.itemCounts.skipped} skipped

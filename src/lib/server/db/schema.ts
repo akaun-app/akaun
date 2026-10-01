@@ -980,6 +980,15 @@ export const recordAttachments = sqliteTable(
     // original is removed (D-16, SC-014). Cleared by the release that drops the
     // legacy tables.
     legacyFilename: text("legacy_filename"),
+    // True when the file is a document that was imported as several items,
+    // one record each, so every one of those records has it (006 FR-027). Its
+    // text describes all of them, so it is never searched as this record's
+    // own (FR-029), even after the others have let it go. Set when the item is
+    // confirmed; the import's own rows may be cleared from history later, so
+    // this flag is what remembers it.
+    groupDocument: integer("group_document", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (t) => [
     index("record_attachments_record_idx").on(t.recordId),

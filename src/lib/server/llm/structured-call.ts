@@ -39,6 +39,11 @@ export interface StructuredSpec<T> {
   instructions: string;
   prompt: string;
   maxOutputTokens?: number;
+  // The longest one request may take, in milliseconds. When it runs out, the
+  // request is stopped and `CallTimedOutError` is thrown. Without it a request
+  // waits until the runtime's own fetch timeout (300 s under Bun), whose error
+  // names no limit.
+  timeoutMs?: number;
 }
 
 // The model stopped before its answer was complete — usually because it hit
@@ -49,6 +54,37 @@ export class OutputTruncatedError extends Error {
   constructor(options?: { cause?: unknown }) {
     super("The model stopped before its answer was complete", options);
     this.name = "OutputTruncatedError";
+  }
+}
+
+// A request took longer than the spec's `timeoutMs` and was stopped. Like a
+// cut-off answer, it is never retried in text mode: the same prompt would take
+// as long again.
+export class CallTimedOutError extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    options?: { cause?: unknown },
+  ) {
+    super(`The model did not answer within ${timeoutMs} ms`, options);
+    this.name = "CallTimedOutError";
+  }
+}
+
+// Sends one request, stopped after `timeoutMs` when it is given. A failure
+// after that limit ran out is reported as `CallTimedOutError`, whatever error
+// the SDK or fetch raised for the stopped request.
+async function within<R>(
+  timeoutMs: number | undefined,
+  send: (abortSignal: AbortSignal | undefined) => Promise<R>,
+): Promise<R> {
+  const signal = timeoutMs != null ? AbortSignal.timeout(timeoutMs) : undefined;
+  try {
+    return await send(signal);
+  } catch (error) {
+    if (timeoutMs != null && signal?.aborted) {
+      throw new CallTimedOutError(timeoutMs, { cause: error });
+    }
+    throw error;
   }
 }
 
@@ -127,14 +163,17 @@ export async function callStructured<T>(
         },
         "LLM request",
       );
-      const result = await generateText({
-        model,
-        output: Output.object({ schema: spec.schema }),
-        instructions: spec.instructions,
-        prompt: spec.prompt,
-        temperature: 0,
-        maxOutputTokens: spec.maxOutputTokens,
-      });
+      const result = await within(spec.timeoutMs, (abortSignal) =>
+        generateText({
+          model,
+          output: Output.object({ schema: spec.schema }),
+          instructions: spec.instructions,
+          prompt: spec.prompt,
+          temperature: 0,
+          maxOutputTokens: spec.maxOutputTokens,
+          abortSignal,
+        }),
+      );
       // The SDK reads the answer only when the model finished normally, and
       // otherwise throws NoOutputGeneratedError when `output` is read. So the
       // reason the model stopped is checked first: only running out of output
@@ -159,7 +198,11 @@ export async function callStructured<T>(
         "Structured answer did not finish normally; retrying this call in text mode",
       );
     } catch (error) {
-      if (error instanceof OutputTruncatedError) throw error;
+      if (
+        error instanceof OutputTruncatedError ||
+        error instanceof CallTimedOutError
+      )
+        throw error;
       if (isRejectedRequest(error)) {
         structuredUnsupported.add(key);
         log.info(
@@ -198,13 +241,16 @@ export async function callStructured<T>(
     },
     "LLM request",
   );
-  const result = await generateText({
-    model,
-    instructions: spec.instructions,
-    prompt: spec.prompt,
-    temperature: 0,
-    maxOutputTokens: spec.maxOutputTokens,
-  });
+  const result = await within(spec.timeoutMs, (abortSignal) =>
+    generateText({
+      model,
+      instructions: spec.instructions,
+      prompt: spec.prompt,
+      temperature: 0,
+      maxOutputTokens: spec.maxOutputTokens,
+      abortSignal,
+    }),
+  );
   log.trace({ ...who, mode: "text", response: result.text }, "LLM response");
   if (result.finishReason === "length") throw new OutputTruncatedError();
   return spec.parse(extractJsonObject(result.text));

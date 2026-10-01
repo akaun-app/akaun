@@ -85,9 +85,11 @@ export async function settleReviewFields(
   const amount = overrides.amount ?? row.amount ?? 0;
   const reference = overrides.reference ?? row.reference ?? "";
   const category = overrides.category ?? row.category ?? "";
-  // A receipt's remark is typed by the reviewer only: reading never fills it.
-  // An item's remark starts with its fee type, and its caller passes it here.
-  const remark = overrides.remark ?? "";
+  // The reviewer's remark, else the one stored with what was read. Reading a
+  // receipt never stores one, so a receipt's remark is still only what the
+  // reviewer typed. An item's remark starts as its fee type, and a document
+  // with one item is reviewed as a receipt that keeps that remark (FR-009).
+  const remark = overrides.remark ?? row.remark ?? "";
 
   // Currency and rate: the reviewer's, then the ones read. For a foreign
   // currency with no rate yet, fetch one for the date.

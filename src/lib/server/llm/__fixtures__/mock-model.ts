@@ -7,21 +7,38 @@ import type { LLMProviderConfig } from "../model-factory.js";
 
 // One model reply: a finished answer, an answer cut off by the output length
 // limit, an answer that ended for another reason (such as a content filter or
-// a provider that reports "other"), or an error thrown by the provider.
+// a provider that reports "other"), an error thrown by the provider, or no
+// answer at all until the request is stopped (as a slow provider would).
 export type Reply =
   | { text: string }
   | { truncated: string }
   | { text: string; finishReason: "content-filter" | "other" | "error" }
-  | { error: unknown };
+  | { error: unknown }
+  | { hang: true };
+
+// Waits until the request's abort signal fires, then fails with its reason, as
+// fetch does. A request with no signal would wait for ever, so it fails at once.
+function hangUntilAborted(signal: AbortSignal | undefined): Promise<never> {
+  if (!signal) {
+    return Promise.reject(new Error("A hanging reply needs an abort signal"));
+  }
+  return new Promise((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    });
+  });
+}
 
 // A mock model that answers each call with the next reply in order, and keeps
 // repeating the last one.
 export function mockModel(replies: Reply[]): MockLanguageModelV4 {
   let call = 0;
   return new MockLanguageModelV4({
-    doGenerate: async () => {
+    doGenerate: async ({ abortSignal }) => {
       const reply = replies[Math.min(call++, replies.length - 1)];
       if ("error" in reply) throw reply.error;
+      if ("hang" in reply) return hangUntilAborted(abortSignal);
       const truncated = "truncated" in reply;
       const unified = truncated
         ? "length"

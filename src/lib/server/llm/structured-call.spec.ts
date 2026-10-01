@@ -38,6 +38,7 @@ vi.mock("$lib/server/logger.js", () => ({
 }));
 
 import {
+  CallTimedOutError,
   OutputTruncatedError,
   callStructured,
   extractJsonObject,
@@ -198,6 +199,47 @@ describe("callStructured", () => {
       callStructured(model, provider("denied"), spec("thing@1")),
     ).rejects.toThrow("Invalid API key");
     expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it("stops a request that runs past the time limit, with no text retry", async () => {
+    const model = mockModel([{ hang: true }]);
+
+    const failure = callStructured(model, provider("slow"), {
+      ...spec("thing@1"),
+      timeoutMs: 20,
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(CallTimedOutError);
+    await expect(failure).rejects.toMatchObject({ timeoutMs: 20 });
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  it("stops the text retry too when it runs past the time limit", async () => {
+    const model = mockModel([{ error: httpError(400) }, { hang: true }]);
+
+    await expect(
+      callStructured(model, provider("slowtext"), {
+        ...spec("thing@1"),
+        timeoutMs: 20,
+      }),
+    ).rejects.toBeInstanceOf(CallTimedOutError);
+    expect(model.doGenerateCalls).toHaveLength(2);
+  });
+
+  it("sends the output length cap with every request", async () => {
+    const model = mockModel([
+      { error: httpError(400) },
+      { text: JSON.stringify(thing) },
+    ]);
+
+    await callStructured(model, provider("capped"), {
+      ...spec("thing@1"),
+      maxOutputTokens: 512,
+    });
+
+    expect(model.doGenerateCalls.map((call) => call.maxOutputTokens)).toEqual([
+      512, 512,
+    ]);
   });
 
   it("throws when the text answer does not fit the schema", async () => {

@@ -93,7 +93,13 @@ export function groupCounts(
   const entry = (jobId: string) => {
     let found = counts.get(jobId);
     if (!found) {
-      found = { ready: 0, needsAttention: 0, confirmed: 0, skipped: 0 };
+      found = {
+        ready: 0,
+        needsAttention: 0,
+        confirmed: 0,
+        confirmedIncome: 0,
+        skipped: 0,
+      };
       counts.set(jobId, found);
     }
     return found;
@@ -107,6 +113,7 @@ export function groupCounts(
       .select({
         jobId: importItems.jobId,
         state: importItems.state,
+        documentType: importItems.documentType,
         n: sql<number>`count(*)`,
       })
       .from(importItems)
@@ -120,12 +127,17 @@ export function groupCounts(
           ]),
         ),
       )
-      .groupBy(importItems.jobId, importItems.state)
+      .groupBy(importItems.jobId, importItems.state, importItems.documentType)
       .all();
     for (const row of byState) {
       const c = entry(row.jobId);
       if (row.state === ImportState.Skipped) c.skipped += row.n;
-      else c.confirmed += row.n;
+      else {
+        c.confirmed += row.n;
+        if (row.documentType === DocumentType.Income) {
+          c.confirmedIncome += row.n;
+        }
+      }
     }
 
     const waiting = db

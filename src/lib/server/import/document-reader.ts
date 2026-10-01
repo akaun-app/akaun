@@ -28,6 +28,7 @@ import { fromMinor, toMinor } from "../ledger/money.js";
 import type { Minor } from "../ledger/types.js";
 import type { LLMProviderConfig } from "../llm/model-factory.js";
 import {
+  CallTimedOutError,
   OutputTruncatedError,
   callStructured,
   withProviderFailover,
@@ -59,7 +60,36 @@ import {
 const log = createLogger("import:document-reader");
 
 /** Which limit a document went over. */
-export type DocumentLimit = "characters" | "items" | "output";
+export type DocumentLimit = "characters" | "items" | "output" | "time";
+
+/**
+ * The longest one request to the model may take while reading a document. It
+ * is kept well under Bun's own 300 s fetch timeout, whose error names no limit,
+ * so a slow reading fails with this limit named instead (FR-010). The research
+ * model wrote about 10 to 20 tokens a second (design.md, "S0.5 research
+ * results").
+ */
+export const DOCUMENT_READ_TIMEOUT_MS = 240_000;
+
+/**
+ * The most tokens the model may write in one reading. It is kept at 8,192, an
+ * output length most models accept: a provider may refuse a figure above its
+ * model's own limit with HTTP 400, and then every reading on it would fail. At
+ * the research model's speed, the time limit above is reached first anyway. A
+ * document whose answer needs more fails with the output limit named.
+ */
+export const DOCUMENT_READ_MAX_OUTPUT_TOKENS = 8_192;
+
+/** The limits of one reading. Tests pass smaller ones. */
+export interface DocumentReadLimits {
+  timeoutMs: number;
+  maxOutputTokens: number;
+}
+
+const DEFAULT_READ_LIMITS: DocumentReadLimits = {
+  timeoutMs: DOCUMENT_READ_TIMEOUT_MS,
+  maxOutputTokens: DOCUMENT_READ_MAX_OUTPUT_TOKENS,
+};
 
 /**
  * A document that cannot be read in full. Its message names the limit, so the
@@ -130,6 +160,16 @@ function formatCount(value: number): string {
   return value.toLocaleString("en-US");
 }
 
+/** "4 minutes", "1 minute" or "0.05 seconds", for a limit's message. */
+function formatDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) {
+    const minutes = ms / 60_000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const seconds = ms / 1000;
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 /** The instructions sent with the document. */
 export function buildItemsSystemPrompt(
   compiled: CompiledProfile,
@@ -168,7 +208,9 @@ export async function readDocumentItems(
   params: DocumentReadingParams,
   providers: LLMProviderConfig[],
   intervalMs = 0,
+  limits: Partial<DocumentReadLimits> = {},
 ): Promise<DocumentReading> {
+  const { timeoutMs, maxOutputTokens } = { ...DEFAULT_READ_LIMITS, ...limits };
   if (params.text.length > DOCUMENT_TEXT_MAX_CHARS) {
     throw new DocumentLimitError(
       "characters",
@@ -184,21 +226,45 @@ export async function readDocumentItems(
     parse: compiled.parse,
     instructions: buildItemsSystemPrompt(compiled, params),
     prompt: wrapDocument(params.text),
+    maxOutputTokens,
+    timeoutMs,
   };
 
+  // Which limits any provider ran into. The failover keeps only the last
+  // provider's error, so a first provider that was cut off would otherwise be
+  // hidden behind a second that failed some other way.
+  let truncated = false;
+  let timedOut = false;
   let envelope: ReadEnvelope;
   try {
     envelope = await withProviderFailover(
       providers,
-      (model, provider) => callStructured(model, provider, spec, intervalMs),
+      async (model, provider) => {
+        try {
+          return await callStructured(model, provider, spec, intervalMs);
+        } catch (error) {
+          if (error instanceof OutputTruncatedError) truncated = true;
+          if (error instanceof CallTimedOutError) timedOut = true;
+          throw error;
+        }
+      },
       log,
     );
   } catch (error) {
-    if (error instanceof Error && error.cause instanceof OutputTruncatedError) {
+    // The last provider's error, which the failover keeps as its cause.
+    const cause = error instanceof Error ? (error.cause ?? error) : error;
+    if (truncated) {
       throw new DocumentLimitError(
         "output",
-        "This document is too long to read in full: the AI model's answer reached its output length limit before every line was read.",
-        { cause: error },
+        `This document is too long to read in full: the AI model's answer reached its output length limit of ${formatCount(maxOutputTokens)} tokens before every line was read.`,
+        { cause },
+      );
+    }
+    if (timedOut) {
+      throw new DocumentLimitError(
+        "time",
+        `This document took longer to read than the limit of ${formatDuration(timeoutMs)} for one reading, so it was not read in full.`,
+        { cause },
       );
     }
     throw error;

@@ -1008,15 +1008,19 @@ export function listAttachments(
 
 /**
  * The files attached to a record whose text may be searched as the record's
- * own: every attachment except one that another record also has.
+ * own: every attachment except a document imported as several items.
  *
  * One stored file is attached to every record made from a document with
  * several items (006 FR-027). Its text describes every one of those records,
  * so indexing it would make each of them match a search for any other line of
  * the document (FR-029). A record made that way is found by its own
- * description, contact, reference and amount instead. A file only this record
- * has, such as a receipt added by hand, is indexed as before. Shared or not,
- * the file stays attached and opens from every record.
+ * description, contact, reference and amount instead. The attachment row says
+ * so itself (`group_document`), so the rule still holds after the other
+ * records have let the file go, or the import has been cleared from history.
+ * A file another record also has is left out too, however it came to be
+ * shared. A file only this record has, such as a receipt added by hand, is
+ * indexed as before. Indexed or not, the file stays attached and opens from
+ * every record.
  */
 export function searchableAttachmentFilenames(
   db: LedgerDb,
@@ -1028,6 +1032,7 @@ export function searchableAttachmentFilenames(
     .where(
       and(
         eq(recordAttachments.recordId, recordId),
+        eq(recordAttachments.groupDocument, false),
         // Uses the index on record_attachments.filename (migration 0022).
         sql`not exists (select 1 from record_attachments as other where other.filename = ${recordAttachments.filename} and other.record_id <> ${recordAttachments.recordId})`,
       ),
@@ -1037,15 +1042,26 @@ export function searchableAttachmentFilenames(
     .map((row) => row.filename);
 }
 
+/**
+ * Attaches a stored file to a record. `groupDocument` marks a document
+ * imported as several items, whose text is then never searched as this
+ * record's own (see `searchableAttachmentFilenames`).
+ */
 export function addAttachment(
   db: LedgerDb,
   recordId: number,
   filename: string,
   displayName: string,
+  options: { groupDocument?: boolean } = {},
 ): RecordAttachmentRow {
   return db
     .insert(recordAttachments)
-    .values({ recordId, filename, displayName })
+    .values({
+      recordId,
+      filename,
+      displayName,
+      groupDocument: options.groupDocument ?? false,
+    })
     .returning()
     .get()!;
 }

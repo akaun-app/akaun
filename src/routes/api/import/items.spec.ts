@@ -320,6 +320,17 @@ const routes = {
       request: jsonRequest(body, "PATCH"),
     } as never);
   },
+  async confirmReceipt(body?: unknown) {
+    const { POST } = await import("./[jobId]/confirm/+server.js");
+    return (POST as Handler)({
+      locals,
+      params: { jobId },
+      request:
+        body === undefined
+          ? new Request("http://test.local/", { method: "POST" })
+          : jsonRequest(body),
+    } as never);
+  },
   async confirm(itemId: string) {
     const { POST } =
       await import("./[jobId]/items/[itemId]/confirm/+server.js");
@@ -396,6 +407,7 @@ beforeAll(async () => {
     import("./[jobId]/items/+server.js"),
     import("./[jobId]/items/[itemId]/+server.js"),
     import("./[jobId]/items/[itemId]/confirm/+server.js"),
+    import("./[jobId]/confirm/+server.js"),
     import("./[jobId]/items/[itemId]/skip/+server.js"),
     import("./[jobId]/items/bulk/+server.js"),
     import("./[jobId]/+server.js"),
@@ -466,6 +478,26 @@ describe("confirming every item", () => {
     );
   });
 
+  it("counts how many of the records made are income, for the history row", async () => {
+    group(3, [
+      {
+        documentType: DocumentType.Income,
+        itemName: "Sale",
+        category: "Sales",
+        categoryAccountId: ids.sales,
+        accountId: ids.receivable,
+      },
+    ]);
+    await bulkResults({ action: "confirm", all: true });
+
+    const jobs = await (await routes.listJobs()).json();
+    expect(jobs[0].itemCounts).toMatchObject({
+      confirmed: 3,
+      confirmedIncome: 1,
+      skipped: 0,
+    });
+  });
+
   it("announces each item and the group's counts only after commit", async () => {
     const [first] = group(2);
 
@@ -484,6 +516,7 @@ describe("confirming every item", () => {
       ready: 1,
       needsAttention: 0,
       confirmed: 1,
+      confirmedIncome: 0,
       skipped: 0,
     });
     expect(sentJob).not.toHaveProperty("extractedText");
@@ -934,6 +967,7 @@ describe("editing items", () => {
       ready: 1,
       needsAttention: 1,
       confirmed: 0,
+      confirmedIncome: 0,
       skipped: 1,
     });
     expect(jobs[0]).not.toHaveProperty("extractedText");
@@ -985,6 +1019,53 @@ describe("permissions", () => {
   });
 });
 
+// ── A document with one item (FR-009) ───────────────────────────────────────
+
+describe("the remark of a document reviewed as a receipt", () => {
+  /** A receipt card on the queue row, with `remark` stored as reading left it. */
+  function receipt(remark: string | null) {
+    db.insert(importQueue)
+      .values({
+        id: jobId,
+        createdBy: 1,
+        state: ImportState.PendingReview,
+        tempFilePath: temp,
+        originalFilename: "fees.pdf",
+        documentType: DocumentType.Expense,
+        itemName: "Commission fee",
+        supplier: "Shopee Malaysia",
+        date: "2026-07-31",
+        amount: 12.5,
+        currency: "MYR",
+        exchangeRate: 1,
+        category: "Marketplace Fees",
+        categoryAccountId: ids.fees,
+        accountId: ids.payable,
+        remark,
+      })
+      .run();
+    putFile(temp);
+  }
+
+  it("keeps the remark the one item was read with when the reviewer sends none", async () => {
+    receipt("Commission Fee");
+    expect((await routes.confirmReceipt({})).status).toBe(201);
+    expect(records()[0].remark).toBe("Commission Fee");
+  });
+
+  it("takes the reviewer's remark, even an empty one, over the stored one", async () => {
+    receipt("Commission Fee");
+    expect((await routes.confirmReceipt({ remark: "" })).status).toBe(201);
+    expect(records()[0].remark).toBe("");
+  });
+
+  it("leaves a receipt with no stored remark as before", async () => {
+    receipt(null);
+    expect((await routes.confirmReceipt()).status).toBe(201);
+    expect(records()[0].remark).toBe("");
+  });
+});
+
 // ── Search text (FR-029) ────────────────────────────────────────────────────
 
 describe("the search text of records sharing one file", () => {
@@ -1025,6 +1106,44 @@ describe("the search text of records sharing one file", () => {
     expect(after.find((r) => r.id === a.id)!.extractedText).toBe(
       "own receipt text",
     );
+  });
+
+  it("never indexes the document on the last record that still has it", async () => {
+    group(2);
+    await bulkResults({ action: "confirm", all: true });
+    const [a, b] = records();
+    holder.textOf.set(stored, "Fee 1 10.00 Fee 2 11.00 Shopee fee notice");
+
+    // Every attachment made from an item says it is the whole document.
+    expect(attachments().map((row) => row.groupDocument)).toEqual([true, true]);
+
+    // Record b lets the file go, so only record a has it now, and the
+    // import's own rows are cleared from history.
+    const onB = attachments().find((row) => row.recordId === b.id)!;
+    expect((await routes.deleteAttachment(b.id, onB.id)).status).toBe(204);
+    expect((await routes.clearHistory()).status).toBe(204);
+    expect(jobRow()).toBeUndefined();
+    expect(attachments().map((row) => row.recordId)).toEqual([a.id]);
+    expect(searchableAttachmentFilenames(db, a.id)).toEqual([]);
+
+    // A new attachment indexes only itself.
+    expect((await routes.addAttachment(a.id)).status).toBe(201);
+    const own = attachments().find((row) => row.filename !== stored)!;
+    expect(own.groupDocument).toBe(false);
+    expect(extractAttachmentsText).toHaveBeenLastCalledWith([own.filename]);
+
+    // And so does a rebuild.
+    const { startRebuild, getRebuildStatus } =
+      await import("$lib/server/search-rebuild/worker.js");
+    extractAttachmentsText.mockClear();
+    startRebuild();
+    for (let i = 0; i < 100 && getRebuildStatus().running; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(getRebuildStatus().running).toBe(false);
+    const asked = extractAttachmentsText.mock.calls.map((call) => call[0]);
+    expect(asked.flat()).not.toContain(stored);
+    expect(asked).toContainEqual([own.filename]);
   });
 
   it("indexes a file only one record has", () => {
