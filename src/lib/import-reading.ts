@@ -29,6 +29,16 @@ export const ImportMode = {
 } as const;
 export type ImportModeValue = (typeof ImportMode)[keyof typeof ImportMode];
 
+/** An import mode in the words the upload screen uses. */
+export function importModeLabel(mode: ImportModeValue): string {
+  return mode === ImportMode.EveryTransaction ? "Every transaction" : "Summary";
+}
+
+/** Whether a stored value is an import mode. */
+export function isImportMode(value: unknown): value is ImportModeValue {
+  return value === ImportMode.Summary || value === ImportMode.EveryTransaction;
+}
+
 /** How the reading was picked, for the screen to say (FR-041). */
 export const ImportReadHow = {
   /** The uploader named the reading. */

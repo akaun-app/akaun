@@ -213,6 +213,20 @@ describe("checkProfile", () => {
     );
   });
 
+  it('refuses "none" as a fee type key or a choice, since the reading uses it for none', () => {
+    const input = withExtras({
+      type: "object",
+      properties: { status: { type: "string", enum: ["paid", "none"] } },
+    }) as unknown as ImportProfileDraft;
+    input.sections[0].feeTypes[1].key = "none";
+    const errors = validateProfile(input);
+    expect(paths(errors)).toEqual([
+      "sections[0].feeTypes[1].key",
+      "sections[0].extras.properties.status.enum[1]",
+    ]);
+    expect(errors[0].message).toMatch(/none of the fee types/);
+  });
+
   it("refuses an unknown kind", () => {
     const input = profile() as unknown as {
       sections: Record<string, unknown>[];

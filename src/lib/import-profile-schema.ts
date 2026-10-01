@@ -93,6 +93,18 @@ export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * What the model writes for "none of these" in a list of choices that may be
+ * empty: a fee type (a line that is none of the section's types) or an extra
+ * field with an enum that a line does not print. It is sent as one more value
+ * of the list, not as null: a strict provider (OpenAI, Groq) reads `enum` as
+ * the only values allowed, null included, so a list without it would give the
+ * model no way to say "none" and it would put a stray line under the closest
+ * type (FR-034). The reading turns it back into null, so no fee type key and
+ * no choice of an extra field may be this word.
+ */
+export const NONE_VALUE = "none";
+
+/**
  * Names every plain JavaScript object already has, such as "constructor".
  * The reading code looks keys up in plain objects, where one of these names
  * finds the built-in value instead of a field, so a section, field or fee type
@@ -414,6 +426,11 @@ function extraField(
             path: valuePath,
             message: `Each choice can be at most ${ENUM_VALUE_MAX} characters.`,
           });
+        } else if (value === NONE_VALUE) {
+          errors.push({
+            path: valuePath,
+            message: `"${NONE_VALUE}" is how the reading marks a line that has none of these choices. Leave it out; a line with no choice is read as empty.`,
+          });
         } else if (seen.has(value)) {
           errors.push({
             path: valuePath,
@@ -622,6 +639,11 @@ function feeTypes(
       errors.push({
         path: `${at}.key`,
         message: builtinNameMessage(key, "a fee type key"),
+      });
+    } else if (key === NONE_VALUE) {
+      errors.push({
+        path: `${at}.key`,
+        message: `"${NONE_VALUE}" is how the reading marks a line that is none of the fee types. Choose another key.`,
       });
     } else if (seen.has(key)) {
       errors.push({

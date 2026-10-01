@@ -18,6 +18,7 @@
 			originalFilename: string;
 			readAs: string | null;
 			readHow: string | null;
+			profile?: { name: string } | null;
 			extractionNotes: string | null;
 			itemCounts: { ready: number; needsAttention: number; confirmed: number; skipped: number } | null;
 		};

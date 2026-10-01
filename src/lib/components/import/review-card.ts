@@ -350,9 +350,17 @@ export function sideIsIncome(
 export function describeReading(job: {
   readAs?: string | null;
   readHow?: string | null;
+  /** The profile's name, from the copy the server kept when it read it. */
+  profile?: { name: string } | null;
 }): string {
   if (job.readAs === ImportReadAs.SeveralItems) {
     return "Read as several items";
+  }
+  if (job.readAs === ImportReadAs.Profile) {
+    // Which profile, and whether it was chosen or detected (FR-041).
+    const name = job.profile ? `“${job.profile.name}”` : "an import profile";
+    const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
+    return `Read with ${name} (${how})`;
   }
   if (
     job.readAs === ImportReadAs.Auto &&

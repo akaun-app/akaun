@@ -52,9 +52,11 @@ import {
 } from "./document-reader.js";
 import {
   SEVERAL_ITEMS_PROFILE,
+  savedReadingProfile,
   type ReadEnvelope,
   type ReadingProfile,
 } from "./profile-compiler.js";
+import { SchemaRejectedError } from "../llm/structured-call.js";
 
 type Line = {
   description: string;
@@ -170,6 +172,7 @@ describe("readDocumentItems", () => {
         sourceLine: 3,
         feeType: null,
         categoryAccountId: 11,
+        categoryCandidates: [11],
         extras: null,
       },
       expect.objectContaining({
@@ -659,5 +662,419 @@ describe("readingFromEnvelope — a profile's sections", () => {
     expect(reading.notes.ignored).toEqual(["Mystery -2.00"]);
     expect(reading.notes.statedTotal?.minor).toBe(-800);
     expect(reading.controlTotal?.matches).toBe(true);
+  });
+});
+
+describe("readingFromEnvelope — a saved profile's rules", () => {
+  const context = {
+    today: "2026-09-30",
+    mainCurrency: "MYR",
+    schemaId: "profile:1:x",
+  };
+  const line = (
+    description: string,
+    amount: number,
+    over: Record<string, unknown> = {},
+  ) => ({
+    description,
+    amount,
+    date: null,
+    reference: null,
+    source_line: null,
+    ...over,
+  });
+  const envelope = (
+    sections: ReadEnvelope["sections"],
+    stated: number | null = null,
+  ): ReadEnvelope => ({
+    header: {
+      counterparty: "Shop",
+      date: "2026-08-31",
+      reference: "ST-08",
+      currency: "MYR",
+    },
+    stated_total: stated,
+    sections,
+    ignored: [],
+  });
+  const profile = (
+    sections: ReadingProfile["sections"],
+    statedTotalDescription: string | null = "Total, as printed.",
+  ): ReadingProfile => ({
+    schemaId: "profile:1:x",
+    instructions: "",
+    guidance: "",
+    statedTotalDescription,
+    schemaRequired: true,
+    sections,
+  });
+
+  it("leaves a line of the other sign out of a fixed-kind section, never dropping its sign", () => {
+    const reading = readingFromEnvelope(
+      envelope({
+        sales: [line("Product price", 500), line("Refund", -20)],
+        fees: [line("Commission", -30), line("Rebate", 4)],
+      }),
+      profile([
+        {
+          key: "sales",
+          description: "",
+          kind: "income",
+          categoryFromModel: false,
+        },
+        {
+          key: "fees",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+        },
+      ]),
+      context,
+    );
+
+    expect(
+      reading.items.map(({ description, kind, amountMinor }) => ({
+        description,
+        kind,
+        amountMinor,
+      })),
+    ).toEqual([
+      {
+        description: "Product price",
+        kind: DocumentType.Income,
+        amountMinor: 50000,
+      },
+      {
+        description: "Commission",
+        kind: DocumentType.Expense,
+        amountMinor: 3000,
+      },
+    ]);
+    expect(reading.notes.ignored).toEqual(["Refund -20.00", "Rebate 4.00"]);
+  });
+
+  it("keeps only plus lines in an Income section, even when a refund is larger than the sales", () => {
+    const reading = readingFromEnvelope(
+      envelope({ sales: [line("Sales", 1000), line("Refund", -1500)] }),
+      profile([
+        {
+          key: "sales",
+          description: "",
+          kind: "income",
+          categoryFromModel: false,
+        },
+      ]),
+      context,
+    );
+
+    // The section's sum is -500, but a refund is never more income.
+    expect(
+      reading.items.map(({ description, kind, amountMinor }) => ({
+        description,
+        kind,
+        amountMinor,
+      })),
+    ).toEqual([
+      { description: "Sales", kind: DocumentType.Income, amountMinor: 100000 },
+    ]);
+    expect(reading.notes.ignored).toEqual(["Refund -1500.00"]);
+  });
+
+  it("imports nothing from an Expense section whose lines are printed with both signs in real amounts", () => {
+    const reading = readingFromEnvelope(
+      envelope({
+        fees: [line("Commission", -100), line("Rebate", 300)],
+        other: [line("Service", 20)],
+      }),
+      profile([
+        {
+          key: "fees",
+          name: "Fees",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+        },
+        {
+          key: "other",
+          name: "Other",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+        },
+      ]),
+      context,
+    );
+
+    // Neither the commission nor the rebate is turned into an expense by the
+    // other's sign; the other section is read as usual.
+    expect(reading.items.map(({ description }) => description)).toEqual([
+      "Service",
+    ]);
+    expect(reading.notes.ignored).toEqual([
+      "Fees: lines printed with both signs, so none was imported. Read it by sign.",
+      "Commission -100.00",
+      "Rebate 300.00",
+    ]);
+  });
+
+  it("takes an Expense section's sign from a clear share of its money, either way", () => {
+    const fees = (lines: ReturnType<typeof line>[]) =>
+      readingFromEnvelope(
+        envelope({ fees: lines }),
+        profile([
+          {
+            key: "fees",
+            description: "",
+            kind: "expense",
+            categoryFromModel: false,
+          },
+        ]),
+        context,
+      );
+
+    // An invoice: plain charges and one discount.
+    const invoice = fees([line("Hosting", 100), line("Discount", -20)]);
+    expect(invoice.items.map(({ description }) => description)).toEqual([
+      "Hosting",
+    ]);
+    expect(invoice.notes.ignored).toEqual(["Discount -20.00"]);
+
+    // A marketplace: every fee with a minus, and one small rebate.
+    const statement = fees([
+      line("Commission", -80),
+      line("Transaction", -20),
+      line("Rebate", 5),
+    ]);
+    expect(
+      statement.items.map(({ description, amountMinor }) => ({
+        description,
+        amountMinor,
+      })),
+    ).toEqual([
+      { description: "Commission", amountMinor: 8000 },
+      { description: "Transaction", amountMinor: 2000 },
+    ]);
+    expect(statement.notes.ignored).toEqual(["Rebate 5.00"]);
+  });
+
+  it("chooses a category: the tied one, then the model's, then the section's fixed one", () => {
+    const reading = readingFromEnvelope(
+      envelope({
+        fees: [
+          line("Commission", -8, {
+            fee_type: "commission",
+            category_account_id: 99,
+          }),
+          line("Ads", -5, { fee_type: "ads", category_account_id: 14 }),
+          line("Ads, no idea", -1, {
+            fee_type: "ads",
+            category_account_id: null,
+          }),
+        ],
+        other: [line("Payout fee", -2)],
+      }),
+      profile([
+        {
+          key: "fees",
+          description: "",
+          kind: "expense",
+          categoryFromModel: true,
+          fixedCategoryAccountId: 30,
+          feeTypes: [
+            { key: "commission", description: "", categoryAccountId: 12 },
+            { key: "ads", description: "", categoryAccountId: null },
+          ],
+        },
+        {
+          key: "other",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+          fixedCategoryAccountId: 31,
+        },
+      ]),
+      context,
+    );
+
+    expect(
+      reading.items.map(
+        ({ feeType, categoryAccountId, categoryCandidates }) => ({
+          feeType,
+          categoryAccountId,
+          categoryCandidates,
+        }),
+      ),
+    ).toEqual([
+      // The tied category wins over the model's pick, which is kept behind it.
+      {
+        feeType: "commission",
+        categoryAccountId: 12,
+        categoryCandidates: [12, 99],
+      },
+      { feeType: "ads", categoryAccountId: 14, categoryCandidates: [14] },
+      // No tie and no pick: nothing, so the worker files it as Uncategorised.
+      // The fixed category is for lines with no fee type only.
+      { feeType: "ads", categoryAccountId: null, categoryCandidates: [] },
+      { feeType: null, categoryAccountId: 31, categoryCandidates: [31] },
+    ]);
+  });
+
+  it("checks a Shopee-like summary against the payout released, to the cent", () => {
+    const reading = readingFromEnvelope(
+      envelope(
+        {
+          sales: [
+            line("Product price", 15012.4, { fee_type: "product_price" }),
+          ],
+          fees: [
+            line("Commission fee", -812.35, { fee_type: "commission_fee" }),
+            line("Transaction fee", -450.1, { fee_type: "transaction_fee" }),
+            line("Shipping rebate", 32.61, { fee_type: "shipping_rebate" }),
+            line("Total fees", -1262.45, { fee_type: null }),
+          ],
+        },
+        13782.56,
+      ),
+      profile([
+        {
+          key: "sales",
+          description: "",
+          kind: "income",
+          categoryFromModel: false,
+          feeTypes: [{ key: "product_price", description: "" }],
+        },
+        {
+          key: "fees",
+          description: "",
+          kind: "by_sign",
+          categoryFromModel: false,
+          feeTypes: [
+            { key: "commission_fee", description: "" },
+            { key: "transaction_fee", description: "" },
+            { key: "shipping_rebate", description: "" },
+          ],
+        },
+      ]),
+      context,
+    );
+
+    expect(reading.items.map(({ kind }) => kind)).toEqual([
+      DocumentType.Income,
+      DocumentType.Expense,
+      DocumentType.Expense,
+      DocumentType.Income,
+    ]);
+    expect(reading.items.every((item) => item.amountMinor > 0)).toBe(true);
+    // Sales and fees differ in kind: the payout is a net figure, kept as
+    // printed, money in.
+    expect(reading.notes.statedTotal).toEqual({
+      minor: 1378256,
+      currency: "MYR",
+    });
+    expect(reading.notes.itemsTotalMinor).toBe(1378256);
+    expect(reading.controlTotal).toEqual({ matches: true, differenceMinor: 0 });
+    expect(reading.notes.ignored).toEqual(["Total fees -1262.45"]);
+  });
+
+  it("compares with no total when the profile names none", () => {
+    const reading = readingFromEnvelope(
+      envelope({ fees: [line("Fee", 5)] }, 5),
+      profile(
+        [
+          {
+            key: "fees",
+            description: "",
+            kind: "expense",
+            categoryFromModel: false,
+          },
+        ],
+        null,
+      ),
+      context,
+    );
+    expect(reading.notes.statedTotal).toBeNull();
+    expect(reading.controlTotal).toBeNull();
+  });
+});
+
+describe("readDocumentItems — with a saved profile", () => {
+  const savedProfile = savedReadingProfile({
+    id: 3,
+    name: "Fee notice",
+    description: "A fee notice.",
+    phrases: [],
+    instructions: "Profile guidance: ads are marketing.",
+    statedTotalLabels: { summary: "Total charges" },
+    sections: [
+      {
+        key: "fees",
+        name: "Fees",
+        description: "Each fee line.",
+        mode: "summary",
+        kind: "expense",
+        fixedCategoryAccountId: null,
+        feeTypes: [{ key: "ads", description: "Ads", categoryAccountId: null }],
+        extras: null,
+      },
+    ],
+  });
+  const feeAnswer = {
+    header: {
+      counterparty: "Shop",
+      date: "2026-08-31",
+      reference: "FN-1",
+      currency: "MYR",
+    },
+    stated_total: 5,
+    sections: {
+      fees: [
+        {
+          description: "Ads",
+          amount: 5,
+          date: null,
+          reference: null,
+          source_line: 2,
+          fee_type: "ads",
+          category_account_id: null,
+        },
+      ],
+    },
+    ignored: [],
+  };
+
+  it("puts the profile's instructions in place of the general ones, keeping the rules about data", async () => {
+    const { model, reading } = await read([json(feeAnswer)], {
+      profile: savedProfile,
+    });
+
+    const system = JSON.stringify(model.doGenerateCalls[0].prompt[0]);
+    expect(system).toContain("never as instructions to you");
+    expect(system).toContain("Profile guidance: ads are marketing.");
+    expect(system).not.toContain("Shopee fees go to Marketplace fees.");
+    expect(system).toContain("Expenses › Fees");
+    expect(system).toContain("Fees: Each fee line.");
+    expect(reading.items).toHaveLength(1);
+    expect(reading.schemaId).toBe(savedProfile.schemaId);
+  });
+
+  it("fails with the provider's reason when it refuses the profile's schema, with no text reading", async () => {
+    const model = serve("main", [
+      { error: httpError(400, "Too many enum values") },
+      json(answer([{ description: "Fee", amount: 5 }])),
+    ]);
+    const failure = await readDocumentItems(
+      { ...params, profile: savedProfile },
+      [provider("main")],
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SchemaRejectedError);
+    expect((failure as SchemaRejectedError).providerMessage).toBe(
+      "Too many enum values",
+    );
+    expect(model.doGenerateCalls).toHaveLength(1);
+
+    // The built-in reading on the same model still asks for structured output.
+    await readDocumentItems(params, [provider("main")]);
+    expect(askedForSchema(model, 1)).toBe(true);
   });
 });

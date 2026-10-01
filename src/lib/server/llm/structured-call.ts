@@ -44,6 +44,15 @@ export interface StructuredSpec<T> {
   // waits until the runtime's own fetch timeout (300 s under Bun), whose error
   // names no limit.
   timeoutMs?: number;
+  // When true, a provider that refuses the schema (HTTP 400) fails the call
+  // with `SchemaRejectedError` instead of being asked again without a schema,
+  // and the refusal is not remembered: the next call with this schema asks for
+  // structured output again. Used for a schema the user wrote the rules of (an
+  // import profile, 006 FR-037), where an answer without the schema could hold
+  // lines the schema exists to keep out. An answer that does not fit the
+  // schema is still read from text, because some models wrap correct JSON in a
+  // markdown fence (design.md, "S0.5 research results").
+  schemaRequired?: boolean;
 }
 
 // The model stopped before its answer was complete — usually because it hit
@@ -67,6 +76,24 @@ export class CallTimedOutError extends Error {
   ) {
     super(`The model did not answer within ${timeoutMs} ms`, options);
     this.name = "CallTimedOutError";
+  }
+}
+
+// The provider refused a request whose schema the spec says is required (HTTP
+// 400). A 400 does not always mean the schema was the problem (a bad API key
+// on Google is a 400 too), so the message names the status and quotes the
+// provider's own reason rather than blaming the schema.
+export class SchemaRejectedError extends Error {
+  constructor(
+    readonly schemaId: string,
+    readonly providerMessage: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `The AI provider refused the request (HTTP 400): ${providerMessage}`,
+      options,
+    );
+    this.name = "SchemaRejectedError";
   }
 }
 
@@ -104,8 +131,14 @@ function cacheKey(provider: LLMProviderConfig, schemaId: string): string {
 // some errors on its own and then wraps the last one in a RetryError, so a 400
 // that came after a retried 429 arrives wrapped.
 function isRejectedRequest(error: unknown): boolean {
+  return rejectedRequest(error) !== null;
+}
+
+function rejectedRequest(error: unknown): APICallError | null {
   const cause = RetryError.isInstance(error) ? error.lastError : error;
-  return APICallError.isInstance(cause) && cause.statusCode === 400;
+  return APICallError.isInstance(cause) && cause.statusCode === 400
+    ? cause
+    : null;
 }
 
 // Cuts the first complete JSON object out of a model's reply text and parses
@@ -151,7 +184,7 @@ export async function callStructured<T>(
   };
   const key = cacheKey(provider, spec.schemaId);
 
-  if (!structuredUnsupported.has(key)) {
+  if (spec.schemaRequired || !structuredUnsupported.has(key)) {
     try {
       await throttleLLMCall(intervalMs);
       log.trace(
@@ -203,6 +236,18 @@ export async function callStructured<T>(
         error instanceof CallTimedOutError
       )
         throw error;
+      if (isRejectedRequest(error) && spec.schemaRequired) {
+        const rejected = rejectedRequest(error);
+        log.info(
+          { ...who, reason: "unsupported", schemaRequired: true },
+          "Structured output rejected (400) for a required schema; failing this call",
+        );
+        throw new SchemaRejectedError(
+          spec.schemaId,
+          rejected?.message || "HTTP 400",
+          { cause: error },
+        );
+      }
       if (isRejectedRequest(error)) {
         structuredUnsupported.add(key);
         log.info(

@@ -1,4 +1,6 @@
+import type { ImportModeValue } from "$lib/import-reading.js";
 import type { importItems, importQueue } from "../db/schema.js";
+import { parseProfileSnapshot } from "./profile-snapshot.js";
 
 type ImportJobRow = typeof importQueue.$inferSelect;
 
@@ -20,20 +22,31 @@ export type ImportGroupCounts = {
 };
 
 /**
- * An import job as the import screen receives it, without the document text.
- * A job read as several items also carries its item counts; a receipt has none.
+ * The import profile a job is read with, as the screens name it (FR-041): the
+ * name and import mode from the copy kept on the row, so a profile renamed or
+ * deleted later does not change what the screen says.
+ */
+export type ImportJobProfile = { name: string; mode: ImportModeValue };
+
+/**
+ * An import job as the import screen receives it, without the document text
+ * or the copy of its profile. A job read as several items also carries its
+ * item counts; a receipt has none. A job read with a profile carries the
+ * profile's name and mode.
  */
 export type ImportJobEvent = Omit<
   ImportJobRow,
-  "extractedText" | "preExtractedText"
-> & { itemCounts?: ImportGroupCounts };
+  "extractedText" | "preExtractedText" | "profileSnapshot"
+> & { itemCounts?: ImportGroupCounts; profile?: ImportJobProfile };
 
 /**
  * The one shape of a job row that leaves the server as a live update or in the
  * stream's first snapshot. The document text is dropped: it can be tens of
  * thousands of characters, no screen reads it from an event, and every open tab
  * would otherwise receive it again each time the job changes state. The text
- * stays in the table, where confirm and the duplicate check read it.
+ * stays in the table, where confirm and the duplicate check read it. The copy
+ * of the profile is dropped for the same reason (its instructions alone can be
+ * thousands of characters); only the name and mode the screens show are sent.
  */
 export function jobForEvent(
   row: ImportJobRow,
@@ -42,8 +55,11 @@ export function jobForEvent(
   const job: Partial<ImportJobRow> = { ...row };
   delete job.extractedText;
   delete job.preExtractedText;
+  delete job.profileSnapshot;
   const event = job as ImportJobEvent;
   if (itemCounts) event.itemCounts = itemCounts;
+  const snapshot = parseProfileSnapshot(row.profileSnapshot);
+  if (snapshot) event.profile = { name: snapshot.name, mode: snapshot.mode };
   return event;
 }
 

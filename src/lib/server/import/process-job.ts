@@ -12,6 +12,10 @@
  *   item is reviewed as a receipt, on the queue row (FR-009). Several become a
  *   group: the items go into `import_items` and the queue row is marked
  *   Grouped. No item is saved unless all of them are (FR-011).
+ * - **With an import profile** the user saved (006 US6-7): read the same way
+ *   as several items, with the profile's sections, fee types and instructions
+ *   in place of the built-in ones. A copy of the profile is kept on the row,
+ *   so a later edit or delete never changes what was read (FR-038).
  *
  * The worker calls this with the app's database and storage folder; the tests
  * call it with their own, so nothing here reaches for either.
@@ -26,7 +30,14 @@ import {
   documentTypeEnum,
   type ImportStateCode,
 } from "$lib/enums.js";
-import { ImportReadAs, serializeExtractionNotes } from "$lib/import-reading.js";
+import {
+  ImportMode,
+  ImportReadAs,
+  ImportReadHow,
+  importModeLabel,
+  isImportMode,
+  serializeExtractionNotes,
+} from "$lib/import-reading.js";
 import { importItems, importQueue, users } from "../db/schema.js";
 import {
   extractNumberedText,
@@ -38,6 +49,12 @@ import {
 import type { LedgerDb } from "../ledger/types.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
 import { createLogger } from "../logger.js";
+import {
+  deletedProfileName,
+  getImportProfile,
+  savedProfileIdOf,
+} from "../services/import-profiles.js";
+import { SchemaRejectedError } from "../llm/structured-call.js";
 import { getSetting, SETTING_KEYS } from "../settings.js";
 import {
   buildReviewFields,
@@ -53,7 +70,16 @@ import {
 import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
 import type { LLMCallParams } from "./providers/types.js";
-import { SEVERAL_ITEMS_PROFILE } from "./profile-compiler.js";
+import {
+  ProfileModeError,
+  SEVERAL_ITEMS_PROFILE,
+  savedReadingProfile,
+  type ReadingProfile,
+} from "./profile-compiler.js";
+import {
+  parseProfileSnapshot,
+  serializeProfileSnapshot,
+} from "./profile-snapshot.js";
 import type { ReviewFields } from "./review-fields.js";
 
 const log = createLogger("import:worker");
@@ -76,14 +102,26 @@ export const NO_ITEMS_FOUND = "No items found";
  */
 const ITEM_INSERT_CHUNK = 100;
 
-type ReadingPath = "receipt" | "items";
+type ReadingPath = "receipt" | "items" | "profile";
 
 /**
- * How this job is read. Only the several-items choice reads items; a row from
- * before 006 has no choice stored and is a receipt, as it was when uploaded.
+ * How this job is read. The several-items choice and a saved profile read
+ * items; a row from before 006 has no choice stored and is a receipt, as it
+ * was when uploaded.
  */
 function readingPath(job: ImportJob): ReadingPath {
-  return job.readAs === ImportReadAs.SeveralItems ? "items" : "receipt";
+  if (job.readAs === ImportReadAs.SeveralItems) return "items";
+  if (job.readAs === ImportReadAs.Profile) return "profile";
+  return "receipt";
+}
+
+/** What a document read as items is read with. */
+interface ItemsReading {
+  profile: ReadingProfile;
+  /** What the row's `profile_id` holds once it is read. */
+  profileId: string;
+  /** The saved profile's name; absent for the built-in reading. */
+  profileName?: string;
 }
 
 function markFailed(
@@ -133,12 +171,20 @@ function loadProviders(db: LedgerDb) {
 }
 
 /** "as a receipt or invoice", in the words the upload screen uses. */
-function howItWasRead(row: Pick<ImportJob, "readAs">): string {
+function howItWasRead(
+  row: Pick<ImportJob, "readAs" | "profileSnapshot">,
+): string {
   switch (row.readAs) {
     case ImportReadAs.SeveralItems:
       return "as a document with several items";
-    case ImportReadAs.Profile:
-      return "with an import profile";
+    case ImportReadAs.Profile: {
+      // The copy kept on the row names the profile even after it is renamed
+      // or deleted, and says which mode it was imported in (FR-033).
+      const snapshot = parseProfileSnapshot(row.profileSnapshot);
+      return snapshot
+        ? `with the import profile "${snapshot.name}" (${importModeLabel(snapshot.mode)})`
+        : "with an import profile";
+    }
     default:
       return "as a receipt or invoice";
   }
@@ -163,6 +209,7 @@ export function alreadyImported(db: LedgerDb, job: ImportJob): string | null {
       id: importQueue.id,
       state: importQueue.state,
       readAs: importQueue.readAs,
+      profileSnapshot: importQueue.profileSnapshot,
       createdAt: importQueue.createdAt,
     })
     .from(importQueue)
@@ -214,7 +261,7 @@ async function documentText(
   if (job.preExtractedText && job.preExtractedText.trim().length > 0) {
     // Caller already ran its own OCR/extraction — skip server-side extraction entirely.
     const given = job.preExtractedText.trim();
-    text = path === "items" ? numberDocumentLines([given]) : given;
+    text = path === "receipt" ? given : numberDocumentLines([given]);
     log.debug(
       { jobId: job.id, textLength: text.length },
       "Using caller-provided text (OCR bypassed)",
@@ -226,9 +273,9 @@ async function documentText(
     const mimeType = inferMimeType(job.originalFilename);
     try {
       text =
-        path === "items"
-          ? await extractNumberedText(absPath, mimeType)
-          : await extractText(absPath, mimeType);
+        path === "receipt"
+          ? await extractText(absPath, mimeType)
+          : await extractNumberedText(absPath, mimeType);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ jobId: job.id, err }, "Text extraction failed");
@@ -239,7 +286,7 @@ async function documentText(
 
   // Numbered text always has its page markers, so what counts is what the
   // document itself prints.
-  const printed = path === "items" ? stripLineNumbers(text).trim() : text;
+  const printed = path === "receipt" ? text : stripLineNumbers(text).trim();
   if (!printed || printed.length < 10) {
     log.warn(
       { jobId: job.id, textLength: printed?.length ?? 0 },
@@ -276,12 +323,27 @@ export async function processImportJob(
   const userId = ownerUser?.id ?? job.createdBy;
   const path = readingPath(job);
 
-  if (path === "items") {
+  if (path !== "receipt") {
     const stop = alreadyImported(db, job);
     if (stop) {
       markFailed(db, job.id, userId, stop);
       return;
     }
+  }
+
+  let itemsReading: ItemsReading | null = null;
+  if (path === "items") {
+    itemsReading = {
+      profile: SEVERAL_ITEMS_PROFILE,
+      profileId: SEVERAL_ITEMS_PROFILE.schemaId,
+    };
+  } else if (path === "profile") {
+    const chosen = profileForJob(db, job);
+    if (!chosen.ok) {
+      markFailed(db, job.id, userId, chosen.reason);
+      return;
+    }
+    itemsReading = chosen.value;
   }
 
   const providers = loadProviders(db);
@@ -334,7 +396,7 @@ export async function processImportJob(
     customInstructions,
   };
 
-  if (path === "receipt") {
+  if (itemsReading === null) {
     await readReceipt(db, job, userId, ctx, {
       text,
       providers,
@@ -342,13 +404,97 @@ export async function processImportJob(
       accountLists,
     });
   } else {
-    await readItems(db, job, userId, ctx, {
-      text,
-      providers,
-      rateLimitMs,
-      accountLists,
-    });
+    await readItems(
+      db,
+      job,
+      userId,
+      ctx,
+      { text, providers, rateLimitMs, accountLists },
+      itemsReading,
+    );
   }
+}
+
+/**
+ * The saved profile a job is to be read with, compiled for its import mode,
+ * or why it cannot be read (spec edge cases). A profile disabled or deleted
+ * after the upload is not used, and the message names it.
+ *
+ * On success the profile is copied onto the row with the mode, before any
+ * reading starts, so every screen can say which profile reads the document
+ * from the first update on (FR-041), and an edit made while it is read, or
+ * later, never changes the group (FR-038). Reading is always chosen for now:
+ * auto-detect (006 S3) will set `read_how` itself before this runs.
+ */
+function profileForJob(
+  db: LedgerDb,
+  job: ImportJob,
+): { ok: true; value: ItemsReading } | { ok: false; reason: string } {
+  const id = savedProfileIdOf(job);
+  if (id === null) {
+    return {
+      ok: false,
+      reason:
+        "This document was to be read with an import profile, but no profile is named. Upload it again and choose how to read it.",
+    };
+  }
+  const saved = getImportProfile(db, id);
+  if (!saved) {
+    const name =
+      parseProfileSnapshot(job.profileSnapshot)?.name ??
+      deletedProfileName(db, id);
+    const named = name ? `"${name}"` : `#${id}`;
+    return {
+      ok: false,
+      reason: `The import profile ${named} chosen for this document was deleted before it was read. Upload it again and choose another way to read it.`,
+    };
+  }
+  if (!saved.enabled) {
+    return {
+      ok: false,
+      reason: `The import profile "${saved.name}" chosen for this document was disabled before it was read. Turn it on again, or upload the document again and choose another way to read it.`,
+    };
+  }
+
+  const mode = isImportMode(job.importMode)
+    ? job.importMode
+    : ImportMode.Summary;
+  let profile: ReadingProfile;
+  try {
+    profile = savedReadingProfile(saved, mode);
+  } catch (err) {
+    if (err instanceof ProfileModeError)
+      return { ok: false, reason: err.message };
+    throw err;
+  }
+
+  db.update(importQueue)
+    .set({
+      importMode: mode,
+      readHow: job.readHow ?? ImportReadHow.Chosen,
+      profileSnapshot: serializeProfileSnapshot({
+        version: 1,
+        id: saved.id,
+        name: saved.name,
+        mode,
+        schemaId: profile.schemaId,
+        profile: {
+          name: saved.name,
+          description: saved.description,
+          phrases: saved.phrases,
+          instructions: saved.instructions,
+          statedTotalLabels: saved.statedTotalLabels,
+          sections: saved.sections,
+        },
+      }),
+    })
+    .where(eq(importQueue.id, job.id))
+    .run();
+
+  return {
+    ok: true,
+    value: { profile, profileId: String(saved.id), profileName: saved.name },
+  };
 }
 
 type ReadingInput = {
@@ -437,13 +583,14 @@ async function readReceipt(
 }
 
 /**
- * The remark an item starts with: its fee type, then each extra field as
- * "name: value" (FR-034, FR-035). Null when it has neither, as for every item
- * of the built-in several-items reading.
+ * The remark an item starts with: its fee type, then each extra field, each as
+ * "name: value" (FR-034, FR-035), for example "Fee type: commission_fee;
+ * order_no: 2408". Null when it has neither, as for every item of the built-in
+ * several-items reading.
  */
 function itemRemark(item: DocumentItem): string | null {
   const parts: string[] = [];
-  if (item.feeType) parts.push(item.feeType);
+  if (item.feeType) parts.push(`Fee type: ${item.feeType}`);
   for (const [name, value] of Object.entries(item.extras ?? {})) {
     if (value === null || value === undefined || value === "") continue;
     parts.push(`${name}: ${String(value)}`);
@@ -458,6 +605,17 @@ async function itemFields(
 ): Promise<ReviewFields[]> {
   const out: ReviewFields[] = [];
   for (const item of reading.items) {
+    // The first category the item could take that is still one of its kind
+    // (FR-034): a tied category archived since the profile was saved is
+    // passed over. None leaves Uncategorised to `buildReviewFields`.
+    const choices =
+      item.kind === DocumentType.Income
+        ? ctx.incomeChoices
+        : ctx.expenseChoices;
+    const categoryAccountId =
+      item.categoryCandidates.find((id) =>
+        choices.some((choice) => choice.id === id),
+      ) ?? null;
     out.push(
       await buildReviewFields(
         db,
@@ -471,7 +629,7 @@ async function itemFields(
           date: item.date,
           reference: item.reference,
           currency: reading.currency,
-          categoryAccountId: item.categoryAccountId,
+          categoryAccountId,
           remark: itemRemark(item),
           // No file name, hash or text: shared by every item of the document
           // and by last month's, so none of them says an item is a duplicate.
@@ -495,8 +653,9 @@ async function readItems(
   userId: number,
   ctx: ReviewContext,
   input: ReadingInput,
+  chosen: ItemsReading,
 ) {
-  const profile = SEVERAL_ITEMS_PROFILE;
+  const { profile, profileId } = chosen;
   let reading: DocumentReading;
   try {
     reading = await readDocumentItems(
@@ -507,6 +666,21 @@ async function readItems(
   } catch (err) {
     if (err instanceof DocumentLimitError) {
       markFailed(db, job.id, userId, err.message);
+      return;
+    }
+    if (err instanceof SchemaRejectedError) {
+      // Only this document fails, and with no reading without the schema
+      // (FR-037). Nothing is remembered about the refusal, so no other
+      // document is read differently.
+      const whose = chosen.profileName
+        ? `the import profile "${chosen.profileName}"`
+        : "the chosen reading";
+      markFailed(
+        db,
+        job.id,
+        userId,
+        `The AI provider refused the request to read this document with ${whose} (HTTP 400), so it was not read: ${err.providerMessage}`,
+      );
       return;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -540,7 +714,7 @@ async function readItems(
     // for search as a receipt does, without the line numbers.
     writeReviewCard(db, job.id, userId, fields[0], {
       extractedText: stripLineNumbers(input.text),
-      profileId: profile.schemaId,
+      profileId,
       extractionNotes,
     });
     log.info({ jobId: job.id }, "Job completed — one item, pending review");
@@ -562,7 +736,7 @@ async function readItems(
   let grouped: boolean;
   try {
     grouped = saveGroup(db, job.id, rows, {
-      profileId: profile.schemaId,
+      profileId,
       extractionNotes,
       document: {
         date: reading.date,

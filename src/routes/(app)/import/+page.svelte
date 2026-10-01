@@ -75,6 +75,8 @@
 		// How the document was to be read, and how it was read (006 FR-001).
 		readAs: string | null;
 		readHow: string | null;
+		// The import profile it was read with, by name, when it was (FR-041).
+		profile: { name: string; mode: string } | null;
 		// The stated total, the items' sum and the lines left out, as JSON.
 		extractionNotes: string | null;
 		// Where a group's items stand. Absent for a receipt.
@@ -97,6 +99,7 @@
 			resultType: j.resultType ?? null,
 			readAs: j.readAs ?? null,
 			readHow: j.readHow ?? null,
+			profile: j.profile ?? null,
 			extractionNotes: j.extractionNotes ?? null,
 			itemCounts: j.itemCounts ?? null,
 			_edits: {},

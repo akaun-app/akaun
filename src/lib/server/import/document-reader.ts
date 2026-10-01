@@ -30,6 +30,7 @@ import type { LLMProviderConfig } from "../llm/model-factory.js";
 import {
   CallTimedOutError,
   OutputTruncatedError,
+  SchemaRejectedError,
   callStructured,
   withProviderFailover,
   type StructuredSpec,
@@ -109,12 +110,18 @@ export class DocumentLimitError extends Error {
 export interface DocumentReadingParams {
   /** The document's numbered text (`extractNumberedText`). */
   text: string;
-  /** What to read. For now always `SEVERAL_ITEMS_PROFILE`. */
+  /**
+   * What to read: `SEVERAL_ITEMS_PROFILE`, or a saved import profile compiled
+   * by `savedReadingProfile`.
+   */
   profile: ReadingProfile;
   expenseAccounts: ImportAccountChoice[];
   incomeAccounts: ImportAccountChoice[];
   mainCurrency: string;
-  /** The user's own notes about their documents, from Settings. */
+  /**
+   * The user's own notes about their documents, from Settings. A profile with
+   * guidance of its own is read with that instead (FR-036).
+   */
   customInstructions?: string;
   /** YYYY-MM-DD; the date used when the document's own is unclear. */
   today?: string;
@@ -136,8 +143,18 @@ export interface DocumentItem {
   /** The document line the amount is printed on, when the model said. */
   sourceLine: number | null;
   feeType: string | null;
-  /** The model's pick; the worker still checks it against the user's list. */
+  /**
+   * The category to propose: the first of `categoryCandidates`. The worker
+   * still checks it against the user's list.
+   */
   categoryAccountId: number | null;
+  /**
+   * Every category the item could take, best first (FR-034, US6 AS7): its fee
+   * type's tied category, then the model's pick, then its section's fixed
+   * category for a line with no fee type. The worker uses the first that is
+   * still a category of the item's kind, and Uncategorised when none is.
+   */
+  categoryCandidates: number[];
   extras: Record<string, unknown> | null;
 }
 
@@ -178,13 +195,24 @@ export function buildItemsSystemPrompt(
   const asksForCategory = params.profile.sections.some(
     (section) => section.categoryFromModel,
   );
+  // A saved profile's line can be either kind, by its section or its sign.
+  const kindOfLine =
+    params.profile.guidance === undefined
+      ? "document's kind"
+      : "line's kind (income or expense)";
   const categoryLines = asksForCategory
     ? `
 - category_account_id = the id of the best matching account for that line, from the list for the
-  document's kind. Null when the line does not say enough to choose one. Never invent an id.
+  ${kindOfLine}. Null when the line does not say enough to choose one. Never invent an id.
   Expense and asset-purchase accounts: ${accountChoicesJson(params.expenseAccounts)}
   Income accounts: ${accountChoicesJson(params.incomeAccounts)}`
     : "";
+  // A saved profile's own instructions replace the general ones, even when
+  // it has none (FR-036). The rules above them stay either way.
+  const guidance =
+    params.profile.guidance === undefined
+      ? params.customInstructions
+      : params.profile.guidance;
   return `${PROMPT_ROLE}
 
 ${DOCUMENT_IS_DATA}
@@ -193,7 +221,7 @@ line such as --- page 2 ---. These marks are not printed on the document.
 
 Instructions:
 ${params.profile.instructions}${categoryLines}
-${customInstructionsBlock(params.customInstructions)}
+${customInstructionsBlock(guidance)}
 The JSON must match this JSON Schema, and its descriptions say what each field holds:
 ${JSON.stringify(compiled.wire)}
 
@@ -228,6 +256,7 @@ export async function readDocumentItems(
     prompt: wrapDocument(params.text),
     maxOutputTokens,
     timeoutMs,
+    schemaRequired: params.profile.schemaRequired ?? false,
   };
 
   // Which limits any provider ran into. The failover keeps only the last
@@ -235,6 +264,7 @@ export async function readDocumentItems(
   // hidden behind a second that failed some other way.
   let truncated = false;
   let timedOut = false;
+  let rejected: SchemaRejectedError | null = null;
   let envelope: ReadEnvelope;
   try {
     envelope = await withProviderFailover(
@@ -245,6 +275,7 @@ export async function readDocumentItems(
         } catch (error) {
           if (error instanceof OutputTruncatedError) truncated = true;
           if (error instanceof CallTimedOutError) timedOut = true;
+          if (error instanceof SchemaRejectedError) rejected ??= error;
           throw error;
         }
       },
@@ -267,6 +298,10 @@ export async function readDocumentItems(
         { cause },
       );
     }
+    // A provider refused a schema that must be used (FR-037). Said even when
+    // a later provider failed some other way, because it is the reason the
+    // user can act on.
+    if (rejected) throw rejected;
     throw error;
   }
 
@@ -299,7 +334,8 @@ export async function readDocumentItems(
 }
 
 /**
- * Which sign a section's charges carry on this document. Most documents print
+ * Which sign a section's charges carry on this document, for a section whose
+ * kind is the document's (the built-in reading). Most documents print
  * charges as plain figures, but some print every fee with a minus. The charges
  * are the larger part of the money, so the sign of the lines' sum is theirs,
  * and a line with the other sign is a credit, discount or refund. Counting
@@ -316,6 +352,49 @@ function chargeSign(
   const sum = amounts.reduce((total, minor) => total + minor, 0);
   if (sum !== 0) return sum < 0 ? -1 : 1;
   return statedTotal != null && statedTotal < 0 ? -1 : 1;
+}
+
+/**
+ * The share of a fixed Expense section's money that one sign must hold before
+ * that sign is taken as how the document prints its charges. Below it, the
+ * section's lines cannot be told apart (see `fixedSectionSign`).
+ */
+const CLEAR_SHARE = 0.8;
+
+/**
+ * Which sign the lines of a fixed Income or Expense section must carry to be
+ * imported as that kind, or null when the document does not say.
+ *
+ * - Income: plus. Money received is printed as a plain figure, so a line with
+ *   a minus among sales is a deduction or refund, never more income.
+ * - Expense: a document prints its charges either way (Shopee prints every fee
+ *   with a minus, an invoice prints plain figures), so the sign is the one the
+ *   section's own lines carry: all of them, or a clear share of the money
+ *   (`CLEAR_SHARE`), as with one discount on an invoice. When both signs hold
+ *   real money, such as a commission of -100 beside a rebate of +300, either
+ *   reading would turn one of them into an expense it is not, so null: none of
+ *   the section's lines is imported, and the reviewer is told to read it by
+ *   sign instead.
+ *
+ * A section's total, as the built-in reading uses (`chargeSign`), is not
+ * enough here: one large line of the other direction would flip it, and every
+ * real charge would be left out while the credit became one.
+ */
+function fixedSectionSign(
+  kind: "income" | "expense",
+  amounts: readonly Minor[],
+): 1 | -1 | null {
+  if (kind === "income") return 1;
+  let plus = 0;
+  let minus = 0;
+  for (const minor of amounts) {
+    if (minor > 0) plus += minor;
+    else minus -= minor;
+  }
+  const money = plus + minus;
+  if (money === 0 || plus >= money * CLEAR_SHARE) return 1;
+  if (minus >= money * CLEAR_SHARE) return -1;
+  return null;
 }
 
 /** A left-out line as the reviewer sees it, e.g. "Discount -5.00". */
@@ -347,6 +426,31 @@ function sharedKind(
 }
 
 /**
+ * The categories a line could take, best first (FR-034, US6 AS7):
+ *
+ * 1. its fee type's tied category, which wins over any other;
+ * 2. the model's pick, when the section asked for one;
+ * 3. its section's fixed category, for a line with no fee type.
+ *
+ * None of them may be valid by the time it is used (a category archived since
+ * the profile was saved), so the worker takes the first one that still is, and
+ * Uncategorised when none is.
+ */
+function categoriesFor(section: SectionSpec, line: ReadItem): number[] {
+  const out: number[] = [];
+  const add = (id: number | null | undefined) => {
+    if (id != null && id > 0 && !out.includes(id)) out.push(id);
+  };
+  const feeType = line.fee_type
+    ? section.feeTypes?.find((entry) => entry.key === line.fee_type)
+    : undefined;
+  add(feeType?.categoryAccountId);
+  if (section.categoryFromModel) add(line.category_account_id);
+  if (!line.fee_type) add(section.fixedCategoryAccountId);
+  return out;
+}
+
+/**
  * Turns the model's answer into proposed records, in code. Exported for the
  * tests; `readDocumentItems` is the way in.
  */
@@ -368,47 +472,60 @@ export function readingFromEnvelope(
   // reviewer should know about.
   const leftOut: string[] = [];
   const items: DocumentItem[] = [];
+  // A profile that names no stated total compares against none, whatever
+  // the model put in the field.
   const printedTotal =
-    envelope.stated_total != null ? toMinor(envelope.stated_total, 1) : null;
+    envelope.stated_total != null && profile.statedTotalDescription !== null
+      ? toMinor(envelope.stated_total, 1)
+      : null;
 
   for (const section of profile.sections) {
     const lines = envelope.sections[section.key] ?? [];
     const amounts = lines.map((line) => toMinor(line.amount, 1));
+    // A section with fee types keeps only lines of a known type (FR-034).
+    const typed = (line: ReadItem) =>
+      !section.feeTypes?.length || line.fee_type != null;
+    // Which sign the section's own lines carry, from the lines it can keep.
+    // Only a section of one kind has one; a by-sign section takes both.
+    const keptAmounts = amounts.filter((_, index) => typed(lines[index]));
     const charges =
-      section.kind === "document" ? chargeSign(amounts, printedTotal) : 1;
+      section.kind === "by_sign"
+        ? 1
+        : section.kind === "document"
+          ? chargeSign(keptAmounts, printedTotal)
+          : fixedSectionSign(section.kind, keptAmounts);
+    if (charges === null) {
+      leftOut.push(
+        `${section.name ?? section.key}: lines printed with both signs, so none was imported. Read it by sign.`,
+      );
+    }
 
     lines.forEach((line, index) => {
       const minor = amounts[index];
-      if (minor === 0) {
-        leftOut.push(ignoredLine(line, minor));
-        return;
-      }
-      // A section with fee types keeps only lines of a known type (FR-034).
-      if (section.feeTypes?.length && line.fee_type == null) {
+      if (minor === 0 || !typed(line) || charges === null) {
         leftOut.push(ignoredLine(line, minor));
         return;
       }
 
       let kind: DocumentTypeCode;
-      switch (section.kind) {
-        case "document":
-          // Against the charges' sign: a credit, discount or refund, which the
-          // several-items reading does not import (FR-005).
-          if (Math.sign(minor) !== charges) {
-            leftOut.push(ignoredLine(line, minor));
-            return;
-          }
-          kind = documentKind;
-          break;
-        case "income":
-          kind = DocumentType.Income;
-          break;
-        case "expense":
-          kind = DocumentType.Expense;
-          break;
-        case "by_sign":
-          kind = minor > 0 ? DocumentType.Income : DocumentType.Expense;
-          break;
+      if (section.kind === "by_sign") {
+        kind = minor > 0 ? DocumentType.Income : DocumentType.Expense;
+      } else {
+        // Against the sign of the section's lines: a credit, discount or
+        // refund among charges, or a deduction among sales. It is not
+        // imported as the section's kind, and never turned into it by
+        // dropping its sign (FR-005, FR-008); a by-sign section is the way
+        // to import both.
+        if (Math.sign(minor) !== charges) {
+          leftOut.push(ignoredLine(line, minor));
+          return;
+        }
+        kind =
+          section.kind === "document"
+            ? documentKind
+            : section.kind === "income"
+              ? DocumentType.Income
+              : DocumentType.Expense;
       }
 
       // A record keeps its amount without a sign, as a receipt does; the
@@ -419,12 +536,7 @@ export function readingFromEnvelope(
         line.source_line != null && line.source_line > 0
           ? line.source_line
           : null;
-      const categoryAccountId =
-        section.categoryFromModel &&
-        line.category_account_id != null &&
-        line.category_account_id > 0
-          ? line.category_account_id
-          : null;
+      const categoryCandidates = categoriesFor(section, line);
       items.push({
         sectionKey: section.key,
         kind,
@@ -435,7 +547,8 @@ export function readingFromEnvelope(
         reference: line.reference?.trim() || reference,
         sourceLine,
         feeType: line.fee_type ?? null,
-        categoryAccountId,
+        categoryAccountId: categoryCandidates[0] ?? null,
+        categoryCandidates,
         extras: line.extras ?? null,
       });
     });

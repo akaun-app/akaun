@@ -30,7 +30,7 @@ import {
   type ProfileSectionKind,
 } from "$lib/import-profile-schema.js";
 import { ImportReadAs } from "$lib/import-reading.js";
-import { diffRecords, recordAudit } from "../audit.js";
+import { diffRecords, getAuditTrail, recordAudit } from "../audit.js";
 import { importProfiles } from "../db/schema.js";
 import { categoryChoices } from "../import/category-accounts.js";
 import type { LedgerDb } from "../ledger/types.js";
@@ -273,6 +273,20 @@ export function savedProfileIdOf(job: {
   if (!/^[1-9][0-9]*$/.test(job.profileId)) return null;
   const id = Number(job.profileId);
   return Number.isSafeInteger(id) ? id : null;
+}
+
+/**
+ * The name a deleted profile had, from the audit entry of its delete, or null
+ * when there is none. A document whose profile was deleted before it was read
+ * fails with a message naming the profile (spec edge case), and the queue row
+ * itself keeps only the profile's id.
+ */
+export function deletedProfileName(db: LedgerDb, id: number): string | null {
+  const deleted = getAuditTrail(db, "import_profile", id).find(
+    (entry) => entry.action === "delete",
+  );
+  const name = deleted?.changes?.find((change) => change.field === "name");
+  return typeof name?.before === "string" ? name.before : null;
 }
 
 // ── Writing ─────────────────────────────────────────────────────────────────

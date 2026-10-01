@@ -40,6 +40,7 @@ vi.mock("$lib/server/logger.js", () => ({
 import {
   CallTimedOutError,
   OutputTruncatedError,
+  SchemaRejectedError,
   callStructured,
   extractJsonObject,
   withProviderFailover,
@@ -110,6 +111,50 @@ describe("callStructured", () => {
     await callStructured(model, config, spec("other@1"));
     expect(model.doGenerateCalls).toHaveLength(4);
     expect(askedForSchema(model, 3)).toBe(true);
+  });
+
+  it("fails a call whose schema is required on a 400, with no text retry and nothing remembered", async () => {
+    const model = mockModel([
+      { error: httpError(400, "enum too large") },
+      { text: JSON.stringify(thing) },
+    ]);
+    const config = provider("picky", "picky-model");
+    const lenient = spec("profile:7:abc");
+    const required = { ...spec("profile:7:abc"), schemaRequired: true };
+
+    const failure = await callStructured(model, config, required).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(SchemaRejectedError);
+    expect((failure as SchemaRejectedError).providerMessage).toBe(
+      "enum too large",
+    );
+    expect(model.doGenerateCalls).toHaveLength(1);
+
+    // The refusal is not remembered: the same schema is asked for again, and
+    // so is any other schema on the same model.
+    await expect(callStructured(model, config, required)).resolves.toEqual(
+      thing,
+    );
+    expect(askedForSchema(model, 1)).toBe(true);
+    await callStructured(model, config, spec("builtin:items@1"));
+    expect(askedForSchema(model, 2)).toBe(true);
+    // The direct proof: a call for the same schema that may fall back still
+    // asks for it, which it would not if the refusal had been cached.
+    await callStructured(model, config, lenient);
+    expect(askedForSchema(model, 3)).toBe(true);
+  });
+
+  it("still reads a required schema's answer from text when it did not fit", async () => {
+    const fenced = "```json\n" + JSON.stringify(thing) + "\n```";
+    const model = mockModel([{ text: fenced }, { text: fenced }]);
+    const required = { ...spec("profile:7:abc"), schemaRequired: true };
+
+    await expect(
+      callStructured(model, provider("fence"), required),
+    ).resolves.toEqual(thing);
+    expect(askedForSchema(model, 0)).toBe(true);
+    expect(askedForSchema(model, 1)).toBe(false);
   });
 
   it("treats a 400 wrapped in the SDK's RetryError as a rejected schema", async () => {

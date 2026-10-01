@@ -15,14 +15,30 @@
  * The schema keeps to what every provider accepts: every property is required,
  * a value that may be missing is typed `[T, "null"]`, objects set
  * `additionalProperties: false`, and enums hold strings only. It never uses
- * minimum/maximum, pattern, $ref or anyOf.
+ * minimum/maximum, pattern, $ref or anyOf. A list of choices that may be empty
+ * is the one exception to `[T, "null"]`: it is sent as a plain string whose
+ * enum also holds `NONE_VALUE`, and the check reads that back as null (see
+ * `toWireSchema`).
  *
  * "Document with several items" is the one built-in profile (below). A saved
- * profile (006 S2) is compiled the same way: it is another `ReadingProfile`
- * with its own sections and a schema id of its own.
+ * import profile (006 S2) is compiled the same way: `savedReadingProfile`
+ * turns the form the user filled in into another `ReadingProfile`, with its own
+ * sections and a schema id of its own, and from there both take one path.
  */
 
+import { createHash } from "crypto";
 import { jsonSchema, type JSONSchema7, type Schema } from "ai";
+import {
+  NONE_VALUE,
+  extraFieldsOf,
+  type ImportProfileDraft,
+  type ProfileSectionKind,
+} from "$lib/import-profile-schema.js";
+import {
+  ImportMode,
+  importModeLabel,
+  type ImportModeValue,
+} from "$lib/import-reading.js";
 
 // ── The field model ─────────────────────────────────────────────────────────
 
@@ -57,6 +73,23 @@ export function toWireSchema(field: FieldSpec): JSONSchema7 {
       };
     }
     case "string":
+      // A list of choices that may be empty. A strict provider (OpenAI and
+      // Groq through the app's model factory) allows only the values `enum`
+      // names, so `["string", "null"]` beside an enum without null still
+      // cannot be null there: the model would have to pick the closest
+      // choice. Google, on the other hand, refuses a null inside an enum. So
+      // "none" is sent as one more choice, which every provider can express,
+      // and `checkField` reads it back as null.
+      if (field.enum && field.nullable) {
+        const base = field.description?.trim() ?? "";
+        const stop = base && !/[.!?]$/.test(base) ? "." : "";
+        const none = `"${NONE_VALUE}" when none of the others applies.`;
+        return {
+          type: "string",
+          description: base ? `${base}${stop} ${none}` : none,
+          enum: [...new Set([...field.enum, NONE_VALUE])],
+        };
+      }
       return {
         type: field.nullable ? ["string", "null"] : "string",
         ...described,
@@ -94,6 +127,8 @@ export function checkField(
   }
   switch (field.type) {
     case "string":
+      // "None of the choices", as `toWireSchema` sends a nullable enum.
+      if (field.enum && field.nullable && value === NONE_VALUE) return null;
       if (typeof value !== "string") {
         errors.push(`${where} must be text`);
       } else if (field.enum && !field.enum.includes(value)) {
@@ -158,21 +193,41 @@ const ERRORS_SHOWN = 10;
  */
 export type SectionKind = "document" | "income" | "expense" | "by_sign";
 
+/** One fee type a section lists, and the category it is tied to. */
+export interface FeeTypeSpec {
+  key: string;
+  /** Tells the model which lines are this type. May be empty. */
+  description: string;
+  /**
+   * The category every line of this type gets, whatever the model suggests
+   * (FR-034). Absent or null when the type is tied to none.
+   */
+  categoryAccountId?: number | null;
+}
+
 /** One list of lines to read from the document. */
 export interface SectionSpec {
   /** The section's key in the answer. Lower-case letters, digits and "_". */
   key: string;
+  /** The section's name as the screens show it. Absent for a built-in. */
+  name?: string;
   /** Tells the model which lines belong in this section. */
   description: string;
   kind: SectionKind;
   /**
    * The closed list of fee types a line of this section can be. The answer's
-   * `fee_type` is one of them or null, and a null is left out as an ignored
-   * line, so a stray line is never forced into the closest type (FR-034).
+   * `fee_type` is one of them or null (sent as `NONE_VALUE`, see
+   * `toWireSchema`), and a null is left out as an ignored line, so a stray
+   * line is never forced into the closest type (FR-034).
    * Absent when the section has no fee types; the answer then has no
    * `fee_type` at all.
    */
-  feeTypes?: readonly { key: string; description: string }[];
+  feeTypes?: readonly FeeTypeSpec[];
+  /**
+   * The category of a line with no fee type: every line of a section that
+   * lists none (FR-034, US6 AS7). Absent or null when the section has none.
+   */
+  fixedCategoryAccountId?: number | null;
   /**
    * Whether the model picks each line's category from the user's list. False
    * when code decides the category, and the answer then has no
@@ -188,7 +243,8 @@ export interface ReadingProfile {
   /**
    * Names the compiled schema for the provider's unsupported cache, with a
    * version (see `StructuredSpec.schemaId`). Change the version whenever the
-   * schema this profile compiles to changes.
+   * schema this profile compiles to changes. A saved profile's id carries a
+   * hash of its schema instead, so every edit is a new id by itself.
    */
   schemaId: string;
   /**
@@ -196,8 +252,26 @@ export interface ReadingProfile {
    * under the prompt's opening and above the user's own guidance.
    */
   instructions: string;
-  /** Which printed total `stated_total` is, for this profile. */
-  statedTotalDescription: string;
+  /**
+   * The user's own guidance for this reading, when it has its own: a saved
+   * profile's instructions. They take the place of the general import
+   * instructions from Settings, even when empty (FR-036). Absent for a
+   * built-in reading, which takes the general ones.
+   */
+  guidance?: string;
+  /**
+   * Which printed total `stated_total` is, for this profile. Null when the
+   * profile names none: the answer still has the field, so every reading has
+   * one shape, but its value is not used and no control total is shown.
+   */
+  statedTotalDescription: string | null;
+  /**
+   * True when a provider's refusal of this schema must fail the document
+   * instead of reading it without a schema (FR-037). Set for a saved profile:
+   * its schema is the user's, and reading without it would quietly drop the
+   * fee type list that decides which lines count.
+   */
+  schemaRequired?: boolean;
   sections: readonly SectionSpec[];
 }
 
@@ -210,7 +284,7 @@ export interface ReadItem {
   reference: string | null;
   /** The number of the line the amount is printed on (the "L0012" prefix). */
   source_line: number | null;
-  /** Present only when the section has fee types. */
+  /** Present only when the section has fee types. Null when it is none. */
   fee_type?: string | null;
   /** Present only when the model picks the category. */
   category_account_id?: number | null;
@@ -279,11 +353,12 @@ function itemField(section: SectionSpec): FieldSpec {
     },
   };
   if (section.feeTypes?.length) {
+    // Nullable: the wire sends "none" as one more choice (`toWireSchema`).
     properties.fee_type = {
       type: "string",
       nullable: true,
       enum: section.feeTypes.map((feeType) => feeType.key),
-      description: `Which fee type this line is. Null when it is none of them. ${section.feeTypes
+      description: `Which fee type this line is. ${section.feeTypes
         .map((feeType) => `${feeType.key}: ${feeType.description}`)
         .join("; ")}`,
     };
@@ -349,6 +424,11 @@ export function envelopeField(profile: ReadingProfile): FieldSpec {
     if (!SLUG.test(section.key) || section.key in sections) {
       throw new Error(`Section key "${section.key}" is not a unique slug`);
     }
+    if (section.feeTypes?.some((feeType) => feeType.key === NONE_VALUE)) {
+      throw new Error(
+        `Section "${section.key}" has a fee type keyed "${NONE_VALUE}", which marks a line that is none of them`,
+      );
+    }
     for (const [key, extra] of Object.entries(section.extras ?? {})) {
       if (
         !SLUG.test(key) ||
@@ -370,7 +450,9 @@ export function envelopeField(profile: ReadingProfile): FieldSpec {
       stated_total: {
         type: "number",
         nullable: true,
-        description: profile.statedTotalDescription,
+        description:
+          profile.statedTotalDescription ??
+          "Always null: this reading compares the lines with no printed total.",
       },
       sections: { type: "object", properties: sections },
       ignored: {
@@ -446,3 +528,157 @@ export const SEVERAL_ITEMS_PROFILE: ReadingProfile = {
     },
   ],
 };
+
+// ── Saved import profiles ───────────────────────────────────────────────────
+
+/** A saved import profile, as `services/import-profiles.ts` reads it. */
+export interface SavedProfile extends ImportProfileDraft {
+  id: number;
+}
+
+/**
+ * A profile has no section in the import mode the document is to be read in
+ * (FR-032, US7 AS6). Nothing is read: no section means no line could become a
+ * record, and reading another mode's sections would import the wrong figures.
+ */
+export class ProfileModeError extends Error {
+  constructor(
+    readonly profileName: string,
+    readonly mode: ImportModeValue,
+  ) {
+    super(
+      `The import profile "${profileName}" has no section for ${importModeLabel(mode)}, so nothing was read.`,
+    );
+    this.name = "ProfileModeError";
+  }
+}
+
+/**
+ * The rules every saved profile is read by. They are the code's, not the
+ * user's: the user's own instructions go under them as guidance (FR-036), and
+ * the sections, fee types and stated total are described in the schema.
+ */
+const SAVED_PROFILE_RULES = `- Read only the sections the schema names under sections. Each section's description says which
+  lines belong in it, and where on the document they are. A line that fits no section is not read.
+- Put one entry in a section for each line that states one amount for one thing.
+- Never list a subtotal, a total, an amount due, a balance or a balance brought forward, or any
+  figure that adds up other lines. Add such lines to ignored.
+- When a section lists fee types, give each line the fee type it is. When a line is none of them,
+  set its fee_type to "${NONE_VALUE}": never choose the closest type for a line that is not one.
+- An extra field the line does not print is null (or "${NONE_VALUE}" for a field with a list of
+  choices). Never make up a value for it.
+- Every item shares the document's other party, date, reference and currency, given once in the
+  header. Give an item its own date or reference only when its line prints one of its own.
+- Copy every amount exactly as printed, with its sign. Never add up, subtract or work out a figure
+  yourself.`;
+
+const KIND_GUIDANCE: Record<ProfileSectionKind, string> = {
+  income: "Every line of this section is money the user receives.",
+  expense: "Every line of this section is money the user pays out.",
+  by_sign:
+    "A line printed as a deduction (with a minus sign or in brackets) is money the user pays out; any other line is money the user receives. Keep each amount's sign as printed.",
+};
+
+/** What the model is told about one section's lines. */
+function sectionDescription(
+  name: string,
+  description: string,
+  kind: ProfileSectionKind,
+): string {
+  return `${name}: ${description} ${KIND_GUIDANCE[kind]}`;
+}
+
+/**
+ * An extra field of a section, in the field model. It is always sent as
+ * nullable, and always required (as every field is): one line may not print a
+ * value another does, such as an order number on a fee line, and the model
+ * only copies what is printed. A field the fragment calls required but that
+ * could not be null would leave the model two choices, both wrong: make the
+ * value up, or answer null and fail the whole document's check. The
+ * fragment's own `required` therefore does not reject an answer.
+ */
+function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
+  const described = field.description ? { description: field.description } : {};
+  if (field.type === "string") {
+    return {
+      type: "string",
+      nullable: true,
+      ...described,
+      ...(field.enum ? { enum: field.enum } : {}),
+    };
+  }
+  return { type: field.type, nullable: true, ...described };
+}
+
+/**
+ * Turns a saved profile into the reading for one import mode, ready to
+ * compile (006 S2). Only the sections of that mode are kept, so nothing from
+ * another mode's sections can be read (FR-032); a profile with none throws
+ * `ProfileModeError`.
+ *
+ * What code decides is never asked of the model. A section whose fee types
+ * are all tied to a category, or that lists no fee types and has a fixed
+ * category, gets no `category_account_id`; the categories are applied after
+ * the reading (`document-reader.ts`).
+ *
+ * The schema id is `profile:<id>:<hash of the schema sent>`. A provider's
+ * refusal of one profile's schema is then about that schema only, and never
+ * changes how another schema is read (FR-037).
+ *
+ * Every section is a Summary section for now; Every transaction (US8) is
+ * deferred. The mode is still a parameter, and each section still carries its
+ * own, so US8 adds its sections without changing this function. Reading such a
+ * section in pieces (FR-043) is not built.
+ */
+export function savedReadingProfile(
+  saved: SavedProfile,
+  mode: ImportModeValue = ImportMode.Summary,
+): ReadingProfile {
+  const sections: SectionSpec[] = saved.sections
+    .filter((section) => (section.mode ?? ImportMode.Summary) === mode)
+    .map((section) => {
+      const feeTypes = section.feeTypes.map((feeType) => ({
+        key: feeType.key,
+        description: feeType.description,
+        categoryAccountId: feeType.categoryAccountId,
+      }));
+      const categoryFromModel = feeTypes.length
+        ? feeTypes.some((feeType) => feeType.categoryAccountId == null)
+        : section.fixedCategoryAccountId == null;
+      const extras: Record<string, FieldSpec> = {};
+      for (const field of extraFieldsOf(section.extras)) {
+        extras[field.key] = extraSpec(field);
+      }
+      return {
+        key: section.key,
+        name: section.name,
+        description: sectionDescription(
+          section.name,
+          section.description,
+          section.kind,
+        ),
+        kind: section.kind,
+        ...(feeTypes.length ? { feeTypes } : {}),
+        fixedCategoryAccountId: section.fixedCategoryAccountId,
+        categoryFromModel,
+        ...(Object.keys(extras).length ? { extras } : {}),
+      };
+    });
+  if (sections.length === 0) throw new ProfileModeError(saved.name, mode);
+
+  const labels: Partial<Record<string, string>> = saved.statedTotalLabels;
+  const label = labels[mode];
+  const profile: ReadingProfile = {
+    schemaId: "",
+    instructions: SAVED_PROFILE_RULES,
+    guidance: saved.instructions,
+    statedTotalDescription: label
+      ? `The figure the document prints for: ${label}. It is the total of exactly the lines read under sections. Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.`
+      : null,
+    schemaRequired: true,
+    sections,
+  };
+  const wire = toWireSchema(envelopeField(profile));
+  const hash = createHash("sha256").update(JSON.stringify(wire)).digest("hex");
+  return { ...profile, schemaId: `profile:${saved.id}:${hash}` };
+}

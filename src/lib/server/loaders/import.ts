@@ -10,6 +10,10 @@ import {
 } from "$lib/server/import/account-policy.js";
 import { categoryChoices } from "$lib/server/import/category-accounts.js";
 import { jobEvents } from "$lib/server/import/group-state.js";
+import {
+  parseProfileSnapshot,
+  snapshotSections,
+} from "$lib/server/import/profile-snapshot.js";
 import type { LedgerDb } from "$lib/server/ledger/types.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { getAccount, listAccounts } from "$lib/server/queries/accounts.js";
@@ -110,9 +114,16 @@ export function loadImportDetail(
     ({ id, name }) => ({ id, name }),
   );
 
+  // The sections of the profile it was read with, as it was then, for the
+  // section filter and each item's section name (FR-017). Empty for the
+  // built-in reading, whose one section has no name of its own.
+  const snapshot = parseProfileSnapshot(row.profileSnapshot);
+  const sections = snapshot ? snapshotSections(snapshot) : [];
+
   return {
     job,
     items,
+    sections,
     expenseCategories,
     incomeCategories,
     perms: {
