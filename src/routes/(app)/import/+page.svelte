@@ -28,7 +28,7 @@
 		type ReviewOptions,
 		type ReviewRow
 	} from '$lib/components/import/review-card.js';
-	import { ImportReadAs, profileReadAsValue } from '$lib/import-reading.js';
+	import { ImportReadAs, ImportReadHow, profileReadAsValue } from '$lib/import-reading.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -464,12 +464,17 @@
 
 	/**
 	 * How a document was asked to be read, when that is not the ordinary receipt
-	 * reading: by a saved profile, or as several items (FR-041). Said on a
+	 * reading: by a saved profile, chosen or detected, or as several items
+	 * (FR-041). Said on a
 	 * document that waits, that failed, and on a one-item reading's receipt card
 	 * (FR-009), which would otherwise look like any receipt. Null for a receipt.
 	 */
 	function readingLabel(job: Job): string | null {
-		return job.readAs === ImportReadAs.Profile || job.readAs === ImportReadAs.SeveralItems ? describeReading(job) : null;
+		const notReceipt =
+			job.readAs === ImportReadAs.Profile ||
+			job.readAs === ImportReadAs.SeveralItems ||
+			job.readHow === ImportReadHow.Detected;
+		return notReceipt ? describeReading(job) : null;
 	}
 
 	function jobIsIncome(job: Job): boolean {

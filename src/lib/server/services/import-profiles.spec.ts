@@ -357,4 +357,22 @@ describe("savedProfileIdOf", () => {
       null,
     );
   });
+
+  it("names a profile Auto-detect found, and nothing for an auto row read the standard way", () => {
+    expect(
+      savedProfileIdOf({
+        readAs: "auto",
+        readHow: "detected",
+        profileId: "12",
+      }),
+    ).toBe(12);
+    expect(
+      savedProfileIdOf({
+        readAs: "auto",
+        readHow: "standard",
+        profileId: "12",
+      }),
+    ).toBeNull();
+    expect(savedProfileIdOf({ readAs: "auto", profileId: "12" })).toBeNull();
+  });
 });

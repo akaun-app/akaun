@@ -64,9 +64,9 @@ const CHOICES = `${builtInReadAs.options.join(", ")}, or ${PROFILE_READ_AS_PREFI
  * point: when Every transaction arrives, the upload sends a mode and it is
  * read here.
  *
- * Auto-detect is the standard reading for now, with no extra step (FR-003).
- * Detecting a profile is 006 S3; until then the row says Standard from the
- * start.
+ * An Auto-detect row says Standard from the start. The worker changes that to
+ * Detected when it finds a profile that fits (006 US9); with no enabled
+ * profile there is no detection step at all (FR-003).
  */
 export function readingForUpload(
   raw: FormDataEntryValue | null,

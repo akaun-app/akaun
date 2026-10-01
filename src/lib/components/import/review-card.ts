@@ -400,7 +400,11 @@ export function describeReading(job: {
   if (job.readAs === ImportReadAs.SeveralItems) {
     return "Read as several items";
   }
-  if (job.readAs === ImportReadAs.Profile) {
+  // A profile chosen at upload, or one Auto-detect found for it.
+  if (
+    job.readAs === ImportReadAs.Profile ||
+    job.readHow === ImportReadHow.Detected
+  ) {
     // Which profile, and whether it was chosen or detected (FR-041).
     const name = job.profile ? `“${job.profile.name}”` : "an import profile";
     const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";

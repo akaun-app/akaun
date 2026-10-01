@@ -29,7 +29,7 @@ import {
   type ProfileSection,
   type ProfileSectionKind,
 } from "$lib/import-profile-schema.js";
-import { ImportReadAs } from "$lib/import-reading.js";
+import { ImportReadAs, ImportReadHow } from "$lib/import-reading.js";
 import { diffRecords, getAuditTrail, recordAudit } from "../audit.js";
 import { importProfiles } from "../db/schema.js";
 import { categoryChoices } from "../import/category-accounts.js";
@@ -260,16 +260,22 @@ export function getImportProfile(
  *
  * `import_queue.profile_id` also holds the schema id of a built-in reading,
  * such as "builtin:items@1" for several items (006 S1). That is never a saved
- * profile's id: a row names a saved profile only when it was read as one
- * (`read_as` = "profile"), and its profile id is then this table's whole
- * number id. Every other row gives null, so an older row is never looked up
- * here by mistake (FR-048).
+ * profile's id: a row names a saved profile only when it was read as one,
+ * chosen at upload (`read_as` = "profile") or found by Auto-detect
+ * (`read_as` = "auto", `read_how` = "detected"), and its profile id is then
+ * this table's whole number id. Every other row gives null, so an older row
+ * is never looked up here by mistake (FR-048).
  */
 export function savedProfileIdOf(job: {
   readAs: string | null;
+  readHow?: string | null;
   profileId: string | null;
 }): number | null {
-  if (job.readAs !== ImportReadAs.Profile || !job.profileId) return null;
+  const withProfile =
+    job.readAs === ImportReadAs.Profile ||
+    (job.readAs === ImportReadAs.Auto &&
+      job.readHow === ImportReadHow.Detected);
+  if (!withProfile || !job.profileId) return null;
   if (!/^[1-9][0-9]*$/.test(job.profileId)) return null;
   const id = Number(job.profileId);
   return Number.isSafeInteger(id) ? id : null;

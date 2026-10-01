@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AccountType, DocumentType } from "$lib/enums.js";
 import {
+  describeReading,
   readCategoryAccountId,
   receiptSides,
   reviewRowFrom,
@@ -45,5 +46,21 @@ describe("readCategoryAccountId", () => {
       category: "Sales",
     });
     expect(readCategoryAccountId(read, options)).toBe(20);
+  });
+});
+
+describe("describeReading", () => {
+  it("says which profile read a document and whether it was chosen or detected", () => {
+    const profile = { name: "Shopee statement" };
+    expect(
+      describeReading({ readAs: "profile", readHow: "chosen", profile }),
+    ).toBe("Read with “Shopee statement” (chosen)");
+    // Auto-detect keeps "auto" as what the uploader chose (006 US9, FR-041).
+    expect(
+      describeReading({ readAs: "auto", readHow: "detected", profile }),
+    ).toBe("Read with “Shopee statement” (detected)");
+    expect(describeReading({ readAs: "auto", readHow: "standard" })).toBe(
+      "Read as one receipt (auto-detect)",
+    );
   });
 });

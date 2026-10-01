@@ -193,3 +193,46 @@ async function extractPages(absPath: string, mimeType: string): Promise<string[]
 	}
 	throw new Error(`Unsupported file type. Please upload a PDF, JPG, or PNG.`);
 }
+
+/**
+ * The document's text both ways at once, for Auto-detect (006 US9): `plain` is
+ * exactly what `extractText` gives, for the receipt reading and for detection,
+ * and `numbered` is what `extractNumberedText` gives, for a profile reading.
+ * Which one is needed is known only after detection, so both are taken from one
+ * pass over the file: an image or a scanned PDF is read by OCR once, never twice.
+ *
+ * A text PDF is parsed twice, once merged and once page by page, so the plain
+ * text is the merged text `extractText` reads and never a copy of how the
+ * library merges pages. Whether a PDF is scanned is decided by the receipt
+ * path's own test, so the standard reading is exactly what it was.
+ */
+export async function extractPlainAndNumberedText(
+	absPath: string,
+	mimeType: string
+): Promise<{ plain: string; numbered: string }> {
+	if (mimeType === 'application/pdf' || absPath.toLowerCase().endsWith('.pdf')) {
+		const buffer = readFileSync(absPath);
+		const { text, totalPages } = await pdfExtractText(new Uint8Array(buffer), {
+			mergePages: true
+		});
+		const avgCharsPerPage = totalPages > 0 ? text.length / totalPages : text.length;
+		if (avgCharsPerPage < 50 && text.length < 200) {
+			const pages = await ocrScannedPdfPages(buffer, totalPages);
+			return {
+				plain: pages.flat().join('\n').trim(),
+				numbered: numberDocumentLines(pages.map((texts) => texts.join('\n')))
+			};
+		}
+		const { text: pages } = await pdfExtractText(new Uint8Array(buffer), { mergePages: false });
+		return { plain: text.trim(), numbered: numberDocumentLines(pages) };
+	}
+	if (
+		mimeType === 'image/jpeg' ||
+		mimeType === 'image/png' ||
+		/\.(jpe?g|png)$/i.test(absPath)
+	) {
+		const text = await extractFromImage(absPath);
+		return { plain: text, numbered: numberDocumentLines([text]) };
+	}
+	throw new Error(`Unsupported file type. Please upload a PDF, JPG, or PNG.`);
+}

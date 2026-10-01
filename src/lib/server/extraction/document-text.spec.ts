@@ -14,6 +14,7 @@ vi.mock("$lib/server/env.js", () => ({
 
 const {
   extractNumberedText,
+  extractPlainAndNumberedText,
   extractText,
   numberDocumentLines,
   stripLineNumbers,
@@ -124,6 +125,34 @@ L0005│Total charges 16.75, payable within thirty days of the notice date`);
   it("refuses a file type it cannot read", async () => {
     await expect(
       extractNumberedText(join(root, "notes.txt"), "text/plain"),
+    ).rejects.toThrow("Unsupported file type");
+  });
+});
+
+describe("extractPlainAndNumberedText", () => {
+  it("gives exactly what each of the two readings would have read on its own", async () => {
+    const path = await writePdf([
+      [
+        "Shopee Income Statement for August, issued to the seller account holder",
+        "Product price 15,012.40",
+        "Commission fee -812.35",
+      ],
+      ["Total Payout Released 14,200.05, paid to the seller's bank account"],
+    ]);
+
+    const both = await extractPlainAndNumberedText(path, "application/pdf");
+
+    // Auto-detect reads the file once, and whichever way it then reads the
+    // document, the text is what that way always had (FR-004, FR-040).
+    expect(both.plain).toBe(await extractText(path, "application/pdf"));
+    expect(both.numbered).toBe(
+      await extractNumberedText(path, "application/pdf"),
+    );
+  });
+
+  it("refuses a file type it cannot read", async () => {
+    await expect(
+      extractPlainAndNumberedText(join(root, "notes.txt"), "text/plain"),
     ).rejects.toThrow("Unsupported file type");
   });
 });

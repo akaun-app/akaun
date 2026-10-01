@@ -16,6 +16,11 @@
  *   as several items, with the profile's sections, fee types and instructions
  *   in place of the built-in ones. A copy of the profile is kept on the row,
  *   so a later edit or delete never changes what was read (FR-038).
+ * - **Auto-detect** (006 US9): with no enabled profile, the receipt reading
+ *   above, unchanged. Otherwise `profile-detect.ts` decides first, and the
+ *   document is read with the profile it found or as a receipt (FR-039,
+ *   FR-040). The row keeps "auto" as what the uploader chose; `read_how`,
+ *   `profile_id` and the copy of the profile say how it was read.
  *
  * The worker calls this with the app's database and storage folder; the tests
  * call it with their own, so nothing here reaches for either.
@@ -41,6 +46,7 @@ import {
 import { importItems, importQueue, users } from "../db/schema.js";
 import {
   extractNumberedText,
+  extractPlainAndNumberedText,
   extractText,
   inferMimeType,
   numberDocumentLines,
@@ -52,7 +58,9 @@ import { createLogger } from "../logger.js";
 import {
   deletedProfileName,
   getImportProfile,
+  listImportProfiles,
   savedProfileIdOf,
+  type ImportProfileView,
 } from "../services/import-profiles.js";
 import { SchemaRejectedError } from "../llm/structured-call.js";
 import { getSetting, SETTING_KEYS } from "../settings.js";
@@ -69,6 +77,7 @@ import {
 } from "./document-reader.js";
 import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
+import { detectProfile } from "./profile-detect.js";
 import type { LLMCallParams } from "./providers/types.js";
 import {
   ProfileModeError,
@@ -103,16 +112,17 @@ export const NO_ITEMS_FOUND = "No items found";
  */
 const ITEM_INSERT_CHUNK = 100;
 
-type ReadingPath = "receipt" | "items" | "profile";
+type ReadingPath = "receipt" | "items" | "profile" | "auto";
 
 /**
  * How this job is read. The several-items choice and a saved profile read
- * items; a row from before 006 has no choice stored and is a receipt, as it
- * was when uploaded.
+ * items; Auto-detect decides once the text is read; a row from before 006 has
+ * no choice stored and is a receipt, as it was when uploaded.
  */
 function readingPath(job: ImportJob): ReadingPath {
   if (job.readAs === ImportReadAs.SeveralItems) return "items";
   if (job.readAs === ImportReadAs.Profile) return "profile";
+  if (job.readAs === ImportReadAs.Auto) return "auto";
   return "receipt";
 }
 
@@ -173,22 +183,24 @@ function loadProviders(db: LedgerDb) {
 
 /** "as a receipt or invoice", in the words the upload screen uses. */
 function howItWasRead(
-  row: Pick<ImportJob, "readAs" | "profileSnapshot">,
+  row: Pick<ImportJob, "readAs" | "readHow" | "profileSnapshot">,
 ): string {
-  switch (row.readAs) {
-    case ImportReadAs.SeveralItems:
-      return "as a document with several items";
-    case ImportReadAs.Profile: {
-      // The copy kept on the row names the profile even after it is renamed
-      // or deleted, and says which mode it was imported in (FR-033).
-      const snapshot = parseProfileSnapshot(row.profileSnapshot);
-      return snapshot
-        ? `with the import profile "${snapshot.name}" (${importModeLabel(snapshot.mode)})`
-        : "with an import profile";
-    }
-    default:
-      return "as a receipt or invoice";
+  if (row.readAs === ImportReadAs.SeveralItems) {
+    return "as a document with several items";
   }
+  // A profile chosen at upload, or one Auto-detect found.
+  if (
+    row.readAs === ImportReadAs.Profile ||
+    row.readHow === ImportReadHow.Detected
+  ) {
+    // The copy kept on the row names the profile even after it is renamed
+    // or deleted, and says which mode it was imported in (FR-033).
+    const snapshot = parseProfileSnapshot(row.profileSnapshot);
+    return snapshot
+      ? `with the import profile "${snapshot.name}" (${importModeLabel(snapshot.mode)})`
+      : "with an import profile";
+  }
+  return "as a receipt or invoice";
 }
 
 function records(count: number): string {
@@ -210,6 +222,7 @@ export function alreadyImported(db: LedgerDb, job: ImportJob): string | null {
       id: importQueue.id,
       state: importQueue.state,
       readAs: importQueue.readAs,
+      readHow: importQueue.readHow,
       profileSnapshot: importQueue.profileSnapshot,
       createdAt: importQueue.createdAt,
     })
@@ -248,23 +261,60 @@ export function alreadyImported(db: LedgerDb, job: ImportJob): string | null {
 }
 
 /**
- * The document's text, as the chosen reading needs it: one run for a receipt,
- * numbered lines for items. Null when the job has already been failed.
+ * One form of a document's text, and how to get it: from the text a caller
+ * gave with the upload, or from the file.
  */
-async function documentText(
+interface TextForm<T> {
+  given: (text: string) => T;
+  extract: (absPath: string, mimeType: string) => Promise<T>;
+  /** What the document itself prints, to check there is enough of it. */
+  printed: (text: T) => string;
+}
+
+/** One run of text, as the receipt reading has always sent it (FR-004). */
+const PLAIN_TEXT: TextForm<string> = {
+  given: (text) => text,
+  extract: extractText,
+  printed: (text) => text,
+};
+
+/**
+ * Numbered lines, for a reading of items. Numbered text always has its page
+ * markers, so what counts is what the document itself prints.
+ */
+const NUMBERED_TEXT: TextForm<string> = {
+  given: (text) => numberDocumentLines([text]),
+  extract: extractNumberedText,
+  printed: (text) => stripLineNumbers(text).trim(),
+};
+
+/**
+ * Both, for Auto-detect, which knows which one it needs only after detection.
+ * Taken in one pass, so an image is read by OCR once.
+ */
+const BOTH_TEXTS: TextForm<{ plain: string; numbered: string }> = {
+  given: (text) => ({ plain: text, numbered: numberDocumentLines([text]) }),
+  extract: extractPlainAndNumberedText,
+  printed: (texts) => texts.plain,
+};
+
+/**
+ * The document's text, in the form the reading needs. Null when the job has
+ * already been failed.
+ */
+async function documentText<T>(
   db: LedgerDb,
   job: ImportJob,
   userId: number,
-  path: ReadingPath,
+  form: TextForm<T>,
   storageRoot: string,
-): Promise<string | null> {
-  let text: string;
+): Promise<T | null> {
+  let text: T;
   if (job.preExtractedText && job.preExtractedText.trim().length > 0) {
     // Caller already ran its own OCR/extraction — skip server-side extraction entirely.
-    const given = job.preExtractedText.trim();
-    text = path === "receipt" ? given : numberDocumentLines([given]);
+    text = form.given(job.preExtractedText.trim());
     log.debug(
-      { jobId: job.id, textLength: text.length },
+      { jobId: job.id, textLength: form.printed(text).length },
       "Using caller-provided text (OCR bypassed)",
     );
   } else {
@@ -273,10 +323,7 @@ async function documentText(
     const absPath = join(storageRoot, job.tempFilePath);
     const mimeType = inferMimeType(job.originalFilename);
     try {
-      text =
-        path === "receipt"
-          ? await extractText(absPath, mimeType)
-          : await extractNumberedText(absPath, mimeType);
+      text = await form.extract(absPath, mimeType);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ jobId: job.id, err }, "Text extraction failed");
@@ -285,9 +332,7 @@ async function documentText(
     }
   }
 
-  // Numbered text always has its page markers, so what counts is what the
-  // document itself prints.
-  const printed = path === "receipt" ? text : stripLineNumbers(text).trim();
+  const printed = form.printed(text);
   if (!printed || printed.length < 10) {
     log.warn(
       { jobId: job.id, textLength: printed?.length ?? 0 },
@@ -303,7 +348,11 @@ async function documentText(
   }
 
   log.debug(
-    { jobId: job.id, textLength: text.length, preview: text.slice(0, 200) },
+    {
+      jobId: job.id,
+      textLength: printed.length,
+      preview: printed.slice(0, 200),
+    },
     "Text extracted",
   );
   return text;
@@ -322,9 +371,23 @@ export async function processImportJob(
     .where(eq(users.id, job.createdBy))
     .get();
   const userId = ownerUser?.id ?? job.createdBy;
-  const path = readingPath(job);
+  let path = readingPath(job);
 
-  if (path !== "receipt") {
+  // Auto-detect with no enabled profile is the receipt reading, with no
+  // detection step and no extra AI call (FR-003, US9 AS3).
+  let candidates: ImportProfileView[] = [];
+  if (path === "auto") {
+    candidates = listImportProfiles(db, { enabledOnly: true });
+    if (candidates.length === 0) {
+      clearDetectedProfile(db, job);
+      path = "receipt";
+    }
+  }
+
+  // A file already imported is stopped before it is read with items or a
+  // profile (FR-026). Auto-detect checks this once it has found a profile:
+  // read the standard way, it is a receipt, and a receipt is never stopped.
+  if (path === "items" || path === "profile") {
     const stop = alreadyImported(db, job);
     if (stop) {
       markFailed(db, job.id, userId, stop);
@@ -376,12 +439,6 @@ export async function processImportJob(
     "Processing job",
   );
 
-  const text = await documentText(db, job, userId, path, options.storageRoot);
-  if (text === null) return;
-
-  // Processing — LLM call
-  setState(db, job.id, userId, ImportState.Processing);
-
   const accountLists = {
     expenseAccounts: ctx.expenseChoices.map(({ id, code, path }) => ({
       id,
@@ -396,24 +453,131 @@ export async function processImportJob(
     mainCurrency: ctx.mainCurrency,
     customInstructions,
   };
+  const calls = { providers, rateLimitMs, accountLists };
+
+  if (path === "auto") {
+    await readAutoDetected(db, job, userId, ctx, candidates, calls, options);
+    return;
+  }
+
+  const text = await documentText(
+    db,
+    job,
+    userId,
+    path === "receipt" ? PLAIN_TEXT : NUMBERED_TEXT,
+    options.storageRoot,
+  );
+  if (text === null) return;
+
+  // Processing — LLM call
+  setState(db, job.id, userId, ImportState.Processing);
 
   if (itemsReading === null) {
-    await readReceipt(db, job, userId, ctx, {
-      text,
-      providers,
-      rateLimitMs,
-      accountLists,
-    });
+    await readReceipt(db, job, userId, ctx, { text, ...calls });
   } else {
-    await readItems(
-      db,
-      job,
-      userId,
-      ctx,
-      { text, providers, rateLimitMs, accountLists },
-      itemsReading,
-    );
+    await readItems(db, job, userId, ctx, { text, ...calls }, itemsReading);
   }
+}
+
+/**
+ * Auto-detect with at least one enabled profile (FR-039): the text is read,
+ * `detectProfile` decides, and the document is then read the way it decided.
+ *
+ * - **A profile was found:** the row records it as detected, with a copy of
+ *   the profile as it is now (FR-038, FR-041), and is read with it exactly as
+ *   if it had been chosen. A file already imported is stopped here, before
+ *   the reading (FR-026).
+ * - **No profile fits**, or detection failed: the receipt reading, with the
+ *   same text and the same call as a receipt chosen at upload (FR-040).
+ */
+async function readAutoDetected(
+  db: LedgerDb,
+  job: ImportJob,
+  userId: number,
+  ctx: ReviewContext,
+  profiles: ImportProfileView[],
+  calls: Omit<ReadingInput, "text">,
+  options: ProcessJobOptions,
+) {
+  const texts = await documentText(
+    db,
+    job,
+    userId,
+    BOTH_TEXTS,
+    options.storageRoot,
+  );
+  if (texts === null) return;
+
+  setState(db, job.id, userId, ImportState.Processing);
+
+  const detection = await detectProfile({
+    text: texts.plain,
+    profiles,
+    providers: calls.providers,
+    intervalMs: calls.rateLimitMs,
+    jobId: job.id,
+  });
+
+  if (detection.route === "standard") {
+    clearDetectedProfile(db, job);
+    await readReceipt(db, job, userId, ctx, { text: texts.plain, ...calls });
+    return;
+  }
+
+  const detected: ImportJob = {
+    ...job,
+    profileId: String(detection.route),
+    readHow: ImportReadHow.Detected,
+    importMode: ImportMode.Summary,
+  };
+  const found = profileForJob(db, detected);
+  if (!found.ok) {
+    markFailed(db, job.id, userId, found.reason);
+    return;
+  }
+  // Every screen now says which profile reads the document, and that it was
+  // detected (FR-041), while the reading runs.
+  emitJobUpdate(db, job.id, userId);
+
+  const stop = alreadyImported(db, detected);
+  if (stop) {
+    markFailed(db, job.id, userId, stop);
+    return;
+  }
+
+  await readItems(
+    db,
+    detected,
+    userId,
+    ctx,
+    { text: texts.numbered, ...calls },
+    found.value,
+  );
+}
+
+/**
+ * Marks an auto-detect row as read the standard way, and removes any profile
+ * left on it. A reading stopped part-way by a restart may have left a detected
+ * profile on the row; the receipt reading that follows does not use it, so the
+ * card, the group page and a later repeat-file stop must not name it (FR-003,
+ * FR-041). A fresh row has nothing to clear, so it gets no extra write.
+ */
+function clearDetectedProfile(db: LedgerDb, job: ImportJob) {
+  const leftOver =
+    job.readHow !== ImportReadHow.Standard ||
+    job.profileId !== null ||
+    job.profileSnapshot !== null ||
+    job.importMode !== null;
+  if (!leftOver) return;
+  db.update(importQueue)
+    .set({
+      readHow: ImportReadHow.Standard,
+      profileId: null,
+      profileSnapshot: null,
+      importMode: null,
+    })
+    .where(eq(importQueue.id, job.id))
+    .run();
 }
 
 /**
@@ -424,13 +588,14 @@ export async function processImportJob(
  * On success the profile is copied onto the row with the mode, before any
  * reading starts, so every screen can say which profile reads the document
  * from the first update on (FR-041), and an edit made while it is read, or
- * later, never changes the group (FR-038). Reading is always chosen for now:
- * auto-detect (006 S3) will set `read_how` itself before this runs.
+ * later, never changes the group (FR-038). Auto-detect passes the job with
+ * the profile it found and `read_how` already set to detected.
  */
 function profileForJob(
   db: LedgerDb,
   job: ImportJob,
 ): { ok: true; value: ItemsReading } | { ok: false; reason: string } {
+  const picked = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
   const id = savedProfileIdOf(job);
   if (id === null) {
     return {
@@ -447,13 +612,13 @@ function profileForJob(
     const named = name ? `"${name}"` : `#${id}`;
     return {
       ok: false,
-      reason: `The import profile ${named} chosen for this document was deleted before it was read. Upload it again and choose another way to read it.`,
+      reason: `The import profile ${named} ${picked} for this document was deleted before it was read. Upload it again and choose another way to read it.`,
     };
   }
   if (!saved.enabled) {
     return {
       ok: false,
-      reason: `The import profile "${saved.name}" chosen for this document was disabled before it was read. Turn it on again, or upload the document again and choose another way to read it.`,
+      reason: `The import profile "${saved.name}" ${picked} for this document was disabled before it was read. Turn it on again, or upload the document again and choose another way to read it.`,
     };
   }
 
@@ -471,6 +636,7 @@ function profileForJob(
 
   db.update(importQueue)
     .set({
+      profileId: String(saved.id),
       importMode: mode,
       readHow: job.readHow ?? ImportReadHow.Chosen,
       profileSnapshot: serializeProfileSnapshot(
