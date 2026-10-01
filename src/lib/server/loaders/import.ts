@@ -88,6 +88,7 @@ export function loadImportPage(locals: App.Locals, database: LedgerDb = db) {
   return {
     jobs,
     readAsChoices: readAsChoices(database),
+    perms: { readAgain: canReadAgain(locals) },
     ...reviewOptions(database),
   };
 }
@@ -146,12 +147,28 @@ export function loadImportDetail(
     sections,
     expenseCategories,
     incomeCategories,
+    // The choices "Read again" offers: the same ones an upload offers.
+    readAsChoices: readAsChoices(database),
     perms: {
       change: hasPermission(locals, "import", "change"),
       delete: hasPermission(locals, "import", "delete"),
+      readAgain: canReadAgain(locals),
     },
     ...reviewOptions(database),
   };
+}
+
+/**
+ * Whether this user may use "Read again": the two abilities its route asks
+ * for (`import.add` to read a document, `import.change` to replace what the
+ * last reading proposed). The screens show the action only then; the route
+ * checks again, so this only saves a refused request.
+ */
+function canReadAgain(locals: App.Locals): boolean {
+  return (
+    hasPermission(locals, "import", "add") &&
+    hasPermission(locals, "import", "change")
+  );
 }
 
 /**

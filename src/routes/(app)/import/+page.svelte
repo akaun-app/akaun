@@ -5,6 +5,7 @@
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ImportReviewCard from '$lib/components/import/ImportReviewCard.svelte';
 	import ImportGroupCard from '$lib/components/import/ImportGroupCard.svelte';
+	import ReadAgainDialog from '$lib/components/import/ReadAgainDialog.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
@@ -18,6 +19,9 @@
 		describeReading,
 		editedValue,
 		formatMoney,
+		hasProfileChoice,
+		readAsOfJob,
+		readingLabel,
 		receiptSides,
 		reviewCurrency,
 		reviewRateMissing,
@@ -28,7 +32,7 @@
 		type ReviewOptions,
 		type ReviewRow
 	} from '$lib/components/import/review-card.js';
-	import { ImportReadAs, ImportReadHow, profileReadAsValue } from '$lib/import-reading.js';
+	import { ImportReadAs } from '$lib/import-reading.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -85,6 +89,12 @@
 		extractionNotes: string | null;
 		// Where a group's items stand. Absent for a receipt.
 		itemCounts: ItemCounts | null;
+		// Whether "Read again" would be accepted now, and if not, why (FR-023).
+		// The server works it out; nothing here copies the rule.
+		canReadAgain: boolean;
+		readAgainReason: string | null;
+		// When its last reading finished; a different value is a new reading.
+		processedAt: string | null;
 		// client-side tracking
 		_edits?: ReviewEdits;
 		// Set from the confirm reply when no category could be read off the document.
@@ -107,6 +117,9 @@
 			profile: j.profile ?? null,
 			extractionNotes: j.extractionNotes ?? null,
 			itemCounts: j.itemCounts ?? null,
+			canReadAgain: j.canReadAgain === true,
+			readAgainReason: j.readAgainReason ?? null,
+			processedAt: j.processedAt ?? null,
 			_edits: {},
 		};
 	}
@@ -258,6 +271,22 @@
 		jobs = jobs.map((local) => {
 			const server = byId.get(local.id);
 			if (!server) return local;
+			// Back in the queue: it is being read again (FR-023). Or a reading
+			// that finished at another time than the one on screen, when this tab
+			// missed it going back (a reconnect whose snapshot already shows the
+			// new card, say).
+			const readAgain =
+				(PIPE_STATES.includes(server.state) && !PIPE_STATES.includes(local.state)) ||
+				(server.processedAt !== null && local.processedAt !== null && server.processedAt !== local.processedAt);
+			if (readAgain) {
+				// What the reviewer typed into the last reading's card belongs to
+				// that reading, so it goes, and the new reading's accounts are taken
+				// as they come.
+				delete sourceAccountTouched[local.id];
+				delete targetAccountTouched[local.id];
+				delete confirmErrors[local.id];
+				return server;
+			}
 			return {
 				...server,
 				_edits: local._edits ?? {},
@@ -414,14 +443,10 @@
 	async function retryJob(jobId: string) {
 		const file = fileStore.get(jobId);
 		if (!file) return;
-		// Read it again the way it was asked to be read the first time.
+		// Read it again the way it was asked to be read the first time. If that
+		// was a profile turned off since, the upload refuses it by name.
 		const job = jobs.find((j) => j.id === jobId);
-		// A row stores a profile reading as "profile" plus the id; the upload names it
-		// "profile:<id>". If the profile was turned off since, the upload refuses it by name.
-		const previousReadAs =
-			job?.readAs === ImportReadAs.Profile && job.profileId
-				? profileReadAsValue(job.profileId)
-				: (job?.readAs ?? undefined);
+		const previousReadAs = job ? readAsOfJob(job) : undefined;
 
 		// Upload again first. A refused retry (the profile was turned off or
 		// deleted since, say) keeps the failed row and its reason, and the upload
@@ -462,19 +487,37 @@
 		});
 	}
 
+	// Whether any import profile is turned on. With none, the standard reading
+	// is the only one Auto-detect gives, so it is not labelled (FR-003).
+	const profilesEnabled = $derived(hasProfileChoice(data.readAsChoices));
+
 	/**
-	 * How a document was asked to be read, when that is not the ordinary receipt
-	 * reading: by a saved profile, chosen or detected, or as several items
-	 * (FR-041). Said on a
-	 * document that waits, that failed, and on a one-item reading's receipt card
-	 * (FR-009), which would otherwise look like any receipt. Null for a receipt.
+	 * How a document is read, as its card or row says it (FR-041): a saved
+	 * profile, chosen or detected, several items, or the standard reading. A
+	 * document still waiting to be read, or whose reading failed, says how it
+	 * was asked to be read. See `readingLabel`.
 	 */
-	function readingLabel(job: Job): string | null {
-		const notReceipt =
-			job.readAs === ImportReadAs.Profile ||
-			job.readAs === ImportReadAs.SeveralItems ||
-			job.readHow === ImportReadHow.Detected;
-		return notReceipt ? describeReading(job) : null;
+	function jobReading(job: Job): string | null {
+		return readingLabel(job, {
+			profilesEnabled,
+			waiting: PIPE_STATES.includes(job.state) || job.state === 'failed'
+		});
+	}
+
+	// ── Read again (006 FR-023) ───────────────────────────────────────────────
+	let readAgainJob = $state<Job | null>(null);
+	let readAgainOpen = $state(false);
+
+	function openReadAgain(job: Job) {
+		readAgainJob = job;
+		readAgainOpen = true;
+	}
+
+	/** What reading this document again throws away, for the dialog to say. */
+	function readAgainReplaces(job: Job): string {
+		// A group is read again from its own page, which says this itself.
+		if (job.state === 'failed') return 'Nothing was read from it last time, so nothing is lost.';
+		return 'This card, and any change you made on it, is replaced by the new reading.';
 	}
 
 	function jobIsIncome(job: Job): boolean {
@@ -607,6 +650,9 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			{#if profilesEnabled && readAs === ImportReadAs.Auto}
+				<span class="upload-option-hint">Uses a saved profile that fits the document, or else reads it the standard way.</span>
+			{/if}
 		</div>
 		{#if uploadError}
 			<div class="upload-error" role="alert">{uploadError}</div>
@@ -640,7 +686,7 @@
 										{job.originalFilename.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image · OCR'}
 									</span>
 								</div>
-								{#if readingLabel(job)}<div class="job-reading">{readingLabel(job)}</div>{/if}
+								{#if jobReading(job)}<div class="job-reading">{jobReading(job)}</div>{/if}
 								<div class="pipe-track">
 									<div class="pipe-fill" style="width:{PIPE_FILL[job.state] ?? 10}%"></div>
 								</div>
@@ -672,13 +718,26 @@
 							<div class="fail-icon"><AlertTriangle size={16} /></div>
 							<div class="fail-main">
 								<div class="fail-name">{job.originalFilename}</div>
-								{#if readingLabel(job)}<div class="job-reading">{readingLabel(job)}</div>{/if}
+								{#if jobReading(job)}<div class="job-reading">{jobReading(job)}</div>{/if}
 								<div class="fail-msg">{job.error ?? 'Unknown error'}</div>
 							</div>
 							<div class="fail-actions">
 								{#if fileStore.has(job.id)}
 									<Button variant="outline" size="sm" onclick={() => retryJob(job.id)}>
 										<RotateCcw size={14} /> Retry
+									</Button>
+								{/if}
+								{#if data.perms.readAgain}
+									<!-- From the file already uploaded, so it works after a reload too,
+									     and it can be read another way (FR-023). -->
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={!job.canReadAgain}
+										title={job.readAgainReason ?? 'Read this document again from its file, another way'}
+										onclick={() => openReadAgain(job)}
+									>
+										Read again
 									</Button>
 								{/if}
 								<Button variant="ghost" size="sm" onclick={() => discardJob(job.id)}>Discard</Button>
@@ -717,7 +776,7 @@
 							options={reviewOptions}
 							heading={job.originalFilename}
 							headingHref={resolve('/api/import/[jobId]/file', { jobId: job.id })}
-							reading={readingLabel(job)}
+							reading={jobReading(job)}
 							error={confirmErrors[job.id] ?? null}
 							onedit={(key, value) => updateEdit(job.id, key, value)}
 							oncontact={(v) => setContact(job.id, v)}
@@ -726,6 +785,8 @@
 							ontarget={(raw) => setTargetAccount(job.id, raw)}
 							onconfirm={() => confirmJob(job.id)}
 							onskip={() => skipJob(job.id)}
+							onreadagain={data.perms.readAgain ? () => openReadAgain(job) : undefined}
+							readAgainBlocked={job.readAgainReason}
 						/>
 					{/each}
 				</div>
@@ -765,6 +826,7 @@
 										class:mixed={tone === 'mixed'}>{made} record{made === 1 ? '' : 's'}</span
 									>
 								</div>
+								<span class="history-reading">{describeReading(job)}</span>
 								<span class="proc-type">
 									{job.itemCounts.confirmed} confirmed · {job.itemCounts.skipped} skipped
 								</span>
@@ -776,6 +838,7 @@
 									<span class="skip-check"><X size={11} /></span>
 									<span>{displayTitle(job)}</span>
 								</div>
+								{#if jobReading(job)}<span class="history-reading">{jobReading(job)}</span>{/if}
 								<span class="proc-type">Skipped{job.duplicateOf ? ' · duplicate' : ''}</span>
 								<span class="skip-amt"
 									>{currencySymbol(job.currency)}
@@ -810,6 +873,7 @@
 										{job.documentType === 'income' ? 'Income' : 'Expense'}
 									</span>
 								</div>
+								{#if jobReading(job)}<span class="history-reading">{jobReading(job)}</span>{/if}
 								<span class="bucket-path"
 									>{importing
 										? 'Importing…'
@@ -832,6 +896,17 @@
 		{/if}
 	</div>
 </div>
+
+{#if readAgainJob}
+	<ReadAgainDialog
+		bind:open={readAgainOpen}
+		jobId={readAgainJob.id}
+		filename={readAgainJob.originalFilename}
+		choices={data.readAsChoices}
+		current={readAsOfJob(readAgainJob)}
+		replaces={readAgainReplaces(readAgainJob)}
+	/>
+{/if}
 
 <ConfirmDialog
 	bind:open={clearHistoryDialogOpen}
@@ -893,6 +968,20 @@
 		min-width: 0;
 		max-width: 100%;
 		height: 34px;
+	}
+	.upload-option-hint {
+		font-size: 12px;
+		color: var(--muted-foreground);
+	}
+	/* How a finished document was read, in its history row. */
+	.history-reading {
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+		max-width: 40%;
 	}
 	.upload-error {
 		font-size: 12px;

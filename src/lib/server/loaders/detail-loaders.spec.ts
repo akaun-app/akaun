@@ -316,7 +316,11 @@ describe("import group detail", () => {
     expect("extractedText" in loaded.job).toBe(false);
     expect(loaded.job.itemCounts).toMatchObject({ confirmed: 1, skipped: 1 });
     expect(loaded.items.map((i) => i.id)).toEqual(["a", "b", "c"]);
-    expect(loaded.perms).toEqual({ change: true, delete: false });
+    expect(loaded.perms).toEqual({
+      change: true,
+      delete: false,
+      readAgain: true,
+    });
   });
 
   it("LoadImportDetail_WhenEveryItemIsDone_ShouldStillOpenThePage", () => {

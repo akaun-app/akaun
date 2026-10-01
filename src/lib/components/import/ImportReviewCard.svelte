@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Upload, Receipt, Check, AlertTriangle, ExternalLink } from '@lucide/svelte';
+	import { Upload, Receipt, Check, AlertTriangle, ExternalLink, RotateCcw } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import ImportSourceAccountSelect from '$lib/components/import/ImportSourceAccountSelect.svelte';
@@ -60,7 +60,9 @@
 		onsource,
 		ontarget,
 		onconfirm,
-		onskip
+		onskip,
+		onreadagain,
+		readAgainBlocked = null
 	}: {
 		row: ReviewRow;
 		edits: ReviewEdits;
@@ -97,6 +99,14 @@
 		ontarget: (raw: string) => void;
 		onconfirm: () => void;
 		onskip: () => void;
+		/**
+		 * "Read again" for a receipt on the queue (006 FR-023): offered only when
+		 * given. An item of a group is not a document, so it has none; its group
+		 * page has the action for the whole document.
+		 */
+		onreadagain?: () => void;
+		/** Why it cannot be read again now. The action stays, disabled, and says why. */
+		readAgainBlocked?: string | null;
 	} = $props();
 
 	// Raw in-progress text for the amount being typed into. Formatting (2
@@ -377,6 +387,17 @@
 				{/if}
 			</span>
 			<div class="review-actions-btns">
+				{#if onreadagain}
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={busy || readAgainBlocked != null}
+						title={readAgainBlocked ?? 'Read this document again from its file, another way'}
+						onclick={onreadagain}
+					>
+						<RotateCcw size={14} /> Read again
+					</Button>
+				{/if}
 				<Button variant="ghost" size="sm" disabled={busy} onclick={onskip}>Skip</Button>
 				<Button size="sm" disabled={busy || rateMissing || accountMissing} onclick={onconfirm}>
 					<Check size={15} />
@@ -417,6 +438,12 @@
 	/* The remark can be long, so it takes the whole row. */
 	.rfield-wide {
 		grid-column: 1 / -1;
+	}
+	/* Three actions on a receipt card: on a narrow phone they wrap rather than
+	   push the card wider than the screen. */
+	.review-actions-btns {
+		flex-wrap: wrap;
+		justify-content: flex-end;
 	}
 	.review-reading {
 		color: var(--foreground);

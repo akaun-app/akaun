@@ -7,8 +7,10 @@ import {
 import {
   ImportReadAs,
   ImportReadHow,
+  PROFILE_READ_AS_PREFIX,
   controlTotal,
   parseExtractionNotes,
+  profileReadAsValue,
 } from "$lib/import-reading.js";
 import { formatCurrency } from "$lib/currency.js";
 import type { AccountView } from "$lib/server/ledger/types.js";
@@ -388,36 +390,106 @@ export function sideIsIncome(
     : importSourceIsIncome(options.allAccounts, source);
 }
 
-// ── A document read as several items ────────────────────────────────────────
+// ── How a document is read ──────────────────────────────────────────────────
 
-/** How a document was read, in the words the queue card and the group page use. */
-export function describeReading(job: {
+/** How a document is to be read, or was read: the columns the screens look at. */
+export type ReadingOf = {
   readAs?: string | null;
   readHow?: string | null;
+  /** The saved profile's id, for a document read with one. */
+  profileId?: string | null;
   /** The profile's name, from the copy the server kept when it read it. */
   profile?: { name: string } | null;
-}): string {
+};
+
+/** What a reading was picked by, in brackets after it (FR-041). */
+function pickedBy(readHow: string | null | undefined): string {
+  if (readHow === ImportReadHow.Detected) return " (detected)";
+  if (readHow === ImportReadHow.Chosen) return " (chosen)";
+  // Auto-detect found no profile that fits, so it read the standard way.
+  if (readHow === ImportReadHow.Standard) return " (auto-detect)";
+  // A row from before 006 says nothing about how it was picked.
+  return "";
+}
+
+/**
+ * How a document was read, in the words every import screen uses (FR-041):
+ * the profile by name and whether it was detected or chosen, the standard
+ * reading, or several items.
+ */
+export function describeReading(job: ReadingOf): string {
   if (job.readAs === ImportReadAs.SeveralItems) {
-    return "Read as several items";
+    return `Read as several items${pickedBy(job.readHow)}`;
   }
   // A profile chosen at upload, or one Auto-detect found for it.
   if (
     job.readAs === ImportReadAs.Profile ||
     job.readHow === ImportReadHow.Detected
   ) {
-    // Which profile, and whether it was chosen or detected (FR-041).
     const name = job.profile ? `“${job.profile.name}”` : "an import profile";
     const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
     return `Read with ${name} (${how})`;
   }
-  if (
-    job.readAs === ImportReadAs.Auto &&
-    job.readHow === ImportReadHow.Standard
-  ) {
-    return "Read as one receipt (auto-detect)";
-  }
-  return "Read as one receipt";
+  // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
+  // row from before 006 (FR-040, FR-048).
+  return `Standard reading${pickedBy(job.readHow)}`;
 }
+
+/** Whether a document is, or was, read the standard way (one record). */
+function isStandardReading(job: ReadingOf): boolean {
+  return (
+    job.readAs !== ImportReadAs.SeveralItems &&
+    job.readAs !== ImportReadAs.Profile &&
+    job.readHow !== ImportReadHow.Detected
+  );
+}
+
+/**
+ * The line a document on the import queue shows about how it is read, or
+ * null when there is nothing to say (FR-041).
+ *
+ * - `profilesEnabled`: whether any import profile is turned on. With none,
+ *   the standard reading is the only reading Auto-detect can give, and the
+ *   queue looks as it did before profiles existed (FR-003), so a standard
+ *   reading is not labelled. A profile or several-items reading always is.
+ * - `waiting`: the document has not been read yet, or its reading failed.
+ *   An Auto-detect row says "standard" from the upload on and only changes
+ *   once a profile is detected, so until then it is shown as "Auto-detect",
+ *   which is what it is waiting for.
+ */
+export function readingLabel(
+  job: ReadingOf,
+  context: { profilesEnabled: boolean; waiting?: boolean },
+): string | null {
+  if (!isStandardReading(job)) return describeReading(job);
+  if (!context.profilesEnabled) return null;
+  if (context.waiting && job.readAs === ImportReadAs.Auto) return "Auto-detect";
+  return describeReading(job);
+}
+
+/**
+ * The "Read as" value that names how this document was asked to be read,
+ * in the words an upload and "Read again" take. A row stores a profile as
+ * "profile" plus its id, and the upload names it `profile:<id>`. A row from
+ * before 006 was read as a receipt.
+ */
+export function readAsOfJob(
+  job: Pick<ReadingOf, "readAs" | "profileId">,
+): string {
+  if (job.readAs === ImportReadAs.Profile && job.profileId) {
+    return profileReadAsValue(job.profileId);
+  }
+  return job.readAs ?? ImportReadAs.Receipt;
+}
+
+/** Whether any of the "Read as" choices is a saved profile. */
+export function hasProfileChoice(choices: { value: string }[]): boolean {
+  return choices.some((choice) =>
+    choice.value.startsWith(PROFILE_READ_AS_PREFIX),
+  );
+}
+
+// ── A document read as several items ────────────────────────────────────────
 
 /** The control total as the screens say it, or null when there is none. */
 export function describeControlTotal(

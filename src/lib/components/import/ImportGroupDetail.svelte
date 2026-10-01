@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
-	import { goto, replaceState } from '$app/navigation';
+	import { goto, invalidateAll, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, FileText, Trash2 } from '@lucide/svelte';
+	import { AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, FileText, RotateCcw, Trash2 } from '@lucide/svelte';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
@@ -12,8 +12,9 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import ImportReviewCard from './ImportReviewCard.svelte';
+	import ReadAgainDialog from './ReadAgainDialog.svelte';
 	import { createResourceStream } from '$lib/sse.js';
-	import { importStateEnum } from '$lib/enums.js';
+	import { ImportState, importStateEnum } from '$lib/enums.js';
 	import { parseExtractionNotes } from '$lib/import-reading.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { currencySymbol, formatCurrency } from '$lib/currency.js';
@@ -25,6 +26,8 @@
 		dupMessage,
 		formatMoney,
 		itemSides,
+		readAsOfJob,
+		readingLabel,
 		reviewRowFrom,
 		targetAfterSourceChange,
 		type ReviewEdits,
@@ -358,14 +361,56 @@
 		| { type: 'item-update'; jobId: string; item: ImportItemEvent }
 		| { type: 'item-deleted'; jobId: string; itemId: string };
 
+	// ── Read again (006 FR-023, US9 AS6-7) ────────────────────────────────────
+	// While the document is read again it is back in the queue: its items are
+	// gone (each `item-deleted` above takes one off the list) and the job says
+	// it is queued or being read. What the page shows then depends on what the
+	// new reading makes of it.
+	const READING_STATES: number[] = [ImportState.Queued, ImportState.Extracting, ImportState.Processing];
+	const beingRead = $derived(READING_STATES.includes(job.state));
+	// Read again as one receipt, or its reading failed: there is nothing left to
+	// review here, and the queue is where it is now.
+	const leftForQueue = $derived(job.state === ImportState.PendingReview || job.state === ImportState.Failed);
+	// Set when this page saw the document go back into the queue, so the page
+	// knows to load the new reading once it is a group again.
+	let sawReading = false;
+
+	// How the document is read, for the hero (FR-041). While it is read again
+	// with Auto-detect the row says "standard" before anything has been
+	// detected, so until the reading is done it says what it waits for. A group
+	// always says how it was read, whether or not a profile is turned on.
+	const heroReading = $derived(
+		readingLabel(job, { profilesEnabled: true, waiting: beingRead }) ?? describeReading(job)
+	);
+
+	function takeJob(next: ImportJobEvent) {
+		// A reading finished at a different time from the one on screen is a new
+		// reading, even when this page missed it going back into the queue (a
+		// reconnect whose first message already shows the new group, say).
+		const newReading = next.processedAt !== null && job.processedAt !== null && next.processedAt !== job.processedAt;
+		if (READING_STATES.includes(next.state)) sawReading = true;
+		else if ((sawReading || newReading) && next.state === ImportState.Grouped) {
+			// Read again as several items or with a profile. Its items arrive one by
+			// one on the stream, but the profile's sections (and so the section
+			// filter and each item's section name) come only with the page's own
+			// load, so it is loaded again.
+			sawReading = false;
+			void invalidateAll();
+		}
+		job = next;
+	}
+
+	let readAgainOpen = $state(false);
+	const canOfferReadAgain = $derived(data.perms.readAgain);
+
 	createResourceStream<StreamMsg>('/api/import/stream', (msg) => {
 		if (msg.type === 'snapshot') {
 			// The stream's first message lists every job still in the queue. This
 			// group's row in it is newer than what the page loaded.
 			const mine = msg.jobs.find((candidate) => candidate.id === job.id);
-			if (mine) job = mine;
+			if (mine) takeJob(mine);
 		} else if (msg.type === 'job-update') {
-			if (msg.job.id === job.id) job = msg.job;
+			if (msg.job.id === job.id) takeJob(msg.job);
 		} else if (msg.type === 'job-deleted') {
 			// Discarded, here or in another tab, with no record made from it.
 			if (msg.jobId === job.id) void goto(resolve('/(app)/import'));
@@ -785,7 +830,7 @@
 	<DetailPage backHref={resolve('/(app)/import')} backLabel="Auto Import">
 		{#snippet hero()}
 			<div class="detail-hero-eyebrow">
-				<span>Auto Import</span><span>·</span><span>{describeReading(job)}</span>
+				<span>Auto Import</span><span>·</span><span>{heroReading}</span>
 			</div>
 			<h1 class="detail-hero-title group-title">{job.originalFilename}</h1>
 			<div class="hero-counts">
@@ -806,6 +851,22 @@
 		{/snippet}
 
 		{#snippet main()}
+			{#if beingRead}
+				<div class="group-report reread" role="status">
+					<span class="spinner sm"></span>
+					This document is being read again. Its new items appear here when the reading is done.
+				</div>
+			{:else if leftForQueue}
+				<div class="group-report reread" role="status">
+					<span>
+						{job.state === ImportState.Failed
+							? `Reading it again failed: ${job.error ?? 'no reason was given'}.`
+							: 'This document was read again as one record.'}
+						<a href={resolve('/(app)/import')}>Review it on Auto Import</a>
+					</span>
+				</div>
+			{/if}
+
 			{#if canChange && waitingCount > 0}
 				<section class="detail-card group-actions">
 					<div class="group-account">
@@ -1007,7 +1068,11 @@
 						{#if visible.length === 0}
 							<tr class="empty-row">
 								<td colspan="9" class="items-empty">
-									{items.length === 0 ? 'This document has no items left.' : 'No item matches this filter.'}
+									{beingRead
+										? 'Reading the document again…'
+										: items.length === 0
+											? 'This document has no items left.'
+											: 'No item matches this filter.'}
 								</td>
 							</tr>
 						{/if}
@@ -1091,6 +1156,26 @@
 				</section>
 			{/if}
 
+			{#if canOfferReadAgain}
+				<!-- Shown even when it cannot be used, so the page says why (US9 AS7). -->
+				<section class="detail-card">
+					<div class="detail-card-head"><span class="detail-card-title">Read again</span></div>
+					<p class="hint discard-hint">
+						{job.readAgainReason ??
+							'Wrong reading? Read this file again another way. Every item still waiting, and every skipped one, is replaced.'}
+					</p>
+					<button
+						type="button"
+						class="sheet-btn read-again-btn"
+						disabled={!job.canReadAgain}
+						title={job.readAgainReason ?? undefined}
+						onclick={() => (readAgainOpen = true)}
+					>
+						<RotateCcw size={14} /> Read again
+					</button>
+				</section>
+			{/if}
+
 			{#if data.perms.delete && waitingCount > 0}
 				<section class="detail-card">
 					<div class="detail-card-head"><span class="detail-card-title">Discard</span></div>
@@ -1161,6 +1246,17 @@
 		{/snippet}
 	</BulkActionBar>
 </div>
+
+{#if canOfferReadAgain}
+	<ReadAgainDialog
+		bind:open={readAgainOpen}
+		jobId={job.id}
+		filename={job.originalFilename}
+		choices={data.readAsChoices}
+		current={readAsOfJob(job)}
+		replaces="Every item still waiting, and every skipped item, is replaced by the new reading."
+	/>
+{/if}
 
 <ConfirmDialog
 	bind:open={skipDialogOpen}
@@ -1287,6 +1383,22 @@
 		color: var(--foreground);
 		border-radius: 8px;
 		padding: 10px 12px;
+	}
+	/* The document is being read again, or was, and is back on the queue. */
+	.group-report.reread {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		background: var(--accent);
+	}
+	.group-report.reread a {
+		color: var(--primary);
+		margin-left: 4px;
+	}
+	.read-again-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 	}
 	.group-report.error {
 		background: var(--red-soft);

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AccountType, DocumentType } from "$lib/enums.js";
 import {
   describeReading,
+  hasProfileChoice,
+  readAsOfJob,
   readCategoryAccountId,
+  readingLabel,
   receiptSides,
   reviewRowFrom,
   type ReviewOptions,
@@ -60,7 +63,98 @@ describe("describeReading", () => {
       describeReading({ readAs: "auto", readHow: "detected", profile }),
     ).toBe("Read with “Shopee statement” (detected)");
     expect(describeReading({ readAs: "auto", readHow: "standard" })).toBe(
-      "Read as one receipt (auto-detect)",
+      "Standard reading (auto-detect)",
+    );
+  });
+
+  it("says the standard reading and several items, and how each was picked", () => {
+    expect(describeReading({ readAs: "receipt", readHow: "chosen" })).toBe(
+      "Standard reading (chosen)",
+    );
+    expect(describeReading({ readAs: "items", readHow: "chosen" })).toBe(
+      "Read as several items (chosen)",
+    );
+    // A row from before 006 has neither column, and was read as a receipt.
+    expect(describeReading({ readAs: null, readHow: null })).toBe(
+      "Standard reading",
+    );
+    // A profile reading whose copy is missing still says it was a profile.
+    expect(describeReading({ readAs: "profile", readHow: "chosen" })).toBe(
+      "Read with an import profile (chosen)",
+    );
+  });
+});
+
+describe("readingLabel", () => {
+  const detected = {
+    readAs: "auto",
+    readHow: "detected",
+    profile: { name: "Fee notice" },
+  };
+  const autoStandard = { readAs: "auto", readHow: "standard" };
+
+  it("says nothing of the standard reading while no profile is turned on (FR-003)", () => {
+    expect(readingLabel(autoStandard, { profilesEnabled: false })).toBeNull();
+    expect(
+      readingLabel(autoStandard, { profilesEnabled: false, waiting: true }),
+    ).toBeNull();
+    expect(
+      readingLabel(
+        { readAs: "receipt", readHow: "chosen" },
+        { profilesEnabled: false },
+      ),
+    ).toBeNull();
+  });
+
+  it("always names a profile or several-items reading (FR-041)", () => {
+    expect(readingLabel(detected, { profilesEnabled: false })).toBe(
+      "Read with “Fee notice” (detected)",
+    );
+    expect(
+      readingLabel(
+        { readAs: "items", readHow: "chosen" },
+        { profilesEnabled: false, waiting: true },
+      ),
+    ).toBe("Read as several items (chosen)");
+  });
+
+  it("names the standard reading once profiles exist, and Auto-detect while it waits", () => {
+    expect(readingLabel(autoStandard, { profilesEnabled: true })).toBe(
+      "Standard reading (auto-detect)",
+    );
+    expect(
+      readingLabel(autoStandard, { profilesEnabled: true, waiting: true }),
+    ).toBe("Auto-detect");
+    expect(
+      readingLabel(detected, { profilesEnabled: true, waiting: true }),
+    ).toBe("Read with “Fee notice” (detected)");
+    expect(
+      readingLabel(
+        { readAs: "receipt", readHow: "chosen" },
+        { profilesEnabled: true, waiting: true },
+      ),
+    ).toBe("Standard reading (chosen)");
+  });
+});
+
+describe("readAsOfJob", () => {
+  it("names the reading the way an upload and Read again take it", () => {
+    expect(readAsOfJob({ readAs: "profile", profileId: "7" })).toBe(
+      "profile:7",
+    );
+    expect(readAsOfJob({ readAs: "auto", profileId: "7" })).toBe("auto");
+    expect(readAsOfJob({ readAs: "items", profileId: null })).toBe("items");
+    expect(readAsOfJob({ readAs: null, profileId: null })).toBe("receipt");
+  });
+});
+
+describe("hasProfileChoice", () => {
+  it("is true only when a saved profile is among the choices", () => {
+    expect(hasProfileChoice([{ value: "auto" }, { value: "receipt" }])).toBe(
+      false,
+    );
+    expect(hasProfileChoice([{ value: "auto" }, { value: "profile:3" }])).toBe(
+      true,
     );
   });
 });
