@@ -45,6 +45,11 @@ import {
 import type { ProviderType } from "$lib/server/import/providers/index.js";
 import { fail } from "@sveltejs/kit";
 import { getAccountDefaults } from "$lib/server/services/account-defaults.js";
+import {
+  applyProfileSwitches,
+  importProfileList,
+  planProfileSwitches,
+} from "$lib/server/loaders/import-profiles.js";
 
 /**
  * A category IS an account (FR-006a) — the everyday word on screen, the chart of
@@ -153,6 +158,11 @@ export const load: PageServerLoad = async ({ locals }) => {
     apiKey: "", // never send actual key to browser
   }));
 
+  // Import profiles, listed beside the providers (006 US6 AS1). This loader
+  // checks no permission, so the list checks its own: seeing it needs
+  // import.view and changing it import.change (FR-045).
+  const importProfiles = importProfileList(locals);
+
   const pdfInvoiceLayoutKey =
     getSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey) ?? DEFAULT_LAYOUT_KEY;
   const pdfQuotationLayoutKey =
@@ -182,6 +192,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     companyRegistrationNo,
     companyLogoUrl,
     providers,
+    importProfiles,
     layoutCatalog: LAYOUT_CATALOG,
     pdfInvoiceLayoutKey,
     pdfQuotationLayoutKey,
@@ -341,9 +352,20 @@ export const actions: Actions = {
     return { success: true, action: "deleteProvider" };
   },
 
-  saveIntelligence: async ({ request }) => {
+  saveIntelligence: async ({ locals, request }) => {
     const data = await request.formData();
     const raw = String(data.get("providers") ?? "[]");
+
+    // The import profiles turned on or off in the list, staged like the
+    // provider switches. Checked first, so a refusal saves nothing on the tab;
+    // applied last, each one audited.
+    const profileSwitches = planProfileSwitches(
+      locals,
+      data.get("importProfiles"),
+    );
+    if (!profileSwitches.ok) {
+      return fail(profileSwitches.status, { error: profileSwitches.error });
+    }
 
     type ExistingEntry = { id: string; enabled: boolean };
     type NewEntry = {
@@ -442,6 +464,8 @@ export const actions: Actions = {
       SETTING_KEYS.autoImportCustomInstructions,
       customInstructions,
     );
+
+    applyProfileSwitches(locals.user!.id, profileSwitches.switches);
 
     return { success: true, action: "saveIntelligence" };
   },

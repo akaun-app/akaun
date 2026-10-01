@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { beforeNavigate, goto } from '$app/navigation';
+	import { beforeNavigate, goto, replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { untrack, onMount, onDestroy } from 'svelte';
-	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon, ShieldCheck, AlertTriangle } from '@lucide/svelte';
+	import { ChevronRight, FileText, GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon, ShieldCheck, AlertTriangle } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import { Slider } from '$lib/components/ui/slider/index.js';
@@ -28,7 +29,26 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	type Tab = 'general' | 'company' | 'books' | 'intelligence' | 'templates' | 'advanced';
-	let activeTab = $state<Tab>('general');
+	const TAB_IDS: readonly Tab[] = ['general', 'company', 'books', 'intelligence', 'templates', 'advanced'];
+
+	// The open tab is kept in the address (`?tab=intelligence`), so a page
+	// opened from a tab — an import profile, say — comes back to that tab, by
+	// the back button or by its own way back.
+	function tabFromUrl(): Tab {
+		const asked = page.url.searchParams.get('tab') as Tab | null;
+		if (!asked || !TAB_IDS.includes(asked)) return 'general';
+		if (asked === 'books' && !data.canSeeBooks) return 'general';
+		return asked;
+	}
+	let activeTab = $state<Tab>(tabFromUrl());
+
+	function showTab(id: Tab) {
+		activeTab = id;
+		const path = resolve('/(app)/settings');
+		// A shallow replace: the tab is page state, not a new page to go back to.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- route is resolved above; only the tab is appended.
+		replaceState(id === 'general' ? path : `${path}?tab=${id}`, page.state);
+	}
 
 	// Mobile detection for Sheet side
 	const screenState = useIsMobile();
@@ -668,6 +688,20 @@
 		providers = reorderItems(providers, state.draggedItem, state.targetElement, state.dropPosition);
 	}
 
+	// --- Import profiles (006 US6 AS1) ---
+	// Listed here, beside the providers that read the documents. Each one opens
+	// on its own page to edit. Turning one on or off is staged like a provider
+	// switch and saved with this tab's Save; the server checks import.change
+	// for it, since this page checks no permission of its own.
+	type ProfileRow = (typeof data.importProfiles.profiles)[0];
+	// svelte-ignore state_referenced_locally
+	let importProfiles = $state<ProfileRow[]>([...data.importProfiles.profiles]);
+	const canChangeProfiles = $derived(data.importProfiles.canChange);
+
+	function profileHref(id: number) {
+		return resolve('/(app)/settings/import-profiles/[id]', { id: String(id) });
+	}
+
 	// --- Provider Sheet state ---
 	let sheetOpen = $state(false);
 	let editingProvider = $state<ProviderRow | null>(null);
@@ -903,6 +937,7 @@
 				if (action !== 'saveIntelligence') closeSheet();
 			}
 			if (action === 'saveIntelligence') {
+				importProfiles = [...data.importProfiles.profiles];
 				aiParallelTasks = data.autoImportParallelTasks;
 				aiCategoryHints = data.autoImportCategoryHints;
 				aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
@@ -942,6 +977,12 @@
 		)
 	);
 
+	const profilesDirty = $derived(
+		importProfiles.some(
+			(p) => p.enabled !== data.importProfiles.profiles.find((saved) => saved.id === p.id)?.enabled
+		)
+	);
+
 	const isDirty = $derived(
 		mainCur !== data.currency ||
 		defaultAccount !== String(data.ledgerDefaultAccountId ?? '') ||
@@ -951,6 +992,7 @@
 		companyRegistrationNo !== data.companyRegistrationNo ||
 		logoChange !== 'none' ||
 		providersDirty ||
+		profilesDirty ||
 		aiParallelTasks !== data.autoImportParallelTasks ||
 		aiCategoryHints !== data.autoImportCategoryHints ||
 		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
@@ -971,6 +1013,7 @@
 		logoChange = 'none';
 		if (logoFileInput) logoFileInput.value = '';
 		providers = [...data.providers];
+		importProfiles = [...data.importProfiles.profiles];
 		aiParallelTasks = data.autoImportParallelTasks;
 		aiCategoryHints = data.autoImportCategoryHints;
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
@@ -990,14 +1033,14 @@
 			pendingTab = id;
 			unsavedConfirmOpen = true;
 		} else {
-			activeTab = id;
+			showTab(id);
 		}
 	}
 
 	function discardAndProceed() {
 		resetAllUnsaved();
 		if (pendingTab) {
-			activeTab = pendingTab;
+			showTab(pendingTab);
 			pendingTab = null;
 		} else if (pendingUrl) {
 			const url = pendingUrl;
@@ -1484,7 +1527,7 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Intelligence</h2>
-						<p class="set-section-sub">Providers used for receipt extraction, and how auto-import processes files.</p>
+						<p class="set-section-sub">Providers used for receipt extraction, import profiles, and how auto-import processes files.</p>
 					</div>
 
 					<form
@@ -1492,6 +1535,9 @@
 						action="?/saveIntelligence"
 						use:enhance={() => ({ update }) => update({ reset: false })}
 					>
+						{#if form?.error}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+						{/if}
 						<p class="set-subsection-label" style="margin-top:0;">Providers</p>
 						<input
 							type="hidden"
@@ -1572,6 +1618,73 @@
 									</div>
 								{/each}
 							</div>
+						{/if}
+
+						{#if data.importProfiles.canView}
+							<p class="set-subsection-label" style="margin-top:28px;">Import profiles</p>
+							<input
+								type="hidden"
+								name="importProfiles"
+								value={JSON.stringify(importProfiles.map((p) => ({ id: p.id, enabled: p.enabled })))}
+							/>
+							<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">
+								A saved way to read one kind of document, such as a marketplace statement. Enabled profiles are offered under
+								“Read as” when uploading.
+							</p>
+							<div class="prov-header">
+								<span class="set-row-label" style="margin:0;">Saved profiles</span>
+								{#if canChangeProfiles}
+									<a
+										class="sheet-btn sheet-btn-primary"
+										style="padding:6px 12px; font-size:13px; text-decoration:none;"
+										href={resolve('/(app)/settings/import-profiles/new')}
+									>
+										<Plus size={14} /> New profile
+									</a>
+								{/if}
+							</div>
+							{#if importProfiles.length === 0}
+								<div class="prov-empty">
+									<FileText size={20} style="opacity:0.3;" />
+									<span>
+										No import profiles yet.{canChangeProfiles
+											? ' Start one from a fee document or a marketplace statement, or from blank.'
+											: ''}
+									</span>
+								</div>
+							{:else}
+								<div class="prov-list">
+									{#each importProfiles as profile (profile.id)}
+										<div class="prov-row related-link" class:prov-row-disabled={!profile.enabled}>
+											<a class="row-link prof-link" href={profileHref(profile.id)}>
+												<span class="prov-info">
+													<span class="prov-name">{profile.name}</span>
+													<span class="prov-model">
+														{profile.sectionCount} section{profile.sectionCount === 1 ? '' : 's'}
+													</span>
+												</span>
+												<ChevronRight size={14} color="var(--muted-foreground)" />
+											</a>
+											<button
+												type="button"
+												class="toggle-btn"
+												class:on={profile.enabled}
+												aria-pressed={profile.enabled}
+												aria-label={profile.enabled ? `Disable ${profile.name}` : `Enable ${profile.name}`}
+												title={canChangeProfiles ? undefined : 'Turning a profile on or off needs permission to change imports.'}
+												disabled={!canChangeProfiles}
+												onclick={() => {
+													importProfiles = importProfiles.map((p) =>
+														p.id === profile.id ? { ...p, enabled: !p.enabled } : p
+													);
+												}}
+											>
+												<span class="toggle-thumb"></span>
+											</button>
+										</div>
+									{/each}
+								</div>
+							{/if}
 						{/if}
 
 						<p class="set-subsection-label" style="margin-top:28px;">Processing</p>
@@ -2315,6 +2428,29 @@
 		color: var(--muted-foreground);
 		cursor: pointer;
 		transition: background 0.12s, color 0.12s;
+	}
+
+	/* An import profile row: the name opens the profile, the switch beside it
+	   turns it on or off. */
+	.prof-link {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: inherit;
+		text-decoration: none;
+		border-radius: 6px;
+	}
+
+	.prof-link:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+
+	.toggle-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 
 	.prov-edit-btn:hover {

@@ -56,6 +56,9 @@
     "import-attention": { label: "Needs attention", tone: "amber" },
     "import-confirmed": { label: "Confirmed", tone: "green" },
     "import-skipped": { label: "Skipped", tone: "gray" },
+    // An import profile is on (offered under "Read as") or off (006 US6 AS12).
+    "profile-enabled": { label: "Enabled", tone: "green" },
+    "profile-disabled": { label: "Disabled", tone: "gray" },
   };
 
   const m = $derived(byLabel[status] ?? byLabel.unpaid);

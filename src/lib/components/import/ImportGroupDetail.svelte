@@ -60,6 +60,8 @@
 		state: string;
 		position: number;
 		sourceLine: number | null;
+		/** The profile section it was read from (006 FR-017). */
+		sectionKey: string;
 		feeType: string | null;
 		resultId: number | null;
 		/** Why a confirm-all would leave this item behind, or null. */
@@ -72,6 +74,7 @@
 			state: importStateEnum.toLabel(raw.state) ?? 'pending_review',
 			position: raw.position,
 			sourceLine: raw.sourceLine ?? null,
+			sectionKey: raw.sectionKey,
 			feeType: raw.feeType ?? null,
 			resultId: raw.resultId ?? null,
 			attention: raw.attention ?? null
@@ -108,8 +111,20 @@
 		return item.itemName || (item.sourceLine != null ? `Line ${item.sourceLine}` : `Item ${item.position + 1}`);
 	}
 
+	// The sections of the profile the document was read with, as they were
+	// then (FR-017, FR-038). Empty for the built-in reading, whose one section
+	// has no name of its own. With one section, its name says nothing new.
+	const sectionNames = $derived(new Map(data.sections.map((section) => [section.key, section.name])));
+	const showSections = $derived(data.sections.length > 1);
+
 	function itemSub(item: Item): string {
-		return [item.feeType, item.sourceLine != null ? `line ${item.sourceLine}` : null].filter(Boolean).join(' · ');
+		return [
+			showSections ? (sectionNames.get(item.sectionKey) ?? null) : null,
+			item.feeType,
+			item.sourceLine != null ? `line ${item.sourceLine}` : null
+		]
+			.filter(Boolean)
+			.join(' · ');
 	}
 
 	function recordHref(id: number) {
@@ -165,6 +180,8 @@
 	const PAGE_SIZE = 50;
 
 	let filter = $state<Filter>('all');
+	// One section of the profile, or '' for every section (FR-017).
+	let sectionFilter = $state('');
 	let pageNo = $state(1);
 
 	function matches(item: Item, f: Filter): boolean {
@@ -184,7 +201,14 @@
 		}
 	}
 
-	const filtered = $derived(items.filter((item) => matches(item, filter)));
+	// The items of the chosen section; the status tabs count within it.
+	const inSection = $derived(sectionFilter ? items.filter((item) => item.sectionKey === sectionFilter) : items);
+	const tabCounts = $derived.by(() => {
+		const tally: Record<Filter, number> = { all: 0, ready: 0, attention: 0, duplicate: 0, confirmed: 0, skipped: 0 };
+		for (const item of inSection) for (const [id] of FILTERS) if (matches(item, id)) tally[id]++;
+		return tally;
+	});
+	const filtered = $derived(inSection.filter((item) => matches(item, filter)));
 	const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
 	// The page asked for, held inside what there is now: confirming the last
 	// items of a filtered page can leave fewer pages than there were.
@@ -196,6 +220,16 @@
 		pageNo = 1;
 	}
 
+	// The select holds text; this stands for "every section". No section key
+	// can be it, since a key starts with a letter.
+	const ALL_SECTIONS = '*';
+
+	function setSectionFilter(next: string) {
+		sectionFilter = next === ALL_SECTIONS ? '' : next;
+		pageNo = 1;
+	}
+	const sectionLabel = $derived(sectionFilter ? (sectionNames.get(sectionFilter) ?? 'Section') : 'All sections');
+
 	// A filtered view is a thing people send each other, so it survives being
 	// copied out of the address bar. The URL is written from the state, never the
 	// other way round after the first read.
@@ -205,6 +239,8 @@
 		const q = page.url.searchParams;
 		const show = q.get('show');
 		if (show && FILTERS.some(([id]) => id === show)) filter = show as Filter;
+		const section = q.get('section');
+		if (section && data.sections.some((candidate) => candidate.key === section)) sectionFilter = section;
 		const p = Number(q.get('page'));
 		if (Number.isInteger(p) && p > 1) pageNo = p;
 	}
@@ -213,6 +249,7 @@
 		if (!urlReady) return;
 		const q = new SvelteURLSearchParams();
 		if (filter !== 'all') q.set('show', filter);
+		if (sectionFilter) q.set('section', sectionFilter);
 		if (currentPage > 1) q.set('page', String(currentPage));
 		const query = q.toString();
 		// The live address, not page.url: a shallow replaceState does not
@@ -824,12 +861,28 @@
 				</div>
 			{/if}
 
-			<div class="status-tabs group-tabs">
-				{#each FILTERS as [id, label] (id)}
-					<button class="status-tab" class:active={filter === id} onclick={() => setFilter(id)}>
-						{label}<span class="tab-count">{counts[id]}</span>
-					</button>
-				{/each}
+			<div class="group-filters">
+				<div class="status-tabs group-tabs">
+					{#each FILTERS as [id, label] (id)}
+						<button class="status-tab" class:active={filter === id} onclick={() => setFilter(id)}>
+							{label}<span class="tab-count">{tabCounts[id]}</span>
+						</button>
+					{/each}
+				</div>
+				{#if showSections}
+					<!-- Read with a profile of several sections: one section at a time (FR-017). -->
+					<div class="section-filter">
+						<Select.Root type="single" value={sectionFilter || ALL_SECTIONS} onValueChange={setSectionFilter}>
+							<Select.Trigger class="rinput w-full" aria-label="Section">{sectionLabel}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value={ALL_SECTIONS} label="All sections" />
+								{#each data.sections as section (section.key)}
+									<Select.Item value={section.key} label={section.name} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				{/if}
 			</div>
 
 			<div class="table-card items-card">
@@ -1261,6 +1314,23 @@
 		max-width: 100%;
 		overflow-x: auto;
 		align-self: flex-start;
+	}
+
+	/* The status tabs, and the section select beside them when the document
+	   was read with a profile of several sections. */
+	.group-filters {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		min-width: 0;
+	}
+	.group-filters .group-tabs {
+		align-self: auto;
+	}
+	.section-filter {
+		width: 220px;
+		max-width: 100%;
 	}
 
 	/* The table scrolls with the page, not in a box of its own: an item opened

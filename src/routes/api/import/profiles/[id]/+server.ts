@@ -22,9 +22,10 @@ import type { RequestHandler } from "./$types.js";
  * the editor's form, turn it on or off, or delete it.
  *
  * Every verb here is managing profiles, so every one needs `import.change`
- * (FR-045), reading included: this is the editor's read, with the profile's
- * whole form. The upload screen gets the names it offers from its own loader,
- * under `import.view`.
+ * (FR-045), reading included. This route is stricter than it has to be: the
+ * editor page itself loads a saved profile under `import.view` (read-only
+ * without `import.change`), as the list API already returns whole profiles
+ * under `import.view`. Seeing a profile is not changing it.
  *
  * Every write is audited by the service in the same transaction as the write.
  * A document already read with the profile keeps its own copy of it, so no

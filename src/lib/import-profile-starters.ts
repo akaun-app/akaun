@@ -227,3 +227,8 @@ export function starterDraft(id: string): ImportProfileDraft | null {
   const starter = IMPORT_PROFILE_STARTERS.find((entry) => entry.id === id);
   return starter ? structuredClone(starter.draft) : null;
 }
+
+/** Whether a value names one of the starters, such as `?starter=` on the editor. */
+export function isStarterId(id: string): id is ImportProfileStarterId {
+  return IMPORT_PROFILE_STARTERS.some((entry) => entry.id === id);
+}
