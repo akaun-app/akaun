@@ -58,6 +58,14 @@ const log = createLogger("import:confirm");
  */
 
 /**
+ * Why a receipt was not imported: the reading the reviewer confirmed is no
+ * longer the one in review, because it was imported meanwhile or the document
+ * was read again.
+ */
+export const RECEIPT_NOT_AS_SHOWN =
+  "This document is no longer waiting for review as it was shown (it was imported, or read again), so nothing was imported.";
+
+/**
  * What is being confirmed: the queue row that holds the file, and, for one
  * item of a group, which item.
  */
@@ -267,7 +275,7 @@ function writeConfirmation(
       ok: false,
       reason: job.itemId
         ? "This item is no longer waiting for review, so it was not imported again."
-        : "This document is no longer waiting for review as it was shown (it was imported, or read again), so nothing was imported.",
+        : RECEIPT_NOT_AS_SHOWN,
     };
   }
 

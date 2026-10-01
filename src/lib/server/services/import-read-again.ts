@@ -85,7 +85,8 @@ function clearedReading(): Partial<ImportJobInsert> {
  * refused by name here too (FR-001, US6 AS12).
  *
  * Allowed for a receipt waiting for review, a group none of whose items is
- * confirmed, and a failed document; see `readAgainRefusal`. In one
+ * confirmed, a failed document, and a skipped document that made no record
+ * while its file is still stored; see `readAgainRefusal`. In one
  * transaction, the job's items go (only waiting or skipped ones can be left,
  * since none is confirmed), every column the last reading wrote is emptied,
  * the new choice is stored, and the job is queued again. The worker then
@@ -136,9 +137,10 @@ export function readDocumentAgain(
         )
       : null;
 
+  const storageRoot = options.storageRoot ?? STORAGE_PATH;
   const outcome = db.transaction(
-    (): { ok: true; removed: string[] } | ReadAgainRefusal => {
-      const current = db
+    (tx): { ok: true; removed: string[] } | ReadAgainRefusal => {
+      const current = tx
         .select({ state: importQueue.state })
         .from(importQueue)
         .where(eq(importQueue.id, jobId))
@@ -150,7 +152,7 @@ export function readDocumentAgain(
           reason: "This document is no longer in the import queue.",
         };
       }
-      const confirmed = db
+      const confirmed = tx
         .select({ id: importItems.id })
         .from(importItems)
         .where(
@@ -163,25 +165,28 @@ export function readDocumentAgain(
           ),
         )
         .all().length;
-      const refusal = readAgainRefusal(current.state, confirmed);
+      const refusal = readAgainRefusal(current.state, confirmed, () =>
+        fileExists(job.tempFilePath, storageRoot),
+      );
       if (refusal) return { ok: false, kind: "rule", reason: refusal };
 
       // Checked only for a job that may be read again, so a refusal for a
-      // reason the user can see on the screen comes first.
-      if (!fileExists(job.tempFilePath, options.storageRoot ?? STORAGE_PATH)) {
+      // reason the user can see on the screen comes first. (A skipped job's
+      // file was already looked for by the rule, with its own reason.)
+      if (!fileExists(job.tempFilePath, storageRoot)) {
         return { ok: false, kind: "rule", reason: FILE_GONE };
       }
 
       // No item is confirmed, so every item left is one the new reading
       // replaces: waiting, or skipped, which made nothing.
-      const removed = db
+      const removed = tx
         .delete(importItems)
         .where(eq(importItems.jobId, jobId))
         .returning({ id: importItems.id })
         .all()
         .map((row) => row.id);
 
-      db.update(importQueue)
+      tx.update(importQueue)
         .set({
           ...clearedReading(),
           state: ImportState.Queued,

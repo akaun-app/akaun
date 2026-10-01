@@ -390,6 +390,9 @@
 			...(job._edits ?? {}),
 			fromAccountId,
 			toAccountId,
+			// The reading this card shows. If the document was read again meanwhile,
+			// the server refuses rather than import the new reading with these edits.
+			readAt: job.processedAt,
 		};
 		const res = await fetch(`/api/import/${jobId}/confirm`, {
 			method: 'POST',

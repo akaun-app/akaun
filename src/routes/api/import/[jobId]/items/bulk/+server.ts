@@ -1,6 +1,8 @@
 import { json } from "@sveltejs/kit";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
+import { importQueue } from "$lib/server/db/schema.js";
 import { badRequest, forbidden, refused } from "$lib/server/api-response.js";
 import { DOCUMENT_ITEMS_MAX } from "$lib/import-reading.js";
 import { groupCounts } from "$lib/server/import/group-state.js";
@@ -24,6 +26,13 @@ import type { RequestHandler } from "./$types.js";
  * behind any item that needs attention, so the reply lists each item with
  * whether it was done and, if not, why. A confirm that is interrupted and sent
  * again creates no record twice: an item already imported is only reported.
+ *
+ * `readAt` is the reading the screen shows: the group's `processedAt` as the
+ * page had it. Named items belong to one reading (a new reading makes new
+ * items), but `all: true` means whatever items are waiting when the request
+ * lands. If the document was read again meanwhile (FR-023), those are items
+ * of a reading the user has not seen, so a request that names another
+ * reading is refused and nothing is done.
  */
 const bodySchema = z
   .object({
@@ -36,6 +45,7 @@ const bodySchema = z
     all: z.literal(true).optional(),
     categoryAccountId: z.number().int().positive().optional(),
     accountId: z.number().int().positive().optional(),
+    readAt: z.string().nullable().optional(),
   })
   .superRefine((body, ctx) => {
     if ((body.itemIds === undefined) === (body.all === undefined)) {
@@ -61,6 +71,9 @@ const bodySchema = z
     }
   });
 
+const NOT_AS_SHOWN =
+  "This document was read again since this page showed it, so nothing was done. Look at the new reading first.";
+
 export const POST: RequestHandler = async ({ locals, params, request }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
   if (!hasPermission(locals, "import", "change")) return forbidden();
@@ -68,6 +81,20 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error);
   const body = parsed.data;
+
+  if (body.readAt !== undefined) {
+    const group = db
+      .select({ processedAt: importQueue.processedAt })
+      .from(importQueue)
+      .where(eq(importQueue.id, params.jobId))
+      .get();
+    // A missing group is left to the action, which already says so.
+    if (group && group.processedAt !== body.readAt) {
+      return refused(NOT_AS_SHOWN);
+    }
+  }
+  // Nothing is awaited between the check above and the moment the action
+  // picks the items it works on, so a "Read again" cannot land in between.
 
   const selection: ItemSelection = body.all ? "all" : (body.itemIds ?? []);
   const options = { actingUserId: locals.user.id };

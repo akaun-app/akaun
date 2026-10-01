@@ -637,7 +637,9 @@
 			const res = await fetch(`/api/import/${job.id}/items/bulk`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
+				// The reading this page shows, so "all" cannot reach the items of a
+				// newer reading the user has not seen (FR-023).
+				body: JSON.stringify({ ...body, readAt: job.processedAt }),
 				credentials: 'include'
 			});
 			if (!res.ok) {

@@ -40,6 +40,7 @@ vi.mock("$lib/server/logger.js", () => {
 
 const {
   DETECT_HEAD_CHARS,
+  DETECT_MAX_OUTPUT_TOKENS,
   DETECT_NONE,
   buildDetectSpec,
   detectProfile,
@@ -261,6 +262,25 @@ describe("detectProfile", () => {
     expect(backup.doGenerateCalls).toHaveLength(1);
   });
 
+  it("routes a number id the AI answers with to that enabled profile", async () => {
+    // The structured answer does not fit the schema's text ids, so the call
+    // is made again in text mode, where the number is read as the id.
+    const model = serve("main", [{ text: '{"profile": 3}' }]);
+    const detection = await detect("Some statement", [shopee, lazada]);
+    expect(detection).toMatchObject({ route: 3, how: "detected", via: "ai" });
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(model.doGenerateCalls[0].maxOutputTokens).toBe(2048);
+  });
+
+  it("never routes a number id to a profile that is not enabled", async () => {
+    serve("main", [{ text: '{"profile": 7}' }]);
+    const detection = await detect("Some statement", [
+      shopee,
+      { ...lazada, enabled: false },
+    ]);
+    expect(detection.route).toBe("standard");
+  });
+
   it("reads a fenced answer from text when the structured answer does not parse", async () => {
     const model = serve("main", [{ text: '```json\n{"profile": "3"}\n```' }]);
     const detection = await detect("Some statement", [shopee, lazada]);
@@ -296,6 +316,18 @@ describe("the detection call", () => {
       profile: DETECT_NONE,
     });
     expect(() => spec.parse({ profile: "7" })).toThrow();
-    expect(() => spec.parse({ profile: 3 })).toThrow();
+  });
+
+  it("reads a number id as the same id, and still only the ids it offered", () => {
+    const spec = buildDetectSpec([shopee], "x");
+    expect(spec.parse({ profile: 3 })).toEqual({ profile: "3" });
+    expect(() => spec.parse({ profile: 7 })).toThrow();
+    expect(() => spec.parse({ profile: 3.5 })).toThrow();
+    expect(() => spec.parse({ profile: null })).toThrow();
+  });
+
+  it("leaves room for a model that reasons before it answers", () => {
+    expect(DETECT_MAX_OUTPUT_TOKENS).toBe(2048);
+    expect(buildDetectSpec([shopee], "x").maxOutputTokens).toBe(2048);
   });
 });

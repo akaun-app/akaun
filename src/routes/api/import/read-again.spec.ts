@@ -141,7 +141,9 @@ const { createImportProfile, setImportProfileEnabled } =
   await import("$lib/server/services/import-profiles.js");
 const { confirmGroupItem } =
   await import("$lib/server/services/import-items.js");
-const { confirmReviewed } = await import("$lib/server/services/import.js");
+const { confirmReviewed, RECEIPT_NOT_AS_SHOWN } =
+  await import("$lib/server/services/import.js");
+const { SKIPPED_FILE_GONE } = await import("$lib/server/import/read-again.js");
 const { insertProvider } = await import("$lib/server/llmProviders.js");
 const { setSetting, SETTING_KEYS } = await import("$lib/server/settings.js");
 const { importEvents } = await import("$lib/server/import/events.js");
@@ -510,14 +512,40 @@ const routes = {
     const { GET } = await import("./[jobId]/+server.js");
     return (GET as Handler)({ locals, params: { jobId: id } } as never);
   },
+  async confirmReceipt(body: unknown) {
+    const { POST } = await import("./[jobId]/confirm/+server.js");
+    return (POST as Handler)({
+      locals,
+      params: { jobId },
+      request: new Request("http://test.local/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    } as never);
+  },
+  async bulk(body: unknown) {
+    const { POST } = await import("./[jobId]/items/bulk/+server.js");
+    return (POST as Handler)({
+      locals,
+      params: { jobId },
+      request: new Request("http://test.local/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    } as never);
+  },
 };
 
 beforeAll(async () => {
   await Promise.all([
     import("./[jobId]/reread/+server.js"),
     import("./[jobId]/+server.js"),
+    import("./[jobId]/confirm/+server.js"),
+    import("./[jobId]/items/bulk/+server.js"),
   ]);
-});
+}, 60_000);
 
 // ── A group ──────────────────────────────────────────────────────────────────
 
@@ -755,6 +783,38 @@ describe("reading a receipt card again", () => {
     });
   });
 
+  it("refuses a confirm made from the reading shown before it was read again", async () => {
+    receiptCard({
+      readAs: ImportReadAs.Receipt,
+      readHow: ImportReadHow.Chosen,
+    });
+    // The reading the reviewer's card shows, and the edits they made to it.
+    const shown = jobRow().processedAt;
+    const edits = { item_name: "Typed for the old reading", amount: 42.5 };
+    const before = recordCount();
+
+    expect((await routes.readAgain(ImportReadAs.Receipt)).status).toBe(202);
+    serve([json(receiptAnswer({ amount: 99, item_name: "New reading" }))]);
+    const read = await runWorker();
+    expect(read.state).toBe(ImportState.PendingReview);
+    expect(read.processedAt).not.toBe(shown);
+
+    const late = await routes.confirmReceipt({ ...edits, readAt: shown });
+    expect(late.status).toBe(409);
+    expect((await late.json()).error).toBe(RECEIPT_NOT_AS_SHOWN);
+    expect(recordCount()).toEqual(before);
+    expect(jobRow()).toMatchObject({
+      state: ImportState.PendingReview,
+      amount: 99,
+      itemName: "New reading",
+    });
+
+    // Confirmed from the reading now on the card, it goes through.
+    const current = await routes.confirmReceipt({ readAt: read.processedAt });
+    expect(current.status).toBe(201);
+    expect(recordCount().records).toBe(before.records + 1);
+  });
+
   it("refuses a way of reading it does not know", async () => {
     receiptCard();
     const res = await routes.readAgain("statement");
@@ -949,6 +1009,126 @@ describe("the text of an image", () => {
   });
 });
 
+// ── A skipped document ──────────────────────────────────────────────────────
+
+describe("reading a skipped document again", () => {
+  it("reads a skipped receipt again while its file is stored", async () => {
+    receiptCard({ state: ImportState.Skipped });
+    const sent = await (await routes.getJob()).json();
+    expect(sent.canReadAgain).toBe(true);
+    expect(sent.readAgainReason).toBeNull();
+
+    const res = await routes.readAgain(ImportReadAs.Receipt);
+    expect(res.status).toBe(202);
+    expect(jobRow()).toMatchObject({
+      state: ImportState.Queued,
+      readAs: ImportReadAs.Receipt,
+      processedAt: null,
+    });
+
+    serve([json(receiptAnswer({ amount: 77 }))]);
+    expect(await runWorker()).toMatchObject({
+      state: ImportState.PendingReview,
+      amount: 77,
+    });
+  });
+
+  it("reads a group whose items were all skipped again, replacing them", async () => {
+    group([ImportState.Skipped, ImportState.Skipped]);
+    db.update(importQueue)
+      .set({ state: ImportState.Skipped })
+      .where(eq(importQueue.id, jobId))
+      .run();
+    const before = recordCount();
+    const sent = await (await routes.getJob()).json();
+    expect(sent.canReadAgain).toBe(true);
+
+    const res = await routes.readAgain(ImportReadAs.SeveralItems);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ jobId, removedItems: 2 });
+    expect(itemsOf()).toEqual([]);
+    expect(jobRow().state).toBe(ImportState.Queued);
+
+    serve([json(itemsAnswer([5, 6, 7]))]);
+    expect((await runWorker()).state).toBe(ImportState.Grouped);
+    expect(itemsOf().map((item) => item.state)).toEqual([
+      ImportState.PendingReview,
+      ImportState.PendingReview,
+      ImportState.PendingReview,
+    ]);
+    expect(recordCount()).toEqual(before);
+  });
+
+  it("refuses once its file was released, and says to upload it again", async () => {
+    receiptCard({ state: ImportState.Skipped });
+    rmSync(join(holder.storageRoot, jobRow().tempFilePath));
+    emitted = [];
+
+    const sent = await (await routes.getJob()).json();
+    expect(sent.canReadAgain).toBe(false);
+    expect(sent.readAgainReason).toBe(SKIPPED_FILE_GONE);
+
+    const res = await routes.readAgain(ImportReadAs.Receipt);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reason).toBe(SKIPPED_FILE_GONE);
+    expect(SKIPPED_FILE_GONE).toMatch(/Upload it again/);
+    expect(jobRow().state).toBe(ImportState.Skipped);
+    expect(emitted).toEqual([]);
+  });
+
+  it("still refuses a skipped document that made a record", async () => {
+    group([ImportState.Imported, ImportState.Skipped]);
+    db.update(importQueue)
+      .set({ state: ImportState.Skipped })
+      .where(eq(importQueue.id, jobId))
+      .run();
+    const res = await routes.readAgain(ImportReadAs.Receipt);
+    expect(res.status).toBe(409);
+    expect((await res.json()).reason).toMatch(/^1 item is already confirmed/);
+    expect(itemsOf()).toHaveLength(2);
+    expect(jobRow().state).toBe(ImportState.Skipped);
+  });
+});
+
+// ── Many items at once, after a Read again ──────────────────────────────────
+
+describe("acting on every item after a Read again", () => {
+  it("refuses an action on all items when the page shows another reading", async () => {
+    group([ImportState.PendingReview, ImportState.PendingReview]);
+    const shown = jobRow().processedAt;
+    const before = recordCount();
+
+    expect((await routes.readAgain(ImportReadAs.SeveralItems)).status).toBe(
+      202,
+    );
+    serve([json(itemsAnswer([5, 6, 7]))]);
+    const read = await runWorker();
+    expect(read.state).toBe(ImportState.Grouped);
+
+    for (const action of ["confirm", "skip"]) {
+      const res = await routes.bulk({ action, all: true, readAt: shown });
+      expect(res.status).toBe(409);
+      expect((await res.json()).reason).toMatch(/was read again/);
+    }
+    // None of the new reading's items was touched.
+    expect(recordCount()).toEqual(before);
+    expect(itemsOf().every((i) => i.state === ImportState.PendingReview)).toBe(
+      true,
+    );
+
+    // From the reading on the page, it goes through.
+    const res = await routes.bulk({
+      action: "confirm",
+      all: true,
+      readAt: read.processedAt,
+    });
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as { results: { ok: boolean }[] };
+    expect(results.map((r) => r.ok)).toEqual([true, true, true]);
+    expect(recordCount().records).toBe(before.records + 3);
+  });
+});
+
 // ── Refusals ────────────────────────────────────────────────────────────────
 
 describe("refusals", () => {
@@ -981,16 +1161,6 @@ describe("refusals", () => {
     const sent = await (await routes.getJob()).json();
     expect(sent.canReadAgain).toBe(false);
     expect(sent.readAgainReason).toMatch(/already imported/);
-  });
-
-  it("refuses a skipped document", async () => {
-    queueRow({ state: ImportState.Skipped });
-    const res = await routes.readAgain(ImportReadAs.Receipt);
-    expect(res.status).toBe(409);
-    expect((await res.json()).reason).toMatch(/was skipped/);
-    const sent = await (await routes.getJob()).json();
-    expect(sent.canReadAgain).toBe(false);
-    expect(jobRow().state).toBe(ImportState.Skipped);
   });
 
   it("refuses when the file is gone", async () => {

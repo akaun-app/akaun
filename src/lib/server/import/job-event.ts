@@ -1,5 +1,6 @@
 import type { ImportModeValue } from "$lib/import-reading.js";
 import type { importItems, importQueue } from "../db/schema.js";
+import { fileExists } from "../file-storage.js";
 import { parseProfileSnapshot } from "./profile-snapshot.js";
 import { readAgainRefusal } from "./read-again.js";
 
@@ -73,9 +74,11 @@ export function jobForEvent(
   if (snapshot) event.profile = { name: snapshot.name, mode: snapshot.mode };
   // A group's counts are always given (see `jobEvents`); a job sent without
   // them has no items, so none of them is confirmed.
+  // The file is looked for only for a skipped job (see `readAgainRefusal`).
   event.readAgainReason = readAgainRefusal(
     row.state,
     itemCounts?.confirmed ?? 0,
+    () => fileExists(row.tempFilePath),
   );
   event.canReadAgain = event.readAgainReason === null;
   return event;

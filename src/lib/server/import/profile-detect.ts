@@ -49,9 +49,10 @@ export const DETECT_HEAD_CHARS = 3_000;
 
 /**
  * The most the model may write for its answer. The answer is one short id;
- * the room above that is for models that count their reasoning as output.
+ * the room above that is for models that count their reasoning as output,
+ * which can spend well over a thousand tokens before they answer.
  */
-const DETECT_MAX_OUTPUT_TOKENS = 512;
+export const DETECT_MAX_OUTPUT_TOKENS = 2048;
 
 /** The longest the detection call may take on one provider. */
 const DETECT_TIMEOUT_MS = 60_000;
@@ -156,6 +157,22 @@ ${JSON_ONLY}`;
 }
 
 /**
+ * A model asked for `{"profile": "3"}` sometimes writes `{"profile": 3}`. The
+ * number means the same id, so it is turned into text before the answer is
+ * checked against the ids allowed. Anything else is left as it is, for the
+ * check to refuse.
+ */
+function idAsText(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || !("profile" in raw)) {
+    return raw;
+  }
+  const { profile } = raw as { profile: unknown };
+  return typeof profile === "number" && Number.isInteger(profile)
+    ? { ...raw, profile: String(profile) }
+    : raw;
+}
+
+/**
  * The one structured call detection makes: its schema allows exactly the ids
  * of the profiles given, and "none".
  */
@@ -176,7 +193,7 @@ export function buildDetectSpec(
   return {
     schemaId: detectSchemaId(profiles.map((profile) => profile.id)),
     schema,
-    parse: (raw) => schema.parse(raw),
+    parse: (raw) => schema.parse(idAsText(raw)),
     instructions: detectInstructions(profiles, choices),
     prompt: wrapDocument(text.slice(0, DETECT_HEAD_CHARS)),
     maxOutputTokens: DETECT_MAX_OUTPUT_TOKENS,

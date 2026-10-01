@@ -298,7 +298,7 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 - **FR-020**: Each item MUST stay individually editable, confirmable and skippable. Skipping or discarding one item MUST NOT change the other items, and MUST NOT remove the source file while any other item or record still uses it. Discarding the whole document MUST remove only the items still awaiting review; records already created stay, and so does the source file while a record uses it.
 - **FR-021**: A confirmed item's history entry MUST link to the record it created. Confirmed receipts get the same link.
 - **FR-022**: The queue card and the group's page MUST be usable at phone widths.
-- **FR-023**: While no item of a group is confirmed, the user MUST be able to "Read again" from the same file, choosing any profile, the standard reading, or several items, and for a profile either import mode, without uploading again. The pending items MUST be replaced by the new reading. Once any item is confirmed, "Read again" MUST NOT be offered and the group MUST say why.
+- **FR-023**: While no item of a group is confirmed, the user MUST be able to "Read again" from the same file, choosing any profile, the standard reading, or several items, and for a profile either import mode, without uploading again. The pending items MUST be replaced by the new reading. Once any item is confirmed, "Read again" MUST NOT be offered and the group MUST say why. A skipped document that made no record MAY be read again while its stored file still exists; once the file has been released, "Read again" MUST be refused with a reason that tells the user to upload it again.
 
 **Duplicates**
 
@@ -328,7 +328,7 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 
 - **FR-039**: With "Auto-detect" and at least one enabled profile, the system MUST decide before reading whether a profile fits. When exactly one profile's recognition phrases all appear in the document, it MUST be used without asking the AI. Otherwise the AI MUST choose among the enabled profiles, or none, using their descriptions. Detection MUST add at most one small AI step.
 - **FR-040**: When no profile fits, the document MUST be read the standard way, as a receipt or invoice.
-- **FR-041**: The screen MUST state how each document was read: the profile name or the standard reading, and whether it was detected or chosen.
+- **FR-041**: The screen MUST state how each document was read: the profile name or the standard reading, and whether it was detected or chosen. With no enabled profile the screen shows nothing extra, so receipts look exactly as before (FR-003).
 - **FR-042**: Text inside a document MUST be treated as content only. It MUST NOT be able to do anything beyond being read, including influencing detection beyond the choice among profiles.
 
 **Long documents**
@@ -338,7 +338,7 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 **Safety, permissions and live updates**
 
 - **FR-044**: Confirming an item MUST either fully succeed or leave nothing behind: no record without its import status, and no new contact left over from a refused record.
-- **FR-045**: Every way of reading a document MUST need only the permission to upload imports that exists today. Confirming, skipping and discarding MUST need the same permissions as today. Managing profiles MUST need the permission to change imports. No new permission is introduced.
+- **FR-045**: Every way of reading a document MUST need only the permission to upload imports that exists today, except "Read again", which MUST need both the permission to upload imports and the permission to change them, because it discards the pending review work as Skip does. Confirming, skipping and discarding MUST need the same permissions as today. Managing profiles MUST need the permission to change imports. No new permission is introduced.
 - **FR-046**: Every record created MUST be audited exactly as records from a receipt import are today.
 - **FR-047**: As items are proposed, confirmed, skipped or discarded, every open Auto Import screen, including a group's page, MUST update without a reload.
 - **FR-048**: Upgrading MUST NOT change or remove anything already in the queue, the import history, the records or the settings.
