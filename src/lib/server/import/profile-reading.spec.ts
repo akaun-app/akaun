@@ -117,7 +117,8 @@ const {
   setImportProfileEnabled,
   updateImportProfile,
 } = await import("../services/import-profiles.js");
-const { confirmGroupItems } = await import("../services/import-items.js");
+const { confirmGroupItems, listGroupItems } =
+  await import("../services/import-items.js");
 const { insertProvider } = await import("../llmProviders.js");
 const { setSetting, SETTING_KEYS } = await import("../settings.js");
 const { importEvents } = await import("./events.js");
@@ -698,6 +699,109 @@ describe("reading a marketplace summary with a profile", () => {
     const notes = parseExtractionNotes(row.extractionNotes)!;
     expect(notes.statedTotal?.minor).toBe(-20050);
     expect(notes.itemsTotalMinor).toBe(-20050);
+  });
+
+  it("says on the item when a by-sign line's tied category is for the other kind, instead of dropping it silently (FR-034)", async () => {
+    const profileId = saveProfile(statementProfile());
+    serve([
+      json(
+        answer({
+          sales: [],
+          fees: [
+            {
+              // Tied to Rebates (income), but printed negative: an expense.
+              // The model's valid pick is used instead.
+              description: "Rebate clawback",
+              amount: -5,
+              fee_type: "shipping_rebate",
+              category_account_id: ids.ads,
+            },
+            {
+              // Tied to Marketplace Fees (an expense), but printed positive:
+              // an income, with no valid pick, so Uncategorised.
+              description: "Commission refund",
+              amount: 3,
+              fee_type: "commission_fee",
+              category_account_id: null,
+            },
+            {
+              // Tied and of the same kind: nothing to say.
+              description: "Commission fee",
+              amount: -812.35,
+              fee_type: "commission_fee",
+              category_account_id: null,
+            },
+          ],
+        }),
+      ),
+    ]);
+    const row = await run(profileJob(profileId));
+
+    expect(row.state).toBe(ImportState.Grouped);
+    const items = itemsOf(row.id);
+    expect(
+      items.map(({ documentType, categoryAccountId, reviewNote }) => ({
+        documentType,
+        categoryAccountId,
+        reviewNote,
+      })),
+    ).toEqual([
+      {
+        documentType: DocumentType.Expense,
+        categoryAccountId: ids.ads,
+        reviewNote:
+          "The category “Rebates” tied to the fee type “shipping_rebate” is an income category, but this line is printed negative, so it is an expense. It is filed under “Advertising” instead: choose its category.",
+      },
+      {
+        documentType: DocumentType.Income,
+        categoryAccountId: ids.uncategorisedIncome,
+        reviewNote:
+          "The category “Marketplace Fees” tied to the fee type “commission_fee” is an expense category, but this line is printed positive, so it is an income. It is filed under “Uncategorised Income” instead: choose its category.",
+      },
+      {
+        documentType: DocumentType.Expense,
+        categoryAccountId: ids.fees,
+        reviewNote: null,
+      },
+    ]);
+
+    // It is a reason to look at the item, so a confirm-all leaves it for the
+    // reviewer once its account is chosen, with the note as the reason.
+    const listed = listGroupItems(db, row.id);
+    expect(listed.map((item) => item.attention)).toEqual([
+      items[0].reviewNote,
+      items[1].reviewNote,
+      null,
+    ]);
+  });
+
+  it("keeps the tied-category note on a one-item reading's receipt card", async () => {
+    const profileId = saveProfile(statementProfile());
+    serve([
+      json(
+        answer({
+          sales: [],
+          fees: [
+            {
+              description: "Rebate clawback",
+              amount: -5,
+              fee_type: "shipping_rebate",
+              category_account_id: null,
+            },
+          ],
+        }),
+      ),
+    ]);
+    const row = await run(profileJob(profileId));
+
+    expect(row.state).toBe(ImportState.PendingReview);
+    expect(row).toMatchObject({
+      documentType: DocumentType.Expense,
+      categoryAccountId: ids.uncategorised,
+      remark: "Fee type: shipping_rebate",
+    });
+    expect(row.reviewNote).toContain("“Rebates”");
+    expect(row.reviewNote).toContain("printed negative");
   });
 
   it("reviews a single item as a receipt, keeping the profile on the row", async () => {

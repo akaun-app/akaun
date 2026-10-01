@@ -222,12 +222,11 @@ describe("who may manage import profiles (FR-045)", () => {
 
     const replies = [
       await routes.create(feeDocument("Other")),
-      await routes.get(id),
       await routes.patch(id, { enabled: false }),
       await routes.patch(id, feeDocument("Renamed")),
       await routes.remove(id),
     ];
-    expect(replies.map((res) => res.status)).toEqual([403, 403, 403, 403, 403]);
+    expect(replies.map((res) => res.status)).toEqual([403, 403, 403, 403]);
     expect(profileRows()).toHaveLength(1);
     expect(getImportProfile(db, id)).toMatchObject({
       name: "Fee notice",
@@ -236,13 +235,25 @@ describe("who may manage import profiles (FR-045)", () => {
     expect(profileAudit()).toHaveLength(before);
   });
 
+  it("reads one profile with import.view alone, as the list and the editor do", async () => {
+    const id = saved();
+    holder.allow = (resource, action) =>
+      resource === "import" && action === "view";
+    const res = await routes.get(id);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id, name: "Fee notice" });
+
+    holder.allow = (resource, action) =>
+      !(resource === "import" && action === "view");
+    expect((await routes.get(id)).status).toBe(403);
+  });
+
   it("lets import.change manage profiles without import.add or import.delete", async () => {
     holder.allow = (resource, action) =>
       resource === "import" && action === "change";
     const created = await routes.create(feeDocument());
     expect(created.status).toBe(201);
     const { id } = (await created.json()) as { id: number };
-    expect((await routes.get(id)).status).toBe(200);
     expect((await routes.patch(id, { enabled: false })).status).toBe(200);
     expect((await routes.remove(id)).status).toBe(204);
   });
@@ -459,7 +470,22 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
       readHow: "chosen",
       profileId: String(id),
       importMode: "summary",
-      profileSnapshot: null,
+    });
+    // A copy that names the profile from the upload on, so the queue can say
+    // how a waiting or failed document was to be read (FR-041). Reading
+    // replaces it with the schema it sent.
+    expect(JSON.parse(row.profileSnapshot ?? "null")).toMatchObject({
+      version: 1,
+      id,
+      name: "Fee notice",
+      mode: "summary",
+      schemaId: "",
+      profile: { name: "Fee notice" },
+    });
+    const { jobForEvent } = await import("$lib/server/import/job-event.js");
+    expect(jobForEvent(row).profile).toEqual({
+      name: "Fee notice",
+      mode: "summary",
     });
     expect(tempFiles()).toHaveLength(1);
   });
@@ -484,7 +510,13 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(((await disabled.json()) as { error: string }).error).toContain(
       '"Fee notice" is turned off',
     );
-    expect((await routes.upload(`profile:${gone}`)).status).toBe(400);
+    // A deleted profile is named, from its delete's audit entry (spec edge
+    // case), not given by its number.
+    const deleted = await routes.upload(`profile:${gone}`);
+    expect(deleted.status).toBe(400);
+    expect(((await deleted.json()) as { error: string }).error).toBe(
+      'The import profile "Old statement" was deleted. Choose another way to read this document.',
+    );
     expect(queueRows()).toHaveLength(0);
     expect(tempFiles()).toHaveLength(0);
   });

@@ -312,6 +312,12 @@ function reviewColumns() {
     accountId: integer("account_id").references(() => accounts.id, {
       onDelete: "set null",
     }),
+    // Something the reader could not do as the profile asked, in words for the
+    // reviewer, such as a fee type's tied category that is for the other kind
+    // of line (006 FR-034). While it is set, a confirm-all leaves the item for
+    // the reviewer to look at. Choosing a category clears it. Null when there
+    // is nothing to say, as for every receipt.
+    reviewNote: text("review_note"),
   };
 }
 

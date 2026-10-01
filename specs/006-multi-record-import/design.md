@@ -127,16 +127,18 @@ If the table comes out scrambled, US8 is blocked, so this must run before any UI
 
 - **`import_profiles` table:** name, description, phrases JSON, instructions, sections JSON, stated-total label per mode, enabled.
 - **Shared validator `src/lib/import-profile-schema.ts`** (the `sequence-template.ts:97` pattern):
-  - the whitelist is type, properties, required, items, enum (strings only), description, and nullable written as a type array
+  - the whitelist (`FRAGMENT_KEYWORDS` and `FIELD_KEYWORDS` in `src/lib/import-profile-schema.ts`): on the extra-fields object only `type`, `properties` and `required`; on each field only `type`, `description` and `enum` (text values, and only on a text field). A value that may be missing is written as a type list with `"null"`, such as `["string", "null"]`. The type is `string`, `number`, `integer` or `boolean`; nested values (`properties` or `items` on a field, or the type `object` or `array`) are refused. `items` is not on the list.
+  - the "none" sentinel (`NONE_VALUE`): a list of choices that may be empty — a section's fee type, or a nullable extra field with an `enum` — is sent with `"none"` as one more choice, not with null. A strict provider (OpenAI, Groq) allows only the values `enum` names, and Google refuses a null inside an `enum`, so null cannot be said there. The reading turns `"none"` back into null, and the validator refuses `"none"` as a fee type key or as a choice.
   - caps: 20 sections, 50 fee types per section, 200 enum values in total, 20 extras
   - slug keys only, and canonical names are reserved
   - error messages name the path
 - **Where to edit:**
   - The list lives in the Settings › Intelligence tab.
   - The editor is its own page, `/settings/import-profiles/[id|new]`, on `DetailPage`: stage the whole profile and save once.
-  - `/api/import/profiles` is gated by `hasPermission('import','change')`.
+  - `/api/import/profiles` writes are gated by `hasPermission('import','change')`; reading the list or one profile needs `import.view`, as the editor page does (read-only without `change`).
   - Add `recordAudit` with a new `'import_profile'` `RecordType`.
-- **Two starters:** "Fee document" and "Statement with summary and transactions".
+- **Review note (migration 0025, additive):** `review_note` on the review columns of the queue and of items. The reading writes it when a fee type's tied category is for the other kind of line (FR-034); while it is set, `itemAttention` returns it, and choosing a category clears it. The receipt card shows it too, for a one-item reading.
+- **Two starters:** "Fee document" and "Marketplace statement summary" (the summary half only; the transactions half waits for US8).
 - **FR-037:** a provider 400 on a profile schema **fails that document**, with no text fallback. Built-in schemas keep the fallback. `schemaId = profile:<id>:<sha256(wire)>`, and a snapshot of the profile is stored on the job (FR-038, Read again).
 
 ### S3 — US8-9

@@ -199,5 +199,8 @@ export async function buildReviewFields(
     duplicateConfidence: dup?.confidence ?? null,
     duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,
     accountId: settlementDefault.ok ? settlementDefault.value : null,
+    // Only the reading of an item has anything to say here; see `itemFields`
+    // in `process-job.ts`.
+    reviewNote: null,
   };
 }

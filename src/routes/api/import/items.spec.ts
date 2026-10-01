@@ -796,6 +796,47 @@ describe("editing items", () => {
     });
   });
 
+  it("confirms with the remark the reviewer edited, and the read one when left alone (FR-034, FR-035)", async () => {
+    const read = "Fee type: commission_fee; order_no: 2408";
+    const [edited, untouched] = group(2, [
+      {
+        feeType: "commission_fee",
+        extrasJson: '{"order_no":"2408"}',
+        remark: read,
+      },
+      {
+        feeType: "commission_fee",
+        extrasJson: '{"order_no":"2409"}',
+        remark: read,
+      },
+    ]);
+
+    // The remark alone: nothing else about the item changes.
+    const res = await routes.patch(edited, { remark: `${read}; checked` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      remark: `${read}; checked`,
+      extrasJson: '{"order_no":"2408"}',
+      categoryAccountId: ids.fees,
+      accountId: ids.payable,
+    });
+
+    expect((await routes.confirm(edited)).status).toBe(201);
+    expect((await routes.confirm(untouched)).status).toBe(201);
+    const remarks = new Map(
+      records().map((record) => [record.description, record.remark]),
+    );
+    expect(remarks.get("Fee 1")).toBe(`${read}; checked`);
+    expect(remarks.get("Fee 2")).toBe(read);
+  });
+
+  it("confirms with an emptied remark as empty, not the one read", async () => {
+    const [first] = group(1, [{ remark: "Fee type: ads_fee" }]);
+    expect((await routes.patch(first, { remark: "" })).status).toBe(200);
+    expect((await routes.confirm(first)).status).toBe(201);
+    expect(records()[0].remark).toBe("");
+  });
+
   it("asks for a rate again when the currency changes", async () => {
     const [first] = group(1);
 
@@ -947,6 +988,61 @@ describe("editing items", () => {
     });
     expect(item(itemIds[1])!.accountId).toBe(ids.bank);
     expect(item(itemIds[0])!.accountId).toBe(ids.payable);
+  });
+
+  it("holds an item back while the reading's note about its category stands, until a category is chosen (FR-034)", async () => {
+    const note =
+      "The category “Sales” tied to the fee type “ads_fee” is an income category, but this line is printed negative, so it is an expense. It is filed under “Uncategorised Expense” instead: choose its category.";
+    const itemIds = group(4, [
+      { reviewNote: note, categoryAccountId: ids.uncategorised },
+      { reviewNote: note, categoryAccountId: ids.uncategorised },
+      { reviewNote: note, categoryAccountId: ids.uncategorised },
+      {},
+    ]);
+
+    const listed = await (await routes.list()).json();
+    expect(listed[0]).toMatchObject({ reviewNote: note, attention: note });
+    expect(listed[3].attention).toBeNull();
+
+    // A new paying account alone sends both sides again, with the same
+    // category: the note stands.
+    const paid = await routes.patch(itemIds[0], {
+      fromAccountId: ids.bank,
+      toAccountId: ids.uncategorised,
+    });
+    expect(await paid.json()).toMatchObject({
+      accountId: ids.bank,
+      reviewNote: note,
+      attention: note,
+    });
+
+    // Choosing a category answers it: on the card, or on a selection.
+    const chosen = await routes.patch(itemIds[1], {
+      fromAccountId: ids.payable,
+      toAccountId: ids.fees,
+    });
+    expect(await chosen.json()).toMatchObject({
+      categoryAccountId: ids.fees,
+      reviewNote: null,
+      attention: null,
+    });
+    await bulkResults({
+      action: "setCategory",
+      itemIds: [itemIds[2]],
+      categoryAccountId: ids.uncategorised,
+    });
+    expect(item(itemIds[2])!.reviewNote).toBeNull();
+
+    const results = await bulkResults({ action: "confirm", all: true });
+    const byId = new Map(results.map((r) => [r.id, r]));
+    expect(byId.get(itemIds[0])).toMatchObject({ ok: false, reason: note });
+    expect(byId.get(itemIds[1])!.ok).toBe(true);
+    expect(byId.get(itemIds[2])!.ok).toBe(true);
+    expect(byId.get(itemIds[3])!.ok).toBe(true);
+    expect(item(itemIds[0])!.state).toBe(ImportState.PendingReview);
+
+    // The reviewer may still confirm it on its own, as it is.
+    expect((await routes.confirm(itemIds[0])).status).toBe(201);
   });
 
   it("lists every item with its attention, and the queue shows the counts", async () => {

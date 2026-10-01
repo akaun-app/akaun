@@ -294,10 +294,12 @@
 			const view = reply as ImportProfileView;
 			if (!saved) {
 				// Saved: nothing is unsaved any more, so the guard lets the page go
-				// to the new profile's own address.
+				// to the new profile's own address. It takes the place of the "new"
+				// page in the history, so Back goes to where the user came from and
+				// not to an empty form for another profile.
 				baseline = fingerprint;
 				await tick();
-				void goto(profileHref(view.id));
+				void goto(profileHref(view.id), { replaceState: true });
 				toast.success('Import profile added');
 				return;
 			}
@@ -660,6 +662,12 @@
 						item's remark names its type. "Auto" takes the AI's suggested category, or Uncategorised. With none listed, every
 						line the description fits is read.
 					</p>
+					{#if section.kind === 'by_sign' && section.feeTypes.length > 0}
+						<p class="field-hint">
+							By sign: an income category applies only to lines printed positive, and an expense category only to lines
+							printed negative. A line of the other sign keeps the AI's suggestion or Uncategorised, and is marked to check.
+						</p>
+					{/if}
 					{@render problemList(shown(`${at}.feeTypes`))}
 				</div>
 

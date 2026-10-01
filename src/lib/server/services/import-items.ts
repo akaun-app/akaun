@@ -523,9 +523,14 @@ export function setGroupItemsCategory(
             : "That category is not one an expense can be filed under.",
       };
     }
+    // A category chosen by the reviewer answers the reading's note about it.
     return {
       ok: true,
-      value: { categoryAccountId: choice.id, category: choice.name },
+      value: {
+        categoryAccountId: choice.id,
+        category: choice.name,
+        reviewNote: null,
+      },
     };
   });
 }
@@ -772,6 +777,9 @@ function itemChanges(
       categoryChoices(db, kind),
       overrides.category,
     );
+    // The reviewer has chosen the category, which answers the reading's
+    // note about it (FR-034).
+    out.reviewNote = null;
   }
 
   // Both accounts, as the receipt card picks them: they settle the kind too.
@@ -811,6 +819,9 @@ function itemChanges(
     out.accountId = pair.kind === "income" ? to.id : from.id;
     out.categoryAccountId = category.id;
     out.category = category.name;
+    // Both accounts are sent whenever either side changes, so only a new
+    // category answers the reading's note; a new paying account does not.
+    if (category.id !== item.categoryAccountId) out.reviewNote = null;
     // The matched contact was found for the kind as read; see below.
     if (isFlip(item, out.documentType) && overrides.contactId === undefined) {
       out.matchedContactId = null;

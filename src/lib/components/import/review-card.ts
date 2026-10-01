@@ -52,6 +52,12 @@ export type ReviewRow = {
   duplicateOf: number | null;
   duplicateConfidence: number | null;
   duplicateReasons: string[];
+  /**
+   * Something the reading could not do as the profile asked, such as a fee
+   * type's tied category that is for the other kind (006 FR-034). Null when
+   * there is nothing to say.
+   */
+  reviewNote: string | null;
 };
 
 /** The accounts and defaults a review card chooses from. */
@@ -99,7 +105,29 @@ export function reviewRowFrom(raw: any): ReviewRow {
     duplicateOf: raw.duplicateOf ?? null,
     duplicateConfidence: raw.duplicateConfidence ?? null,
     duplicateReasons: parseList<string>(raw.duplicateReasons),
+    reviewNote: raw.reviewNote ?? null,
   };
+}
+
+/**
+ * An item's extra fields, as "name: value" (006 FR-035), in the order the
+ * profile lists them. A field the line did not print is left out, as it is
+ * from the remark. Empty for a receipt, which has none.
+ */
+export function extraFieldsShown(extrasJson: unknown): string[] {
+  if (typeof extrasJson !== "string" || !extrasJson) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extrasJson);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  return Object.entries(parsed as Record<string, unknown>)
+    .filter(
+      ([, value]) => value !== null && value !== undefined && value !== "",
+    )
+    .map(([name, value]) => `${name}: ${String(value)}`);
 }
 
 // ── Fields ──────────────────────────────────────────────────────────────────
@@ -245,6 +273,22 @@ export function initialCategoryAccountId(
         : account.type !== AccountType.Revenue),
   );
   return candidates[0]?.id ?? null;
+}
+
+/**
+ * The category a card starts with, as both receiptSides and itemSides put it:
+ * the one that was read, else Uncategorised for the row's kind.
+ */
+export function readCategoryAccountId(
+  row: ReviewRow,
+  options: ReviewOptions,
+): number | null {
+  return (
+    initialCategoryAccountId(row, options) ??
+    (row.documentType === "income"
+      ? options.uncategorisedIncomeAccountId
+      : options.uncategorisedAccountId)
+  );
 }
 
 /**

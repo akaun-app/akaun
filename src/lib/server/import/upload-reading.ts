@@ -53,7 +53,8 @@ const CHOICES = `${builtInReadAs.options.join(", ")}, or ${PROFILE_READ_AS_PREFI
  *
  * A saved profile is accepted only while it exists and is enabled, which is
  * what `findProfile` answers; a disabled or deleted one is not offered under
- * "Read as" (US6 AS12) and is refused by name here, so an old remembered
+ * "Read as" (US6 AS12) and is refused by name here (a deleted one by the name
+ * `deletedName` finds for it), so an old remembered
  * choice or a tool that names it gets a clear reason instead of a document
  * that fails later. The profile is checked again when the document is read,
  * since it can be turned off while the document waits.
@@ -70,6 +71,8 @@ const CHOICES = `${builtInReadAs.options.join(", ")}, or ${PROFILE_READ_AS_PREFI
 export function readingForUpload(
   raw: FormDataEntryValue | null,
   findProfile: (id: number) => UploadProfile | null,
+  /** The name a deleted profile had, when it is known (spec edge case). */
+  deletedName: (id: number) => string | null = () => null,
 ): UploadReading {
   const value = raw === null || raw === "" ? ImportReadAs.Auto : raw;
   const parsed = uploadReadAs.safeParse(value);
@@ -85,9 +88,14 @@ export function readingForUpload(
     const id = parsed.data;
     const profile = findProfile(id);
     if (!profile) {
+      // A deleted profile is named, as the spec's edge case asks; an id that
+      // never named one (or whose delete left no name) is given by number.
+      const name = deletedName(id);
       return {
         ok: false,
-        error: `No import profile has the id ${id}; it may have been deleted. Choose another way to read this document.`,
+        error: name
+          ? `The import profile "${name}" was deleted. Choose another way to read this document.`
+          : `No import profile has the id ${id}; it may have been deleted. Choose another way to read this document.`,
       };
     }
     if (!profile.enabled) {

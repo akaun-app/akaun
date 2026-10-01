@@ -15,6 +15,7 @@
 		dupReasonsLabel,
 		editedValue,
 		formatMoney,
+		readCategoryAccountId,
 		reviewConverted,
 		reviewCurrency,
 		reviewIsForeign,
@@ -46,9 +47,11 @@
 		options,
 		heading,
 		headingHref,
+		reading = null,
 		error = null,
 		note = null,
 		readonly = false,
+		done = false,
 		busy = false,
 		onedit,
 		oncommit,
@@ -68,12 +71,20 @@
 		heading: string;
 		/** Opens the source file when given. */
 		headingHref?: string;
+		/**
+		 * How the document was read, when that is worth saying: a document read
+		 * with a profile that gave one item is reviewed as a receipt (FR-009), and
+		 * this says which profile read it (FR-041).
+		 */
+		reading?: string | null;
 		/** Why the last confirm was refused. */
 		error?: string | null;
 		/** Said in the footer in place of the count of edited fields. */
 		note?: string | null;
 		/** Shows the fields without letting them change, and no actions. */
 		readonly?: boolean;
+		/** The item is already imported or skipped, so its review note no longer applies. */
+		done?: boolean;
 		/** A confirm or skip is on its way. */
 		busy?: boolean;
 		/** A field changed. Called on every keystroke. */
@@ -102,6 +113,17 @@
 	const converted = $derived(reviewConverted(row, edits, main));
 	const rateMissing = $derived(reviewRateMissing(row, edits, main));
 	const accountMissing = $derived(sourceAccountId == null || targetAccountId == null);
+	// The review note asks the reviewer to choose a category. Once they have
+	// picked another one here, or the item is finished, it has nothing left to
+	// ask. The error line already says it when it is the only thing left. The
+	// category is the source of an income and the target of an expense.
+	const reviewNoteShown = $derived(
+		!done &&
+			!!row.reviewNote &&
+			row.reviewNote !== error &&
+			(row.documentType === 'income' ? sourceAccountId : targetAccountId) ===
+				readCategoryAccountId(row, options)
+	);
 	const numEdits = $derived(Object.keys(edits).filter((k) => k !== 'document_type').length);
 
 	function value(key: string): string | number {
@@ -159,8 +181,17 @@
 
 	<div class="review-detected">
 		<Upload size={12} />
+		{#if reading}<span class="review-reading">{reading}</span> ·{/if}
 		AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
 	</div>
+
+	{#if reviewNoteShown}
+		<!-- What the reading could not do as the profile asked (FR-034). -->
+		<div class="dup-note review-note">
+			<AlertTriangle size={12} />
+			{row.reviewNote}
+		</div>
+	{/if}
 
 	<!-- Fields grid. A fieldset only so that a read-only card disables every
 	     control inside it at once; it draws nothing of its own. -->
@@ -303,6 +334,22 @@
 					onchange={() => oncommit?.('reference')}
 				/>
 			</div>
+
+			<!-- Remark: the record's remark. An item read with a profile starts with
+			     its fee type and extra fields (FR-034, FR-035); a receipt with none. -->
+			<div class="rfield rfield-wide">
+				<span class="rfield-label">
+					Remark
+					{#if isEdited('remark')}<span class="edited-tag">edited</span>{/if}
+				</span>
+				<input
+					class="form-input rinput"
+					placeholder="—"
+					value={value('remark')}
+					oninput={(e) => onedit('remark', (e.target as HTMLInputElement).value)}
+					onchange={() => oncommit?.('remark')}
+				/>
+			</div>
 		</div>
 	</fieldset>
 
@@ -366,5 +413,23 @@
 	}
 	.review-grid :global(.account-select) {
 		height: 34px;
+	}
+	/* The remark can be long, so it takes the whole row. */
+	.rfield-wide {
+		grid-column: 1 / -1;
+	}
+	.review-reading {
+		color: var(--foreground);
+		font-weight: 500;
+	}
+	.review-note {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		margin: -6px 0 12px;
+	}
+	.review-note :global(svg) {
+		flex-shrink: 0;
+		margin-top: 2px;
 	}
 </style>

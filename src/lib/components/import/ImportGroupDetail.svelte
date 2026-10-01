@@ -21,6 +21,7 @@
 	import {
 		describeControlTotal,
 		describeReading,
+		extraFieldsShown,
 		dupMessage,
 		formatMoney,
 		itemSides,
@@ -63,6 +64,8 @@
 		/** The profile section it was read from (006 FR-017). */
 		sectionKey: string;
 		feeType: string | null;
+		/** The profile's extra fields for this line, as "name: value" (FR-035). */
+		extras: string[];
 		resultId: number | null;
 		/** Why a confirm-all would leave this item behind, or null. */
 		attention: string | null;
@@ -76,6 +79,7 @@
 			sourceLine: raw.sourceLine ?? null,
 			sectionKey: raw.sectionKey,
 			feeType: raw.feeType ?? null,
+			extras: extraFieldsShown(raw.extrasJson),
 			resultId: raw.resultId ?? null,
 			attention: raw.attention ?? null
 		};
@@ -121,6 +125,7 @@
 		return [
 			showSections ? (sectionNames.get(item.sectionKey) ?? null) : null,
 			item.feeType,
+			...item.extras,
 			item.sourceLine != null ? `line ${item.sourceLine}` : null
 		]
 			.filter(Boolean)
@@ -984,6 +989,7 @@
 											error={itemErrors[item.id] ?? (isWaiting(item) ? item.attention : null)}
 											note={(savingCount[item.id] ?? 0) > 0 ? 'Saving…' : 'Changes are saved as you make them.'}
 											readonly={!canChange || !isWaiting(item)}
+											done={!isWaiting(item)}
 											busy={busy.has(item.id) || run != null}
 											onedit={(key, value) => onEdit(item.id, key, value)}
 											oncommit={(key) => onCommit(item.id, key)}

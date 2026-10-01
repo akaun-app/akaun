@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { eq } from "drizzle-orm";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, readdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -33,6 +33,21 @@ afterEach(() => {
 
 const LAST_BEFORE = 21;
 const MIGRATION = 22;
+
+/** The index of the newest migration in `drizzle/`. */
+const LATEST =
+  readdirSync("drizzle").filter((name) => /^\d{4}_.*\.sql$/.test(name)).length -
+  1;
+
+/**
+ * Applies every migration after 0022. A test that reads through the app's
+ * schema needs them: the schema is the newest one, and a later migration may
+ * add a column it selects (0025 adds `review_note`). The later ones only add,
+ * so what 0022 did is still what is checked.
+ */
+function throughLatest(db: Database) {
+  applyMigrationRange(db, MIGRATION + 1, LATEST);
+}
 
 function databaseAt0021(): Database {
   const directory = mkdtempSync(join(tmpdir(), "akaun-migration-0022-"));
@@ -221,6 +236,7 @@ describe("migration 0022", () => {
     const sqlite = databaseAt0021();
     fillLikeBefore006(sqlite);
     applyMigrationRange(sqlite, MIGRATION, MIGRATION);
+    throughLatest(sqlite);
     const db = drizzle(sqlite, { schema });
 
     const row = db
@@ -248,6 +264,7 @@ describe("migration 0022", () => {
     const sqlite = databaseAt0021();
     fillLikeBefore006(sqlite);
     applyMigrationRange(sqlite, MIGRATION, MIGRATION);
+    throughLatest(sqlite);
     sqlite.exec("PRAGMA foreign_keys = ON");
     const db = drizzle(sqlite, { schema });
     const jobId = "11111111-1111-4111-8111-111111111111";

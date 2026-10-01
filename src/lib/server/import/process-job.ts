@@ -78,6 +78,7 @@ import {
 } from "./profile-compiler.js";
 import {
   parseProfileSnapshot,
+  profileSnapshotOf,
   serializeProfileSnapshot,
 } from "./profile-snapshot.js";
 import type { ReviewFields } from "./review-fields.js";
@@ -472,21 +473,9 @@ function profileForJob(
     .set({
       importMode: mode,
       readHow: job.readHow ?? ImportReadHow.Chosen,
-      profileSnapshot: serializeProfileSnapshot({
-        version: 1,
-        id: saved.id,
-        name: saved.name,
-        mode,
-        schemaId: profile.schemaId,
-        profile: {
-          name: saved.name,
-          description: saved.description,
-          phrases: saved.phrases,
-          instructions: saved.instructions,
-          statedTotalLabels: saved.statedTotalLabels,
-          sections: saved.sections,
-        },
-      }),
+      profileSnapshot: serializeProfileSnapshot(
+        profileSnapshotOf(saved, mode, profile.schemaId),
+      ),
     })
     .where(eq(importQueue.id, job.id))
     .run();
@@ -598,11 +587,52 @@ function itemRemark(item: DocumentItem): string | null {
   return parts.length ? parts.join("; ") : null;
 }
 
+/**
+ * What to tell the reviewer when the category the item's fee type is tied to
+ * could not be used because it is for the other kind of record, or null.
+ *
+ * A by-sign section reads each line's kind from its printed sign, so a fee
+ * type tied to an income category can still give a line printed negative,
+ * which is an expense. The tied category is then not used (it would file an
+ * expense under income), the item keeps what it would have had without it,
+ * and this says so, on the item, rather than dropping the tie silently.
+ */
+export function tiedCategoryNote(
+  item: Pick<DocumentItem, "kind" | "feeType" | "tiedCategoryAccountId">,
+  sectionKind: string | undefined,
+  filedUnder: Pick<ReviewFields, "categoryAccountId" | "category">,
+  ctx: Pick<ReviewContext, "incomeChoices" | "expenseChoices">,
+): string | null {
+  const tied = item.tiedCategoryAccountId;
+  if (tied == null || filedUnder.categoryAccountId === tied) return null;
+  const isIncome = item.kind === DocumentType.Income;
+  const otherKind = (isIncome ? ctx.expenseChoices : ctx.incomeChoices).find(
+    (choice) => choice.id === tied,
+  );
+  // Archived since the profile was saved, or one of this kind after all:
+  // either way nothing contradicts the line, so there is nothing to say.
+  if (!otherKind) return null;
+  const tiedKind = isIncome ? "an expense category" : "an income category";
+  const lineKind = isIncome ? "an income" : "an expense";
+  const why =
+    sectionKind === "by_sign"
+      ? `this line is printed ${isIncome ? "positive" : "negative"}, so it is ${lineKind}`
+      : `this line is ${lineKind}`;
+  const instead = filedUnder.category
+    ? `It is filed under “${filedUnder.category}” instead`
+    : "It has no category instead";
+  return `The category “${otherKind.name}” tied to the fee type “${item.feeType}” is ${tiedKind}, but ${why}. ${instead}: choose its category.`;
+}
+
 async function itemFields(
   db: LedgerDb,
   reading: DocumentReading,
   ctx: ReviewContext,
+  profile: ReadingProfile,
 ): Promise<ReviewFields[]> {
+  const sectionKinds = new Map(
+    profile.sections.map((section) => [section.key, section.kind]),
+  );
   const out: ReviewFields[] = [];
   for (const item of reading.items) {
     // The first category the item could take that is still one of its kind
@@ -616,33 +646,38 @@ async function itemFields(
       item.categoryCandidates.find((id) =>
         choices.some((choice) => choice.id === id),
       ) ?? null;
-    out.push(
-      await buildReviewFields(
-        db,
-        {
-          documentType: item.kind,
-          itemName: item.description,
-          // The other party and currency are the document's; the date and
-          // reference are the item's own when its line prints one (FR-006).
-          supplier: reading.counterparty,
-          amount: item.amount,
-          date: item.date,
-          reference: item.reference,
-          currency: reading.currency,
-          categoryAccountId,
-          remark: itemRemark(item),
-          // No file name, hash or text: shared by every item of the document
-          // and by last month's, so none of them says an item is a duplicate.
-          // The file hash was checked for the whole document before reading.
-          duplicateEvidence: {
-            originalFilename: null,
-            fileHash: null,
-            extractedText: null,
-          },
+    const fields = await buildReviewFields(
+      db,
+      {
+        documentType: item.kind,
+        itemName: item.description,
+        // The other party and currency are the document's; the date and
+        // reference are the item's own when its line prints one (FR-006).
+        supplier: reading.counterparty,
+        amount: item.amount,
+        date: item.date,
+        reference: item.reference,
+        currency: reading.currency,
+        categoryAccountId,
+        remark: itemRemark(item),
+        // No file name, hash or text: shared by every item of the document
+        // and by last month's, so none of them says an item is a duplicate.
+        // The file hash was checked for the whole document before reading.
+        duplicateEvidence: {
+          originalFilename: null,
+          fileHash: null,
+          extractedText: null,
         },
-        ctx,
-      ),
+      },
+      ctx,
     );
+    fields.reviewNote = tiedCategoryNote(
+      item,
+      sectionKinds.get(item.sectionKey),
+      fields,
+      ctx,
+    );
+    out.push(fields);
   }
   return out;
 }
@@ -706,7 +741,7 @@ async function readItems(
 
   // Every look-up that waits (exchange rates) is done here, before the write,
   // so the write below can be one transaction that never waits.
-  const fields = await itemFields(db, reading, ctx);
+  const fields = await itemFields(db, reading, ctx, profile);
   const extractionNotes = serializeExtractionNotes(reading.notes);
 
   if (fields.length === 1) {

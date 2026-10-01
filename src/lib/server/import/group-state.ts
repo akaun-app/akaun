@@ -37,6 +37,9 @@ const WAITING: number[] = [ImportState.PendingReview, ImportState.Confirmed];
  *   own, which is the "Import anyway" a receipt card offers.
  * - A foreign currency with no exchange rate: the record cannot be valued.
  * - No account that paid or received it: the record cannot be built.
+ * - A note from the reading, such as a fee type's tied category that is for
+ *   the other kind (FR-034): the category it has instead is a guess the
+ *   reviewer should check. Choosing a category clears the note.
  */
 export function itemAttention(
   item: Pick<
@@ -47,6 +50,7 @@ export function itemAttention(
     | "exchangeRate"
     | "accountId"
     | "documentType"
+    | "reviewNote"
   >,
   mainCurrency: string,
 ): string | null {
@@ -66,7 +70,7 @@ export function itemAttention(
       ? "Say which account received it."
       : "Say which account paid for it.";
   }
-  return null;
+  return item.reviewNote ?? null;
 }
 
 /** An item as the screens receive it, with its attention worked out. */
@@ -149,6 +153,7 @@ export function groupCounts(
         exchangeRate: importItems.exchangeRate,
         accountId: importItems.accountId,
         documentType: importItems.documentType,
+        reviewNote: importItems.reviewNote,
       })
       .from(importItems)
       .where(

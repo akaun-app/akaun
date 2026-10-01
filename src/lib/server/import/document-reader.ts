@@ -155,6 +155,12 @@ export interface DocumentItem {
    * still a category of the item's kind, and Uncategorised when none is.
    */
   categoryCandidates: number[];
+  /**
+   * The category the item's fee type is tied to, when it is tied to one. The
+   * worker says on the item when it could not be used (FR-034), for example an
+   * income category on a line a by-sign section reads as an expense.
+   */
+  tiedCategoryAccountId: number | null;
   extras: Record<string, unknown> | null;
 }
 
@@ -441,13 +447,19 @@ function categoriesFor(section: SectionSpec, line: ReadItem): number[] {
   const add = (id: number | null | undefined) => {
     if (id != null && id > 0 && !out.includes(id)) out.push(id);
   };
-  const feeType = line.fee_type
-    ? section.feeTypes?.find((entry) => entry.key === line.fee_type)
-    : undefined;
-  add(feeType?.categoryAccountId);
+  add(tiedCategoryFor(section, line));
   if (section.categoryFromModel) add(line.category_account_id);
   if (!line.fee_type) add(section.fixedCategoryAccountId);
   return out;
+}
+
+/** The category the line's fee type is tied to, or null. */
+function tiedCategoryFor(section: SectionSpec, line: ReadItem): number | null {
+  if (!line.fee_type) return null;
+  const id = section.feeTypes?.find(
+    (entry) => entry.key === line.fee_type,
+  )?.categoryAccountId;
+  return id != null && id > 0 ? id : null;
 }
 
 /**
@@ -549,6 +561,7 @@ export function readingFromEnvelope(
         feeType: line.fee_type ?? null,
         categoryAccountId: categoryCandidates[0] ?? null,
         categoryCandidates,
+        tiedCategoryAccountId: tiedCategoryFor(section, line),
         extras: line.extras ?? null,
       });
     });

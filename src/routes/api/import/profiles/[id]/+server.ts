@@ -21,11 +21,10 @@ import type { RequestHandler } from "./$types.js";
  * One import profile (006 US6, FR-030, FR-038): read it for the editor, save
  * the editor's form, turn it on or off, or delete it.
  *
- * Every verb here is managing profiles, so every one needs `import.change`
- * (FR-045), reading included. This route is stricter than it has to be: the
- * editor page itself loads a saved profile under `import.view` (read-only
- * without `import.change`), as the list API already returns whole profiles
- * under `import.view`. Seeing a profile is not changing it.
+ * Reading a profile needs `import.view`, as the list and the editor page do:
+ * seeing a profile is not changing it, and a user who may only view imports
+ * sees the editor read-only. Every other verb here manages profiles, so it
+ * needs `import.change` (FR-045).
  *
  * Every write is audited by the service in the same transaction as the write.
  * A document already read with the profile keeps its own copy of it, so no
@@ -47,7 +46,7 @@ const patchBody = z
 
 export const GET: RequestHandler = async ({ locals, params }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
-  if (!hasPermission(locals, "import", "change")) return forbidden();
+  if (!hasPermission(locals, "import", "view")) return forbidden();
 
   const id = profileIdParam(params.id);
   const profile = id === null ? null : getImportProfile(db, id);

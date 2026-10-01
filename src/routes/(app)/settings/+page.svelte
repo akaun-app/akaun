@@ -1749,6 +1749,7 @@
 								<div class="set-row-label">Custom instructions</div>
 								<div class="set-row-value" style="font-size:12px; margin-top:2px; margin-bottom:6px;">
 									Extra guidance for the AI when reading your documents — e.g. recurring suppliers, unusual formats, or category rules specific to your business.
+									A document read with an import profile uses that profile's own instructions in place of these.
 								</div>
 								<textarea
 									name="customInstructions"

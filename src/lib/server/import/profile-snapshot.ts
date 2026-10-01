@@ -31,10 +31,46 @@ export interface ProfileSnapshot {
   name: string;
   /** The import mode the document was read in. */
   mode: ImportModeValue;
-  /** The id of the schema that was sent (`profile:<id>:<hash>`). */
+  /**
+   * The id of the schema that was sent (`profile:<id>:<hash>`). Empty while
+   * the document waits to be read: the copy taken at upload only names the
+   * profile, and reading replaces it with the profile as it is read.
+   */
   schemaId: string;
   /** The profile's form, as it was. */
   profile: ImportProfileDraft;
+}
+
+/** A saved profile, as much of it as a copy keeps. */
+type SnapshotSource = ImportProfileDraft & { id: number };
+
+/**
+ * The copy of a profile for a queue row. Taken twice: at upload, with no
+ * schema id, so a document that waits or fails can still say which profile it
+ * was to be read with, and a profile deleted before it is read can be named
+ * (FR-041, spec edge case); and again when it is read, with the schema sent,
+ * which is the copy the group keeps (FR-038).
+ */
+export function profileSnapshotOf(
+  saved: SnapshotSource,
+  mode: ImportModeValue,
+  schemaId = "",
+): ProfileSnapshot {
+  return {
+    version: 1,
+    id: saved.id,
+    name: saved.name,
+    mode,
+    schemaId,
+    profile: {
+      name: saved.name,
+      description: saved.description,
+      phrases: saved.phrases,
+      instructions: saved.instructions,
+      statedTotalLabels: saved.statedTotalLabels,
+      sections: saved.sections,
+    },
+  };
 }
 
 export function serializeProfileSnapshot(snapshot: ProfileSnapshot): string {

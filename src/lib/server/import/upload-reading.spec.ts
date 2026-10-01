@@ -79,6 +79,24 @@ describe("readingForUpload", () => {
     });
   });
 
+  it("refuses a deleted profile by the name it had, when that is known", () => {
+    const names: Record<number, string> = { 7: "Old statement" };
+    expect(
+      readingForUpload("profile:7", none, (id) => names[id] ?? null),
+    ).toEqual({
+      ok: false,
+      error:
+        'The import profile "Old statement" was deleted. Choose another way to read this document.',
+    });
+    expect(
+      readingForUpload("profile:8", none, (id) => names[id] ?? null),
+    ).toEqual({
+      ok: false,
+      error:
+        "No import profile has the id 8; it may have been deleted. Choose another way to read this document.",
+    });
+  });
+
   it("refuses a disabled profile by name (US6 AS12)", () => {
     expect(
       readingForUpload(

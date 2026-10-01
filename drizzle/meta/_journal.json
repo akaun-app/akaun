@@ -176,6 +176,13 @@
       "when": 1790823249823,
       "tag": "0024_curvy_wolf_cub",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1790834333647,
+      "tag": "0025_pink_ricochet",
+      "breakpoints": true
     }
   ]
 }

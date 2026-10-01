@@ -173,6 +173,7 @@ describe("readDocumentItems", () => {
         feeType: null,
         categoryAccountId: 11,
         categoryCandidates: [11],
+        tiedCategoryAccountId: null,
         extras: null,
       },
       expect.objectContaining({

@@ -15,6 +15,7 @@
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { currencySymbol } from '$lib/currency.js';
 	import {
+		describeReading,
 		editedValue,
 		formatMoney,
 		receiptSides,
@@ -300,30 +301,36 @@
 		});
 	}
 
-	async function uploadFiles(files: FileList | File[], readAsOverride?: string) {
-		for (const file of Array.from(files)) {
-			const form = new FormData();
-			form.append('file', file);
-			form.append('readAs', readAsOverride ?? readAs);
-			try {
-				const res = await fetch('/api/import', {
-					method: 'POST',
-					body: form,
-					credentials: 'include',
-				});
-				if (!res.ok) {
-					const err = await res.json().catch(() => ({ error: 'Upload failed' }));
-					console.error('Upload error:', err.error);
-					uploadError = `${file.name}: ${err.error ?? 'Upload failed'}`;
-					continue;
-				}
-				uploadError = null;
-				const { jobId } = await res.json();
-				fileStore.set(jobId, file); // kept for Retry button on failed jobs
-			} catch (err) {
-				console.error('Upload failed:', err);
+	/** Uploads one file. Returns the new job's id, or null when it was refused or did not arrive. */
+	async function uploadFile(file: File, readAsOverride?: string): Promise<string | null> {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('readAs', readAsOverride ?? readAs);
+		try {
+			const res = await fetch('/api/import', {
+				method: 'POST',
+				body: form,
+				credentials: 'include',
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+				console.error('Upload error:', err.error);
+				uploadError = `${file.name}: ${err.error ?? 'Upload failed'}`;
+				return null;
 			}
+			uploadError = null;
+			const { jobId } = await res.json();
+			fileStore.set(jobId, file); // kept for Retry button on failed jobs
+			return jobId;
+		} catch (err) {
+			console.error('Upload failed:', err);
+			uploadError = `${file.name}: the upload did not reach the server. Check the connection and try again.`;
+			return null;
 		}
+	}
+
+	async function uploadFiles(files: FileList | File[], readAsOverride?: string) {
+		for (const file of Array.from(files)) await uploadFile(file, readAsOverride);
 	}
 
 	function handleDrop(e: DragEvent) {
@@ -416,15 +423,19 @@
 				? profileReadAsValue(job.profileId)
 				: (job?.readAs ?? undefined);
 
-		// Delete the old job
+		// Upload again first. A refused retry (the profile was turned off or
+		// deleted since, say) keeps the failed row and its reason, and the upload
+		// area says why it was refused.
+		const newJobId = await uploadFile(file, previousReadAs);
+		if (!newJobId) return;
+
+		// Only now that the new upload is queued does the failed one go.
 		await fetch(`/api/import/${jobId}`, {
 			method: 'DELETE',
 			credentials: 'include',
 		});
 		jobs = jobs.filter((j) => j.id !== jobId);
-
-		// Re-upload
-		await uploadFiles([file], previousReadAs);
+		fileStore.delete(jobId);
 	}
 
 	async function discardJob(jobId: string) {
@@ -449,6 +460,16 @@
 			if (j.id !== jobId) return j;
 			return { ...j, _edits: { ...(j._edits ?? {}), [key]: value } };
 		});
+	}
+
+	/**
+	 * How a document was asked to be read, when that is not the ordinary receipt
+	 * reading: by a saved profile, or as several items (FR-041). Said on a
+	 * document that waits, that failed, and on a one-item reading's receipt card
+	 * (FR-009), which would otherwise look like any receipt. Null for a receipt.
+	 */
+	function readingLabel(job: Job): string | null {
+		return job.readAs === ImportReadAs.Profile || job.readAs === ImportReadAs.SeveralItems ? describeReading(job) : null;
 	}
 
 	function jobIsIncome(job: Job): boolean {
@@ -614,6 +635,7 @@
 										{job.originalFilename.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image · OCR'}
 									</span>
 								</div>
+								{#if readingLabel(job)}<div class="job-reading">{readingLabel(job)}</div>{/if}
 								<div class="pipe-track">
 									<div class="pipe-fill" style="width:{PIPE_FILL[job.state] ?? 10}%"></div>
 								</div>
@@ -645,6 +667,7 @@
 							<div class="fail-icon"><AlertTriangle size={16} /></div>
 							<div class="fail-main">
 								<div class="fail-name">{job.originalFilename}</div>
+								{#if readingLabel(job)}<div class="job-reading">{readingLabel(job)}</div>{/if}
 								<div class="fail-msg">{job.error ?? 'Unknown error'}</div>
 							</div>
 							<div class="fail-actions">
@@ -689,6 +712,7 @@
 							options={reviewOptions}
 							heading={job.originalFilename}
 							headingHref={resolve('/api/import/[jobId]/file', { jobId: job.id })}
+							reading={readingLabel(job)}
 							error={confirmErrors[job.id] ?? null}
 							onedit={(key, value) => updateEdit(job.id, key, value)}
 							oncontact={(v) => setContact(job.id, v)}
@@ -837,6 +861,15 @@
 {/if}
 
 <style>
+	/* How a waiting or failed document is read, under its name. */
+	.job-reading {
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+		margin-top: 2px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	/* "Read as": how the next upload is read. Beside the drop zone, not in it,
 	   so choosing does not open the file picker. */
 	.upload-options {
