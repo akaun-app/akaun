@@ -56,6 +56,14 @@ export function sniffAllowedType(
   return null;
 }
 
+/**
+ * True when a stored path is still in the upload folder `saveToTemp` writes
+ * to, so it has not yet been moved to a record's folder.
+ */
+export function isImportTempPath(relativePath: string): boolean {
+  return relativePath.startsWith("import/temp/");
+}
+
 export function saveToTemp(buffer: Buffer, originalFilename: string): string {
   const uuid = randomUUID();
   const rel = `import/temp/${uuid}_${originalFilename}`;

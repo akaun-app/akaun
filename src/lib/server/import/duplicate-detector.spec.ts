@@ -241,4 +241,56 @@ describe("detectDuplicate over the one record store", () => {
     expect(detectDuplicate(db, job)?.reasons).toContain("filename");
     expect(detectDuplicate(db, { ...job, originalFilename: null })).toBeNull();
   });
+
+  it("still flags a receipt whose file was imported as a group of items (006 FR-004)", () => {
+    const id = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 7,
+      amountMinor: 700,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2020-01-01",
+      reference: "OTHER",
+    });
+    db.insert(schema.users)
+      .values({ id: 1, email: "u@test", username: "u", passwordHash: "x" })
+      .run();
+    // A finished group is Imported with no record of its own; its record is on
+    // its item.
+    db.insert(schema.importQueue)
+      .values({
+        id: "group-job",
+        createdBy: 1,
+        state: ImportState.Imported,
+        tempFilePath: "records/2026/07/fees.pdf",
+        originalFilename: "fees.pdf",
+        fileHash: "same-bytes",
+      })
+      .run();
+    db.insert(schema.importItems)
+      .values({
+        id: "group-item",
+        jobId: "group-job",
+        state: ImportState.Imported,
+        position: 0,
+        sectionKey: "items",
+        resultId: id,
+        resultType: DocumentType.Expense,
+      })
+      .run();
+
+    const result = detectDuplicate(db, {
+      ...baseJob,
+      supplier: null,
+      reference: null,
+      originalFilename: "renamed.pdf",
+      fileHash: "same-bytes",
+    });
+
+    expect(result).toEqual({
+      duplicateOf: id,
+      confidence: 100,
+      reasons: ["file_hash"],
+    });
+  });
 });

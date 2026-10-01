@@ -5,11 +5,12 @@ import {
   ImportState,
   Role,
 } from "$lib/enums.js";
-import { importQueue } from "../db/schema.js";
+import { importItems, importQueue, recordAttachments } from "../db/schema.js";
 import { STORAGE_PATH } from "../env.js";
 import {
   displayName,
   fileExists,
+  isImportTempPath,
   moveToRecordStorage,
   returnToTemp,
 } from "../file-storage.js";
@@ -20,8 +21,17 @@ import {
   matchCategoryAccount,
   resolvePaidFromAccountId,
 } from "../import/category-accounts.js";
-import { importEvents } from "../import/events.js";
-import { jobForEvent } from "../import/job-event.js";
+import {
+  emitItemUpdates,
+  emitJobUpdate,
+  finishGroupIfDone,
+} from "../import/group-state.js";
+import type { ReviewFields } from "../import/review-fields.js";
+import {
+  settleReviewFields,
+  type ReviewOverrides,
+  type SettleRefusal,
+} from "../import/settle-review.js";
 import type {
   LedgerDb,
   RecordCreate,
@@ -40,21 +50,45 @@ const log = createLogger("import:confirm");
 /**
  * Turning a reviewed document into a record.
  *
- * The route reads the request, checks it, and works out every field the
- * reviewer settled on: their correction where they made one, and what was read
- * off the document where they did not. This service takes those settled fields
- * and does the writing, so any caller that has review fields (today the
- * receipt's queue row) confirms the same way.
+ * A receipt's queue row and each item of a group hold the same review fields
+ * (`ReviewFields`). `confirmReviewed` takes those fields and the reviewer's
+ * corrections, settles what the record will say, and hands the result to
+ * `confirmImportRow`, which does the writing. So a receipt and an item are
+ * confirmed by the same code, with the same rules (006 FR-007, FR-044).
  */
 
-/** The document being confirmed: what the queue row holds about the file. */
+/**
+ * What is being confirmed: the queue row that holds the file, and, for one
+ * item of a group, which item.
+ */
 export type ImportJobSource = {
   jobId: string;
+  /**
+   * The item of the group being confirmed. Absent for a receipt, whose queue
+   * row is itself the thing being confirmed.
+   */
+  itemId?: string;
   /** Who uploaded the file. The record and any new contact are theirs. */
   uploadedBy: number;
+  /**
+   * Where the file is now. For an item this is only a hint: the confirm reads
+   * the group's current path inside its transaction, because an earlier item
+   * may have moved the file while this request waited.
+   */
   tempFilePath: string;
-  /** Carried onto the record so it can be searched. */
+  /**
+   * Carried onto the record so it can be searched. An item always gives null,
+   * whatever is passed: the document's text describes every item, so it would
+   * make each record match a search for any other line (FR-029).
+   */
   extractedText: string | null;
+  /**
+   * The date the stored file is filed under (`records/YYYY/MM/`). A receipt
+   * uses its record's date, the default. Every item of a group must pass the
+   * document's date: they share one file, and a later item looks for it in
+   * that month (see `moveToRecordStorage`).
+   */
+  fileDate?: string;
 };
 
 /** What the record will say, after the reviewer's corrections are applied. */
@@ -145,8 +179,33 @@ export function confirmImportRow(
   }
 
   for (const emit of emits) emit();
+  if (job.itemId) {
+    emitItemUpdates(db, job.jobId, [job.itemId], options.actingUserId);
+  }
   emitJobUpdate(db, job.jobId, options.actingUserId);
   return { ok: true, value: confirmed };
+}
+
+/**
+ * Confirms a receipt or an item from its stored review fields and the
+ * reviewer's corrections: review fields in, record out.
+ *
+ * The fields are settled first (an exchange rate may be fetched, which waits),
+ * and only then is everything written in one transaction by `confirmImportRow`.
+ * A refusal says why. `kind: "rate"` means no exchange rate is known, which the
+ * receipt route has always answered with a 400.
+ */
+export async function confirmReviewed(
+  db: LedgerDb,
+  job: ImportJobSource,
+  row: ReviewFields,
+  overrides: ReviewOverrides,
+  options: { actingUserId: number; storageRoot?: string },
+): Promise<{ ok: true; value: ImportConfirmed } | SettleRefusal> {
+  const settled = await settleReviewFields(db, row, overrides);
+  if (!settled.ok) return settled;
+  const confirmed = confirmImportRow(db, job, settled.value, options);
+  return confirmed.ok ? confirmed : { ...confirmed, kind: "rule" };
 }
 
 /** Every write of a confirm. Runs inside the caller's transaction. */
@@ -169,29 +228,33 @@ function writeConfirmation(
     uncategorised,
   } = resolved.value;
 
-  // The claim. It only matches a job that is still in review, so a second
-  // confirm of the same job (a double click, a second tab) changes no row.
-  const claimed = db
-    .update(importQueue)
-    .set({
-      state: ImportState.Confirmed,
-      accountId,
-      documentType: docCode,
-      confirmedAt: new Date().toISOString(),
-    })
-    .where(
-      and(
-        eq(importQueue.id, job.jobId),
-        eq(importQueue.state, ImportState.PendingReview),
-      ),
-    )
-    .returning({ id: importQueue.id })
-    .get();
+  // The claim. It only matches a job (or an item) that is still in review, so
+  // a second confirm of the same one (a double click, a second tab, a
+  // confirm-all run again) changes no row.
+  const claimed = job.itemId
+    ? claimItem(db, job.jobId, job.itemId, accountId, docCode)
+    : db
+        .update(importQueue)
+        .set({
+          state: ImportState.Confirmed,
+          accountId,
+          documentType: docCode,
+          confirmedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(importQueue.id, job.jobId),
+            eq(importQueue.state, ImportState.PendingReview),
+          ),
+        )
+        .returning({ id: importQueue.id })
+        .get();
   if (!claimed) {
     return {
       ok: false,
-      reason:
-        "This document is no longer waiting for review, so it was not imported again.",
+      reason: job.itemId
+        ? "This item is no longer waiting for review, so it was not imported again."
+        : "This document is no longer waiting for review, so it was not imported again.",
     };
   }
 
@@ -207,7 +270,7 @@ function writeConfirmation(
     contactId,
     reference: fields.reference,
     remark: fields.remark,
-    extractedText: job.extractedText,
+    extractedText: job.itemId ? null : job.extractedText,
   };
   const sides: RecordCreate = isIncome
     ? { kind: "income", receivedIntoAccountId: accountId, ...common }
@@ -216,19 +279,9 @@ function writeConfirmation(
   const created = createRecord(db, job.uploadedBy, sides, emits);
   if (!created.ok) return created;
 
-  // Move the file out of temp and attach it to the record. A failed move
-  // leaves the temp file where it is and still attaches it, so nothing is lost.
-  let attachmentPath = job.tempFilePath;
-  try {
-    const movedHere = fileExists(job.tempFilePath, root);
-    attachmentPath = moveToRecordStorage(job.tempFilePath, fields.date, root);
-    if (movedHere) file.moved = { from: job.tempFilePath, to: attachmentPath };
-  } catch (err) {
-    log.error(
-      { err, jobId: job.jobId },
-      "File move failed (temp file remains recoverable)",
-    );
-  }
+  const attachmentPath = job.itemId
+    ? sharedFileForItem(db, job, root, file)
+    : movedReceiptFile(job, fields.date, root, file);
   addAttachment(
     db,
     created.value.id,
@@ -236,17 +289,154 @@ function writeConfirmation(
     displayName(attachmentPath),
   );
 
-  db.update(importQueue)
-    .set({
-      state: ImportState.Imported,
-      resultId: created.value.id,
-      resultType: docCode,
-      completedAt: new Date().toISOString(),
-    })
-    .where(eq(importQueue.id, job.jobId))
-    .run();
+  if (job.itemId) {
+    db.update(importItems)
+      .set({
+        state: ImportState.Imported,
+        resultId: created.value.id,
+        resultType: docCode,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(importItems.id, job.itemId))
+      .run();
+    // The last waiting item finishes the group, in this same transaction.
+    finishGroupIfDone(db, job.jobId);
+  } else {
+    db.update(importQueue)
+      .set({
+        state: ImportState.Imported,
+        resultId: created.value.id,
+        resultType: docCode,
+        completedAt: new Date().toISOString(),
+      })
+      .where(eq(importQueue.id, job.jobId))
+      .run();
+  }
 
   return { ok: true, value: { record: created.value, uncategorised } };
+}
+
+/**
+ * Claims one item of a group: it moves out of review only if it is still in
+ * review and its group is still open. Returns null when either is not so.
+ */
+function claimItem(
+  db: LedgerDb,
+  jobId: string,
+  itemId: string,
+  accountId: number,
+  docCode: number,
+): { id: string } | undefined {
+  const group = db
+    .select({ state: importQueue.state })
+    .from(importQueue)
+    .where(eq(importQueue.id, jobId))
+    .get();
+  if (group?.state !== ImportState.Grouped) return undefined;
+  return db
+    .update(importItems)
+    .set({
+      state: ImportState.Confirmed,
+      accountId,
+      documentType: docCode,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(importItems.id, itemId),
+        eq(importItems.jobId, jobId),
+        eq(importItems.state, ImportState.PendingReview),
+      ),
+    )
+    .returning({ id: importItems.id })
+    .get();
+}
+
+/**
+ * Moves a receipt's file out of temp, and returns where to attach it. A failed
+ * move leaves the temp file where it is and still attaches it, so nothing is
+ * lost.
+ */
+function movedReceiptFile(
+  job: ImportJobSource,
+  recordDate: string,
+  root: string,
+  file: { moved: { from: string; to: string } | null },
+): string {
+  const date = job.fileDate ?? recordDate;
+  try {
+    const movedHere = fileExists(job.tempFilePath, root);
+    const moved = moveToRecordStorage(job.tempFilePath, date, root);
+    if (movedHere) file.moved = { from: job.tempFilePath, to: moved };
+    return moved;
+  } catch (err) {
+    log.error(
+      { err, jobId: job.jobId },
+      "File move failed (temp file remains recoverable)",
+    );
+    return job.tempFilePath;
+  }
+}
+
+/**
+ * The one stored file every record of a group shares (FR-027), and where to
+ * attach it.
+ *
+ * The first item to be confirmed moves the file out of temp, under the
+ * document's date, and saves the new path on the group, so the group keeps
+ * using it and every later item attaches that same path without moving
+ * anything. The path is read here, inside the transaction, not from the
+ * caller: another item may have moved it since the caller looked. A failed
+ * move attaches the temp file where it lies, as for a receipt, and every later
+ * item then attaches it there too, so the records always share one path.
+ */
+function sharedFileForItem(
+  db: LedgerDb,
+  job: ImportJobSource,
+  root: string,
+  file: { moved: { from: string; to: string } | null },
+): string {
+  const group = db
+    .select({
+      tempFilePath: importQueue.tempFilePath,
+      date: importQueue.date,
+      createdAt: importQueue.createdAt,
+    })
+    .from(importQueue)
+    .where(eq(importQueue.id, job.jobId))
+    .get();
+  const current = group?.tempFilePath ?? job.tempFilePath;
+  if (!isImportTempPath(current)) return current;
+  // An earlier item whose move failed attached the temp file where it lay.
+  // Moving it now would leave that record pointing at nothing, so it stays.
+  const alreadyAttached = db
+    .select({ id: recordAttachments.id })
+    .from(recordAttachments)
+    .where(eq(recordAttachments.filename, current))
+    .limit(1)
+    .get();
+  if (alreadyAttached) return current;
+
+  // The document's date, kept on the group when it was read. A group read
+  // before that was kept falls back to the day it was uploaded.
+  const documentDate =
+    job.fileDate ?? group?.date ?? (group?.createdAt ?? "").slice(0, 10);
+  try {
+    const movedHere = fileExists(current, root);
+    const moved = moveToRecordStorage(current, documentDate, root);
+    if (movedHere) file.moved = { from: current, to: moved };
+    db.update(importQueue)
+      .set({ tempFilePath: moved })
+      .where(eq(importQueue.id, job.jobId))
+      .run();
+    return moved;
+  } catch (err) {
+    log.error(
+      { err, jobId: job.jobId, itemId: job.itemId },
+      "File move failed (temp file remains recoverable)",
+    );
+    return current;
+  }
 }
 
 type ResolvedSides = {
@@ -404,13 +594,4 @@ function resolveContact(
     return resolveOrCreateContact(db, fields.partyName, role, job.uploadedBy);
   }
   return null;
-}
-
-function emitJobUpdate(db: LedgerDb, jobId: string, userId: number) {
-  const job = db
-    .select()
-    .from(importQueue)
-    .where(eq(importQueue.id, jobId))
-    .get();
-  if (job) importEvents.emit("job-update", { userId, job: jobForEvent(job) });
 }

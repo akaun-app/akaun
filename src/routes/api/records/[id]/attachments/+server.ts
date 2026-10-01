@@ -6,6 +6,7 @@ import {
   addAttachment,
   getRecord,
   listAttachments,
+  searchableAttachmentFilenames,
   setExtractedText,
 } from "$lib/server/queries/ledger.js";
 import { resourceForKind } from "$lib/server/ledger/record-permissions.js";
@@ -86,10 +87,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   );
 
   // Re-run over every attachment, not just the new one, so the record's
-  // searchable text matches what "Rebuild search index" would produce.
+  // searchable text matches what "Rebuild search index" would produce. A file
+  // other records share (one document imported as several items) is left out,
+  // so its text is not put back on this record (006 FR-029).
   try {
     const text = await extractAttachmentsText(
-      listAttachments(db, id).map((a) => a.filename),
+      searchableAttachmentFilenames(db, id),
     );
     if (text != null) setExtractedText(db, id, text);
   } catch {

@@ -2,11 +2,8 @@ import { not, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
 import { importEvents } from '$lib/server/import/events.js';
-import {
-	jobForEvent,
-	type ImportItemEvent,
-	type ImportJobEvent
-} from '$lib/server/import/job-event.js';
+import { jobEvents } from '$lib/server/import/group-state.js';
+import type { ImportItemEvent, ImportJobEvent } from '$lib/server/import/job-event.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -30,12 +27,14 @@ export const GET: RequestHandler = ({ locals }) => {
 			// snapshot is of queue rows only, never of a group's items: a group can
 			// hold a thousand, and its page loads them itself. Items arrive as
 			// changes only, like any paginated list.
-			const currentJobs = db
-				.select()
-				.from(importQueue)
-				.where(not(inArray(importQueue.state, TERMINAL_STATES)))
-				.all()
-				.map(jobForEvent);
+			const currentJobs = jobEvents(
+				db,
+				db
+					.select()
+					.from(importQueue)
+					.where(not(inArray(importQueue.state, TERMINAL_STATES)))
+					.all()
+			);
 			controller.enqueue(encodeEvent({ type: 'snapshot', jobs: currentJobs }));
 
 			const updateHandler = ({ job }: { job: ImportJobEvent }) => {

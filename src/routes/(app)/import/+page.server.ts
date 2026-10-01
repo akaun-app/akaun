@@ -3,7 +3,7 @@ import type { PageServerLoad } from "./$types.js";
 import { db } from "$lib/server/db/client.js";
 import { importQueue } from "$lib/server/db/schema.js";
 import { categoryChoices } from "$lib/server/import/category-accounts.js";
-import { jobForEvent } from "$lib/server/import/job-event.js";
+import { jobEvents } from "$lib/server/import/group-state.js";
 import { getAccount, listAccounts } from "$lib/server/queries/accounts.js";
 import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
 import { desc } from "drizzle-orm";
@@ -19,14 +19,12 @@ export const load: PageServerLoad = async ({ locals }) => {
     throw redirect(302, "/dashboard");
 
   // Shared ledger — show every job. Sent in the shape of a live update, without
-  // the document text: no screen reads it, and it would be serialised into the
-  // page for every row.
-  const jobs = db
-    .select()
-    .from(importQueue)
-    .orderBy(desc(importQueue.createdAt))
-    .all()
-    .map(jobForEvent);
+  // the document text (no screen reads it, and it would be serialised into the
+  // page for every row), and with each group's item counts.
+  const jobs = jobEvents(
+    db,
+    db.select().from(importQueue).orderBy(desc(importQueue.createdAt)).all(),
+  );
 
   // Categories are accounts now (FR-006a); the review screen still picks one by
   // name, which is what the confirm step matches back to an account.

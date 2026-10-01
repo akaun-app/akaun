@@ -50,8 +50,7 @@ import {
   type DocumentItem,
   type DocumentReading,
 } from "./document-reader.js";
-import { importEvents } from "./events.js";
-import { itemForEvent, jobForEvent } from "./job-event.js";
+import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
 import type { LLMCallParams } from "./providers/types.js";
 import { SEVERAL_ITEMS_PROFILE } from "./profile-compiler.js";
@@ -85,15 +84,6 @@ type ReadingPath = "receipt" | "items";
  */
 function readingPath(job: ImportJob): ReadingPath {
   return job.readAs === ImportReadAs.SeveralItems ? "items" : "receipt";
-}
-
-function emitJobUpdate(db: LedgerDb, jobId: string, userId: number) {
-  const row = db
-    .select()
-    .from(importQueue)
-    .where(eq(importQueue.id, jobId))
-    .get();
-  if (row) importEvents.emit("job-update", { userId, job: jobForEvent(row) });
 }
 
 function markFailed(
@@ -574,6 +564,12 @@ async function readItems(
     grouped = saveGroup(db, job.id, rows, {
       profileId: profile.schemaId,
       extractionNotes,
+      document: {
+        date: reading.date,
+        supplier: reading.counterparty,
+        reference: reading.reference,
+        currency: reading.currency,
+      },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -594,21 +590,14 @@ async function readItems(
 
   // Announced only now that the group has committed.
   emitJobUpdate(db, job.id, userId);
-  const saved = db
-    .select()
-    .from(importItems)
-    .where(eq(importItems.jobId, job.id))
-    .all()
-    .sort((a, b) => a.position - b.position);
-  for (const item of saved) {
-    importEvents.emit("item-update", {
-      userId,
-      jobId: job.id,
-      item: itemForEvent(item),
-    });
-  }
+  emitItemUpdates(
+    db,
+    job.id,
+    rows.map((row) => row.id),
+    userId,
+  );
   log.info(
-    { jobId: job.id, items: saved.length },
+    { jobId: job.id, items: rows.length },
     "Job completed — grouped for review",
   );
 }
@@ -623,7 +612,19 @@ export function saveGroup(
   db: LedgerDb,
   jobId: string,
   rows: ImportItemInsert[],
-  notes: { profileId: string; extractionNotes: string },
+  notes: {
+    profileId: string;
+    extractionNotes: string;
+    /**
+     * The document's own header. Kept on the group, whose review columns are
+     * otherwise unused: the date is the month every record of the group files
+     * the shared document under (see `confirmImportRow`).
+     */
+    document?: Pick<
+      typeof importQueue.$inferInsert,
+      "date" | "supplier" | "reference" | "currency"
+    >;
+  },
 ): boolean {
   return db.transaction((tx) => {
     const current = tx
@@ -641,6 +642,7 @@ export function saveGroup(
     tx.update(importQueue)
       .set({
         state: ImportState.Grouped,
+        ...notes.document,
         profileId: notes.profileId,
         extractionNotes: notes.extractionNotes,
         error: null,

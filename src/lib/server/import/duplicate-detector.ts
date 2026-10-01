@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { ledgerRecords, importQueue, contacts } from '../db/schema.js';
+import { ledgerRecords, importQueue, importItems, contacts } from '../db/schema.js';
 import { ImportState, DocumentType, LedgerRecordKind } from '$lib/enums.js';
 import { normalizeName } from '../queries/contacts.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
@@ -72,13 +72,34 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	// File hash — byte-identical re-upload of a file already imported. Unambiguous, so it
 	// short-circuits before the (more expensive) weighted engine below runs at all.
 	if (job.fileHash) {
-		const byHash = db
-			.select({ id: importQueue.resultId })
-			.from(importQueue)
-			.where(
-				and(eq(importQueue.fileHash, job.fileHash), eq(importQueue.state, ImportState.Imported))
-			)
-			.get();
+		// A document read as several items finishes as Imported with no record of
+		// its own: its records are on its items. So a queue row only counts when it
+		// names a record, and otherwise any imported item of a document with this
+		// file stands for it (006 FR-004: a receipt is still warned).
+		const byHash =
+			db
+				.select({ id: importQueue.resultId })
+				.from(importQueue)
+				.where(
+					and(
+						eq(importQueue.fileHash, job.fileHash),
+						eq(importQueue.state, ImportState.Imported),
+						isNotNull(importQueue.resultId)
+					)
+				)
+				.get() ??
+			db
+				.select({ id: importItems.resultId })
+				.from(importItems)
+				.innerJoin(importQueue, eq(importQueue.id, importItems.jobId))
+				.where(
+					and(
+						eq(importQueue.fileHash, job.fileHash),
+						eq(importItems.state, ImportState.Imported),
+						isNotNull(importItems.resultId)
+					)
+				)
+				.get();
 		if (byHash?.id != null) {
 			return { duplicateOf: byHash.id, confidence: 100, reasons: ['file_hash'] };
 		}

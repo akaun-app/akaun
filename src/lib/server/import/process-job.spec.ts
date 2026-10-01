@@ -565,6 +565,14 @@ describe("reading a document with several items", () => {
     // The queue row holds the file and the group, not a record of its own.
     expect(row.amount).toBeNull();
     expect(row.documentType).toBeNull();
+    // It keeps the document's header: the date is the month the shared file
+    // is filed under when the first item is confirmed.
+    expect(row).toMatchObject({
+      date: "2026-08-31",
+      supplier: "Shopee Malaysia",
+      reference: "FN-2026-08",
+      currency: "MYR",
+    });
     expect(parseExtractionNotes(row.extractionNotes)).toEqual({
       statedTotal: { minor: -4460, currency: "MYR" },
       itemsTotalMinor: -4460,

@@ -28,6 +28,8 @@ vi.mock("$lib/server/queries/ledger.js", () => ({
   getRecord: (...args: unknown[]) => getRecord(...(args as [])),
   addAttachment: (...args: unknown[]) => addAttachment(...(args as [])),
   listAttachments: (...args: unknown[]) => listAttachments(...(args as [])),
+  // No file here is shared with another record, so every one is searchable.
+  searchableAttachmentFilenames: () => listAttachments().map((a) => a.filename),
   setExtractedText: (...args: unknown[]) => setExtractedText(...(args as [])),
 }));
 

@@ -4,7 +4,15 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { ImportState, LedgerRecordKind } from "$lib/enums.js";
 
 /**
@@ -68,6 +76,18 @@ afterEach(() => {
 });
 
 const locals = { user: { id: 1 } } as never;
+
+// Load the four routes once, before any test's clock starts. Skip and discard
+// now also reach the group code (services/import-items.ts), and loading that
+// the first time can take longer than one test is given on a busy run.
+beforeAll(async () => {
+  await Promise.all([
+    import("./records/[id]/attachments/[attachmentId]/+server.js"),
+    import("./import/history/+server.js"),
+    import("./import/[jobId]/skip/+server.js"),
+    import("./import/[jobId]/+server.js"),
+  ]);
+}, 60_000);
 
 function putFile(rel: string) {
   const abs = join(holder.storageRoot, rel);

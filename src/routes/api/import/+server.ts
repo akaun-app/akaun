@@ -6,6 +6,7 @@ import { importQueue } from '$lib/server/db/schema.js';
 import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { jobForEvent } from '$lib/server/import/job-event.js';
+import { jobEvents } from '$lib/server/import/group-state.js';
 import { readingForUpload } from '$lib/server/import/upload-reading.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
@@ -35,8 +36,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 	});
 
 	// The same shape as a live update: no document text, which can be tens of
-	// thousands of characters per row and which no screen reads from the list.
-	return json(rows.map(jobForEvent));
+	// thousands of characters per row and which no screen reads from the list,
+	// and each group with its item counts.
+	return json(jobEvents(db, rows));
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
