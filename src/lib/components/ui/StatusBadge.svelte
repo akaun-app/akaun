@@ -49,6 +49,13 @@
     "exact-match": { label: "Exact match", tone: "green" },
     "partial-match": { label: "Partial", tone: "amber" },
     "no-match": { label: "No match", tone: "gray" },
+    // An item of an imported document read as several items (006 FR-017).
+    // Keyed apart from the record statuses above: "confirmed" here means the
+    // item became a record, not that a bill was paid.
+    "import-ready": { label: "Ready", tone: "blue" },
+    "import-attention": { label: "Needs attention", tone: "amber" },
+    "import-confirmed": { label: "Confirmed", tone: "green" },
+    "import-skipped": { label: "Skipped", tone: "gray" },
   };
 
   const m = $derived(byLabel[status] ?? byLabel.unpaid);

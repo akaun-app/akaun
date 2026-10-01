@@ -1,38 +1,32 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { resolve } from '$app/paths';
-	import {
-		Upload,
-		Clock,
-		Receipt,
-		Check,
-		X,
-		AlertTriangle,
-		RotateCcw,
-		Camera,
-		ExternalLink,
-		ChevronRight,
-	} from '@lucide/svelte';
-	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
+	import { Upload, Clock, Receipt, Check, X, AlertTriangle, RotateCcw, Camera, ChevronRight } from '@lucide/svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
-	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
-	import ImportSourceAccountSelect from '$lib/components/import/ImportSourceAccountSelect.svelte';
-	import ImportCategoryAccountSelect from '$lib/components/import/ImportCategoryAccountSelect.svelte';
-	import AmountInput from '$lib/components/ui/AmountInput.svelte';
+	import ImportReviewCard from '$lib/components/import/ImportReviewCard.svelte';
+	import ImportGroupCard from '$lib/components/import/ImportGroupCard.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import ScannerOverlay from '$lib/components/scanner/ScannerOverlay.svelte';
 	import { loadOpenCv } from '$lib/scanner/cv';
-	import { AccountType, Role, importStateEnum, documentTypeEnum } from '$lib/enums.js';
-	import {
-		defaultTargetForImportSource,
-		importSourceIsIncome,
-		syncImportAccountSelection,
-		targetAccountsForImportSource,
-	} from '$lib/import-account-groups.js';
+	import { importStateEnum } from '$lib/enums.js';
+	import { syncImportAccountSelection } from '$lib/import-account-groups.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
-	import { CURRENCIES, currencySymbol } from '$lib/currency.js';
+	import { currencySymbol } from '$lib/currency.js';
+	import {
+		editedValue,
+		formatMoney,
+		receiptSides,
+		reviewCurrency,
+		reviewRateMissing,
+		reviewRowFrom,
+		sideIsIncome,
+		targetAfterSourceChange,
+		type ReviewEdits,
+		type ReviewOptions,
+		type ReviewRow
+	} from '$lib/components/import/review-card.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -46,40 +40,28 @@
 		| 'imported'
 		| 'skipped'
 		| 'failed'
-		// A document read as several items. Named here so such a row is never taken
-		// for another state; this screen does not list it yet.
+		// A document read as several items. It shows as one card that opens the
+		// group's own page, where its items are reviewed.
 		| 'grouped';
 
-	type Candidate = { id: number; legalName: string; score?: number };
+	type ItemCounts = { ready: number; needsAttention: number; confirmed: number; skipped: number };
 
-	type Job = {
-		id: string;
+	type Job = ReviewRow & {
 		state: JobState;
 		originalFilename: string;
-		documentType: string | null;
-		itemName: string | null;
-		supplier: string | null;
-		matchedContactId: number | null;
-		matchCandidates: Candidate[];
-		date: string | null;
-		amount: number | null;
-		currency: string | null;
-		exchangeRate: number | null;
-		reference: string | null;
-		category: string | null;
-		categoryAccountId: number | null;
-		remark: string | null;
-		// Which account paid for this / received it, as the worker pre-filled it.
-		accountId: number | null;
-		duplicateOf: number | null;
-		duplicateConfidence: number | null;
-		duplicateReasons: string[];
 		error: string | null;
 		// The record this document became, once it is imported. The history row links to it.
 		resultId: number | null;
 		resultType: number | null;
+		// How the document was to be read, and how it was read (006 FR-001).
+		readAs: string | null;
+		readHow: string | null;
+		// The stated total, the items' sum and the lines left out, as JSON.
+		extractionNotes: string | null;
+		// Where a group's items stand. Absent for a receipt.
+		itemCounts: ItemCounts | null;
 		// client-side tracking
-		_edits?: Record<string, string | number>;
+		_edits?: ReviewEdits;
 		// Set from the confirm reply when no category could be read off the document.
 		_uncategorised?: boolean;
 	};
@@ -87,45 +69,29 @@
 	// Convert a raw DB queue row (INT enum codes) into a display Job (string labels).
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	function normalizeJob(j: any): Job {
-		let candidates: Candidate[];
-		try {
-			candidates = j.matchCandidates ? JSON.parse(j.matchCandidates) : [];
-		} catch {
-			candidates = [];
-		}
-		let reasons: string[];
-		try {
-			reasons = j.duplicateReasons ? JSON.parse(j.duplicateReasons) : [];
-		} catch {
-			reasons = [];
-		}
 		return {
-			id: j.id,
+			...reviewRowFrom(j),
 			state: (importStateEnum.toLabel(j.state) ?? 'queued') as JobState,
 			originalFilename: j.originalFilename,
-			documentType: documentTypeEnum.toLabel(j.documentType),
-			itemName: j.itemName,
-			supplier: j.supplier,
-			matchedContactId: j.matchedContactId ?? null,
-			matchCandidates: candidates,
-			date: j.date,
-			amount: j.amount,
-			currency: j.currency ?? null,
-			exchangeRate: j.exchangeRate ?? null,
-			reference: j.reference,
-			category: j.category,
-			categoryAccountId: j.categoryAccountId ?? null,
-			remark: j.remark,
-			accountId: j.accountId ?? null,
-			duplicateOf: j.duplicateOf,
-			duplicateConfidence: j.duplicateConfidence ?? null,
-			duplicateReasons: reasons,
 			error: j.error,
 			resultId: j.resultId ?? null,
 			resultType: j.resultType ?? null,
+			readAs: j.readAs ?? null,
+			readHow: j.readHow ?? null,
+			extractionNotes: j.extractionNotes ?? null,
+			itemCounts: j.itemCounts ?? null,
 			_edits: {},
 		};
 	}
+
+	const reviewOptions = $derived<ReviewOptions>({
+		allAccounts: data.allAccounts,
+		categoryAccounts: data.categoryAccounts,
+		payableAccountId: data.payableAccountId,
+		receivableAccountId: data.receivableAccountId,
+		uncategorisedAccountId: data.uncategorisedAccountId,
+		uncategorisedIncomeAccountId: data.uncategorisedIncomeAccountId
+	});
 
 	// Initialize from SSR data, converting DB rows to typed Job objects
 	// svelte-ignore state_referenced_locally
@@ -134,62 +100,14 @@
 	// Source determines direction. Target is always the narrowed other side.
 	// svelte-ignore state_referenced_locally
 	let sourceAccountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(data.jobs.map((j) => [j.id, initialSourceAccountId(j)])),
+		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions).source]))
 	);
 	// svelte-ignore state_referenced_locally
 	let targetAccountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(data.jobs.map((j) => [j.id, initialTargetAccountId(j)])),
+		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions).target]))
 	);
 	let sourceAccountTouched = $state<Record<string, boolean>>({});
 	let targetAccountTouched = $state<Record<string, boolean>>({});
-
-	function initialCategoryAccountId(job: {
-		category?: string | null;
-		categoryAccountId?: number | null;
-		documentType?: number | string | null;
-	}): number | null {
-		if (
-			job.categoryAccountId != null &&
-			data.categoryAccounts.some((account) => account.id === job.categoryAccountId)
-		) {
-			return job.categoryAccountId;
-		}
-		const wanted = (job.category ?? '').trim().toLowerCase();
-		if (!wanted) return null;
-		const documentLabel =
-			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
-		const candidates = data.categoryAccounts.filter(
-			(account) =>
-				account.name.trim().toLowerCase() === wanted &&
-				(documentLabel === 'income' ? account.type === AccountType.Revenue : account.type !== AccountType.Revenue),
-		);
-		return candidates[0]?.id ?? null;
-	}
-
-	function initialSourceAccountId(job: {
-		accountId?: number | null;
-		category?: string | null;
-		categoryAccountId?: number | null;
-		documentType?: number | string | null;
-	}): number | null {
-		const documentLabel =
-			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
-		return documentLabel === 'income'
-			? (initialCategoryAccountId(job) ?? data.uncategorisedIncomeAccountId)
-			: (data.payableAccountId ?? job.accountId ?? null);
-	}
-
-	function initialTargetAccountId(job: {
-		accountId?: number | null;
-		category?: string | null;
-		categoryAccountId?: number | null;
-		documentType?: number | string | null;
-	}): number | null {
-		const documentLabel =
-			typeof job.documentType === 'string' ? job.documentType : documentTypeEnum.toLabel(job.documentType);
-		if (documentLabel === 'income') return data.receivableAccountId ?? job.accountId ?? null;
-		return initialCategoryAccountId(job) ?? data.uncategorisedAccountId;
-	}
 
 	// Store original file references for retry
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- File objects must stay outside $state.
@@ -198,14 +116,29 @@
 	// Why a job's import was refused, keyed by job id. Cleared when it goes through.
 	let confirmErrors = $state<Record<string, string>>({});
 
-	// Raw in-progress text for an amount field being typed into, keyed by job id.
-	// Formatting (2 decimals) is only applied on blur — see amountDisplay()/onAmountBlur()
-	// below — so reformatting mid-keystroke doesn't fight the user's cursor/input.
-	let amountDrafts = $state<Record<string, string>>({});
-
 	let drag = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
 	let clearHistoryDialogOpen = $state(false);
+
+	// ── How the next upload is read (006 FR-001) ──────────────────────────────
+	// The choices come from the server, first one the default, so saved profiles
+	// can join the list later. The last choice is remembered on this device only.
+	const READ_AS_KEY = 'akaun.import.readAs';
+	// svelte-ignore state_referenced_locally
+	let readAs = $state<string>(data.readAsChoices[0]?.value ?? 'auto');
+	const readAsLabel = $derived(data.readAsChoices.find((c) => c.value === readAs)?.label ?? 'Auto-detect');
+	// Why the last upload was refused, shown under the drop zone.
+	let uploadError = $state<string | null>(null);
+
+	function setReadAs(value: string) {
+		if (!data.readAsChoices.some((c) => c.value === value)) return;
+		readAs = value;
+		try {
+			localStorage.setItem(READ_AS_KEY, value);
+		} catch {
+			// Storage can be blocked; the choice then lasts for this visit only.
+		}
+	}
 
 	const screen = useIsMobile();
 	const isMobile = $derived(screen.current);
@@ -251,12 +184,21 @@
 	const pipeline = $derived(jobs.filter((j) => PIPE_STATES.includes(j.state)));
 	const failed = $derived(jobs.filter((j) => j.state === 'failed'));
 	const review = $derived(jobs.filter((j) => j.state === 'pending_review'));
+	// Documents read as several items, still with items to review.
+	const groups = $derived(jobs.filter((j) => j.state === 'grouped'));
 	const history = $derived(jobs.filter((j) => ['confirmed', 'imported', 'skipped'].includes(j.state)));
 	const confirmable = $derived(review.filter((j) => !j.duplicateOf && !jobAccountMissing(j)).length);
 	let _es: EventSource | null = null;
 
 	// onMount/onDestroy guarantee exactly one connection per page visit — no reactive re-runs
 	onMount(() => {
+		try {
+			const stored = localStorage.getItem(READ_AS_KEY);
+			if (stored && data.readAsChoices.some((c) => c.value === stored)) readAs = stored;
+		} catch {
+			// No storage: keep the default.
+		}
+
 		_es = new EventSource('/api/import/stream');
 
 		_es.onmessage = (e) => {
@@ -268,6 +210,10 @@
 			} else if (msg.type === 'job-deleted') {
 				jobs = jobs.filter((j) => j.id !== msg.jobId);
 			}
+			// `item-update` and `item-deleted` are about one item of a group, not a
+			// queue row: they belong to the group's own page. The group's card here
+			// changes through the `job-update` that follows each of them, which
+			// carries its new counts. An item is never merged in as a job.
 		};
 	});
 
@@ -301,14 +247,15 @@
 		// Live extraction may replace an automatic fallback. Only an actual reviewer
 		// choice is protected from subsequent server updates.
 		for (const j of incoming) {
+			const sides = receiptSides(j, reviewOptions);
 			sourceAccountByJob[j.id] = syncImportAccountSelection(
 				sourceAccountByJob[j.id],
-				initialSourceAccountId(j),
+				sides.source,
 				sourceAccountTouched[j.id] === true,
 			);
 			targetAccountByJob[j.id] = syncImportAccountSelection(
 				targetAccountByJob[j.id],
-				initialTargetAccountId(j),
+				sides.target,
 				targetAccountTouched[j.id] === true,
 			);
 		}
@@ -327,10 +274,11 @@
 		});
 	}
 
-	async function uploadFiles(files: FileList | File[]) {
+	async function uploadFiles(files: FileList | File[], readAsOverride?: string) {
 		for (const file of Array.from(files)) {
 			const form = new FormData();
 			form.append('file', file);
+			form.append('readAs', readAsOverride ?? readAs);
 			try {
 				const res = await fetch('/api/import', {
 					method: 'POST',
@@ -340,8 +288,10 @@
 				if (!res.ok) {
 					const err = await res.json().catch(() => ({ error: 'Upload failed' }));
 					console.error('Upload error:', err.error);
+					uploadError = `${file.name}: ${err.error ?? 'Upload failed'}`;
 					continue;
 				}
+				uploadError = null;
 				const { jobId } = await res.json();
 				fileStore.set(jobId, file); // kept for Retry button on failed jobs
 			} catch (err) {
@@ -366,7 +316,7 @@
 		const job = jobs.find((j) => j.id === jobId);
 		if (!job) return;
 		// A foreign-currency job can't be imported without a rate to convert it.
-		if (jobRateMissing(job)) return;
+		if (reviewRateMissing(job, job._edits ?? {}, mainCurrency())) return;
 		// A record has to say which account paid for it or received it.
 		if (jobAccountMissing(job)) return;
 
@@ -431,6 +381,9 @@
 	async function retryJob(jobId: string) {
 		const file = fileStore.get(jobId);
 		if (!file) return;
+		// Read it again the way it was asked to be read the first time.
+		const job = jobs.find((j) => j.id === jobId);
+		const previousReadAs = job?.readAs ?? undefined;
 
 		// Delete the old job
 		await fetch(`/api/import/${jobId}`, {
@@ -440,7 +393,7 @@
 		jobs = jobs.filter((j) => j.id !== jobId);
 
 		// Re-upload
-		await uploadFiles([file]);
+		await uploadFiles([file], previousReadAs);
 	}
 
 	async function discardJob(jobId: string) {
@@ -468,8 +421,7 @@
 	}
 
 	function jobIsIncome(job: Job): boolean {
-		const source = sourceAccountByJob[job.id];
-		return source == null ? job.documentType === 'income' : importSourceIsIncome(data.allAccounts, source);
+		return sideIsIncome(job, reviewOptions, sourceAccountByJob[job.id]);
 	}
 
 	function setSourceAccount(jobId: string, value: number): void {
@@ -478,17 +430,8 @@
 		sourceAccountByJob[jobId] = value;
 		sourceAccountTouched[jobId] = true;
 		targetAccountTouched[jobId] = true;
-		const isIncome = importSourceIsIncome(data.allAccounts, value);
-		const targets = targetAccountsForJob(jobId);
-		if (!targets.some((account) => account.id === targetAccountByJob[jobId])) {
-			const defaultTarget = defaultTargetForImportSource(
-				data.allAccounts,
-				value,
-				data.receivableAccountId,
-				data.uncategorisedAccountId,
-			);
-			targetAccountByJob[jobId] = targets.some((account) => account.id === defaultTarget) ? defaultTarget : null;
-		}
+		const isIncome = sideIsIncome({ documentType: null }, reviewOptions, value);
+		targetAccountByJob[jobId] = targetAfterSourceChange(reviewOptions, value, targetAccountByJob[jobId] ?? null);
 		if (job && isIncome !== wasIncome) {
 			// Matches and suggestions were resolved using the LLM's original role.
 			// Do not silently carry one across an Expense/Income correction.
@@ -504,59 +447,17 @@
 		targetAccountTouched[jobId] = true;
 	}
 
-	function targetAccountsForJob(jobId: string) {
-		return targetAccountsForImportSource(
-			data.allAccounts,
-			sourceAccountByJob[jobId],
-			data.payableAccountId,
-			data.receivableAccountId,
-		);
-	}
-
-	function editedValue(job: Job, key: string): string | number {
-		if (job._edits && key in job._edits) return job._edits[key];
-		if (key === 'item_name') return job.itemName ?? '';
-		if (key === 'supplier') return job.supplier ?? '';
-		if (key === 'amount') return job.amount ?? 0;
-		if (key === 'currency') return (job.currency ?? mainCurrency()).toUpperCase();
-		if (key === 'exchangeRate') return job.exchangeRate ?? '';
-		if (key === 'category') return job.category ?? '';
-		if (key === 'date') return job.date ?? '';
-		if (key === 'reference') return job.reference ?? '';
-		if (key === 'remark') return job.remark ?? '';
-		return '';
-	}
-
-	// Effective currency / rate for a job (edit override → extracted value → default).
-	function jobCurrency(job: Job): string {
-		return String(editedValue(job, 'currency') || mainCurrency()).toUpperCase();
-	}
-	function jobIsForeign(job: Job): boolean {
-		return jobCurrency(job) !== mainCurrency();
-	}
-	function jobRateStr(job: Job): string {
-		const v = editedValue(job, 'exchangeRate');
-		return v === '' || v == null ? '' : String(v);
-	}
-	function jobRateMissing(job: Job): boolean {
-		return jobIsForeign(job) && !(parseFloat(jobRateStr(job)) > 0);
-	}
 	function jobAccountMissing(job: Job): boolean {
 		return sourceAccountByJob[job.id] == null || targetAccountByJob[job.id] == null;
-	}
-	function jobConverted(job: Job): number | null {
-		const a = parseFloat(String(editedValue(job, 'amount')));
-		const r = parseFloat(jobRateStr(job));
-		if (!jobIsForeign(job) || isNaN(a) || isNaN(r) || r <= 0) return null;
-		return a * r;
 	}
 
 	// Fetch a rate for a job's foreign currency + date, storing it as an edit override.
 	async function fetchJobRate(jobId: string) {
 		const job = jobs.find((j) => j.id === jobId);
 		if (!job) return;
-		const cur = jobCurrency(job);
-		const date = String(editedValue(job, 'date'));
+		const edits = job._edits ?? {};
+		const cur = reviewCurrency(job, edits, mainCurrency());
+		const date = String(editedValue(job, edits, 'date', mainCurrency()));
 		if (cur === mainCurrency() || !date) return;
 		try {
 			const res = await fetch(`/api/exchange-rate?from=${cur}&to=${mainCurrency()}&date=${date}`);
@@ -573,33 +474,6 @@
 		else fetchJobRate(jobId);
 	}
 
-	function isEdited(job: Job, key: string): boolean {
-		return !!(job._edits && key in job._edits);
-	}
-
-	function editedCount(job: Job): number {
-		return Object.keys(job._edits ?? {}).filter((k) => k !== 'document_type').length;
-	}
-
-	const DUP_REASON_LABELS: Record<string, string> = {
-		file_hash: 'identical file',
-		reference: 'reference',
-		amount: 'amount',
-		date: 'date',
-		supplier: 'supplier',
-		filename: 'filename',
-		content: 'content',
-	};
-
-	function dupReasonsLabel(job: Job): string {
-		return job.duplicateReasons.map((r) => DUP_REASON_LABELS[r] ?? r).join(' · ');
-	}
-
-	function dupMessage(job: Job): string {
-		if (job.duplicateReasons.includes('file_hash')) return `This exact file was already imported.`;
-		return `${job.duplicateConfidence}% match on ${dupReasonsLabel(job)} against an existing record.`;
-	}
-
 	function bucketPath(job: Job): string {
 		if (!job.date) return '—';
 		const [y, m] = job.date.split('-');
@@ -610,34 +484,8 @@
 	function displayTitle(job: Job): string {
 		return job.itemName || job.originalFilename;
 	}
-
-	function formatMoney(n: number | null): string {
-		if (n == null) return '—';
-		return new Intl.NumberFormat('en-US', {
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2,
-		}).format(n);
-	}
-
-	// While the user is typing, show their raw text instead of the reformatted amount —
-	// otherwise every keystroke gets rounded to 2dp and stomps the cursor mid-edit.
-	function amountDisplay(job: Job): string {
-		return amountDrafts[job.id] ?? formatMoney(editedValue(job, 'amount') as number);
-	}
-
-	function onAmountInput(jobId: string, e: Event) {
-		const raw = (e.target as HTMLInputElement).value;
-		amountDrafts = { ...amountDrafts, [jobId]: raw };
-		const v = parseFloat(raw.replace(/,/g, ''));
-		if (!isNaN(v)) updateEdit(jobId, 'amount', v);
-	}
-
-	function onAmountBlur(jobId: string) {
-		const rest = { ...amountDrafts };
-		delete rest[jobId];
-		amountDrafts = rest;
-	}
 </script>
+
 
 <svelte:head>
 	<title>Auto Import - Akaun</title>
@@ -692,6 +540,20 @@
 			style="display:none"
 			onchange={handleFileInput}
 		/>
+		<div class="upload-options">
+			<span class="upload-option-label">Read as</span>
+			<Select.Root type="single" value={readAs} onValueChange={setReadAs}>
+				<Select.Trigger class="upload-readas" aria-label="Read as">{readAsLabel}</Select.Trigger>
+				<Select.Content>
+					{#each data.readAsChoices as choice (choice.value)}
+						<Select.Item value={choice.value} label={choice.label} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		</div>
+		{#if uploadError}
+			<div class="upload-error" role="alert">{uploadError}</div>
+		{/if}
 
 		<!-- Pipeline -->
 		{#if pipeline.length > 0}
@@ -771,228 +633,40 @@
 		<!-- Review -->
 		<div class="import-section">
 			<div class="import-section-head between">
-				<span>Ready to review <span class="hbadge">{review.length}</span></span>
+				<span>Ready to review <span class="hbadge">{review.length + groups.length}</span></span>
 				{#if confirmable > 0}
 					<Button size="sm" onclick={confirmAll}>
 						<Check size={15} /> Confirm all ({confirmable})
 					</Button>
 				{/if}
 			</div>
-			{#if review.length === 0}
+			{#if review.length === 0 && groups.length === 0}
 				<div class="import-empty">No items awaiting review. Drop a file above to start.</div>
 			{:else}
 				<div class="review-list">
+					<!-- A document read as several items: one card that opens its page.
+					     "Confirm all" above is for receipts only; a group has its own. -->
+					{#each groups as job (job.id)}
+						<ImportGroupCard {job} />
+					{/each}
 					{#each review as job (job.id)}
-						{@const isIncome = jobIsIncome(job)}
-						{@const dup = !!job.duplicateOf}
-						{@const numEdits = editedCount(job)}
-						<div class="review-card" class:is-dup={dup}>
-							<!-- Header -->
-							<div class="review-head">
-								<a
-									href={resolve('/api/import/[jobId]/file', { jobId: job.id })}
-									target="_blank"
-									rel="noopener"
-									class="review-file"
-									aria-label="Open {job.originalFilename}"
-								>
-									<Receipt size={15} />
-									{job.originalFilename}
-									<ExternalLink size={11} color="var(--muted-foreground)" />
-								</a>
-								<div class="review-head-right">
-									{#if dup}
-										<span class="dup-badge">
-											<AlertTriangle size={11} /> Duplicate · {job.duplicateConfidence}% · {dupReasonsLabel(job)}
-										</span>
-									{/if}
-								</div>
-							</div>
-
-							<div class="review-detected">
-								<Upload size={12} />
-								AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before
-								importing
-							</div>
-
-							<!-- Fields grid -->
-							<div class="review-grid">
-								<!-- Description -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Description
-										{#if isEdited(job, 'item_name')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									<input
-										class="form-input rinput"
-										value={editedValue(job, 'item_name')}
-										oninput={(e) => updateEdit(job.id, 'item_name', (e.target as HTMLInputElement).value)}
-									/>
-								</div>
-
-								<!-- Contact (role follows the chosen category) -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Contact
-										{#if isEdited(job, 'contactId') || isEdited(job, 'newContactName')}<span class="edited-tag"
-												>edited</span
-											>{/if}
-									</span>
-									<ContactSelect
-										role={isIncome ? Role.Customer : Role.Supplier}
-										initialLabel={job.supplier}
-										suggestions={job.matchCandidates}
-										onChange={(v) => setContact(job.id, v)}
-									/>
-								</div>
-
-								<!-- Amount (main currency; read-only & converted when foreign) -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Amount{jobIsForeign(job) ? ` (${mainCurrency()})` : ''}
-										{#if !jobIsForeign(job) && isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									{#if jobIsForeign(job)}
-										<AmountInput
-											wrapperClass="sm"
-											readonly
-											value={jobConverted(job) != null ? formatMoney(jobConverted(job)) : ''}
-										/>
-									{:else}
-										<AmountInput
-											wrapperClass="sm"
-											value={amountDisplay(job)}
-											oninput={(e) => onAmountInput(job.id, e)}
-											onblur={() => onAmountBlur(job.id)}
-										/>
-									{/if}
-								</div>
-
-								<!-- Currency + exchange rate (auto-shown when a foreign currency is detected) -->
-								<div class="rfield">
-									<span class="rfield-label">Currency</span>
-									<Select.Root type="single" value={jobCurrency(job)} onValueChange={(v) => setJobCurrency(job.id, v)}>
-										<Select.Trigger class="rinput w-full">{jobCurrency(job)}</Select.Trigger>
-										<Select.Content>
-											{#each CURRENCIES as c (c.code)}
-												<Select.Item value={c.code} label={`${c.code} — ${c.name}`} />
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-								{#if jobIsForeign(job)}
-									<div class="rfield">
-										<span class="rfield-label">
-											Amount ({jobCurrency(job)})
-											{#if isEdited(job, 'amount')}<span class="edited-tag">edited</span>{/if}
-										</span>
-										<AmountInput
-											wrapperClass="sm"
-											prefix={currencySymbol(jobCurrency(job))}
-											value={amountDisplay(job)}
-											oninput={(e) => onAmountInput(job.id, e)}
-											onblur={() => onAmountBlur(job.id)}
-										/>
-									</div>
-									<div class="rfield">
-										<span class="rfield-label">Rate (1 {jobCurrency(job)} = ? {mainCurrency()})</span>
-										<input
-											class="form-input rinput"
-											inputmode="decimal"
-											placeholder="0.0000"
-											value={jobRateStr(job)}
-											oninput={(e) => updateEdit(job.id, 'exchangeRate', (e.target as HTMLInputElement).value)}
-										/>
-										{#if jobConverted(job) == null}
-											<span class="foreign-note">Enter the rate manually to convert to {mainCurrency()}.</span>
-										{/if}
-									</div>
-								{/if}
-
-								<!-- Source establishes direction; Target is then narrowed by policy. -->
-								<div class="rfield">
-									<span class="rfield-label">Source account</span>
-									<ImportSourceAccountSelect
-										accounts={data.allAccounts}
-										payableAccountId={data.payableAccountId}
-										value={sourceAccountByJob[job.id]}
-										incomeFirst={isIncome}
-										onChange={(value) => setSourceAccount(job.id, value)}
-									/>
-								</div>
-
-								<div class="rfield">
-									<span class="rfield-label">
-										Target account
-										{#if isEdited(job, 'category')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									<ImportCategoryAccountSelect
-										accounts={targetAccountsForJob(job.id)}
-										value={targetAccountByJob[job.id]}
-										onChange={(value) => setTargetAccount(job.id, value)}
-									/>
-								</div>
-
-								<!-- Date -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Date
-										{#if isEdited(job, 'date')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									<DatePicker
-										value={editedValue(job, 'date') as string}
-										onchange={(v) => updateEdit(job.id, 'date', v)}
-									/>
-								</div>
-
-								<!-- Reference -->
-								<div class="rfield">
-									<span class="rfield-label">
-										Reference
-										{#if isEdited(job, 'reference')}<span class="edited-tag">edited</span>{/if}
-									</span>
-									<input
-										class="form-input rinput"
-										placeholder="—"
-										value={editedValue(job, 'reference')}
-										oninput={(e) => updateEdit(job.id, 'reference', (e.target as HTMLInputElement).value)}
-									/>
-								</div>
-							</div>
-
-							{#if dup}
-								<div class="dup-note">
-									{dupMessage(job)} Import only if this is a separate transaction.
-								</div>
-							{/if}
-
-							<div class="review-actions">
-								<span class="merge-note">
-									{#if confirmErrors[job.id]}
-										{confirmErrors[job.id]}
-									{:else if jobAccountMissing(job)}
-										Choose both the source and target account before importing it.
-									{:else if !isIncome && sourceAccountByJob[job.id] === data.payableAccountId}
-										Marked as paid personally — owed to the contact above until reimbursed.
-									{:else if numEdits > 0}
-										{numEdits} field{numEdits > 1 ? 's' : ''} edited — only these override the AI values
-									{:else}
-										Importing AI values as-is
-									{/if}
-								</span>
-								<div class="review-actions-btns">
-									<Button variant="ghost" size="sm" onclick={() => skipJob(job.id)}>Skip</Button>
-									<Button
-										size="sm"
-										disabled={jobRateMissing(job) || jobAccountMissing(job)}
-										onclick={() => confirmJob(job.id)}
-									>
-										<Check size={15} />
-										{dup ? 'Import anyway' : 'Confirm & import'}
-									</Button>
-								</div>
-							</div>
-						</div>
+						<ImportReviewCard
+							row={job}
+							edits={job._edits ?? {}}
+							sourceAccountId={sourceAccountByJob[job.id] ?? null}
+							targetAccountId={targetAccountByJob[job.id] ?? null}
+							options={reviewOptions}
+							heading={job.originalFilename}
+							headingHref={resolve('/api/import/[jobId]/file', { jobId: job.id })}
+							error={confirmErrors[job.id] ?? null}
+							onedit={(key, value) => updateEdit(job.id, key, value)}
+							oncontact={(v) => setContact(job.id, v)}
+							oncurrency={(code) => setJobCurrency(job.id, code)}
+							onsource={(value) => setSourceAccount(job.id, value)}
+							ontarget={(raw) => setTargetAccount(job.id, raw)}
+							onconfirm={() => confirmJob(job.id)}
+							onskip={() => skipJob(job.id)}
+						/>
 					{/each}
 				</div>
 			{/if}
@@ -1007,7 +681,30 @@
 				</div>
 				<div class="proc-list">
 					{#each history as job (job.id)}
-						{#if job.state === 'skipped'}
+						{#if job.itemCounts}
+							{@const made = job.itemCounts.confirmed}
+							<!-- A finished group: its page lists each item and links each
+							     confirmed one to its record (FR-021). -->
+							<a
+								href={resolve('/(app)/import/[id]', { id: job.id })}
+								class="proc-row done related-link history-link"
+								class:skip={made === 0}
+							>
+								<div class="proc-file">
+									{#if made === 0}
+										<span class="skip-check"><X size={11} /></span>
+									{:else}
+										<span class="ok-check"><Check size={11} strokeWidth={3} /></span>
+									{/if}
+									<span>{job.originalFilename}</span>
+									<span class="type-chip expense">{made} record{made === 1 ? '' : 's'}</span>
+								</div>
+								<span class="proc-type">
+									{job.itemCounts.confirmed} confirmed · {job.itemCounts.skipped} skipped
+								</span>
+								<ChevronRight size={14} color="var(--muted-foreground)" />
+							</a>
+						{:else if job.state === 'skipped'}
 							<div class="proc-row skip">
 								<div class="proc-file">
 									<span class="skip-check"><X size={11} /></span>
@@ -1103,22 +800,29 @@
 {/if}
 
 <style>
-	/* AccountSelect brings its own .field markup — line it up with the review grid's
-	   own fields so the account reads as one more field, not a transplant. */
-	.review-grid :global(.field) {
+	/* "Read as": how the next upload is read. Beside the drop zone, not in it,
+	   so choosing does not open the file picker. */
+	.upload-options {
 		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		margin-bottom: 0;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		margin-top: -6px;
 	}
-	.review-grid :global(.field-label) {
-		font-size: 11.5px;
+	.upload-option-label {
+		font-size: 12.5px;
 		color: var(--muted-foreground);
 		font-weight: 500;
-		margin-bottom: 0;
 	}
-	.review-grid :global(.account-select) {
+	.upload-options :global(.upload-readas) {
+		min-width: 0;
+		max-width: 100%;
 		height: 34px;
+	}
+	.upload-error {
+		font-size: 12px;
+		color: var(--red);
+		margin-top: -6px;
 	}
 
 	/* A history row that opens its record: a link that still looks like the other rows. */

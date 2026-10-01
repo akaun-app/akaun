@@ -1,0 +1,197 @@
+import { redirect } from "@sveltejs/kit";
+import { desc, eq } from "drizzle-orm";
+import { DefaultAccountPurpose, ImportState } from "$lib/enums.js";
+import { ImportReadAs } from "$lib/import-reading.js";
+import { db } from "$lib/server/db/client.js";
+import { importQueue } from "$lib/server/db/schema.js";
+import {
+  isImportIncomeTarget,
+  isImportPurchaseSource,
+} from "$lib/server/import/account-policy.js";
+import { categoryChoices } from "$lib/server/import/category-accounts.js";
+import { jobEvents } from "$lib/server/import/group-state.js";
+import type { LedgerDb } from "$lib/server/ledger/types.js";
+import { hasPermission } from "$lib/server/permissions.js";
+import { getAccount, listAccounts } from "$lib/server/queries/accounts.js";
+import { requireAccountDefault } from "$lib/server/services/account-defaults.js";
+import { listGroupItems } from "$lib/server/services/import-items.js";
+
+/**
+ * The loads behind `/import` (the queue) and `/import/[id]` (one document read
+ * as several items, with its items).
+ *
+ * Split, as every feature's loaders are (CLAUDE.md "Loaders are split"): the
+ * queue sends every job and none of their items, and a group's page sends one
+ * job and all of its items. Neither has to load what the other shows.
+ *
+ * Both take the database as an argument with the real one as the default, so
+ * a spec can run them against a temporary database.
+ */
+
+const LIST_PATH = "/import";
+
+/**
+ * The "Read as" choices the upload offers, in order (006 FR-001). The first is
+ * the default. Sent from the server so that saved profiles can be added to the
+ * list later without the screen knowing about them.
+ */
+export const READ_AS_CHOICES: { value: string; label: string }[] = [
+  { value: ImportReadAs.Auto, label: "Auto-detect" },
+  { value: ImportReadAs.Receipt, label: "Receipt or invoice (one record)" },
+  {
+    value: ImportReadAs.SeveralItems,
+    label: "Document with several items (one record each)",
+  },
+];
+
+/** The queue: every job, newest first, with each group's item counts. */
+export function loadImportPage(locals: App.Locals, database: LedgerDb = db) {
+  if (!hasPermission(locals, "import", "view"))
+    throw redirect(302, "/dashboard");
+
+  // Shared ledger — show every job. Sent in the shape of a live update, without
+  // the document text (no screen reads it, and it would be serialised into the
+  // page for every row), and with each group's item counts.
+  const jobs = jobEvents(
+    database,
+    database
+      .select()
+      .from(importQueue)
+      .orderBy(desc(importQueue.createdAt))
+      .all(),
+  );
+
+  return {
+    jobs,
+    readAsChoices: READ_AS_CHOICES,
+    ...reviewOptions(database),
+  };
+}
+
+/**
+ * One document read as several items, with every item, for `/import/[id]`.
+ *
+ * A group holds at most a thousand items and an item row keeps no document
+ * text, so all of them are sent and the page pages and filters them itself, as
+ * the Records screen does (006 FR-017).
+ *
+ * The page is for a group only. A job that is missing, or that is not a group
+ * (a receipt, or a document whose reading has not finished), goes back to the
+ * queue, which is where such a job is reviewed. There is no error page in the
+ * app shell to land on instead.
+ */
+export function loadImportDetail(
+  locals: App.Locals,
+  id: string,
+  database: LedgerDb = db,
+) {
+  if (!hasPermission(locals, "import", "view"))
+    throw redirect(302, "/dashboard");
+
+  const row = database
+    .select()
+    .from(importQueue)
+    .where(eq(importQueue.id, id))
+    .get();
+  if (!row) throw redirect(302, LIST_PATH);
+
+  const items = listGroupItems(database, id);
+  // A finished group (every item confirmed or skipped) is no longer Grouped,
+  // but its page still lists what became of each item.
+  if (row.state !== ImportState.Grouped && items.length === 0) {
+    throw redirect(302, LIST_PATH);
+  }
+
+  const [job] = jobEvents(database, [row]);
+  const expenseCategories = categoryChoices(database, "expense").map(
+    ({ id, name }) => ({ id, name }),
+  );
+  const incomeCategories = categoryChoices(database, "income").map(
+    ({ id, name }) => ({ id, name }),
+  );
+
+  return {
+    job,
+    items,
+    expenseCategories,
+    incomeCategories,
+    perms: {
+      change: hasPermission(locals, "import", "change"),
+      delete: hasPermission(locals, "import", "delete"),
+    },
+    ...reviewOptions(database),
+  };
+}
+
+/**
+ * The accounts and defaults a review card needs, whether it reviews a receipt
+ * on the queue or an item on a group's page. One function, so both offer the
+ * same accounts.
+ */
+function reviewOptions(database: LedgerDb) {
+  // Categories are accounts now (FR-006a); the review screen still picks one by
+  // name, which is what the confirm step matches back to an account.
+  const expenseChoices = categoryChoices(database, "expense");
+  const incomeChoices = categoryChoices(database, "income");
+
+  const allAccounts = listAccounts(database, {});
+
+  // Accounts Payable is offered alongside the money pots for an expense job
+  // only: picking it is how a reviewer says "I paid this personally, the
+  // business owes me" rather than "it came out of the bank" (FR-008, FR-011).
+  // Income has no equivalent — every income record is category → asset, with
+  // no "not yet received" side to pick instead.
+  const payable = requireAccountDefault(
+    database,
+    DefaultAccountPurpose.Payable,
+  );
+  const payableAccount = payable.ok
+    ? getAccount(database, payable.value)
+    : null;
+  const receivable = requireAccountDefault(
+    database,
+    DefaultAccountPurpose.Receivable,
+  );
+  const receivableAccount = receivable.ok
+    ? getAccount(database, receivable.value)
+    : null;
+  const transactionDefault = requireAccountDefault(
+    database,
+    DefaultAccountPurpose.EverydayTransaction,
+  );
+  const uncategorised = requireAccountDefault(
+    database,
+    DefaultAccountPurpose.UncategorisedExpense,
+  );
+  const uncategorisedIncome = requireAccountDefault(
+    database,
+    DefaultAccountPurpose.UncategorisedIncome,
+  );
+
+  const expensePaymentAccounts = allAccounts.filter((account) =>
+    isImportPurchaseSource(account, payableAccount?.id ?? null),
+  );
+  const incomeReceiptAccounts = allAccounts.filter((account) =>
+    isImportIncomeTarget(account, receivableAccount?.id ?? null),
+  );
+  const categoryIds = new Set(
+    [...expenseChoices, ...incomeChoices].map((choice) => choice.id),
+  );
+  const categoryAccounts = allAccounts.filter((account) =>
+    categoryIds.has(account.id),
+  );
+
+  return {
+    categoryAccounts,
+    allAccounts,
+    accounts: incomeReceiptAccounts,
+    expensePaymentAccounts,
+    payableAccountId: payableAccount?.id ?? null,
+    receivableAccountId: receivableAccount?.id ?? null,
+    uncategorisedAccountId: uncategorised.ok ? uncategorised.value : null,
+    uncategorisedIncomeAccountId: uncategorisedIncome.ok
+      ? uncategorisedIncome.value
+      : null,
+    defaultAccountId: transactionDefault.ok ? transactionDefault.value : null,
+  };
+}
