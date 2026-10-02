@@ -82,7 +82,9 @@ function clearedReading(): Partial<ImportJobInsert> {
  * Reads a document again from the same file, the way `rawReadAs` names it:
  * `auto`, `receipt`, `items` or `profile:<id>`, the same words an upload sends
  * and checked by the same function, so a profile that is off or deleted is
- * refused by name here too (FR-001, US6 AS12).
+ * refused by name here too (FR-001, US6 AS12). `rawImportMode` is the
+ * upload's "Import" choice, Summary when it is left out, so a profile can be
+ * read again in the other mode (FR-023).
  *
  * Allowed for a receipt waiting for review, a group none of whose items is
  * confirmed, a failed document, and a skipped document that made no record
@@ -102,10 +104,12 @@ export function readDocumentAgain(
   db: LedgerDb,
   jobId: string,
   rawReadAs: string,
+  rawImportMode: string | null | undefined,
   options: ReadAgainOptions,
 ): ReadAgainResult {
   const reading = readingForUpload(
     rawReadAs,
+    rawImportMode,
     (id) => getImportProfile(db, id),
     (id) => deletedProfileName(db, id),
   );

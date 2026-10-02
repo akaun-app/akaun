@@ -32,7 +32,13 @@
 		type ReviewOptions,
 		type ReviewRow
 	} from '$lib/components/import/review-card.js';
-	import { ImportReadAs } from '$lib/import-reading.js';
+	import {
+		ImportMode,
+		ImportReadAs,
+		importModeLabel,
+		isImportMode,
+		type ImportModeValue
+	} from '$lib/import-reading.js';
 	import type { PageData } from './$types.js';
 
 	let { data }: { data: PageData } = $props();
@@ -83,6 +89,8 @@
 		readHow: string | null;
 		// The saved profile's id when it was read with one; else a built-in schema id or null.
 		profileId: string | null;
+		// What the uploader chose under "Import" (FR-002), for a profile or Auto-detect; else null.
+		importMode: string | null;
 		// The import profile it was read with, by name, when it was (FR-041).
 		profile: { name: string; mode: string } | null;
 		// The stated total, the items' sum and the lines left out, as JSON.
@@ -114,6 +122,7 @@
 			readAs: j.readAs ?? null,
 			readHow: j.readHow ?? null,
 			profileId: j.profileId ?? null,
+			importMode: j.importMode ?? null,
 			profile: j.profile ?? null,
 			extractionNotes: j.extractionNotes ?? null,
 			itemCounts: j.itemCounts ?? null,
@@ -175,6 +184,32 @@
 		readAs = value;
 		try {
 			localStorage.setItem(READ_AS_KEY, value);
+		} catch {
+			// Storage can be blocked; the choice then lasts for this visit only.
+		}
+	}
+
+	// Which part of a statement to import (FR-002): Summary, the default, or
+	// Every transaction. Offered only while a profile is turned on, and only
+	// for a reading that can use a profile; a receipt or several items has no
+	// mode. Remembered on this device, as "Read as" is.
+	const IMPORT_MODE_KEY = 'akaun.import.mode';
+	const IMPORT_MODES = [
+		{ value: ImportMode.Summary, label: importModeLabel(ImportMode.Summary) },
+		{ value: ImportMode.EveryTransaction, label: importModeLabel(ImportMode.EveryTransaction) }
+	];
+	let importMode = $state<ImportModeValue>(ImportMode.Summary);
+	const importModeShown = $derived(
+		hasProfileChoice(data.readAsChoices) &&
+			readAs !== ImportReadAs.Receipt &&
+			readAs !== ImportReadAs.SeveralItems
+	);
+
+	function setImportMode(value: string) {
+		if (!isImportMode(value)) return;
+		importMode = value;
+		try {
+			localStorage.setItem(IMPORT_MODE_KEY, value);
 		} catch {
 			// Storage can be blocked; the choice then lasts for this visit only.
 		}
@@ -244,6 +279,8 @@
 		try {
 			const stored = localStorage.getItem(READ_AS_KEY);
 			if (stored && data.readAsChoices.some((c) => c.value === stored)) readAs = stored;
+			const storedMode = localStorage.getItem(IMPORT_MODE_KEY);
+			if (isImportMode(storedMode)) importMode = storedMode;
 		} catch {
 			// No storage: keep the default.
 		}
@@ -339,11 +376,16 @@
 		});
 	}
 
-	/** Uploads one file. Returns the new job's id, or null when it was refused or did not arrive. */
-	async function uploadFile(file: File, readAsOverride?: string): Promise<string | null> {
+	/**
+	 * Uploads one file. Returns the new job's id, or null when it was refused or did not arrive.
+	 * The import mode goes only when the upload screen offers it; the server reads a missing one as Summary.
+	 */
+	async function uploadFile(file: File, readAsOverride?: string, modeOverride?: string): Promise<string | null> {
 		const form = new FormData();
 		form.append('file', file);
 		form.append('readAs', readAsOverride ?? readAs);
+		const mode = modeOverride ?? (importModeShown ? importMode : undefined);
+		if (mode) form.append('importMode', mode);
 		try {
 			const res = await fetch('/api/import', {
 				method: 'POST',
@@ -457,13 +499,16 @@
 		if (!file) return;
 		// Read it again the way it was asked to be read the first time. If that
 		// was a profile turned off since, the upload refuses it by name.
+		// The import mode it was asked for stays too; a job with none was read
+		// as Summary, or has no mode at all.
 		const job = jobs.find((j) => j.id === jobId);
 		const previousReadAs = job ? readAsOfJob(job) : undefined;
+		const previousMode = job?.importMode ?? ImportMode.Summary;
 
 		// Upload again first. A refused retry (the profile was turned off or
 		// deleted since, say) keeps the failed row and its reason, and the upload
 		// area says why it was refused.
-		const newJobId = await uploadFile(file, previousReadAs);
+		const newJobId = await uploadFile(file, previousReadAs, previousMode);
 		if (!newJobId) return;
 
 		// Only now that the new upload is queued does the failed one go.
@@ -663,6 +708,17 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			{#if importModeShown}
+				<span class="upload-option-label">Import</span>
+				<Select.Root type="single" value={importMode} onValueChange={setImportMode}>
+					<Select.Trigger class="upload-readas" aria-label="Import">{importModeLabel(importMode)}</Select.Trigger>
+					<Select.Content>
+						{#each IMPORT_MODES as choice (choice.value)}
+							<Select.Item value={choice.value} label={choice.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			{/if}
 			{#if profilesEnabled && readAs === ImportReadAs.Auto}
 				<span class="upload-option-hint">Uses a saved profile that fits the document, or else reads it the standard way.</span>
 			{/if}
@@ -917,6 +973,7 @@
 		filename={readAgainJob.originalFilename}
 		choices={data.readAsChoices}
 		current={readAsOfJob(readAgainJob)}
+		currentMode={readAgainJob.importMode}
 		replaces={readAgainReplaces(readAgainJob)}
 	/>
 {/if}

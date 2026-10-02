@@ -15,6 +15,7 @@ import {
   returnToTemp,
 } from "../file-storage.js";
 import { validateImportAccountPair } from "../import/account-policy.js";
+import { alreadyImportedAtConfirm } from "../import/repeat-file.js";
 import {
   categoryAccountForImport,
   categoryChoices,
@@ -278,6 +279,15 @@ function writeConfirmation(
         : RECEIPT_NOT_AS_SHOWN,
     };
   }
+
+  // One file is imported one way only (FR-033). Another upload of the same
+  // file may have made a record since this one was read, for example the
+  // same statement read once as Summary and once as Every transaction.
+  // Asked here, in the transaction that would write the record, so of two
+  // confirms that arrive together only the first can pass (FR-064). A
+  // receipt read the standard way is not asked (FR-004).
+  const repeat = alreadyImportedAtConfirm(db, job.jobId);
+  if (repeat) return { ok: false, reason: repeat };
 
   const contactId = resolveContact(db, job, fields, docCode, isIncome);
 

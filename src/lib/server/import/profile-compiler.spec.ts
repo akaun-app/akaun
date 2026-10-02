@@ -556,4 +556,61 @@ describe("savedReadingProfile", () => {
       'The import profile "Shop statement" has no section for Every transaction',
     );
   });
+
+  it("reads only the chosen mode's sections, against that mode's stated total", () => {
+    const both = saved({
+      ...shopLike,
+      statedTotalLabels: {
+        summary: "Total Payout Released",
+        every_transaction: "Total Money In",
+      },
+      sections: [
+        ...shopLike.sections,
+        {
+          key: "rows",
+          name: "Transactions",
+          description: "One line per row of the transaction table.",
+          mode: "every_transaction",
+          kind: "by_sign",
+          fixedCategoryAccountId: 21,
+          feeTypes: [],
+          extras: null,
+        },
+      ],
+    });
+
+    const every = savedReadingProfile(both, ImportMode.EveryTransaction);
+    expect(every.sections.map((section) => section.key)).toEqual(["rows"]);
+    expect(every.statedTotalDescription).toContain(
+      "The figure the document prints for: Total Money In.",
+    );
+    expect(every.statedTotalDescription).not.toContain("Payout");
+
+    const summary = savedReadingProfile(both, ImportMode.Summary);
+    expect(summary.sections.map((section) => section.key)).toEqual([
+      "sales",
+      "fees",
+      "pinned",
+    ]);
+    expect(summary.statedTotalDescription).toContain(
+      "The figure the document prints for: Total Payout Released.",
+    );
+    // The two readings send different schemas, so they are named apart.
+    expect(every.schemaId).not.toBe(summary.schemaId);
+  });
+
+  it("has no stated total in a mode the profile names no total for", () => {
+    const profile = savedReadingProfile(
+      saved({
+        ...shopLike,
+        sections: shopLike.sections.map((section) => ({
+          ...section,
+          mode: "every_transaction",
+        })),
+      }),
+      ImportMode.EveryTransaction,
+    );
+    // Only the Summary label is set: it is never borrowed for another mode.
+    expect(profile.statedTotalDescription).toBeNull();
+  });
 });

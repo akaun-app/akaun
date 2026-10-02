@@ -88,23 +88,45 @@ describe("the form and the profile", () => {
     },
   );
 
-  it("sends every section as a Summary section", () => {
+  it("starts a new section in Summary, and sends each section's own mode", () => {
     const form = blankForm();
+    form.sections.push(newSection("every_transaction"));
     const payload = payloadFromForm(form) as {
       sections: { mode: string }[];
     };
     expect(payload.sections.map((section) => section.mode)).toEqual([
       "summary",
+      "every_transaction",
     ]);
   });
 
   it("sends no stated total when the label is empty", () => {
     const form = blankForm();
-    form.statedTotal = "   ";
+    form.statedTotals.summary = "   ";
     expect(payloadFromForm(form).statedTotalLabels).toEqual({});
-    form.statedTotal = "Total charges";
+    form.statedTotals.summary = "Total charges";
     expect(payloadFromForm(form).statedTotalLabels).toEqual({
       summary: "Total charges",
+    });
+  });
+
+  it("keeps each mode's sections and stated total through the form", () => {
+    const draft = starterDraft("marketplace_summary")!;
+    draft.sections[1] = { ...draft.sections[1], mode: "every_transaction" };
+    draft.statedTotalLabels = {
+      summary: "Total payout released",
+      every_transaction: " Total money in ",
+    };
+    const result = checkProfile(payloadFromForm(formFromDraft(draft)));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.sections.map((section) => section.mode)).toEqual([
+      "summary",
+      "every_transaction",
+    ]);
+    expect(result.profile.statedTotalLabels).toEqual({
+      summary: "Total payout released",
+      every_transaction: "Total money in",
     });
   });
 

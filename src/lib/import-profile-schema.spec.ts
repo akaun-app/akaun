@@ -134,17 +134,51 @@ describe("checkProfile", () => {
     expect(result.ok && result.profile.sections[0].mode).toBe("summary");
   });
 
-  it("refuses Every transaction until it is built", () => {
+  it("keeps each section's own mode, Every transaction included", () => {
+    const input = profile();
+    input.sections.push({
+      ...input.sections[0],
+      key: "rows",
+      name: "Transactions",
+      mode: "every_transaction",
+    });
+    const result = checkProfile(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.sections.map((section) => section.mode)).toEqual([
+      "summary",
+      "every_transaction",
+    ]);
+  });
+
+  it("keeps a stated total per mode", () => {
+    const input = profile();
+    input.statedTotalLabels = {
+      summary: "Total charges",
+      every_transaction: "  Total money in  ",
+    };
+    const result = checkProfile(input);
+    expect(result.ok && result.profile.statedTotalLabels).toEqual({
+      summary: "Total charges",
+      every_transaction: "Total money in",
+    });
+  });
+
+  it("refuses a mode or a stated-total mode it does not know", () => {
     const input = profile() as unknown as {
       sections: Record<string, unknown>[];
       statedTotalLabels: Record<string, string>;
     };
-    input.sections[0].mode = "every_transaction";
-    input.statedTotalLabels.every_transaction = "Total";
-    expect(paths(validateProfile(input))).toEqual([
-      "statedTotalLabels.every_transaction",
+    input.sections[0].mode = "everything";
+    input.statedTotalLabels.everything = "Total";
+    const errors = validateProfile(input);
+    expect(paths(errors)).toEqual([
+      "statedTotalLabels.everything",
       "sections[0].mode",
     ]);
+    expect(errors[1].message).toBe(
+      "Choose whether the section is read in Summary or Every transaction.",
+    );
   });
 
   it("names each missing required field", () => {

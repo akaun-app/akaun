@@ -476,8 +476,8 @@ export const importProfiles = sqliteTable("import_profiles", {
   // The sections, as a JSON list of ProfileSection.
   sectionsJson: text("sections_json").notNull().default("[]"),
   // Which printed total each import mode compares against, as a JSON object
-  // keyed by mode ("summary"). Every transaction is deferred, so only the
-  // Summary key is written today.
+  // keyed by mode ("summary", "every_transaction"). A mode with no key names
+  // no total.
   statedTotalLabelsJson: text("stated_total_labels_json")
     .notNull()
     .default("{}"),

@@ -21,9 +21,11 @@
 
 import {
   PROFILE_KEY_PATTERN,
+  PROFILE_SECTION_MODES,
   type ImportProfileDraft,
   type ProfileError,
   type ProfileSectionKind,
+  type ProfileSectionMode,
 } from "./import-profile-schema.js";
 import { ImportMode } from "./import-reading.js";
 
@@ -44,6 +46,8 @@ export interface SectionForm {
   keyFromName: boolean;
   name: string;
   description: string;
+  /** Which import mode reads this section: Summary or Every transaction. */
+  mode: ProfileSectionMode;
   kind: ProfileSectionKind;
   fixedCategoryAccountId: number | null;
   feeTypes: FeeTypeForm[];
@@ -57,11 +61,11 @@ export interface ProfileForm {
   phrases: string[];
   instructions: string;
   /**
-   * The Summary stated total. Only Summary exists for now (US8 is deferred);
-   * when Every transaction is added, this becomes one label per mode, as
-   * `statedTotalLabels` already is.
+   * The stated total of each import mode, as typed. Empty means the profile
+   * names no total for that mode. A summary and a transaction table total
+   * different lines, so each mode has its own.
    */
-  statedTotal: string;
+  statedTotals: Record<ProfileSectionMode, string>;
   sections: SectionForm[];
 }
 
@@ -112,19 +116,30 @@ export function newFeeType(): FeeTypeForm {
   return { uid: newUid(), key: "", description: "", categoryAccountId: null };
 }
 
-/** An empty section. Expense is the commonest kind on a fee document. */
-export function newSection(): SectionForm {
+/**
+ * An empty section, in Summary unless another mode is given. Expense is the
+ * commonest kind on a fee document.
+ */
+export function newSection(
+  mode: ProfileSectionMode = ImportMode.Summary,
+): SectionForm {
   return {
     uid: newUid(),
     key: "",
     keyFromName: true,
     name: "",
     description: "",
+    mode,
     kind: "expense",
     fixedCategoryAccountId: null,
     feeTypes: [],
     extrasText: "",
   };
+}
+
+/** No stated total for any mode. */
+function noStatedTotals(): Record<ProfileSectionMode, string> {
+  return { [ImportMode.Summary]: "", [ImportMode.EveryTransaction]: "" };
 }
 
 /** A blank profile with one empty section, since a profile needs one. */
@@ -134,7 +149,7 @@ export function blankForm(): ProfileForm {
     description: "",
     phrases: [],
     instructions: "",
-    statedTotal: "",
+    statedTotals: noStatedTotals(),
     sections: [newSection()],
   };
 }
@@ -150,13 +165,18 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
     description: draft.description,
     phrases: [...draft.phrases],
     instructions: draft.instructions,
-    statedTotal: draft.statedTotalLabels[ImportMode.Summary] ?? "",
+    statedTotals: {
+      [ImportMode.Summary]: draft.statedTotalLabels[ImportMode.Summary] ?? "",
+      [ImportMode.EveryTransaction]:
+        draft.statedTotalLabels[ImportMode.EveryTransaction] ?? "",
+    },
     sections: draft.sections.map((section) => ({
       uid: newUid(),
       key: section.key,
       keyFromName: false,
       name: section.name,
       description: section.description,
+      mode: section.mode,
       kind: section.kind,
       fixedCategoryAccountId: section.fixedCategoryAccountId,
       feeTypes: section.feeTypes.map((feeType) => ({
@@ -200,24 +220,27 @@ export function sectionKeys(sections: readonly SectionForm[]): string[] {
 
 /**
  * What the editor sends: the profile's form in the shape the shared check
- * reads. Every section is a Summary section, since Every transaction (US8) is
- * deferred; the mode is still sent, so a saved section already names it.
- * The extra fields go as the text typed.
+ * reads. Each section goes with its own import mode, and each mode's stated
+ * total only when one is typed. The extra fields go as the text typed.
  */
 export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
   const keys = sectionKeys(form.sections);
-  const statedTotal = form.statedTotal.trim();
+  const statedTotalLabels: Partial<Record<ProfileSectionMode, string>> = {};
+  for (const mode of PROFILE_SECTION_MODES) {
+    const label = (form.statedTotals[mode] ?? "").trim();
+    if (label) statedTotalLabels[mode] = label;
+  }
   return {
     name: form.name,
     description: form.description,
     phrases: form.phrases,
     instructions: form.instructions,
-    statedTotalLabels: statedTotal ? { [ImportMode.Summary]: statedTotal } : {},
+    statedTotalLabels,
     sections: form.sections.map((section, index) => ({
       key: keys[index],
       name: section.name,
       description: section.description,
-      mode: ImportMode.Summary,
+      mode: section.mode,
       kind: section.kind,
       fixedCategoryAccountId: section.fixedCategoryAccountId,
       feeTypes: section.feeTypes.map((feeType) => ({

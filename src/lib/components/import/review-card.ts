@@ -5,10 +5,12 @@ import {
   targetAccountsForImportSource,
 } from "$lib/import-account-groups.js";
 import {
+  ImportMode,
   ImportReadAs,
   ImportReadHow,
   PROFILE_READ_AS_PREFIX,
   controlTotal,
+  importModeLabel,
   parseExtractionNotes,
   profileReadAsValue,
 } from "$lib/import-reading.js";
@@ -398,8 +400,11 @@ export type ReadingOf = {
   readHow?: string | null;
   /** The saved profile's id, for a document read with one. */
   profileId?: string | null;
-  /** The profile's name, from the copy the server kept when it read it. */
-  profile?: { name: string } | null;
+  /**
+   * The profile's name and import mode, from the copy the server kept when it
+   * read it.
+   */
+  profile?: { name: string; mode?: string } | null;
 };
 
 /** What a reading was picked by, in brackets after it (FR-041). */
@@ -428,7 +433,13 @@ export function describeReading(job: ReadingOf): string {
   ) {
     const name = job.profile ? `“${job.profile.name}”` : "an import profile";
     const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
-    return `Read with ${name} (${how})`;
+    // Summary is the default and goes unsaid, so a summary reading reads as
+    // it did before Every transaction existed.
+    const mode =
+      job.profile?.mode === ImportMode.EveryTransaction
+        ? ` · ${importModeLabel(ImportMode.EveryTransaction)}`
+        : "";
+    return `Read with ${name} (${how})${mode}`;
   }
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).

@@ -1170,15 +1170,16 @@ describe("Auto-detect", () => {
     expect(itemsOf(row.id)).toEqual([]);
   });
 
-  it("clears a profile an earlier attempt detected when it now reads the standard way", async () => {
-    // Detected, then stopped by a restart; read again, nothing fits now.
+  it("clears a profile an earlier attempt detected when it now reads the standard way, keeping the chosen mode", async () => {
+    // Detected, then stopped by a restart; read again, nothing fits now. The
+    // mode is the uploader's choice, not the profile's, so it stays.
     saveProfile(statementProfile({ phrases: ["Lazada"] }));
     serve([json({ profile: "none" }), receiptAnswer()]);
     const row = await run(
       autoJob({
         readHow: ImportReadHow.Detected,
         profileId: "999",
-        importMode: ImportMode.Summary,
+        importMode: ImportMode.EveryTransaction,
         profileSnapshot: "{}",
       }),
     );
@@ -1187,7 +1188,7 @@ describe("Auto-detect", () => {
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: null,
+      importMode: ImportMode.EveryTransaction,
     });
   });
 
@@ -1213,7 +1214,7 @@ describe("Auto-detect", () => {
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: null,
+      importMode: ImportMode.Summary,
       itemName: "Paper",
     });
   });

@@ -174,7 +174,7 @@ const routes = {
     const { DELETE } = await import("./profiles/[id]/+server.js");
     return (DELETE as Handler)({ locals, params: { id: String(id) } } as never);
   },
-  async upload(readAs?: string) {
+  async upload(readAs?: string, importMode?: string) {
     const { POST } = await import("./+server.js");
     const form = new FormData();
     form.append(
@@ -182,6 +182,7 @@ const routes = {
       new File(["%PDF-1.4 test"], "fees.pdf", { type: "application/pdf" }),
     );
     if (readAs !== undefined) form.append("readAs", readAs);
+    if (importMode !== undefined) form.append("importMode", importMode);
     return (POST as Handler)({
       locals,
       request: new Request("http://test.local/api/import", {
@@ -521,6 +522,39 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(tempFiles()).toHaveLength(0);
   });
 
+  it("stores the Import choice for a profile and for Auto-detect (FR-002)", async () => {
+    const id = saved();
+    expect(
+      (await routes.upload(`profile:${id}`, "every_transaction")).status,
+    ).toBe(202);
+    expect((await routes.upload("auto", "every_transaction")).status).toBe(202);
+    expect((await routes.upload("receipt", "every_transaction")).status).toBe(
+      202,
+    );
+    const byReadAs = Object.fromEntries(
+      queueRows().map((row) => [row.readAs, row]),
+    );
+    expect(byReadAs.profile.importMode).toBe("every_transaction");
+    // The copy taken at upload names the mode, so the queue can say it.
+    expect(
+      JSON.parse(byReadAs.profile.profileSnapshot ?? "null"),
+    ).toMatchObject({ id, mode: "every_transaction" });
+    expect(byReadAs.auto.importMode).toBe("every_transaction");
+    // A receipt has no mode, so the choice is ignored for it.
+    expect(byReadAs.receipt.importMode).toBeNull();
+  });
+
+  it("refuses an unknown Import choice with a clear message, and stores nothing", async () => {
+    const id = saved();
+    const res = await routes.upload(`profile:${id}`, "everything");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      'Unknown import mode: "everything". Use summary or every_transaction.',
+    );
+    expect(queueRows()).toHaveLength(0);
+    expect(tempFiles()).toHaveLength(0);
+  });
+
   it("refuses the stored words as an upload choice", async () => {
     saved();
     for (const value of ["profile", "profile:builtin:items@1"]) {
@@ -529,7 +563,7 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(queueRows()).toHaveLength(0);
   });
 
-  it("still reads the built-in choices as before, with no profile or mode", async () => {
+  it("still reads the built-in choices as before, with no profile, and Auto-detect in Summary", async () => {
     expect((await routes.upload("items")).status).toBe(202);
     expect((await routes.upload()).status).toBe(202);
     const rows = queueRows().sort((a, b) =>
@@ -540,7 +574,7 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
         readAs: "auto",
         readHow: "standard",
         profileId: null,
-        importMode: null,
+        importMode: "summary",
       },
       { readAs: "items", readHow: "chosen", profileId: null, importMode: null },
     ]);

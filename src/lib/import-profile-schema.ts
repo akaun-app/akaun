@@ -21,7 +21,7 @@
  * and with a plain sentence saying what is wrong.
  */
 
-import { ImportMode } from "./import-reading.js";
+import { ImportMode, type ImportModeValue } from "./import-reading.js";
 
 // ── Limits ──────────────────────────────────────────────────────────────────
 
@@ -135,17 +135,15 @@ export const PROFILE_SECTION_KINDS: readonly ProfileSectionKind[] = [
 ];
 
 /**
- * Which import mode a section belongs to (FR-031, FR-032).
- *
- * Only Summary for now. Every transaction (US8, FR-002 and FR-043) is
- * deferred by the maintainer, so every section is a Summary section and the
- * editor shows no choice. This is the extension point: US8 adds
- * `ImportMode.EveryTransaction` to this list, and a saved section already
- * carries its mode, so nothing stored needs to change.
+ * Which import mode a section belongs to (FR-031, FR-032): Summary (the
+ * statement's summary lines) or Every transaction (each row of its
+ * transaction table, US8). A document is read in one mode only (FR-033), and
+ * only the sections of that mode are read.
  */
-export type ProfileSectionMode = typeof ImportMode.Summary;
+export type ProfileSectionMode = ImportModeValue;
 export const PROFILE_SECTION_MODES: readonly ProfileSectionMode[] = [
   ImportMode.Summary,
+  ImportMode.EveryTransaction,
 ];
 
 /** A plain value an extra field can hold. */
@@ -221,8 +219,10 @@ export interface ImportProfileDraft {
   instructions: string;
   /**
    * Which printed total each import mode compares against, such as "Total
-   * payout released". Keyed by mode; only Summary for now. Empty or missing
-   * means the profile names no total and no control total is shown.
+   * payout released" for Summary. Keyed by mode, since the summary and the
+   * transaction table of one statement total different lines. Empty or
+   * missing means the profile names no total for that mode, and no control
+   * total is shown.
    */
   statedTotalLabels: Partial<Record<ProfileSectionMode, string>>;
   sections: ProfileSection[];
@@ -716,13 +716,14 @@ function section(
     { max: SECTION_DESCRIPTION_MAX, required: true },
   );
 
-  // Missing means Summary: the only mode there is today (see
-  // PROFILE_SECTION_MODES).
+  // Missing means Summary: every section saved before Every transaction
+  // existed is a Summary section.
   const mode = value.mode ?? ImportMode.Summary;
   if (!(PROFILE_SECTION_MODES as readonly unknown[]).includes(mode)) {
     errors.push({
       path: `${path}.mode`,
-      message: "Only Summary sections are supported for now.",
+      message:
+        "Choose whether the section is read in Summary or Every transaction.",
     });
   }
 
@@ -748,7 +749,7 @@ function section(
       key,
       name,
       description,
-      mode: ImportMode.Summary,
+      mode: mode as ProfileSectionMode,
       kind: kind as ProfileSectionKind,
       fixedCategoryAccountId,
       feeTypes: fees,
@@ -842,7 +843,8 @@ export function checkProfile(
       if (!(PROFILE_SECTION_MODES as readonly string[]).includes(mode)) {
         errors.push({
           path: at,
-          message: "Only the Summary stated total is supported for now.",
+          message:
+            "A stated total is given for Summary or for Every transaction only.",
         });
         continue;
       }

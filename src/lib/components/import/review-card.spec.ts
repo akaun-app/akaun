@@ -83,6 +83,24 @@ describe("describeReading", () => {
       "Read with an import profile (chosen)",
     );
   });
+
+  it("names Every transaction after the profile, and leaves Summary unsaid", () => {
+    const every = { name: "Wallet report", mode: "every_transaction" };
+    expect(
+      describeReading({ readAs: "profile", readHow: "chosen", profile: every }),
+    ).toBe("Read with “Wallet report” (chosen) · Every transaction");
+    expect(
+      describeReading({ readAs: "auto", readHow: "detected", profile: every }),
+    ).toBe("Read with “Wallet report” (detected) · Every transaction");
+    // Summary, the default, reads as it did before the mode existed.
+    expect(
+      describeReading({
+        readAs: "profile",
+        readHow: "chosen",
+        profile: { name: "Wallet report", mode: "summary" },
+      }),
+    ).toBe("Read with “Wallet report” (chosen)");
+  });
 });
 
 describe("readingLabel", () => {

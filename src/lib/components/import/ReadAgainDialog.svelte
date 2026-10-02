@@ -3,7 +3,14 @@
 	import { Dialog } from 'bits-ui';
 	import { RotateCcw } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { ImportReadAs } from '$lib/import-reading.js';
+	import {
+		ImportMode,
+		ImportReadAs,
+		PROFILE_READ_AS_PREFIX,
+		importModeLabel,
+		isImportMode,
+		type ImportModeValue
+	} from '$lib/import-reading.js';
 	import { hasProfileChoice } from './review-card.js';
 
 	/**
@@ -15,6 +22,12 @@
 	 * may be read again and says why not; the job then goes back into the
 	 * queue, and every open screen follows it through the live updates, so
 	 * nothing here changes the list itself.
+	 *
+	 * For a reading that can use a profile (a profile, or Auto-detect while a
+	 * profile is on) the dialog also asks which part of a statement to import,
+	 * Summary or Every transaction (FR-002, FR-023), starting from the mode the
+	 * document had, so a statement read as its summary can be read again as
+	 * every transaction.
 	 */
 	let {
 		open = $bindable(false),
@@ -22,6 +35,7 @@
 		filename,
 		choices,
 		current,
+		currentMode = null,
 		replaces,
 		ondone
 	}: {
@@ -32,6 +46,8 @@
 		choices: { value: string; label: string }[];
 		/** How the document was asked to be read last time, as a "Read as" value. */
 		current: string;
+		/** The import mode it was asked for last time, if it had one. */
+		currentMode?: string | null;
 		/** What reading it again throws away, in a sentence. */
 		replaces: string;
 		/** Called once the server has queued the new reading. */
@@ -39,6 +55,8 @@
 	} = $props();
 
 	let choice = $state<string>(ImportReadAs.Auto);
+	let mode = $state<ImportModeValue>(ImportMode.Summary);
+	const MODES: ImportModeValue[] = [ImportMode.Summary, ImportMode.EveryTransaction];
 	let sending = $state(false);
 	let error = $state<string | null>(null);
 
@@ -49,11 +67,17 @@
 		if (!open) return;
 		untrack(() => {
 			choice = choices.some((c) => c.value === current) ? current : ImportReadAs.Auto;
+			mode = isImportMode(currentMode) ? currentMode : ImportMode.Summary;
 			error = null;
 		});
 	});
 
 	const profilesEnabled = $derived(hasProfileChoice(choices));
+	// A receipt or several items has no import mode, so it is asked only for a
+	// reading that can use a profile.
+	const modeShown = $derived(
+		profilesEnabled && (choice === ImportReadAs.Auto || choice.startsWith(PROFILE_READ_AS_PREFIX))
+	);
 
 	async function readAgain() {
 		if (sending) return;
@@ -63,7 +87,7 @@
 			const res = await fetch(`/api/import/${jobId}/reread`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ readAs: choice }),
+				body: JSON.stringify(modeShown ? { readAs: choice, importMode: mode } : { readAs: choice }),
 				credentials: 'include'
 			});
 			if (!res.ok) {
@@ -116,6 +140,24 @@
 					</label>
 				{/each}
 			</div>
+
+			{#if modeShown}
+				<div class="ra-mode" role="radiogroup" aria-label="Import">
+					<span class="ra-mode-label">Import</span>
+					{#each MODES as option (option)}
+						<label class="ra-mode-choice" class:on={mode === option}>
+							<input
+								type="radio"
+								name="read-again-mode-{jobId}"
+								value={option}
+								checked={mode === option}
+								onchange={() => (mode = option)}
+							/>
+							{importModeLabel(option)}
+						</label>
+					{/each}
+				</div>
+			{/if}
 
 			{#if error}
 				<p class="ra-error" role="alert">{error}</p>
@@ -183,6 +225,36 @@
 	.ra-choice-hint {
 		font-size: 11.5px;
 		color: var(--muted-foreground);
+	}
+	.ra-mode {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 12px;
+		font-size: 13px;
+	}
+	.ra-mode-label {
+		font-size: 12.5px;
+		font-weight: 500;
+		color: var(--muted-foreground);
+		margin-right: 4px;
+	}
+	.ra-mode-choice {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 5px 10px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		cursor: pointer;
+	}
+	.ra-mode-choice.on {
+		border-color: var(--primary);
+		background: var(--accent);
+	}
+	.ra-mode-choice input {
+		accent-color: var(--primary);
 	}
 	.ra-error {
 		margin: 12px 0 0;

@@ -55,11 +55,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
 
-	// How to read it (FR-001). Checked before anything is stored, so a refused
-	// upload leaves no file and no queue row behind. A saved profile needs only
-	// this upload permission, the same as every other way of reading (FR-045).
+	// How to read it (FR-001), and which part of a statement to import
+	// (FR-002). Checked before anything is stored, so a refused upload leaves
+	// no file and no queue row behind. A saved profile needs only this upload
+	// permission, the same as every other way of reading (FR-045).
 	const reading = readingForUpload(
 		formData.get('readAs'),
+		formData.get('importMode'),
 		(id) => getImportProfile(db, id),
 		(id) => deletedProfileName(db, id)
 	);

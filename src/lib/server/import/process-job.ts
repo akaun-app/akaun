@@ -27,7 +27,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { join } from "path";
 import {
   DocumentType,
@@ -39,7 +39,6 @@ import {
   ImportMode,
   ImportReadAs,
   ImportReadHow,
-  importModeLabel,
   isImportMode,
   serializeExtractionNotes,
 } from "$lib/import-reading.js";
@@ -84,6 +83,7 @@ import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
 import { detectProfile } from "./profile-detect.js";
 import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
+import { alreadyImported } from "./repeat-file.js";
 import type { LLMCallParams } from "./providers/types.js";
 import {
   ProfileModeError,
@@ -187,84 +187,9 @@ function loadProviders(db: LedgerDb) {
   return providers;
 }
 
-/** "as a receipt or invoice", in the words the upload screen uses. */
-function howItWasRead(
-  row: Pick<ImportJob, "readAs" | "readHow" | "profileSnapshot">,
-): string {
-  if (row.readAs === ImportReadAs.SeveralItems) {
-    return "as a document with several items";
-  }
-  // A profile chosen at upload, or one Auto-detect found.
-  if (
-    row.readAs === ImportReadAs.Profile ||
-    row.readHow === ImportReadHow.Detected
-  ) {
-    // The copy kept on the row names the profile even after it is renamed
-    // or deleted, and says which mode it was imported in (FR-033).
-    const snapshot = parseProfileSnapshot(row.profileSnapshot);
-    return snapshot
-      ? `with the import profile "${snapshot.name}" (${importModeLabel(snapshot.mode)})`
-      : "with an import profile";
-  }
-  return "as a receipt or invoice";
-}
-
-function records(count: number): string {
-  return count === 1 ? "1 record" : `${count} records`;
-}
-
-/**
- * Why this file must not be read again, or null when it may be (FR-026).
- *
- * The same file already made at least one record: as a receipt, or as items
- * of a group. An earlier upload whose items were all skipped or discarded made
- * nothing, so the file is read as normal. Checked before the file is read, so
- * a stopped upload costs no AI call.
- */
-export function alreadyImported(db: LedgerDb, job: ImportJob): string | null {
-  if (!job.fileHash) return null;
-  const earlier = db
-    .select({
-      id: importQueue.id,
-      state: importQueue.state,
-      readAs: importQueue.readAs,
-      readHow: importQueue.readHow,
-      profileSnapshot: importQueue.profileSnapshot,
-      createdAt: importQueue.createdAt,
-    })
-    .from(importQueue)
-    .where(
-      and(eq(importQueue.fileHash, job.fileHash), ne(importQueue.id, job.id)),
-    )
-    .all()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-
-  for (const row of earlier) {
-    // Count the imported items first: a finished group is itself marked
-    // Imported, and it made one record per item, not one. A row with no items
-    // is a receipt, which made one record when it was imported.
-    const importedItems = db
-      .select({ id: importItems.id })
-      .from(importItems)
-      .where(
-        and(
-          eq(importItems.jobId, row.id),
-          eq(importItems.state, ImportState.Imported),
-        ),
-      )
-      .all().length;
-    const made =
-      importedItems > 0
-        ? importedItems
-        : row.state === ImportState.Imported
-          ? 1
-          : 0;
-    if (made > 0) {
-      return `This file was already imported ${howItWasRead(row)}, which made ${records(made)}. It was not read again.`;
-    }
-  }
-  return null;
-}
+// Stopped before reading when the same file already made a record (FR-026).
+// The rule lives with the confirm's own check of it (FR-064).
+export { alreadyImported };
 
 /**
  * One form of a document's text, and how to get it: from the text a caller
@@ -586,11 +511,17 @@ async function readAutoDetected(
     return;
   }
 
+  // The found profile is read in the mode the uploader chose under "Import"
+  // (FR-002): the modes are the same for every profile, so the choice is
+  // made before any profile is found. A row from before the choice existed
+  // has none and is read as Summary, as it always was.
   const detected: ImportJob = {
     ...job,
     profileId: String(detection.route),
     readHow: ImportReadHow.Detected,
-    importMode: ImportMode.Summary,
+    importMode: isImportMode(job.importMode)
+      ? job.importMode
+      : ImportMode.Summary,
   };
   const found = profileForJob(db, detected);
   if (!found.ok) {
@@ -623,20 +554,22 @@ async function readAutoDetected(
  * profile on the row; the receipt reading that follows does not use it, so the
  * card, the group page and a later repeat-file stop must not name it (FR-003,
  * FR-041). A fresh row has nothing to clear, so it gets no extra write.
+ *
+ * The import mode stays: it is what the uploader chose under "Import", not
+ * something a profile set, and Retry and "Read again" offer it again. Nothing
+ * reads it for a receipt.
  */
 function clearDetectedProfile(db: LedgerDb, job: ImportJob) {
   const leftOver =
     job.readHow !== ImportReadHow.Standard ||
     job.profileId !== null ||
-    job.profileSnapshot !== null ||
-    job.importMode !== null;
+    job.profileSnapshot !== null;
   if (!leftOver) return;
   db.update(importQueue)
     .set({
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: null,
     })
     .where(eq(importQueue.id, job.id))
     .run();

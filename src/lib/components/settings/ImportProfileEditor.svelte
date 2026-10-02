@@ -17,8 +17,10 @@
 		PROFILE_SECTIONS_MAX,
 		checkProfile,
 		type ProfileError,
-		type ProfileSectionKind
+		type ProfileSectionKind,
+		type ProfileSectionMode
 	} from '$lib/import-profile-schema.js';
+	import { ImportMode } from '$lib/import-reading.js';
 	import { IMPORT_PROFILE_STARTERS, starterDraft, type ImportProfileStarterId } from '$lib/import-profile-starters.js';
 	import {
 		blankForm,
@@ -47,9 +49,9 @@
 	 * "Advanced: extra fields", checked as it is typed by the same check the
 	 * server runs (the sequence-template pattern), so the two never disagree.
 	 *
-	 * Every section is a Summary section. Every transaction (US8) is deferred,
-	 * so the editor shows no "Import" choice; a section already carries its
-	 * mode (`payloadFromForm`), which is where that choice will be added.
+	 * Each section says which import mode reads it, Summary or Every
+	 * transaction (FR-031), and each mode has its own stated total, since a
+	 * summary and a transaction table total different lines.
 	 *
 	 * Whether the profile is on or off is set from the list in Settings ›
 	 * Intelligence, beside the AI providers, and not here.
@@ -173,6 +175,18 @@
 	}
 
 	// ── Editing ────────────────────────────────────────────────────────────────
+	const MODES: { value: ProfileSectionMode; label: string }[] = [
+		{ value: ImportMode.Summary, label: 'Summary' },
+		{ value: ImportMode.EveryTransaction, label: 'Every transaction' }
+	];
+
+	// The Every transaction stated total is shown once a section is read in
+	// that mode, or while it still holds a label, so nothing saved is hidden.
+	const showEveryTransactionTotal = $derived(
+		form.sections.some((section) => section.mode === ImportMode.EveryTransaction) ||
+			form.statedTotals[ImportMode.EveryTransaction].trim() !== ''
+	);
+
 	const KINDS: { value: ProfileSectionKind; label: string }[] = [
 		{ value: 'income', label: 'Income' },
 		{ value: 'expense', label: 'Expense' },
@@ -481,11 +495,11 @@
 				{@render problemList(shown('instructions'))}
 			</div>
 
-			<div class="field" style="margin-bottom:0;">
-				<label class="field-label" for="pf-stated-total">Stated total</label>
+			<div class="field" style={showEveryTransactionTotal ? '' : 'margin-bottom:0;'}>
+				<label class="field-label" for="pf-stated-total">Stated total{showEveryTransactionTotal ? ' · Summary' : ''}</label>
 				<Input
 					id="pf-stated-total"
-					bind:value={form.statedTotal}
+					bind:value={form.statedTotals[ImportMode.Summary]}
 					disabled={!canChange}
 					class="w-full"
 					placeholder="e.g. Total payout released"
@@ -497,6 +511,24 @@
 				{@render problemList(shown('statedTotalLabels'))}
 				{@render problemList(shown('statedTotalLabels.summary'))}
 			</div>
+
+			{#if showEveryTransactionTotal}
+				<div class="field" style="margin-bottom:0;">
+					<label class="field-label" for="pf-stated-total-every">Stated total · Every transaction</label>
+					<Input
+						id="pf-stated-total-every"
+						bind:value={form.statedTotals[ImportMode.EveryTransaction]}
+						disabled={!canChange}
+						class="w-full"
+						placeholder="e.g. Total money in"
+					/>
+					<p class="field-hint">
+						The printed total the transaction rows should add up to, for a document imported as Every transaction.
+						Leave empty if the document prints none.
+					</p>
+					{@render problemList(shown('statedTotalLabels.every_transaction'))}
+				</div>
+			{/if}
 		</section>
 
 		<div class="pf-sections-head">
@@ -536,7 +568,6 @@
 					{/if}
 				</div>
 				{@render problemList(shown(at))}
-				{@render problemList(shown(`${at}.mode`))}
 
 				<div class="field">
 					<label class="field-label" for="pf-s-name-{section.uid}">Name *</label>
@@ -550,6 +581,31 @@
 					<label class="field-label" for="pf-s-desc-{section.uid}">What it is and where to find it *</label>
 					<Textarea id="pf-s-desc-{section.uid}" rows={2} bind:value={section.description} disabled={!canChange} class="leading-relaxed" />
 					{@render problemList(shown(`${at}.description`))}
+				</div>
+
+				<div class="field">
+					<span class="field-label">Import *</span>
+					<div class="chip-row" role="radiogroup" aria-label="Import">
+						{#each MODES as mode (mode.value)}
+							<label class="chip" class:on={section.mode === mode.value}>
+								<input
+									type="radio"
+									name="pf-mode-{section.uid}"
+									value={mode.value}
+									checked={section.mode === mode.value}
+									disabled={!canChange}
+									onchange={() => (section.mode = mode.value)}
+								/>
+								{mode.label}
+							</label>
+						{/each}
+					</div>
+					<p class="field-hint">
+						{section.mode === ImportMode.EveryTransaction
+							? 'Read only when a document is uploaded with Import: Every transaction. One item per row of the transaction table.'
+							: 'Read only when a document is uploaded with Import: Summary, the default.'}
+					</p>
+					{@render problemList(shown(`${at}.mode`))}
 				</div>
 
 				<div class="field">

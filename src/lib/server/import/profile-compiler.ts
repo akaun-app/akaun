@@ -625,10 +625,10 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
  * refusal of one profile's schema is then about that schema only, and never
  * changes how another schema is read (FR-037).
  *
- * Every section is a Summary section for now; Every transaction (US8) is
- * deferred. The mode is still a parameter, and each section still carries its
- * own, so US8 adds its sections without changing this function. Reading such a
- * section in pieces (FR-043) is not built.
+ * The stated total is the profile's label for this mode, since a summary and
+ * a transaction table total different lines. Every transaction sections are
+ * read here the same way as Summary ones; reading a long document in pieces
+ * (FR-043) is not built yet.
  */
 export function savedReadingProfile(
   saved: SavedProfile,
