@@ -5,7 +5,7 @@ import { PNG } from 'pngjs';
 import { OCR_CACHE_PATH } from '../env.js';
 import { readCsv } from './spreadsheet/csv.js';
 import { renderWorkbook } from './spreadsheet/render.js';
-import { cellText, type Workbook } from './spreadsheet/types.js';
+import { isBlankRow, type Workbook } from './spreadsheet/types.js';
 import { readXlsx } from './spreadsheet/xlsx.js';
 
 const OCR_LANGS = 'eng+chi_sim';
@@ -324,7 +324,5 @@ export function spreadsheetText(workbook: Workbook): { plain: string; numbered: 
  * than the sheet names. Stops at the first cell that does.
  */
 export function isEmptyWorkbook(workbook: Workbook): boolean {
-	return workbook.sheets.every((sheet) =>
-		sheet.rows.every((row) => row.cells.every((cell) => cellText(cell).trim() === ''))
-	);
+	return workbook.sheets.every((sheet) => sheet.rows.every(isBlankRow));
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   controlTotal,
+  ignoredSummary,
   IGNORED_LINE_MAX_CHARS,
   IGNORED_LINES_MAX,
   parseExtractionNotes,
@@ -20,6 +21,25 @@ describe("extraction notes", () => {
     expect(parseExtractionNotes(serializeExtractionNotes(notes))).toEqual(
       notes,
     );
+  });
+
+  it("keeps how the items were read and how many lines were left out, when it is said", () => {
+    const columns: ExtractionNotes = {
+      ...notes,
+      ignoredCount: 726,
+      method: "columns",
+    };
+    expect(parseExtractionNotes(serializeExtractionNotes(columns))).toEqual(
+      columns,
+    );
+    // An AI reading says neither, and stores exactly what it stored before.
+    expect(JSON.parse(serializeExtractionNotes(notes))).toEqual(notes);
+    // A damaged count or method is dropped; the control total still shows.
+    expect(
+      parseExtractionNotes(
+        JSON.stringify({ ...notes, ignoredCount: -1, method: "guess" }),
+      ),
+    ).toEqual(notes);
   });
 
   it("keeps no more than the capped number and length of ignored lines", () => {
@@ -117,5 +137,25 @@ describe("controlTotal", () => {
     expect(
       controlTotal({ statedTotal: null, itemsTotalMinor: 500, ignored: [] }),
     ).toBeNull();
+  });
+});
+
+describe("ignoredSummary", () => {
+  it("says how many lines were left out, and how many are shown (FR-056)", () => {
+    const sample = Array.from({ length: 20 }, (_, i) => `Row ${i}`);
+    expect(ignoredSummary({ ignored: sample, ignoredCount: 726 })).toBe(
+      "Ignored 726 lines (20 shown)",
+    );
+    expect(ignoredSummary({ ignored: ["Subtotal 1.00"] })).toBe(
+      "Ignored 1 line",
+    );
+    expect(ignoredSummary({ ignored: ["a", "b"], ignoredCount: 2 })).toBe(
+      "Ignored 2 lines",
+    );
+    expect(ignoredSummary({ ignored: [], ignoredCount: 0 })).toBeNull();
+    expect(ignoredSummary({ ignored: [] })).toBeNull();
+    expect(ignoredSummary({ ignored: [], ignoredCount: 1234 })).toBe(
+      "Ignored 1,234 lines (0 shown)",
+    );
   });
 });

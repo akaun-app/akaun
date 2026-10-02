@@ -291,6 +291,11 @@ export interface ReadingProfile {
    * transfer. Code uses it after the reading; it is not part of the schema.
    */
   documentAccountId?: number | null;
+  /**
+   * True in Every transaction mode: an item takes its reference only from its
+   * own row, never the document's (FR-062). Code uses it after the reading.
+   */
+  ownReferencesOnly?: boolean;
   sections: readonly SectionSpec[];
 }
 
@@ -309,6 +314,19 @@ export interface ReadItem {
   category_account_id?: number | null;
   /** Present only when the section has extra fields. */
   extras?: Record<string, unknown>;
+  /**
+   * Set only by code that reads a table from its columns (`table-reader.ts`),
+   * never by the model: the check of an answer keeps only the keys the schema
+   * names, and the schema names neither of these.
+   *
+   * - `amount_minor`: the amount in whole cents, read from the cell's text, so
+   *   no figure goes through a binary number on its way in. Wins over
+   *   `amount`.
+   * - `review_note`: what the reviewer is to check on this item, from its
+   *   section's flag rule (FR-061).
+   */
+  amount_minor?: number;
+  review_note?: string;
 }
 
 /** The model's whole answer, after the check. */
@@ -323,6 +341,11 @@ export interface ReadEnvelope {
   };
   /** The printed total for exactly the lines read, as printed. */
   stated_total: number | null;
+  /**
+   * The same total in whole cents, set only by code that reads a table from
+   * its columns (see `ReadItem.amount_minor`). Wins over `stated_total`.
+   */
+  stated_total_minor?: number | null;
   sections: Record<string, ReadItem[]>;
   ignored: string[];
 }
@@ -704,6 +727,9 @@ export function savedReadingProfile(
       : null,
     schemaRequired: true,
     documentAccountId: saved.accountId ?? null,
+    ...(mode === ImportMode.EveryTransaction
+      ? { ownReferencesOnly: true }
+      : {}),
     sections,
   };
   const wire = toWireSchema(envelopeField(profile));

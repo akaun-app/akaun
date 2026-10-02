@@ -69,6 +69,7 @@ export function profileSnapshotOf(
       instructions: saved.instructions,
       statedTotalLabels: saved.statedTotalLabels,
       accountId: saved.accountId ?? null,
+      ...(saved.layout ? { layout: saved.layout } : {}),
       sections: saved.sections,
     },
   };

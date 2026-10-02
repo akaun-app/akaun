@@ -459,6 +459,11 @@ export type ReadingOf = {
    * read it.
    */
   profile?: { name: string; mode?: string } | null;
+  /**
+   * What the reading noted, as the row stores it. Read here only for how the
+   * items were read: a spreadsheet read from its columns says so (FR-041).
+   */
+  extractionNotes?: string | null;
 };
 
 /** What a reading was picked by, in brackets after it (FR-041). */
@@ -493,7 +498,11 @@ export function describeReading(job: ReadingOf): string {
       job.profile?.mode === ImportMode.EveryTransaction
         ? ` · ${importModeLabel(ImportMode.EveryTransaction)}`
         : "";
-    return `Read with ${name} (${how})${mode}`;
+    const columns =
+      parseExtractionNotes(job.extractionNotes)?.method === "columns"
+        ? " · read from columns"
+        : "";
+    return `Read with ${name} (${how})${mode}${columns}`;
   }
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).

@@ -16,6 +16,10 @@
  * It has no imports from `$lib/server` and does not use zod, because client
  * files do not load zod.
  *
+ * A profile may also carry a table layout, and its sections row rules, for
+ * reading a spreadsheet from its columns with no AI (FR-053 to FR-055). Every
+ * column they name is one of the layout's headings, checked here too.
+ *
  * Every problem is reported with the path of the value it is about, such as
  * `sections[1].feeTypes[3].key`, so the editor can show it next to the field,
  * and with a plain sentence saying what is wrong.
@@ -184,6 +188,172 @@ export interface ProfileFeeType {
   description: string;
   /** The category every line of this type gets. Wins over any other. */
   categoryAccountId: number | null;
+  /**
+   * The cell values that mean this fee type, in the section's fee type column
+   * (FR-054), for a section read from columns. Absent, or never set, for a
+   * section the AI reads: the model picks the type from its description.
+   */
+  values?: string[];
+}
+
+// ── Reading from columns (FR-053 to FR-055) ─────────────────────────────────
+
+/** How a row rule compares a cell (FR-054). */
+export type RowConditionOp =
+  | "is"
+  | "is_not"
+  | "is_one_of"
+  | "contains"
+  | "empty"
+  | "not_empty";
+export const ROW_CONDITION_OPS: readonly RowConditionOp[] = [
+  "is",
+  "is_not",
+  "is_one_of",
+  "contains",
+  "empty",
+  "not_empty",
+];
+
+/**
+ * One condition on a row: the cell under `column` (a heading of the table)
+ * compared with `value`, or with any of `values` for "is one of". "Empty" and
+ * "not empty" compare with nothing. Cells are compared as `foldTableText`
+ * gives them, so case and spacing do not matter.
+ */
+export interface RowCondition {
+  column: string;
+  op: RowConditionOp;
+  /** For is, is not and contains. */
+  value?: string;
+  /** For is one of. */
+  values?: string[];
+}
+
+/**
+ * Which rows of the table a section takes, and what to do with them (FR-054).
+ * A row belongs to the section when every condition of `where` holds; an
+ * empty `where` takes every row. A row that also meets every condition of a
+ * non-empty `flagWhen` is still imported, with `flagNote` for the reviewer
+ * (FR-061). `feeTypeColumn` names the column whose value says the row's fee
+ * type, matched against each fee type's `values`.
+ */
+export interface SectionRows {
+  where: RowCondition[];
+  flagWhen: RowCondition[];
+  /** What to check, for a row `flagWhen` matches. Empty when it is empty. */
+  flagNote: string;
+  feeTypeColumn: string | null;
+}
+
+/** How a table writes its dates, for a date cell that is text (FR-053). */
+export type TableDateFormat =
+  | "YYYY-MM-DD"
+  | "YYYY/MM/DD"
+  | "DD/MM/YYYY"
+  | "MM/DD/YYYY"
+  | "DD-MM-YYYY"
+  | "MM-DD-YYYY"
+  | "DD.MM.YYYY";
+export const TABLE_DATE_FORMATS: readonly TableDateFormat[] = [
+  "YYYY-MM-DD",
+  "YYYY/MM/DD",
+  "DD/MM/YYYY",
+  "MM/DD/YYYY",
+  "DD-MM-YYYY",
+  "MM-DD-YYYY",
+  "DD.MM.YYYY",
+];
+
+/** The separators a `.csv` file's cells may be split by. */
+export type TableCsvDelimiter = "," | ";" | "\t" | "|";
+export const TABLE_CSV_DELIMITERS: readonly TableCsvDelimiter[] = [
+  ",",
+  ";",
+  "\t",
+  "|",
+];
+
+/**
+ * Where a spreadsheet's table is and what each of its columns holds (FR-053).
+ * It belongs to the profile, not a section, because one document has one
+ * table. Every column is named by its heading, which must be one of
+ * `headers`: the headings that, all in one row, are how the table is found.
+ */
+export interface TableLayout {
+  /** The sheet the table is on. Null: the first sheet that has the headings. */
+  sheet: string | null;
+  headers: string[];
+  columns: {
+    date: string;
+    description: string;
+    /** The amount, with its sign unless `direction` gives the sign. */
+    amount: string;
+    reference: string | null;
+  };
+  /** How a date written as text is laid out. A real date cell needs none. */
+  dateFormat: TableDateFormat;
+  /**
+   * A column that says which way the money went, and the values that mean in
+   * and out. When set, it gives each amount its sign.
+   */
+  direction: { column: string; in: string[]; out: string[] } | null;
+  /** The decimal separator of amounts written as text. */
+  decimalSeparator: "." | ",";
+  /** The separator of a `.csv` file. Null: worked out from the file. */
+  csvDelimiter: TableCsvDelimiter | null;
+  /** The other party every item shares (FR-006), or null for none. */
+  counterparty: string | null;
+  /** The ISO-4217 code of every amount. Null: the main currency. */
+  currency: string | null;
+  /** The label the document's date is printed beside, or null. */
+  documentDateLabel: string | null;
+  /** Columns whose values are added to each item's remark. */
+  remarkColumns: string[];
+  /**
+   * The labels each mode's stated total is printed beside, such as "Total
+   * Money In" and "Total Money Out". The figures beside them are added up in
+   * code. A mode with none has no control total.
+   */
+  statedTotalLabels: Partial<Record<ImportModeValue, string[]>>;
+}
+
+/** Most headings a layout names. */
+export const LAYOUT_HEADERS_MAX = 50;
+/** Most conditions in one rule. */
+export const ROW_CONDITIONS_MAX = 10;
+/** Most values one list (is one of, a fee type, a direction) holds. */
+export const ROW_VALUES_MAX = 50;
+/** Most remark columns, and most stated-total labels per mode. */
+const LAYOUT_LIST_MAX = 10;
+const CELL_VALUE_MAX = 100;
+/** Excel's own limit on a sheet's name. */
+const SHEET_NAME_MAX = 31;
+
+/**
+ * A cell or heading as row rules and headings compare it: Unicode-normalised,
+ * in lower case, with its spaces trimmed and runs of spaces made one. "Money
+ * In" and " money  in " are the same value. The reader on the server uses
+ * this too, so the editor's check and the reading never disagree.
+ */
+export function foldTableText(text: string): string {
+  return text.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Whether a profile reads documents of this mode from their columns, with no
+ * AI (FR-055, FR-057): it has a table layout, and every one of its sections in
+ * that mode has row rules. Only a spreadsheet can be read this way.
+ */
+export function readsFromColumns(
+  profile: Pick<ImportProfileDraft, "layout" | "sections">,
+  mode: ImportModeValue,
+): boolean {
+  if (!profile.layout) return false;
+  const sections = profile.sections.filter(
+    (section) => (section.mode ?? ImportMode.Summary) === mode,
+  );
+  return sections.length > 0 && sections.every((section) => section.rows);
 }
 
 /** One part of the document to read (FR-031). */
@@ -212,6 +382,11 @@ export interface ProfileSection {
    * saved before transfers existed, for every other kind.
    */
   counterAccountId?: number | null;
+  /**
+   * Which rows of the profile's table the section takes (FR-054). Absent for
+   * a section the AI reads.
+   */
+  rows?: SectionRows;
 }
 
 /** A profile as the editor fills it in and the server saves it. */
@@ -242,6 +417,11 @@ export interface ImportProfileDraft {
    * existed, when the profile names none.
    */
   accountId?: number | null;
+  /**
+   * Where a spreadsheet's table is and what its columns hold (FR-053). Absent
+   * when the profile has none: a document is then read by the AI.
+   */
+  layout?: TableLayout | null;
   sections: ProfileSection[];
 }
 
@@ -329,6 +509,509 @@ function categoryId(
     errors,
     "Choose a category from the list, or none.",
   );
+}
+
+// ── The table layout and row rules ──────────────────────────────────────────
+
+/** Reads one cell value or heading: text, not empty, within the cell limit. */
+function cellValue(
+  value: unknown,
+  path: string,
+  label: string,
+  errors: ProfileError[],
+): string {
+  return text(value, path, label, errors, {
+    max: CELL_VALUE_MAX,
+    required: true,
+  });
+}
+
+/**
+ * Reads a list of cell values: `min` to `max` of them, none twice once
+ * folded (see `foldTableText`).
+ */
+function valueList(
+  raw: unknown,
+  path: string,
+  label: string,
+  errors: ProfileError[],
+  { min, max }: { min: number; max: number },
+): string[] {
+  if (raw === undefined || raw === null) raw = [];
+  if (!Array.isArray(raw)) {
+    errors.push({ path, message: `${label} must be a list.` });
+    return [];
+  }
+  if (raw.length < min) {
+    errors.push({
+      path,
+      message: `List at least ${min === 1 ? "one value" : `${min} values`} for ${label.toLowerCase()}.`,
+    });
+  }
+  if (raw.length > max) {
+    errors.push({
+      path,
+      message: `${label} can list at most ${max} values; this has ${raw.length}.`,
+    });
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  raw.forEach((entry, index) => {
+    const at = `${path}[${index}]`;
+    const value = cellValue(entry, at, "A value", errors);
+    if (!value) return;
+    const folded = foldTableText(value);
+    if (seen.has(folded)) {
+      errors.push({ path: at, message: `"${value}" is listed twice.` });
+      return;
+    }
+    seen.add(folded);
+    out.push(value);
+  });
+  return out;
+}
+
+/**
+ * Reads a column, named by its heading, which must be one of the layout's
+ * headings. Null when it is optional and not given.
+ */
+function columnRef(
+  value: unknown,
+  path: string,
+  headings: ReadonlySet<string>,
+  errors: ProfileError[],
+  { required, label }: { required: boolean; label: string },
+): string | null {
+  if (!required && (value === undefined || value === null || value === "")) {
+    return null;
+  }
+  const column = cellValue(value, path, label, errors);
+  if (!column) return null;
+  if (!headings.has(foldTableText(column))) {
+    errors.push({
+      path,
+      message: `"${column}" is not one of the table's headings. Add it to the headings, or choose one of them.`,
+    });
+  }
+  return column;
+}
+
+/** An optional piece of text: null when empty. */
+function optionalText(
+  value: unknown,
+  path: string,
+  label: string,
+  errors: ProfileError[],
+  max: number,
+): string | null {
+  const cleaned = text(value, path, label, errors, { max, required: false });
+  return cleaned || null;
+}
+
+/**
+ * Checks a profile's table layout (FR-053). Null when the profile has none.
+ * The headings are what the rest of the layout, and every section's row
+ * rules, name columns by.
+ */
+function tableLayout(
+  raw: unknown,
+  path: string,
+  errors: ProfileError[],
+): TableLayout | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isRecord(raw)) {
+    errors.push({ path, message: "The table layout must be an object." });
+    return null;
+  }
+  const at = (key: string) => join(path, key);
+
+  const sheet = optionalText(
+    raw.sheet,
+    at("sheet"),
+    "The sheet name",
+    errors,
+    SHEET_NAME_MAX,
+  );
+  const headers = valueList(raw.headers, at("headers"), "Headings", errors, {
+    min: 1,
+    max: LAYOUT_HEADERS_MAX,
+  });
+  const headings = new Set(headers.map(foldTableText));
+
+  const rawColumns = isRecord(raw.columns) ? raw.columns : {};
+  if (!isRecord(raw.columns)) {
+    errors.push({
+      path: at("columns"),
+      message:
+        "Say which column holds the date, the description and the amount.",
+    });
+  }
+  const column = (key: string, label: string, required: boolean) =>
+    columnRef(rawColumns[key], `${at("columns")}.${key}`, headings, errors, {
+      required,
+      label,
+    });
+  const columns = {
+    date: column("date", "The date column", true) ?? "",
+    description: column("description", "The description column", true) ?? "",
+    amount: column("amount", "The amount column", true) ?? "",
+    reference: column("reference", "The reference column", false),
+  };
+
+  const dateFormat = raw.dateFormat ?? "YYYY-MM-DD";
+  if (!(TABLE_DATE_FORMATS as readonly unknown[]).includes(dateFormat)) {
+    errors.push({
+      path: at("dateFormat"),
+      message: `Choose how dates are written: ${TABLE_DATE_FORMATS.join(", ")}.`,
+    });
+  }
+
+  let direction: TableLayout["direction"] = null;
+  if (raw.direction !== undefined && raw.direction !== null) {
+    const dirPath = at("direction");
+    const value = isRecord(raw.direction) ? raw.direction : {};
+    if (!isRecord(raw.direction)) {
+      errors.push({
+        path: dirPath,
+        message: "The direction must name its column and its values.",
+      });
+    }
+    const dirColumn =
+      columnRef(value.column, join(dirPath, "column"), headings, errors, {
+        required: true,
+        label: "The direction column",
+      }) ?? "";
+    const valuesIn = valueList(
+      value.in,
+      join(dirPath, "in"),
+      "Money in",
+      errors,
+      { min: 1, max: ROW_VALUES_MAX },
+    );
+    const valuesOut = valueList(
+      value.out,
+      join(dirPath, "out"),
+      "Money out",
+      errors,
+      { min: 1, max: ROW_VALUES_MAX },
+    );
+    const ins = new Set(valuesIn.map(foldTableText));
+    valuesOut.forEach((entry, index) => {
+      if (ins.has(foldTableText(entry))) {
+        errors.push({
+          path: `${join(dirPath, "out")}[${index}]`,
+          message: `"${entry}" cannot mean both money in and money out.`,
+        });
+      }
+    });
+    direction = { column: dirColumn, in: valuesIn, out: valuesOut };
+  }
+
+  const decimalSeparator = raw.decimalSeparator ?? ".";
+  if (decimalSeparator !== "." && decimalSeparator !== ",") {
+    errors.push({
+      path: at("decimalSeparator"),
+      message: 'The decimal separator is "." or ",".',
+    });
+  }
+  const csvDelimiter = raw.csvDelimiter ?? null;
+  if (
+    csvDelimiter !== null &&
+    !(TABLE_CSV_DELIMITERS as readonly unknown[]).includes(csvDelimiter)
+  ) {
+    errors.push({
+      path: at("csvDelimiter"),
+      message:
+        "The CSV separator is a comma, a semicolon, a tab or a vertical bar, or none to work it out from the file.",
+    });
+  }
+
+  const counterparty = optionalText(
+    raw.counterparty,
+    at("counterparty"),
+    "The other party",
+    errors,
+    SHORT_DESCRIPTION_MAX,
+  );
+  let currency = optionalText(
+    raw.currency,
+    at("currency"),
+    "The currency",
+    errors,
+    3,
+  );
+  if (currency !== null) {
+    currency = currency.toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      errors.push({
+        path: at("currency"),
+        message:
+          "The currency is a three-letter ISO code, such as MYR or USD, or none for the main currency.",
+      });
+    }
+  }
+  const documentDateLabel = optionalText(
+    raw.documentDateLabel,
+    at("documentDateLabel"),
+    "The document date label",
+    errors,
+    CELL_VALUE_MAX,
+  );
+
+  const remarkColumns: string[] = [];
+  const rawRemarks = raw.remarkColumns ?? [];
+  if (!Array.isArray(rawRemarks)) {
+    errors.push({
+      path: at("remarkColumns"),
+      message: "The remark columns must be a list.",
+    });
+  } else {
+    if (rawRemarks.length > LAYOUT_LIST_MAX) {
+      errors.push({
+        path: at("remarkColumns"),
+        message: `At most ${LAYOUT_LIST_MAX} columns can be added to the remark; this has ${rawRemarks.length}.`,
+      });
+    }
+    const seen = new Set<string>();
+    rawRemarks.forEach((entry, index) => {
+      const remarkPath = `${at("remarkColumns")}[${index}]`;
+      const name = columnRef(entry, remarkPath, headings, errors, {
+        required: true,
+        label: "A remark column",
+      });
+      if (!name) return;
+      if (seen.has(foldTableText(name))) {
+        errors.push({
+          path: remarkPath,
+          message: `"${name}" is listed twice.`,
+        });
+        return;
+      }
+      seen.add(foldTableText(name));
+      remarkColumns.push(name);
+    });
+  }
+
+  const statedTotalLabels: TableLayout["statedTotalLabels"] = {};
+  const rawTotals = raw.statedTotalLabels ?? {};
+  if (!isRecord(rawTotals)) {
+    errors.push({
+      path: at("statedTotalLabels"),
+      message: "The stated totals must be given per import mode.",
+    });
+  } else {
+    for (const [mode, labels] of Object.entries(rawTotals)) {
+      const totalPath = `${at("statedTotalLabels")}.${mode}`;
+      if (!(PROFILE_SECTION_MODES as readonly string[]).includes(mode)) {
+        errors.push({
+          path: totalPath,
+          message:
+            "A stated total is given for Summary or for Every transaction only.",
+        });
+        continue;
+      }
+      const list = valueList(labels, totalPath, "Stated total labels", errors, {
+        min: 0,
+        max: LAYOUT_LIST_MAX,
+      });
+      if (list.length > 0) {
+        statedTotalLabels[mode as ImportModeValue] = list;
+      }
+    }
+  }
+
+  return {
+    sheet,
+    headers,
+    columns,
+    dateFormat: dateFormat as TableDateFormat,
+    direction,
+    decimalSeparator: decimalSeparator as "." | ",",
+    csvDelimiter: csvDelimiter as TableCsvDelimiter | null,
+    counterparty,
+    currency,
+    documentDateLabel,
+    remarkColumns,
+    statedTotalLabels,
+  };
+}
+
+/** Reads a list of row conditions (FR-054). */
+function rowConditions(
+  raw: unknown,
+  path: string,
+  headings: ReadonlySet<string>,
+  errors: ProfileError[],
+): RowCondition[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push({ path, message: "The conditions must be a list." });
+    return [];
+  }
+  if (raw.length > ROW_CONDITIONS_MAX) {
+    errors.push({
+      path,
+      message: `A rule can have at most ${ROW_CONDITIONS_MAX} conditions; this has ${raw.length}.`,
+    });
+  }
+  return raw.map((entry, index) => {
+    const at = `${path}[${index}]`;
+    const value = isRecord(entry) ? entry : {};
+    if (!isRecord(entry)) {
+      errors.push({ path: at, message: "Each condition must be an object." });
+    }
+    const column =
+      columnRef(value.column, `${at}.column`, headings, errors, {
+        required: true,
+        label: "The column",
+      }) ?? "";
+    const op = value.op;
+    const condition: RowCondition = { column, op: op as RowConditionOp };
+    if (!(ROW_CONDITION_OPS as readonly unknown[]).includes(op)) {
+      errors.push({
+        path: `${at}.op`,
+        message:
+          "Choose how the cell is compared: is, is not, is one of, contains, is empty or is not empty.",
+      });
+    } else if (op === "is" || op === "is_not" || op === "contains") {
+      condition.value = cellValue(
+        value.value,
+        `${at}.value`,
+        "The value",
+        errors,
+      );
+    } else if (op === "is_one_of") {
+      condition.values = valueList(
+        value.values,
+        `${at}.values`,
+        "The values",
+        errors,
+        { min: 1, max: ROW_VALUES_MAX },
+      );
+    }
+    return condition;
+  });
+}
+
+/**
+ * Checks a section's row rules (FR-054). Undefined when the section has none.
+ * `headings` is null when the profile has no table layout, and then row rules
+ * have nothing to read.
+ */
+function sectionRows(
+  raw: unknown,
+  path: string,
+  headings: ReadonlySet<string> | null,
+  errors: ProfileError[],
+): SectionRows | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (headings === null) {
+    errors.push({
+      path,
+      message:
+        "Row rules read the profile's table, and this profile has no table layout. Add one, or remove the row rules.",
+    });
+    return undefined;
+  }
+  if (!isRecord(raw)) {
+    errors.push({ path, message: "The row rules must be an object." });
+    return undefined;
+  }
+  const where = rowConditions(raw.where, join(path, "where"), headings, errors);
+  const flagWhen = rowConditions(
+    raw.flagWhen,
+    join(path, "flagWhen"),
+    headings,
+    errors,
+  );
+  const flagNote = text(
+    raw.flagNote,
+    join(path, "flagNote"),
+    "The note for a flagged row",
+    errors,
+    { max: SHORT_DESCRIPTION_MAX, required: flagWhen.length > 0 },
+  );
+  if (flagWhen.length === 0 && flagNote) {
+    errors.push({
+      path: join(path, "flagNote"),
+      message:
+        "A note is shown only on a row the flag conditions pick. Add the conditions, or remove the note.",
+    });
+  }
+  const feeTypeColumn = columnRef(
+    raw.feeTypeColumn,
+    join(path, "feeTypeColumn"),
+    headings,
+    errors,
+    { required: false, label: "The fee type column" },
+  );
+  return {
+    where,
+    flagWhen,
+    flagNote: flagWhen.length > 0 ? flagNote : "",
+    feeTypeColumn,
+  };
+}
+
+/**
+ * What a section's fee types and its row rules must agree on: a section read
+ * from columns with fee types reads each row's type from its fee type column,
+ * by the values each type lists, and no value may mean two types. A section
+ * the AI reads has no values to list.
+ */
+function checkFeeTypeValues(
+  fees: readonly ProfileFeeType[],
+  rows: SectionRows | undefined,
+  path: string,
+  errors: ProfileError[],
+) {
+  const column = rows?.feeTypeColumn ?? null;
+  if (rows && fees.length > 0 && column === null) {
+    errors.push({
+      path: `${path}.rows.feeTypeColumn`,
+      message:
+        "Name the column that holds each row's fee type, or remove the fee types.",
+    });
+  }
+  if (column !== null && fees.length === 0) {
+    errors.push({
+      path: `${path}.rows.feeTypeColumn`,
+      message:
+        "A fee type column needs the fee types it holds. Add them, or remove the column.",
+    });
+  }
+  const meaning = new Map<string, string>();
+  fees.forEach((fee, index) => {
+    const at = `${path}.feeTypes[${index}].values`;
+    const values = fee.values ?? [];
+    if (column === null) {
+      if (values.length > 0) {
+        errors.push({
+          path: at,
+          message:
+            "Cell values are read only from the section's fee type column. Name that column under the row rules, or remove the values.",
+        });
+      }
+      return;
+    }
+    if (values.length === 0) {
+      errors.push({
+        path: at,
+        message: `List the values of "${column}" that mean this fee type.`,
+      });
+    }
+    values.forEach((value, valueIndex) => {
+      const folded = foldTableText(value);
+      const other = meaning.get(folded);
+      if (other !== undefined && other !== fee.key) {
+        errors.push({
+          path: `${at}[${valueIndex}]`,
+          message: `"${value}" already means the fee type "${other}".`,
+        });
+      }
+      meaning.set(folded, fee.key);
+    });
+  });
 }
 
 // ── Extra fields ────────────────────────────────────────────────────────────
@@ -684,7 +1367,7 @@ function feeTypes(
       });
     }
     seen.add(key);
-    return {
+    const fee: ProfileFeeType = {
       key,
       description: text(
         value.description,
@@ -699,6 +1382,17 @@ function feeTypes(
         errors,
       ),
     };
+    // The values that mean it in a fee type column. Whether the section has
+    // one is checked with its row rules (`checkFeeTypeValues`).
+    const values = valueList(
+      value.values,
+      `${at}.values`,
+      "The fee type's values",
+      errors,
+      { min: 0, max: ROW_VALUES_MAX },
+    );
+    if (values.length > 0) fee.values = values;
+    return fee;
   });
 }
 
@@ -706,6 +1400,7 @@ function section(
   raw: unknown,
   path: string,
   seenKeys: Set<string>,
+  headings: ReadonlySet<string> | null,
   errors: ProfileError[],
 ): { section: ProfileSection; enumCount: number } {
   const value = isRecord(raw) ? raw : {};
@@ -776,6 +1471,8 @@ function section(
   const fees = feeTypes(value.feeTypes, `${path}.feeTypes`, errors);
   const extras = validateExtrasFragment(value.extras, `${path}.extras`);
   if (!extras.ok) errors.push(...extras.errors);
+  const rows = sectionRows(value.rows, `${path}.rows`, headings, errors);
+  checkFeeTypeValues(fees, rows, path, errors);
 
   // A transfer is neither income nor an expense, so it has no category, and
   // it names the other account instead (FR-031, FR-058). Whether that account
@@ -826,6 +1523,8 @@ function section(
       extras: extras.ok ? extras.fragment : null,
       // Only a transfer names one, so no other section carries the key.
       ...(kind === "transfer" ? { counterAccountId } : {}),
+      // Only a section read from columns has row rules.
+      ...(rows ? { rows } : {}),
     },
     enumCount: fees.length + (extras.ok ? extras.enumCount : 0),
   };
@@ -937,6 +1636,11 @@ export function checkProfile(
     "Choose the account from the list, or none.",
   );
 
+  // The table layout, read before the sections: their row rules name its
+  // columns (FR-053, FR-054).
+  const layout = tableLayout(input.layout, "layout", errors);
+  const headings = layout ? new Set(layout.headers.map(foldTableText)) : null;
+
   // The sections, and the listed values they add up to.
   const sections: ProfileSection[] = [];
   let enumCount = 0;
@@ -957,7 +1661,7 @@ export function checkProfile(
     const seenKeys = new Set<string>();
     rawSections.forEach((raw, index) => {
       const path = `sections[${index}]`;
-      const read = section(raw, path, seenKeys, errors);
+      const read = section(raw, path, seenKeys, headings, errors);
       sections.push(read.section);
       enumCount += read.enumCount;
       if (enumCount > PROFILE_ENUM_VALUES_MAX && !enumReported) {
@@ -1002,6 +1706,8 @@ export function checkProfile(
       // A profile that names no account carries no key for it, as one saved
       // before the account existed does.
       ...(accountId !== null ? { accountId } : {}),
+      // Likewise a profile with no table layout carries no key for it.
+      ...(layout ? { layout } : {}),
       sections,
     },
   };

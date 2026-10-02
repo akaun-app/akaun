@@ -210,6 +210,7 @@ type Decided = Detection & { failed?: true };
 
 async function decide(input: {
   text: string;
+  phraseText?: string;
   profiles: readonly DetectableProfile[];
   providers: LLMProviderConfig[];
   intervalMs?: number;
@@ -219,7 +220,7 @@ async function decide(input: {
     return standard("none", "No import profile is enabled.");
   }
 
-  const matched = phraseMatch(input.text, enabled);
+  const matched = phraseMatch(input.phraseText ?? input.text, enabled);
   if (matched.length === 1) {
     return {
       route: matched[0].id,
@@ -273,9 +274,14 @@ async function decide(input: {
  * Decides how a document uploaded with "Auto-detect" is read. `text` is the
  * document's plain text, without line numbers. Never throws for a failed AI
  * call: the answer is then the standard reading.
+ *
+ * `phraseText` is the text the recognition phrases are looked for in, when it
+ * is not `text`: a spreadsheet's words without the ` | ` between its cells
+ * (`detectionText`), so a phrase is found even across two cells.
  */
 export async function detectProfile(input: {
   text: string;
+  phraseText?: string;
   profiles: readonly DetectableProfile[];
   providers: LLMProviderConfig[];
   intervalMs?: number;

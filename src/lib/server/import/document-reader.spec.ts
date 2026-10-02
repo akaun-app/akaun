@@ -176,6 +176,7 @@ describe("readDocumentItems", () => {
         counterAccountId: null,
         tiedCategoryAccountId: null,
         extras: null,
+        reviewNote: null,
       },
       expect.objectContaining({
         description: "Service fee",
@@ -996,6 +997,91 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
     );
     expect(reading.notes.statedTotal).toBeNull();
     expect(reading.controlTotal).toBeNull();
+  });
+
+  it("gives an item only its own reference in Every transaction mode (FR-062)", () => {
+    const sections: ReadingProfile["sections"] = [
+      {
+        key: "rows",
+        description: "",
+        kind: "by_sign",
+        categoryFromModel: false,
+      },
+    ];
+    const lines = {
+      rows: [line("Order", 5, { reference: "O-1" }), line("Fee", -1)],
+    };
+    const summary = readingFromEnvelope(
+      envelope(lines),
+      profile(sections),
+      context,
+    );
+    expect(summary.items.map((item) => item.reference)).toEqual([
+      "O-1",
+      "ST-08",
+    ]);
+    const every = readingFromEnvelope(
+      envelope(lines),
+      { ...profile(sections), ownReferencesOnly: true },
+      context,
+    );
+    expect(every.items.map((item) => item.reference)).toEqual(["O-1", ""]);
+    expect(
+      savedReadingProfile(
+        {
+          id: 3,
+          name: "Wallet",
+          description: "A wallet report.",
+          phrases: [],
+          instructions: "",
+          statedTotalLabels: {},
+          sections: [
+            {
+              key: "rows",
+              name: "Rows",
+              description: "Each row.",
+              mode: "every_transaction",
+              kind: "by_sign",
+              fixedCategoryAccountId: null,
+              feeTypes: [],
+              extras: null,
+            },
+          ],
+        },
+        "every_transaction",
+      ).ownReferencesOnly,
+    ).toBe(true);
+  });
+
+  it("takes exact cents and a review note only from code, never a float", () => {
+    const reading = readingFromEnvelope(
+      {
+        ...envelope({
+          rows: [
+            line("Big", 98765432109.87, {
+              amount_minor: 9876543210987,
+              review_note: "Check it.",
+            }),
+          ],
+        }),
+        stated_total: 1,
+        stated_total_minor: 9876543210987,
+      },
+      profile([
+        {
+          key: "rows",
+          description: "",
+          kind: "by_sign",
+          categoryFromModel: false,
+        },
+      ]),
+      context,
+    );
+    expect(reading.items[0]).toMatchObject({
+      amountMinor: 9876543210987,
+      reviewNote: "Check it.",
+    });
+    expect(reading.controlTotal).toEqual({ matches: true, differenceMinor: 0 });
   });
 });
 

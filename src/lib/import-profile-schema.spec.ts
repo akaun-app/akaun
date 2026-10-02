@@ -6,12 +6,19 @@ import {
   PROFILE_SECTIONS_MAX,
   checkProfile,
   extraFieldsOf,
+  foldTableText,
   formatProfileErrors,
+  readsFromColumns,
   validateExtrasFragment,
   validateProfile,
   type ImportProfileDraft,
   type ProfileError,
 } from "./import-profile-schema.js";
+import {
+  orderSections,
+  walletLayout,
+  withdrawalSection,
+} from "./server/import/__fixtures__/wallet-table.js";
 import {
   IMPORT_PROFILE_STARTERS,
   starterDraft,
@@ -599,5 +606,266 @@ describe("formatProfileErrors", () => {
     expect(formatProfileErrors(errors)).toBe(
       "p0: m0. p1: m1. p2: m2. p3: m3. p4: m4. and 2 more.",
     );
+  });
+});
+
+describe("table layout and row rules (FR-053, FR-054)", () => {
+  function wallet(): Record<string, unknown> {
+    return {
+      name: "Wallet report",
+      description: "A marketplace wallet report.",
+      phrases: [],
+      instructions: "",
+      statedTotalLabels: {},
+      accountId: 40,
+      layout: walletLayout(),
+      sections: [...orderSections(), withdrawalSection(41)],
+    };
+  }
+  type Loose = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  function errorsOf(edit: (value: Loose) => void): ProfileError[] {
+    const value = structuredClone(wallet()) as Loose;
+    edit(value);
+    return validateProfile(value);
+  }
+
+  it("keeps a layout and each section's row rules as they are", () => {
+    const result = checkProfile(wallet());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.layout).toEqual(walletLayout());
+    expect(result.profile.sections.map((section) => section.rows)).toEqual(
+      [...orderSections(), withdrawalSection(41)].map(
+        (section) => section.rows,
+      ),
+    );
+  });
+
+  it("fills in the date format and decimal separator when they are left out", () => {
+    const value = wallet();
+    const layout = { ...walletLayout() } as Loose;
+    delete layout.dateFormat;
+    delete layout.decimalSeparator;
+    delete layout.csvDelimiter;
+    value.layout = layout;
+    const result = checkProfile(value);
+    expect(result.ok && result.profile.layout).toMatchObject({
+      dateFormat: "YYYY-MM-DD",
+      decimalSeparator: ".",
+      csvDelimiter: null,
+    });
+  });
+
+  it("keeps no layout key on a profile without one, as before", () => {
+    const value = wallet();
+    delete value.layout;
+    value.sections = [{ ...orderSections()[0], rows: undefined }];
+    const result = checkProfile(value);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect("layout" in result.profile).toBe(false);
+    expect("rows" in result.profile.sections[0]).toBe(false);
+  });
+
+  it("refuses a column that is not one of the headings, wherever it is named", () => {
+    const errors = errorsOf((value) => {
+      value.layout.columns.amount = "Total";
+      value.layout.remarkColumns = ["Note"];
+      value.sections[0].rows.where[0].column = "Kind";
+    });
+    expect(paths(errors)).toEqual([
+      "layout.columns.amount",
+      "layout.remarkColumns[0]",
+      "sections[0].rows.where[0].column",
+    ]);
+    expect(errors[0].message).toBe(
+      '"Total" is not one of the table\'s headings. Add it to the headings, or choose one of them.',
+    );
+    // Headings compare as the reading compares them.
+    expect(
+      errorsOf((value) => {
+        value.layout.columns.amount = "  AMOUNT ";
+      }),
+    ).toEqual([]);
+  });
+
+  it("refuses row rules on a profile with no table layout", () => {
+    const errors = errorsOf((value) => {
+      delete value.layout;
+    });
+    expect(paths(errors)).toEqual([
+      "sections[0].rows",
+      "sections[1].rows",
+      "sections[2].rows",
+    ]);
+    expect(errors[0].message).toMatch(/has no table layout/);
+  });
+
+  it("refuses a layout with no headings or a missing column", () => {
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.layout = { headers: [], columns: {} };
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "layout.headers",
+        "layout.columns.date",
+        "layout.columns.description",
+        "layout.columns.amount",
+      ]),
+    );
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.layout.headers = ["Date", "date"];
+        }),
+      ),
+    ).toContain("layout.headers[1]");
+  });
+
+  it("refuses a condition with no value, an unknown comparison or an empty list", () => {
+    const errors = errorsOf((value) => {
+      value.sections[0].rows.where = [
+        { column: "Status", op: "is" },
+        { column: "Status", op: "starts_with", value: "x" },
+        { column: "Status", op: "is_one_of", values: [] },
+        { column: "Status", op: "empty" },
+      ];
+    });
+    expect(paths(errors)).toEqual([
+      "sections[0].rows.where[0].value",
+      "sections[0].rows.where[1].op",
+      "sections[0].rows.where[2].values",
+    ]);
+  });
+
+  it("needs a note for a flag rule, and a flag rule for a note", () => {
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.sections[2].rows.flagNote = "";
+        }),
+      ),
+    ).toEqual(["sections[2].rows.flagNote"]);
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.sections[0].rows.flagNote = "Check it.";
+        }),
+      ),
+    ).toEqual(["sections[0].rows.flagNote"]);
+  });
+
+  it("ties fee types to their column and values, and no value to two types", () => {
+    const withFees = (edit: (section: Loose) => void) =>
+      paths(
+        errorsOf((value) => {
+          value.sections[0].feeTypes = [
+            {
+              key: "orders",
+              description: "",
+              categoryAccountId: null,
+              values: ["Order Income"],
+            },
+            {
+              key: "refunds",
+              description: "",
+              categoryAccountId: null,
+              values: ["Refund"],
+            },
+          ];
+          value.sections[0].rows.feeTypeColumn = "Transaction Type";
+          edit(value.sections[0]);
+        }),
+      );
+    expect(withFees(() => {})).toEqual([]);
+    expect(
+      withFees((section) => {
+        section.rows.feeTypeColumn = null;
+      }),
+    ).toEqual([
+      "sections[0].rows.feeTypeColumn",
+      "sections[0].feeTypes[0].values",
+      "sections[0].feeTypes[1].values",
+    ]);
+    expect(
+      withFees((section) => {
+        section.feeTypes[1].values = [];
+      }),
+    ).toEqual(["sections[0].feeTypes[1].values"]);
+    expect(
+      withFees((section) => {
+        section.feeTypes[1].values = ["order  income"];
+      }),
+    ).toEqual(["sections[0].feeTypes[1].values[0]"]);
+    expect(
+      withFees((section) => {
+        section.feeTypes = [];
+      }),
+    ).toEqual(["sections[0].rows.feeTypeColumn"]);
+  });
+
+  it("refuses values on a fee type the AI reads, which has no column to read them from", () => {
+    const value = wallet();
+    delete value.layout;
+    value.sections = [
+      {
+        ...orderSections()[0],
+        rows: undefined,
+        feeTypes: [
+          {
+            key: "orders",
+            description: "",
+            categoryAccountId: null,
+            values: ["Order"],
+          },
+        ],
+      },
+    ];
+    expect(paths(validateProfile(value))).toEqual([
+      "sections[0].feeTypes[0].values",
+    ]);
+  });
+
+  it("refuses a direction value meaning both ways, a bad currency and an unknown mode", () => {
+    const errors = errorsOf((value) => {
+      value.layout.direction.out = ["Money Out", "money in"];
+      value.layout.currency = "RM";
+      value.layout.decimalSeparator = " ";
+      value.layout.dateFormat = "D MMM YYYY";
+      value.layout.statedTotalLabels = { daily: ["Total"] };
+    });
+    expect(paths(errors)).toEqual([
+      "layout.dateFormat",
+      "layout.direction.out[1]",
+      "layout.decimalSeparator",
+      "layout.currency",
+      "layout.statedTotalLabels.daily",
+    ]);
+  });
+
+  it("says which profiles read a mode from columns: a layout, and rules on every section of it", () => {
+    const result = checkProfile(wallet());
+    if (!result.ok) throw new Error("not ok");
+    const profile = result.profile;
+    expect(readsFromColumns(profile, "every_transaction")).toBe(true);
+    expect(readsFromColumns(profile, "summary")).toBe(false);
+    const mixed = {
+      ...profile,
+      sections: [
+        ...profile.sections,
+        { ...profile.sections[0], key: "other", rows: undefined },
+      ],
+    };
+    expect(readsFromColumns(mixed, "every_transaction")).toBe(false);
+    expect(
+      readsFromColumns({ ...profile, layout: null }, "every_transaction"),
+    ).toBe(false);
+  });
+
+  it("folds case and spacing the one way the reader does", () => {
+    expect(foldTableText("  Money\u00a0 In ")).toBe("money in");
   });
 });

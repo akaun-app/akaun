@@ -21,6 +21,12 @@ type JobSnapshot = {
 	reference: string | null;
 	extractedText: string | null;
 	documentType: number;
+	// When true, a record whose own reference differs from this item's is never
+	// its duplicate (006 FR-063): two rows of one table with different references
+	// are different transactions, however alike the rest. Set only for an item
+	// read from a table's columns or in pieces; every other reading keeps the
+	// weighted check below unchanged (FR-024).
+	referenceVeto?: boolean;
 };
 
 type DuplicateResult = {
@@ -185,9 +191,13 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	const jobSupplierTokens = jobSupplierNorm ? tokenSet(jobSupplierNorm) : null;
 
 	let best: { id: number; score: number; reasons: string[] } | null = null;
+	const ownReference = job.referenceVeto ? (job.reference?.trim() ?? '') : '';
 
 	for (const c of candidates.values()) {
 		const reasons: { label: string; weight: number }[] = [];
+
+		const theirReference = c.reference?.trim() ?? '';
+		if (ownReference && theirReference && theirReference !== ownReference) continue;
 
 		if (job.reference && job.reference.trim() && c.reference && c.reference.trim() === job.reference.trim()) {
 			reasons.push({ label: 'reference', weight: 65 });

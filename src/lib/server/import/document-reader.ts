@@ -138,7 +138,10 @@ export interface DocumentItem {
   amount: number;
   /** The item's own date when its line prints one, else the document's. */
   date: string;
-  /** The item's own reference when its line prints one, else the document's. */
+  /**
+   * The item's own reference when its line prints one, else the document's;
+   * in Every transaction mode only its own (FR-062).
+   */
   reference: string;
   /** The document line the amount is printed on, when the model said. */
   sourceLine: number | null;
@@ -167,6 +170,11 @@ export interface DocumentItem {
    */
   tiedCategoryAccountId: number | null;
   extras: Record<string, unknown> | null;
+  /**
+   * What the reviewer is to check on this item, from its section's flag rule
+   * (FR-061), or null. Only a reading from columns sets one.
+   */
+  reviewNote: string | null;
 }
 
 /** What reading a document found. */
@@ -493,13 +501,19 @@ export function readingFromEnvelope(
   // A profile that names no stated total compares against none, whatever
   // the model put in the field.
   const printedTotal =
-    envelope.stated_total != null && profile.statedTotalDescription !== null
-      ? toMinor(envelope.stated_total, 1)
-      : null;
+    profile.statedTotalDescription === null
+      ? null
+      : envelope.stated_total_minor != null
+        ? envelope.stated_total_minor
+        : envelope.stated_total != null
+          ? toMinor(envelope.stated_total, 1)
+          : null;
 
   for (const section of profile.sections) {
     const lines = envelope.sections[section.key] ?? [];
-    const amounts = lines.map((line) => toMinor(line.amount, 1));
+    const amounts = lines.map((line) =>
+      line.amount_minor != null ? line.amount_minor : toMinor(line.amount, 1),
+    );
     // A section with fee types keeps only lines of a known type (FR-034).
     const typed = (line: ReadItem) =>
       !section.feeTypes?.length || line.fee_type != null;
@@ -567,7 +581,9 @@ export function readingFromEnvelope(
         amountMinor,
         amount: fromMinor(amountMinor),
         date: ownDate || date,
-        reference: line.reference?.trim() || reference,
+        reference:
+          line.reference?.trim() ||
+          (profile.ownReferencesOnly ? "" : reference),
         sourceLine,
         feeType: line.fee_type ?? null,
         categoryAccountId: categoryCandidates[0] ?? null,
@@ -578,6 +594,7 @@ export function readingFromEnvelope(
             : null,
         tiedCategoryAccountId: tiedCategoryFor(section, line),
         extras: line.extras ?? null,
+        reviewNote: line.review_note?.trim() || null,
       });
     });
   }

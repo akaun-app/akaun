@@ -26,6 +26,8 @@ import {
   type ProfileError,
   type ProfileSectionKind,
   type ProfileSectionMode,
+  type SectionRows,
+  type TableLayout,
 } from "./import-profile-schema.js";
 import { ImportMode } from "./import-reading.js";
 
@@ -36,6 +38,12 @@ export interface FeeTypeForm {
   description: string;
   /** The pinned category, or null for "Auto". */
   categoryAccountId: number | null;
+  /**
+   * The cell values that mean this fee type in a fee type column (FR-054).
+   * The editor does not show them yet; they are kept as saved, so a save from
+   * the editor never drops them.
+   */
+  values: string[];
 }
 
 export interface SectionForm {
@@ -55,6 +63,11 @@ export interface SectionForm {
   extrasText: string;
   /** A transfer section's other account (FR-058); null for any other kind. */
   counterAccountId: number | null;
+  /**
+   * The section's row rules for reading from columns (FR-054), or null. Kept
+   * as saved, like the layout below.
+   */
+  rows: SectionRows | null;
 }
 
 export interface ProfileForm {
@@ -70,6 +83,12 @@ export interface ProfileForm {
   statedTotals: Record<ProfileSectionMode, string>;
   /** The account the document is about (FR-058), or null for none. */
   accountId: number | null;
+  /**
+   * The table layout for reading a spreadsheet from its columns (FR-053), or
+   * null. The editor does not edit it yet; it is kept as saved and sent back
+   * unchanged, so editing another field never drops it.
+   */
+  layout: TableLayout | null;
   sections: SectionForm[];
 }
 
@@ -117,7 +136,13 @@ export function typingKey(text: string): string {
 
 /** An empty fee type row. */
 export function newFeeType(): FeeTypeForm {
-  return { uid: newUid(), key: "", description: "", categoryAccountId: null };
+  return {
+    uid: newUid(),
+    key: "",
+    description: "",
+    categoryAccountId: null,
+    values: [],
+  };
 }
 
 /**
@@ -139,6 +164,7 @@ export function newSection(
     feeTypes: [],
     extrasText: "",
     counterAccountId: null,
+    rows: null,
   };
 }
 
@@ -156,6 +182,7 @@ export function blankForm(): ProfileForm {
     instructions: "",
     statedTotals: noStatedTotals(),
     accountId: null,
+    layout: null,
     sections: [newSection()],
   };
 }
@@ -177,6 +204,7 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
         draft.statedTotalLabels[ImportMode.EveryTransaction] ?? "",
     },
     accountId: draft.accountId ?? null,
+    layout: draft.layout ?? null,
     sections: draft.sections.map((section) => ({
       uid: newUid(),
       key: section.key,
@@ -191,9 +219,11 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
         key: feeType.key,
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
+        values: [...(feeType.values ?? [])],
       })),
       extrasText: section.extras ? JSON.stringify(section.extras, null, 2) : "",
       counterAccountId: section.counterAccountId ?? null,
+      rows: section.rows ?? null,
     })),
   };
 }
@@ -245,6 +275,8 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
     instructions: form.instructions,
     statedTotalLabels,
     accountId: form.accountId,
+    // Sent only when there is one, as a profile without one is saved.
+    ...(form.layout ? { layout: form.layout } : {}),
     sections: form.sections.map((section, index) => ({
       key: keys[index],
       name: section.name,
@@ -256,12 +288,14 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
         key: feeType.key,
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
+        ...(feeType.values.length ? { values: feeType.values } : {}),
       })),
       extras: section.extrasText,
       // Sent only for a transfer, the one kind that names it.
       ...(section.kind === "transfer"
         ? { counterAccountId: section.counterAccountId }
         : {}),
+      ...(section.rows ? { rows: section.rows } : {}),
     })),
   };
 }

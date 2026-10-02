@@ -15,7 +15,7 @@
 	import ReadAgainDialog from './ReadAgainDialog.svelte';
 	import { createResourceStream } from '$lib/sse.js';
 	import { ImportState, importStateEnum } from '$lib/enums.js';
-	import { parseExtractionNotes } from '$lib/import-reading.js';
+	import { ignoredSummary, parseExtractionNotes } from '$lib/import-reading.js';
 	import { mainCurrency } from '$lib/currency-state.svelte.js';
 	import { currencySymbol, formatCurrency } from '$lib/currency.js';
 	import { formatDateShort } from '$lib/format.js';
@@ -179,6 +179,7 @@
 	});
 	const waitingCount = $derived(counts.ready + counts.attention);
 	const notes = $derived(parseExtractionNotes(job.extractionNotes));
+	const ignoredText = $derived(notes ? ignoredSummary(notes) : null);
 	const control = $derived(describeControlTotal(job.extractionNotes));
 
 	// The two totals usually share a sign, and then the rail shows them without
@@ -1224,18 +1225,25 @@
 				</section>
 			{/if}
 
-			{#if notes && notes.ignored.length > 0}
+			{#if notes && ignoredText}
 				<section class="detail-card">
 					<details class="ignored">
-						<summary>Ignored {notes.ignored.length} line{notes.ignored.length === 1 ? '' : 's'}</summary>
+						<!-- A reading from columns counts every row it left out and keeps a
+						     sample, such as "Ignored 726 lines (20 shown)" (FR-056). -->
+						<summary>{ignoredText}</summary>
 						<ul class="ignored-list">
 							{#each notes.ignored as line, i (i)}
 								<li>{line}</li>
 							{/each}
 						</ul>
 						<p class="hint">
-							Lines the reading saw and left out on purpose, such as subtotals. A guide only: it may not list every
-							line that was left out.
+							{#if notes.method === 'columns'}
+								Rows of the table that fit no section, or whose fee type is not listed. The count is exact; only the
+								first rows are listed.
+							{:else}
+								Lines the reading saw and left out on purpose, such as subtotals. A guide only: it may not list every
+								line that was left out.
+							{/if}
 						</p>
 					</details>
 				</section>

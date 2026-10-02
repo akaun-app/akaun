@@ -98,3 +98,36 @@ describe("detectionText", () => {
     expect(text).not.toContain("|");
   });
 });
+
+describe("what the AI reads of a workbook (006 S4.5 decisions)", () => {
+  it("writes a | inside a cell as ¦, so it never reads as a cell boundary", () => {
+    const workbook = readCsv(Buffer.from('a,"b | c",d\n'), { sheetName: "x" });
+    const { pages } = renderWorkbook(workbook);
+    expect(pages).toEqual(["Sheet: x\na | b \u00a6 c | d"]);
+    // Phrase matching reads the cells as they are.
+    expect(detectionText(workbook)).toContain("b | c");
+  });
+
+  it("reads a hidden sheet like any other, and says it is hidden", () => {
+    const workbook = readXlsx(
+      buildXlsx({
+        sheets: [
+          { name: "Shown", rows: [["one"]] },
+          { name: "Lookup", rows: [["two"]], state: "hidden" },
+          { name: "Macro", rows: [["three"]], state: "veryHidden" },
+        ],
+      }),
+    );
+    expect(workbook.sheets.map((sheet) => sheet.hidden ?? false)).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(renderWorkbook(workbook).pages).toEqual([
+      "Sheet: Shown\none",
+      "Sheet: Lookup (hidden)\ntwo",
+      "Sheet: Macro (hidden)\nthree",
+    ]);
+    expect(detectionText(workbook)).toContain("two");
+  });
+});

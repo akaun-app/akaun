@@ -57,6 +57,12 @@ export interface ReadFields {
     originalFilename: string | null;
     fileHash: string | null;
     extractedText: string | null;
+    /**
+     * True for an item read from a table's columns or in pieces: a record
+     * with a different reference of its own is then never its duplicate
+     * (FR-063). Absent, as for a receipt, keeps the check as it was.
+     */
+    referenceVeto?: boolean;
   };
   /**
    * The account the document is about, when its profile names one (FR-008,
@@ -209,6 +215,7 @@ export async function buildReviewFields(
     reference: input.reference,
     extractedText: input.duplicateEvidence.extractedText,
     documentType: docType,
+    referenceVeto: input.duplicateEvidence.referenceVeto,
   });
 
   // Contact resolution — deterministic backend step (the LLM is never given

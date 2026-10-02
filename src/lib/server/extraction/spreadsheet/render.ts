@@ -13,7 +13,7 @@
  * cells (see `xlsx.ts`); numbers are written in full, as Excel shows them.
  */
 
-import { cellText, type Sheet, type Workbook } from "./types.js";
+import { cellText, isBlankRow, type Sheet, type Workbook } from "./types.js";
 
 /** Where one row went in the text. */
 export interface RenderedRow {
@@ -40,6 +40,17 @@ function oneLine(text: string): string {
   return text.replace(/[\r\n\t\v\f\u2028\u2029]+/g, " ");
 }
 
+/**
+ * A cell as the AI reads it. Cells are joined by ` | `, so a `|` inside a
+ * cell would read as a cell boundary and shift every column after it; it is
+ * written as `¦` instead, which looks the same to a person and is never a
+ * boundary. Only the AI's text changes: a reading from columns uses the cells
+ * themselves, and phrase matching uses `detectionText`.
+ */
+function renderedCell(text: string): string {
+  return oneLine(text).replace(/\|/g, "\u00a6");
+}
+
 /** The row's cells joined by ` | `, with the empty cells after the last one left off. */
 function rowLine(cells: readonly string[]): string {
   let end = cells.length;
@@ -47,8 +58,14 @@ function rowLine(cells: readonly string[]): string {
   return cells.slice(0, end).join(" | ");
 }
 
+/**
+ * The line a sheet's page starts with. A hidden sheet says so: its cells are
+ * read like any other's, but nobody sees them in Excel, so the AI and the
+ * reviewer are told where those lines come from.
+ */
 export function sheetHeading(sheet: Sheet): string {
-  return `Sheet: ${oneLine(sheet.name).trim() || "(no name)"}`;
+  const name = oneLine(sheet.name).trim() || "(no name)";
+  return `Sheet: ${name}${sheet.hidden ? " (hidden)" : ""}`;
 }
 
 /**
@@ -65,10 +82,10 @@ export function renderWorkbook(workbook: Workbook): RenderedWorkbook {
     const lines = [sheetHeading(sheet)];
     line++;
     for (const row of sheet.rows) {
+      if (isBlankRow(row)) continue;
       const text = rowLine(
-        row.cells.map((cell) => oneLine(cellText(cell))),
+        row.cells.map((cell) => renderedCell(cellText(cell))),
       ).trimEnd();
-      if (text.trim() === "") continue;
       lines.push(text);
       line++;
       rows.push({ sheetIndex, rowNumber: row.number, line });

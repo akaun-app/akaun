@@ -293,4 +293,55 @@ describe("detectDuplicate over the one record store", () => {
       reasons: ["file_hash"],
     });
   });
+
+  it("never offers a record whose own reference differs, for an item read from columns (006 FR-063)", () => {
+    const other = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 100,
+      amountMinor: 10_000,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2026-08-01",
+      reference: "ORDER-1",
+    });
+    const item = {
+      ...baseJob,
+      originalFilename: null,
+      reference: "ORDER-2",
+    };
+
+    // Every other reading keeps the weighted check: date, amount and other
+    // party outweigh the different reference (FR-024).
+    expect(detectDuplicate(db, item)?.duplicateOf).toBe(other);
+    // Two rows of one table with different references are two transactions.
+    expect(detectDuplicate(db, { ...item, referenceVeto: true })).toBeNull();
+    // The same reference, or none on either side, is still compared.
+    expect(
+      detectDuplicate(db, {
+        ...item,
+        reference: "ORDER-1",
+        referenceVeto: true,
+      })?.duplicateOf,
+    ).toBe(other);
+    expect(
+      detectDuplicate(db, { ...item, reference: "", referenceVeto: true })
+        ?.duplicateOf,
+    ).toBe(other);
+    const unnamed = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 55,
+      amountMinor: 5_500,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2026-08-03",
+    });
+    expect(
+      detectDuplicate(db, {
+        ...item,
+        amount: 55,
+        date: "2026-08-03",
+        referenceVeto: true,
+      })?.duplicateOf,
+    ).toBe(unnamed);
+  });
 });

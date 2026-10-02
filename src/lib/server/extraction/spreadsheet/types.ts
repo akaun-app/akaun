@@ -36,6 +36,12 @@ export interface SheetRow {
 export interface Sheet {
   name: string;
   /**
+   * True for a sheet the workbook hides from view (hidden or "very hidden"
+   * in Excel). It is still read: a hidden sheet's cells are part of the file,
+   * and leaving them out would drop lines without saying so (FR-010).
+   */
+  hidden?: boolean;
+  /**
    * The rows that hold at least one cell, top to bottom. A row with nothing in
    * it is not listed, so a gap in `number` is a blank row.
    */
@@ -134,4 +140,14 @@ export function cellText(cell: CellValue | null | undefined): string {
     case "error":
       return cell.code;
   }
+}
+
+/**
+ * Whether a row shows nothing: every cell is empty or only spaces. This is the
+ * one definition of a blank row. The text rendering leaves such a row out,
+ * so it has no line number, and a table read from its columns ends at the
+ * first one (FR-055). A row the file does not list at all is blank too.
+ */
+export function isBlankRow(row: Pick<SheetRow, "cells">): boolean {
+  return row.cells.every((cell) => cellText(cell).trim() === "");
 }

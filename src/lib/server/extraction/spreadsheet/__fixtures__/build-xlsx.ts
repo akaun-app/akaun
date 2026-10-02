@@ -94,6 +94,8 @@ export interface FixtureSheet {
   xml?: string;
   /** Row numbers to write for each row instead of counting from 1. */
   rowNumbers?: number[];
+  /** Hides the sheet, as Excel's Hide (or a macro's "very hidden") does. */
+  state?: "hidden" | "veryHidden";
 }
 
 export interface FixtureWorkbook {
@@ -225,7 +227,7 @@ export function buildXlsx(workbook: FixtureWorkbook): Buffer {
     workbook.sheets
       .map(
         (sheet, index) =>
-          `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`,
+          `<sheet name="${escapeXml(sheet.name)}" sheetId="${index + 1}"${sheet.state ? ` state="${sheet.state}"` : ""} r:id="rId${index + 1}"/>`,
       )
       .join("") +
     `</sheets></workbook>`;

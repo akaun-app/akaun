@@ -186,7 +186,7 @@ export function readXlsx(
       limits,
       budget,
     });
-    sheets.push({ name, rows });
+    sheets.push(entry.hidden ? { name, rows, hidden: true } : { name, rows });
   }
   if (sheets.length === 0)
     throw new SpreadsheetError("The workbook has no sheets with cells in it.");
@@ -253,7 +253,7 @@ function readRelationships(
 interface WorkbookPart {
   date1904: boolean;
   /** The sheets in workbook order, each with its relationship id. */
-  sheets: { name?: string; id?: string }[];
+  sheets: { name?: string; id?: string; hidden: boolean }[];
 }
 
 /** The workbook part: its date system and its list of sheets. */
@@ -270,7 +270,12 @@ function readWorkbookPart(xml: string): WorkbookPart {
         path[1] === "sheets" &&
         name === "sheet"
       ) {
-        part.sheets.push({ name: attrs.name, id: attrs.id });
+        part.sheets.push({
+          name: attrs.name,
+          id: attrs.id,
+          // "hidden", or "veryHidden" for one only a macro can show.
+          hidden: attrs.state === "hidden" || attrs.state === "veryHidden",
+        });
       }
     },
     close() {

@@ -155,6 +155,36 @@ describe("describeReading", () => {
       }),
     ).toBe("Read with “Wallet report” (chosen)");
   });
+
+  it("says when a spreadsheet was read from its columns (FR-041)", () => {
+    const every = { name: "Wallet report", mode: "every_transaction" };
+    const notes = (method?: string) =>
+      JSON.stringify({
+        statedTotal: null,
+        itemsTotalMinor: 0,
+        ignored: [],
+        ...(method ? { method } : {}),
+      });
+    expect(
+      describeReading({
+        readAs: "auto",
+        readHow: "detected",
+        profile: every,
+        extractionNotes: notes("columns"),
+      }),
+    ).toBe(
+      "Read with “Wallet report” (detected) · Every transaction · read from columns",
+    );
+    // An AI reading says nothing more than it did.
+    expect(
+      describeReading({
+        readAs: "profile",
+        readHow: "chosen",
+        profile: every,
+        extractionNotes: notes(),
+      }),
+    ).toBe("Read with “Wallet report” (chosen) · Every transaction");
+  });
 });
 
 describe("readingLabel", () => {

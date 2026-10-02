@@ -14,6 +14,11 @@ import {
 } from "./import-profile-form.js";
 import { checkProfile } from "./import-profile-schema.js";
 import {
+  orderSections,
+  walletLayout,
+  withdrawalSection,
+} from "./server/import/__fixtures__/wallet-table.js";
+import {
   IMPORT_PROFILE_STARTERS,
   starterDraft,
 } from "./import-profile-starters.js";
@@ -122,6 +127,42 @@ describe("the form and the profile", () => {
       sections: Record<string, unknown>[];
     };
     expect(payload.sections.at(-1)).not.toHaveProperty("counterAccountId");
+  });
+
+  it("keeps a table layout, row rules and fee type values it does not edit yet", () => {
+    const sections = [...orderSections(), withdrawalSection(8)];
+    sections[0] = {
+      ...sections[0],
+      feeTypes: [
+        {
+          key: "orders",
+          description: "",
+          categoryAccountId: null,
+          values: ["Order Income"],
+        },
+      ],
+      rows: {
+        ...sections[0].rows!,
+        where: [],
+        feeTypeColumn: "Transaction Type",
+      },
+    };
+    const draft = {
+      name: "Wallet report",
+      description: "A marketplace wallet report.",
+      phrases: [],
+      instructions: "",
+      statedTotalLabels: {},
+      accountId: 7,
+      layout: walletLayout(),
+      sections,
+    };
+    const form = formFromDraft(draft);
+    form.name = "Wallet report, renamed";
+    expect(checkProfile(payloadFromForm(form))).toEqual({
+      ok: true,
+      profile: { ...draft, name: "Wallet report, renamed" },
+    });
   });
 
   it("starts a new section in Summary, and sends each section's own mode", () => {

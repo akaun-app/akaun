@@ -195,6 +195,16 @@ describe("compileProfile — built-in several items", () => {
     expect(compiled.parse(noisy)).toEqual(value);
   });
 
+  it("never lets a model set what only a reading from columns sets", () => {
+    const value = sample(compiled.wire, "full") as Record<string, unknown>;
+    const noisy = structuredClone(value) as Loose;
+    noisy.stated_total_minor = 1;
+    noisy.sections.items[0].amount_minor = 1;
+    noisy.sections.items[0].review_note = "Approved by the system.";
+
+    expect(compiled.parse(noisy)).toEqual(value);
+  });
+
   it("reads a missing value that may be null as null", () => {
     const value = sample(compiled.wire, "full") as Loose;
     delete value.stated_total;

@@ -21,6 +21,10 @@
  *   document is read with the profile it found or as a receipt (FR-039,
  *   FR-040). The row keeps "auto" as what the uploader chose; `read_how`,
  *   `profile_id` and the copy of the profile say how it was read.
+ * - **From its columns** (006 FR-055): a spreadsheet read with a profile whose
+ *   sections in the chosen mode all have row rules is read by code
+ *   (`table-reader.ts`), with no AI call. It needs no AI provider, so the check
+ *   for one is made only where the AI is asked.
  *
  * The worker calls this with the app's database and storage folder; the tests
  * call it with their own, so nothing here reaches for either.
@@ -28,6 +32,7 @@
 
 import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
+import { readFileSync } from "fs";
 import { join } from "path";
 import {
   DocumentType,
@@ -36,15 +41,18 @@ import {
   isTransferType,
   type ImportStateCode,
 } from "$lib/enums.js";
+import { readsFromColumns } from "$lib/import-profile-schema.js";
 import {
   ImportMode,
   ImportReadAs,
   ImportReadHow,
   isImportMode,
   serializeExtractionNotes,
+  type ImportModeValue,
 } from "$lib/import-reading.js";
 import { importItems, importQueue, users } from "../db/schema.js";
 import {
+  CSV_MIME_TYPE,
   extractDocumentSource,
   extractNumberedText,
   extractPlainAndNumberedText,
@@ -54,9 +62,13 @@ import {
   isSpreadsheetMimeType,
   keepsReadText,
   numberDocumentLines,
+  spreadsheetText,
   stripLineNumbers,
   type DocumentSource,
 } from "../extraction/document-text.js";
+import { readCsv } from "../extraction/spreadsheet/csv.js";
+import { detectionText } from "../extraction/spreadsheet/render.js";
+import type { Workbook } from "../extraction/spreadsheet/types.js";
 import type { LedgerDb } from "../ledger/types.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
 import { createLogger } from "../logger.js";
@@ -82,7 +94,7 @@ import {
 } from "./document-reader.js";
 import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
-import { detectProfile } from "./profile-detect.js";
+import { detectProfile, phraseMatch } from "./profile-detect.js";
 import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
 import { alreadyImported } from "./repeat-file.js";
 import {
@@ -102,6 +114,13 @@ import {
   serializeProfileSnapshot,
 } from "./profile-snapshot.js";
 import type { ReviewFields } from "./review-fields.js";
+import {
+  TableReadError,
+  columnsReadingId,
+  layoutMatches,
+  readFromColumns,
+  type TableProfile,
+} from "./table-reader.js";
 
 const log = createLogger("import:worker");
 
@@ -115,6 +134,10 @@ export interface ProcessJobOptions {
 
 /** The message a document with nothing to import fails with (FR-009). */
 export const NO_ITEMS_FOUND = "No items found";
+
+/** The message a reading that needs the AI fails with when none is set up. */
+export const NO_PROVIDERS =
+  "No LLM providers configured. Go to Settings → Intelligence to add one.";
 
 /**
  * Items are inserted this many at a time, so a document of a thousand items
@@ -144,6 +167,11 @@ interface ItemsReading {
   profileId: string;
   /** The saved profile's name; absent for the built-in reading. */
   profileName?: string;
+  /**
+   * Set when the document is a spreadsheet to be read from its columns, with
+   * no AI (FR-055): the profile's layout and sections, and the mode.
+   */
+  columns?: { table: TableProfile; mode: ImportModeValue };
 }
 
 function markFailed(
@@ -230,13 +258,15 @@ const NUMBERED_TEXT: TextForm<string> = {
 };
 
 /**
- * Both, for Auto-detect, which knows which one it needs only after detection.
- * Taken in one pass, so an image is read by OCR once.
+ * Every form at once: both texts, and a spreadsheet's cells. For Auto-detect,
+ * which knows which one it needs only after detection, and for a reading from
+ * columns, which needs the cells and the numbered text both. Taken in one
+ * pass, so an image is read by OCR once and a workbook unpacked once.
  */
-const BOTH_TEXTS: TextForm<{ plain: string; numbered: string }> = {
+const SOURCE_TEXTS: TextForm<DocumentSource> = {
   given: (text) => ({ plain: text, numbered: numberDocumentLines([text]) }),
   extract: extractPlainAndNumberedText,
-  fromSource: ({ plain, numbered }) => ({ plain, numbered }),
+  fromSource: (source) => source,
   printed: (texts) => texts.plain,
 };
 
@@ -402,14 +432,15 @@ export async function processImportJob(
     itemsReading = chosen.value;
   }
 
+  // A reading that will certainly ask the AI stops here, before the file is
+  // read, as it always has. One that may be read from columns goes on: it
+  // needs no provider, and the check is made where the AI is asked.
   const providers = loadProviders(db);
-  if (!providers.length) {
-    markFailed(
-      db,
-      job.id,
-      userId,
-      "No LLM providers configured. Go to Settings → Intelligence to add one.",
-    );
+  if (
+    !providers.length &&
+    !mayReadWithoutAi(job, path, itemsReading, candidates)
+  ) {
+    markFailed(db, job.id, userId, NO_PROVIDERS);
     return;
   }
 
@@ -452,6 +483,26 @@ export async function processImportJob(
     return;
   }
 
+  if (itemsReading?.columns) {
+    // The cells themselves, and the numbered text for each item's line.
+    const source = await documentText(
+      db,
+      job,
+      userId,
+      SOURCE_TEXTS,
+      options.storageRoot,
+    );
+    if (source === null) return;
+    setState(db, job.id, userId, ImportState.Processing);
+    const cells = cellsForColumns(job, source, itemsReading, options);
+    if (typeof cells === "string") {
+      markFailed(db, job.id, userId, cells);
+      return;
+    }
+    await readItems(db, job, userId, ctx, { ...cells, ...calls }, itemsReading);
+    return;
+  }
+
   const text = await documentText(
     db,
     job,
@@ -469,6 +520,39 @@ export async function processImportJob(
   } else {
     await readItems(db, job, userId, ctx, { text, ...calls }, itemsReading);
   }
+}
+
+/**
+ * Whether this job may be read with no AI at all, so a missing provider is
+ * not yet a reason to fail it: a spreadsheet read with a profile from its
+ * columns, or a spreadsheet Auto-detect may find such a profile for. Anything
+ * else asks the AI, and is stopped before its file is read, as before.
+ */
+function mayReadWithoutAi(
+  job: ImportJob,
+  path: ReadingPath,
+  itemsReading: ItemsReading | null,
+  candidates: readonly ImportProfileView[],
+): boolean {
+  if (path === "profile") return itemsReading?.columns !== undefined;
+  if (path !== "auto" || !readsCells(job)) return false;
+  const mode = modeOf(job);
+  return candidates.some((profile) => readsFromColumns(profile, mode));
+}
+
+/** The import mode the uploader chose; Summary on a row from before it. */
+function modeOf(job: Pick<ImportJob, "importMode">): ImportModeValue {
+  return isImportMode(job.importMode) ? job.importMode : ImportMode.Summary;
+}
+
+/**
+ * Whether the job's cells can be read: a spreadsheet whose text was not
+ * given with the upload. Text given in its place has no cells to go by.
+ */
+function readsCells(
+  job: Pick<ImportJob, "originalFilename" | "preExtractedText">,
+): boolean {
+  return isSpreadsheetJob(job) && !job.preExtractedText?.trim();
 }
 
 /**
@@ -495,20 +579,26 @@ async function readAutoDetected(
     db,
     job,
     userId,
-    BOTH_TEXTS,
+    SOURCE_TEXTS,
     options.storageRoot,
   );
   if (texts === null) return;
 
   setState(db, job.id, userId, ImportState.Processing);
 
-  const detection = await detectProfile({
-    text: texts.plain,
-    profiles,
-    providers: calls.providers,
-    intervalMs: calls.rateLimitMs,
-    jobId: job.id,
-  });
+  const detection = texts.workbook
+    ? await detectSpreadsheet(job, texts, texts.workbook, profiles, calls)
+    : await detectProfile({
+        text: texts.plain,
+        profiles,
+        providers: calls.providers,
+        intervalMs: calls.rateLimitMs,
+        jobId: job.id,
+      });
+  if (typeof detection === "string") {
+    markFailed(db, job.id, userId, detection);
+    return;
+  }
 
   if (detection.route === "standard") {
     clearDetectedProfile(db, job);
@@ -524,9 +614,7 @@ async function readAutoDetected(
     ...job,
     profileId: String(detection.route),
     readHow: ImportReadHow.Detected,
-    importMode: isImportMode(job.importMode)
-      ? job.importMode
-      : ImportMode.Summary,
+    importMode: modeOf(job),
   };
   const found = profileForJob(db, detected);
   if (!found.ok) {
@@ -543,14 +631,130 @@ async function readAutoDetected(
     return;
   }
 
+  const cells = cellsForColumns(detected, texts, found.value, options);
+  if (typeof cells === "string") {
+    markFailed(db, job.id, userId, cells);
+    return;
+  }
   await readItems(
     db,
     detected,
     userId,
     ctx,
-    { text: texts.numbered, ...calls },
+    { ...cells, ...calls },
     found.value,
   );
+}
+
+/**
+ * The cells and numbered text a reading goes by. A CSV file read from its
+ * columns with a layout that names the file's separator is read again with
+ * that separator, rather than the one worked out from the file: a file of
+ * amounts with decimal commas can look as if it were split by commas. The
+ * numbered text is made from the same cells, so each item's line is the
+ * line its row has. Returns the reason when the file cannot be read again.
+ */
+function cellsForColumns(
+  job: ImportJob,
+  source: DocumentSource,
+  chosen: ItemsReading,
+  options: ProcessJobOptions,
+): { text: string; workbook?: Workbook } | string {
+  const delimiter = chosen.columns?.table.layout.csvDelimiter ?? null;
+  const isCsv = inferMimeType(job.originalFilename) === CSV_MIME_TYPE;
+  if (!chosen.columns || delimiter === null || !isCsv) {
+    return { text: source.numbered, workbook: source.workbook };
+  }
+  try {
+    const bytes = readFileSync(join(options.storageRoot, job.tempFilePath));
+    const workbook = readCsv(bytes, { delimiter });
+    return { text: spreadsheetText(workbook).numbered, workbook };
+  } catch (err) {
+    log.error({ jobId: job.id, err }, "Reading the CSV file again failed");
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
+ * Auto-detect for a spreadsheet (FR-039, US10 AS12), cheapest first:
+ *
+ * 1. **The table's headings.** Exactly one enabled profile whose layout's
+ *    headings are all in one row of the workbook is used, with no AI.
+ * 2. **Several profiles' headings match.** Their recognition phrases, looked
+ *    for in the cells' words (`detectionText`), decide among those profiles
+ *    only; then the AI detect call, among those profiles only. With no
+ *    provider the job fails, naming them: the table fits each of them, and
+ *    the standard reading would be the wrong answer.
+ * 3. **No profile's headings match.** The phrases decide among every enabled
+ *    profile. Otherwise the AI detect call chooses among the profiles that
+ *    could read the document: a profile that reads this mode from columns
+ *    could not, since its headings are not there. When there are none, or no
+ *    provider is set up, no AI is asked and the standard reading follows,
+ *    whose own checks name a spreadsheet too long for it (FR-052) or the
+ *    missing provider.
+ *
+ * Returns the detection, or the reason the job fails.
+ */
+async function detectSpreadsheet(
+  job: ImportJob,
+  texts: DocumentSource,
+  workbook: Workbook,
+  profiles: ImportProfileView[],
+  calls: Omit<ReadingInput, "text">,
+): Promise<{ route: number | "standard" } | string> {
+  const byHeadings = profiles.filter(
+    (profile) => profile.layout && layoutMatches(workbook, profile.layout),
+  );
+  if (byHeadings.length === 1) {
+    log.info(
+      { jobId: job.id, route: byHeadings[0].id, via: "layout" },
+      "Auto-detect decided",
+    );
+    return { route: byHeadings[0].id };
+  }
+
+  const words = detectionText(workbook);
+  const among = byHeadings.length > 1 ? byHeadings : profiles;
+  const byPhrases = phraseMatch(words, among);
+  if (byPhrases.length === 1) {
+    log.info(
+      { jobId: job.id, route: byPhrases[0].id, via: "phrases" },
+      "Auto-detect decided",
+    );
+    return { route: byPhrases[0].id };
+  }
+
+  if (byHeadings.length > 1 && calls.providers.length === 0) {
+    return severalLayoutsFit(byHeadings);
+  }
+  const mode = modeOf(job);
+  const choices =
+    byHeadings.length > 1
+      ? byHeadings
+      : profiles.filter((profile) => !readsFromColumns(profile, mode));
+  if (choices.length === 0 || calls.providers.length === 0) {
+    return { route: "standard" };
+  }
+
+  return detectProfile({
+    text: texts.plain,
+    phraseText: words,
+    profiles: choices,
+    providers: calls.providers,
+    intervalMs: calls.rateLimitMs,
+    jobId: job.id,
+  });
+}
+
+/**
+ * Why Auto-detect cannot choose among the profiles whose headings a
+ * spreadsheet has, with no AI provider to ask.
+ */
+export function severalLayoutsFit(
+  profiles: readonly Pick<ImportProfileView, "name">[],
+): string {
+  const names = profiles.map((profile) => `"${profile.name}"`).join(", ");
+  return `This spreadsheet has the column headings of ${profiles.length} import profiles (${names}), their recognition phrases do not tell them apart, and no AI provider is set up to choose. Read it again with one of them chosen, or give each recognition phrases only its own documents have.`;
 }
 
 /**
@@ -622,9 +826,7 @@ function profileForJob(
     };
   }
 
-  const mode = isImportMode(job.importMode)
-    ? job.importMode
-    : ImportMode.Summary;
+  const mode = modeOf(job);
   let profile: ReadingProfile;
   try {
     profile = savedReadingProfile(saved, mode);
@@ -634,13 +836,21 @@ function profileForJob(
     throw err;
   }
 
+  // A spreadsheet the profile reads from its columns (FR-055). Its copy
+  // names what was read, the layout and the sections, not a schema the AI
+  // was never sent.
+  const fromColumns = readsCells(job) && readsFromColumns(saved, mode);
+  const schemaId = fromColumns
+    ? columnsReadingId(saved, mode)
+    : profile.schemaId;
+
   db.update(importQueue)
     .set({
       profileId: String(saved.id),
       importMode: mode,
       readHow: job.readHow ?? ImportReadHow.Chosen,
       profileSnapshot: serializeProfileSnapshot(
-        profileSnapshotOf(saved, mode, profile.schemaId),
+        profileSnapshotOf(saved, mode, schemaId),
       ),
     })
     .where(eq(importQueue.id, job.id))
@@ -648,12 +858,30 @@ function profileForJob(
 
   return {
     ok: true,
-    value: { profile, profileId: String(saved.id), profileName: saved.name },
+    value: {
+      profile: fromColumns ? { ...profile, schemaId } : profile,
+      profileId: String(saved.id),
+      profileName: saved.name,
+      ...(fromColumns && saved.layout
+        ? {
+            columns: {
+              table: {
+                name: saved.name,
+                layout: saved.layout,
+                sections: saved.sections,
+              },
+              mode,
+            },
+          }
+        : {}),
+    },
   };
 }
 
 type ReadingInput = {
   text: string;
+  /** A spreadsheet's cells, for a reading from its columns. */
+  workbook?: Workbook;
   providers: ReturnType<typeof getEnabledProviders>;
   rateLimitMs: number;
   accountLists: Omit<LLMCallParams, "text">;
@@ -706,6 +934,10 @@ async function readReceipt(
   const tooLong = receiptTextRefusal(job, input.text);
   if (tooLong) {
     markFailed(db, job.id, userId, tooLong);
+    return;
+  }
+  if (input.providers.length === 0) {
+    markFailed(db, job.id, userId, NO_PROVIDERS);
     return;
   }
 
@@ -825,6 +1057,10 @@ async function itemFields(
   const sectionKinds = new Map(
     profile.sections.map((section) => [section.key, section.kind]),
   );
+  // A row read from a table, or in pieces, carries its own reference, and a
+  // record with a different one is a different transaction (FR-063).
+  const referenceVeto =
+    reading.notes.method === "columns" || reading.notes.method === "ai_pieces";
   const out: ReviewFields[] = [];
   for (const item of reading.items) {
     // The first category the item could take that is still one of its kind
@@ -859,6 +1095,7 @@ async function itemFields(
           originalFilename: null,
           fileHash: null,
           extractedText: null,
+          referenceVeto,
         },
         // The profile's own account, and a transfer's other one (FR-058).
         documentAccountId: profile.documentAccountId ?? null,
@@ -866,12 +1103,14 @@ async function itemFields(
       },
       ctx,
     );
-    fields.reviewNote = tiedCategoryNote(
-      item,
-      sectionKinds.get(item.sectionKey),
-      fields,
-      ctx,
-    );
+    // What the reading says to check: its section's flag rule (FR-061), and
+    // a tied category it could not use (FR-034). Either holds it back from
+    // "Confirm all" until the reviewer has looked.
+    const notes = [
+      item.reviewNote,
+      tiedCategoryNote(item, sectionKinds.get(item.sectionKey), fields, ctx),
+    ].filter((note): note is string => Boolean(note));
+    fields.reviewNote = notes.length ? notes.join(" ") : null;
     out.push(fields);
   }
   flagTransferDuplicates(db, reading, out, ctx);
@@ -925,15 +1164,39 @@ async function readItems(
   chosen: ItemsReading,
 ) {
   const { profile, profileId } = chosen;
+  if (!chosen.columns && input.providers.length === 0) {
+    markFailed(db, job.id, userId, NO_PROVIDERS);
+    return;
+  }
   let reading: DocumentReading;
   try {
-    reading = await readDocumentItems(
-      { text: input.text, profile, ...input.accountLists },
-      input.providers,
-      input.rateLimitMs,
-    );
+    if (chosen.columns) {
+      // Read by code from the cells (FR-055): no AI call, no provider.
+      if (!input.workbook) {
+        throw new TableReadError(
+          "This spreadsheet's cells could not be read, so it was not read from its columns.",
+        );
+      }
+      reading = readFromColumns(
+        input.workbook,
+        chosen.columns.table,
+        chosen.columns.mode,
+        profile,
+        {
+          today: new Date().toISOString().slice(0, 10),
+          mainCurrency: input.accountLists.mainCurrency,
+          schemaId: profile.schemaId,
+        },
+      );
+    } else {
+      reading = await readDocumentItems(
+        { text: input.text, profile, ...input.accountLists },
+        input.providers,
+        input.rateLimitMs,
+      );
+    }
   } catch (err) {
-    if (err instanceof DocumentLimitError) {
+    if (err instanceof DocumentLimitError || err instanceof TableReadError) {
       markFailed(db, job.id, userId, err.message);
       return;
     }

@@ -30,6 +30,7 @@ import {
   type ProfileError,
   type ProfileSection,
   type ProfileSectionKind,
+  type TableLayout,
 } from "$lib/import-profile-schema.js";
 import { ImportReadAs, ImportReadHow } from "$lib/import-reading.js";
 import { diffRecords, getAuditTrail, recordAudit } from "../audit.js";
@@ -96,7 +97,10 @@ const isPlainObject = (value: unknown) =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** What `options_json` holds. Each part is optional. */
-type ProfileOptions = { accountId?: number | null };
+type ProfileOptions = {
+  accountId?: number | null;
+  layout?: TableLayout | null;
+};
 
 /** The account the profile names, from its options, or null. */
 function optionAccountId(options: ProfileOptions): number | null {
@@ -124,6 +128,8 @@ function toView(row: ProfileRow): ImportProfileView {
       isPlainObject,
     ),
     accountId: optionAccountId(options),
+    // Checked when it was saved, like the sections.
+    ...(isPlainObject(options.layout) ? { layout: options.layout } : {}),
     sections: parseColumn<ProfileSection[]>(
       row.sectionsJson,
       [],
@@ -144,6 +150,7 @@ function audited(profile: ImportProfileDraft) {
     instructions: profile.instructions,
     statedTotalLabels: profile.statedTotalLabels,
     accountId: profile.accountId ?? null,
+    layout: profile.layout ?? null,
     sections: profile.sections,
   };
 }
@@ -156,9 +163,10 @@ function columns(profile: ImportProfileDraft) {
     instructions: profile.instructions,
     sectionsJson: JSON.stringify(profile.sections),
     statedTotalLabelsJson: JSON.stringify(profile.statedTotalLabels),
-    optionsJson: JSON.stringify(
-      profile.accountId == null ? {} : { accountId: profile.accountId },
-    ),
+    optionsJson: JSON.stringify({
+      ...(profile.accountId == null ? {} : { accountId: profile.accountId }),
+      ...(profile.layout ? { layout: profile.layout } : {}),
+    }),
   };
 }
 

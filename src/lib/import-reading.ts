@@ -80,6 +80,13 @@ export const IGNORED_LINES_MAX = 20;
 export const IGNORED_LINE_MAX_CHARS = 120;
 
 /**
+ * How a document's items were read (FR-041): by the AI in one call, by the AI
+ * in pieces (FR-043), or from a spreadsheet's columns by code (FR-055).
+ */
+export type ReadMethod = "ai" | "ai_pieces" | "columns";
+const READ_METHODS: readonly ReadMethod[] = ["ai", "ai_pieces", "columns"];
+
+/**
  * What reading a document found besides its items. All money is whole cents in
  * the document's own currency, never a decimal.
  */
@@ -111,6 +118,18 @@ export type ExtractionNotes = {
    * (FR-012).
    */
   ignored: string[];
+  /**
+   * How many lines were left out in all, when the reading counted them: a
+   * reading from columns leaves out every row no section takes, often
+   * hundreds, and keeps only a sample in `ignored` (FR-056). Absent when only
+   * the sample is known, as for an AI reading.
+   */
+  ignoredCount?: number;
+  /**
+   * How the items were read. Absent on a reading by the AI in one call, which
+   * is how every document was read before the others existed.
+   */
+  method?: ReadMethod;
 };
 
 /** Cuts the ignored lines to the kept number and length. */
@@ -140,6 +159,10 @@ export function serializeExtractionNotes(notes: ExtractionNotes): string {
     statedTotal: notes.statedTotal,
     itemsTotalMinor: notes.itemsTotalMinor,
     ignored: capIgnored(notes.ignored),
+    ...(notes.ignoredCount !== undefined
+      ? { ignoredCount: notes.ignoredCount }
+      : {}),
+    ...(notes.method !== undefined ? { method: notes.method } : {}),
   } satisfies ExtractionNotes);
 }
 
@@ -170,11 +193,34 @@ export function parseExtractionNotes(
     statedTotal = { minor, currency };
   }
 
-  return {
+  const notes: ExtractionNotes = {
     statedTotal,
     itemsTotalMinor: value.itemsTotalMinor,
     ignored: Array.isArray(value.ignored) ? capIgnored(value.ignored) : [],
   };
+  // Each is dropped when it is not what it should be, rather than the whole
+  // value: neither changes the control total.
+  if (isCents(value.ignoredCount) && value.ignoredCount >= 0) {
+    notes.ignoredCount = value.ignoredCount;
+  }
+  if ((READ_METHODS as readonly unknown[]).includes(value.method)) {
+    notes.method = value.method as ReadMethod;
+  }
+  return notes;
+}
+
+/**
+ * How many lines a reading left out, and how many of them it lists: "Ignored
+ * 726 lines (20 shown)" (FR-056). Null when it left out none.
+ */
+export function ignoredSummary(
+  notes: Pick<ExtractionNotes, "ignored" | "ignoredCount">,
+): string | null {
+  const shown = notes.ignored.length;
+  const count = Math.max(notes.ignoredCount ?? shown, shown);
+  if (count === 0) return null;
+  const lines = `Ignored ${count.toLocaleString("en-US")} line${count === 1 ? "" : "s"}`;
+  return count > shown ? `${lines} (${shown} shown)` : lines;
 }
 
 /**
