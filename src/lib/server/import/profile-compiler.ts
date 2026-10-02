@@ -350,17 +350,6 @@ export interface ReadEnvelope {
   ignored: string[];
 }
 
-/** A profile ready to send: its schema, and the check of the answer. */
-export interface CompiledProfile {
-  schemaId: string;
-  /** The JSON Schema the provider receives. */
-  wire: JSONSchema7;
-  /** `wire` with its check attached, for `Output.object`. */
-  schema: Schema<ReadEnvelope>;
-  /** Checks a value read from reply text. Throws, naming each problem. */
-  parse: (raw: unknown) => ReadEnvelope;
-}
-
 const SLUG = /^[a-z][a-z0-9_]*$/;
 
 function itemField(section: SectionSpec): FieldSpec {
@@ -423,11 +412,8 @@ function itemField(section: SectionSpec): FieldSpec {
   };
 }
 
-/** The field model of a profile's whole answer. */
-export function envelopeField(profile: ReadingProfile): FieldSpec {
-  if (profile.sections.length === 0) {
-    throw new Error("A reading profile needs at least one section");
-  }
+/** The header fields of a profile's answer: who, when, which and in what. */
+function headerField(profile: ReadingProfile): FieldSpec {
   const header: Record<string, FieldSpec> = {};
   if (profile.sections.some((section) => section.kind === "document")) {
     header.document_type = {
@@ -460,7 +446,24 @@ export function envelopeField(profile: ReadingProfile): FieldSpec {
     description:
       "The ISO-4217 code the amounts are in (for example USD, MYR, SGD, EUR), from any symbol or code on the document. Null when none is shown.",
   };
+  return { type: "object", properties: header };
+}
 
+function statedTotalField(profile: ReadingProfile): FieldSpec {
+  return {
+    type: "number",
+    nullable: true,
+    description:
+      profile.statedTotalDescription ??
+      "Always null: this reading compares the lines with no printed total.",
+  };
+}
+
+/** The sections of a profile's answer, one list of lines each. */
+function sectionsField(profile: ReadingProfile): FieldSpec {
+  if (profile.sections.length === 0) {
+    throw new Error("A reading profile needs at least one section");
+  }
   const sections: Record<string, FieldSpec> = {};
   for (const section of profile.sections) {
     if (!SLUG.test(section.key) || section.key in sections) {
@@ -484,37 +487,59 @@ export function envelopeField(profile: ReadingProfile): FieldSpec {
     }
     sections[section.key] = itemField(section);
   }
+  return { type: "object", properties: sections };
+}
 
+const IGNORED_FIELD: FieldSpec = {
+  type: "array",
+  description:
+    'A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.',
+  items: { type: "string" },
+};
+
+/** The field model of a profile's whole answer. */
+export function envelopeField(profile: ReadingProfile): FieldSpec {
+  const sections = sectionsField(profile);
   return {
     type: "object",
     properties: {
-      header: { type: "object", properties: header },
-      stated_total: {
-        type: "number",
-        nullable: true,
-        description:
-          profile.statedTotalDescription ??
-          "Always null: this reading compares the lines with no printed total.",
-      },
-      sections: { type: "object", properties: sections },
-      ignored: {
-        type: "array",
-        description:
-          'A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.',
-        items: { type: "string" },
-      },
+      header: headerField(profile),
+      stated_total: statedTotalField(profile),
+      sections,
+      ignored: IGNORED_FIELD,
     },
   };
 }
 
-/** Compiles a profile into the schema sent and the check of the answer. */
-export function compileProfile(profile: ReadingProfile): CompiledProfile {
-  const field = envelopeField(profile);
+/**
+ * A reading of a long document in pieces (006 FR-043) asks for its answer in
+ * two parts: the header and the stated total once, from the start and the end
+ * of the document, and the lines once for each piece. Each part's schema is
+ * the matching part of the whole answer's, so the two cannot drift apart.
+ */
+export type ReadEnvelopeHeader = Pick<ReadEnvelope, "header" | "stated_total">;
+export type ReadEnvelopeLines = Pick<ReadEnvelope, "sections" | "ignored">;
+
+/** A schema sent, and the check of the answer to it. */
+export interface CompiledPart<T> {
+  schemaId: string;
+  /** The JSON Schema the provider receives. */
+  wire: JSONSchema7;
+  /** `wire` with its check attached, for `Output.object`. */
+  schema: Schema<T>;
+  /** Checks a value read from reply text. Throws, naming each problem. */
+  parse: (raw: unknown) => T;
+}
+
+/** A profile ready to send: its schema, and the check of the answer. */
+export type CompiledProfile = CompiledPart<ReadEnvelope>;
+
+function compileField<T>(field: FieldSpec, schemaId: string): CompiledPart<T> {
   const wire = toWireSchema(field);
 
   const check = (raw: unknown) => {
     const errors: string[] = [];
-    const value = checkField(field, raw, "", errors) as ReadEnvelope;
+    const value = checkField(field, raw, "", errors) as T;
     if (errors.length === 0) return { success: true as const, value };
     const shown = errors.slice(0, ERRORS_SHOWN).join("; ");
     const more =
@@ -528,15 +553,58 @@ export function compileProfile(profile: ReadingProfile): CompiledProfile {
   };
 
   return {
-    schemaId: profile.schemaId,
+    schemaId,
     wire,
-    schema: jsonSchema<ReadEnvelope>(wire, { validate: check }),
+    schema: jsonSchema<T>(wire, { validate: check }),
     parse: (raw) => {
       const result = check(raw);
       if (!result.success) throw result.error;
       return result.value;
     },
   };
+}
+
+/** Compiles a profile into the schema sent and the check of the answer. */
+export function compileProfile(profile: ReadingProfile): CompiledProfile {
+  return compileField<ReadEnvelope>(envelopeField(profile), profile.schemaId);
+}
+
+/**
+ * The header part of a reading in pieces: the header and the stated total,
+ * with no lines. Its schema id is the profile's with "#header" after it.
+ */
+export function compileHeaderPart(
+  profile: ReadingProfile,
+): CompiledPart<ReadEnvelopeHeader> {
+  // The sections are checked here too, so a profile that could not be read
+  // whole is refused before any part of it is sent.
+  sectionsField(profile);
+  return compileField<ReadEnvelopeHeader>(
+    {
+      type: "object",
+      properties: {
+        header: headerField(profile),
+        stated_total: statedTotalField(profile),
+      },
+    },
+    `${profile.schemaId}#header`,
+  );
+}
+
+/**
+ * The lines part of a reading in pieces: the sections and the ignored lines,
+ * with no header. Its schema id is the profile's with "#lines" after it.
+ */
+export function compileLinesPart(
+  profile: ReadingProfile,
+): CompiledPart<ReadEnvelopeLines> {
+  return compileField<ReadEnvelopeLines>(
+    {
+      type: "object",
+      properties: { sections: sectionsField(profile), ignored: IGNORED_FIELD },
+    },
+    `${profile.schemaId}#lines`,
+  );
 }
 
 // ── The built-in profile ────────────────────────────────────────────────────
@@ -670,9 +738,9 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
  * changes how another schema is read (FR-037).
  *
  * The stated total is the profile's label for this mode, since a summary and
- * a transaction table total different lines. Every transaction sections are
- * read here the same way as Summary ones; reading a long document in pieces
- * (FR-043) is not built yet.
+ * a transaction table total different lines. An Every transaction reading by
+ * the AI is read in pieces (`piece-reader.ts`, FR-043) with the parts of this
+ * same schema (`compileHeaderPart`, `compileLinesPart`).
  */
 export function savedReadingProfile(
   saved: SavedProfile,

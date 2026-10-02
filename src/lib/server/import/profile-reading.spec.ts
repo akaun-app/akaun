@@ -21,6 +21,14 @@ import {
   type Reply,
 } from "../llm/__fixtures__/mock-model.js";
 import { walletReportFixture } from "../extraction/spreadsheet/__fixtures__/build-xlsx.js";
+import {
+  fakeReader,
+  fakeReportPages,
+  fakeRows,
+  rowText,
+  rowsTotalMinor,
+  type FakeReaderOptions,
+} from "./__fixtures__/piece-model.js";
 
 /**
  * Reading a queued document with a saved import profile (006 S2, US6-7).
@@ -1413,5 +1421,206 @@ describe("a spreadsheet read with a profile, or by Auto-detect", () => {
     expect(row.error).toMatch(
       /^This spreadsheet is too long to be read as a receipt or invoice: .* at most 6,000\./,
     );
+  });
+});
+
+describe("a long document read in pieces (FR-043)", () => {
+  /** An Every transaction profile with one by-sign section of rows. */
+  function walletProfile(): ProfileInput {
+    return {
+      name: "Wallet report",
+      description: "A made-up wallet report.",
+      phrases: [],
+      instructions: "PROFILE NOTE: one record per row.",
+      statedTotalLabels: { every_transaction: "Net total" },
+      sections: [
+        {
+          key: "rows",
+          name: "Transactions",
+          description: "Each transaction row.",
+          mode: "every_transaction",
+          kind: "by_sign",
+          fixedCategoryAccountId: null,
+          feeTypes: [],
+          extras: null,
+        },
+      ],
+    };
+  }
+
+  function serveFake(options: FakeReaderOptions = {}) {
+    const fake = fakeReader({ tokensPerRow: 40, ...options });
+    holder.models.set("main", fake.model);
+    return fake;
+  }
+
+  // 3 header lines, 60 rows and a closing line: 64 lines, which the first
+  // guess of 40 tokens a line cuts into two pieces.
+  const rows = fakeRows(60);
+  const text = fakeReportPages(rows).join("\n");
+
+  function everyJob(profileId: number, over = {}) {
+    return profileJob(profileId, {
+      importMode: ImportMode.EveryTransaction,
+      preExtractedText: text,
+      ...over,
+    });
+  }
+
+  it("groups every row once, counting the parts on the queue row while it reads", async () => {
+    const profileId = saveProfile(walletProfile());
+    const fake = serveFake({
+      header: { stated_total: rowsTotalMinor(rows) / 100 },
+    });
+    const row = await run(everyJob(profileId));
+
+    expect(fake.calls.map((call) => call.kind)).toEqual([
+      "header",
+      "lines",
+      "lines",
+    ]);
+    expect(row.state).toBe(ImportState.Grouped);
+    const items = itemsOf(row.id);
+    expect(items).toHaveLength(60);
+    expect(items.map((item) => item.reference)).toEqual(
+      rows.map((entry) => entry.reference),
+    );
+    const notes = parseExtractionNotes(row.extractionNotes)!;
+    expect(notes.method).toBe("ai_pieces");
+    expect(notes.statedTotal?.minor).toBe(notes.itemsTotalMinor);
+
+    // Each part was announced as it was read, and the count goes once the
+    // reading is done.
+    const counted = emitted
+      .filter((entry) => entry.event === "job-update")
+      .map((entry) => entry.payload.job as typeof row)
+      .filter((job) => job.progressTotal !== null)
+      .map((job) => [job.progressDone, job.progressTotal]);
+    expect(counted).toEqual([
+      [0, 2],
+      [1, 2],
+      [2, 2],
+    ]);
+    expect(row).toMatchObject({ progressDone: null, progressTotal: null });
+  });
+
+  it("reads a short document in one call, with no parts", async () => {
+    const profileId = saveProfile(walletProfile());
+    const fake = serveFake();
+    const row = await run(
+      everyJob(profileId, {
+        preExtractedText: fakeReportPages(fakeRows(5)).join("\n"),
+      }),
+    );
+
+    expect(fake.calls.map((call) => call.kind)).toEqual(["whole"]);
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(itemsOf(row.id)).toHaveLength(5);
+    expect(parseExtractionNotes(row.extractionNotes)?.method).toBeUndefined();
+  });
+
+  it("stops between parts when the document is discarded while it reads, saving nothing", async () => {
+    const profileId = saveProfile(walletProfile());
+    const queued = everyJob(profileId);
+    const fake = serveFake({
+      // Discarded while the first part is read.
+      onCall: (call) => {
+        if (call === 2) {
+          db.delete(importQueue).where(eq(importQueue.id, queued.id)).run();
+        }
+      },
+    });
+    await processImportJob(db, queued, { storageRoot });
+
+    expect(fake.calls.map((call) => call.kind)).toEqual(["header", "lines"]);
+    expect(
+      db.select().from(importQueue).where(eq(importQueue.id, queued.id)).get(),
+    ).toBeUndefined();
+    expect(itemsOf(queued.id)).toEqual([]);
+  });
+
+  it("fails naming the lines when a part cannot be read, with no partial group (FR-011)", async () => {
+    const profileId = saveProfile(walletProfile());
+    serveFake({ truncateAbove: 0 });
+    const row = await run(everyJob(profileId));
+
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toMatch(
+      // 37 lines, split three times: L0001-L0019, L0001-L0010, L0001-L0005.
+      /^Lines L0001 to L0005 could not be read: the AI model's answer reached its output length limit of 3,000 tokens, even 5 lines at a time\.$/,
+    );
+    expect(itemsOf(row.id)).toEqual([]);
+    expect(row).toMatchObject({ progressDone: null, progressTotal: null });
+  });
+
+  // Three readings of a long document and a confirm of the first: more than
+  // the default five seconds on a busy machine.
+  it("flags a row repeated under its own reference, never one under another reference (FR-063)", async () => {
+    const profileId = saveProfile({
+      ...walletProfile(),
+      sections: walletProfile().sections.map((section) => ({
+        ...section,
+        fixedCategoryAccountId: ids.sales,
+      })),
+    });
+    serveFake();
+    const first = await run(everyJob(profileId));
+    const file = join(storageRoot, first.tempFilePath);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "%PDF-1.4 report");
+    const confirmed = await confirmGroupItems(db, first.id, "all", {
+      actingUserId: 1,
+      storageRoot,
+    });
+    expect(confirmed.ok).toBe(true);
+    expect(db.select().from(ledgerRecords).all().length).toBeGreaterThan(0);
+
+    // The same rows under other references are other transactions.
+    const renamed = fakeReportPages(
+      rows.map((entry) => ({
+        ...entry,
+        reference: entry.reference.replace("TX-", "RX-"),
+      })),
+    ).join("\n");
+    const other = await run(everyJob(profileId, { preExtractedText: renamed }));
+    expect(other.state).toBe(ImportState.Grouped);
+    expect(
+      itemsOf(other.id).filter((item) => item.duplicateOf !== null),
+    ).toEqual([]);
+
+    // The same rows under the same references are flagged, every one.
+    const again = await run(everyJob(profileId));
+    expect(
+      itemsOf(again.id).filter((item) => item.duplicateOf !== null),
+    ).toHaveLength(rows.length);
+  }, 30_000);
+
+  it("reads a long spreadsheet the AI reads in pieces too", async () => {
+    const profileId = saveProfile(walletProfile());
+    const fake = serveFake();
+    const csv = [
+      "Date,Reference,Description,Amount",
+      ...rows.map((entry) =>
+        [entry.date, entry.reference, entry.description, entry.amount].join(
+          ",",
+        ),
+      ),
+    ].join("\n");
+    const queued = profileJob(profileId, {
+      importMode: ImportMode.EveryTransaction,
+      originalFilename: "wallet.csv",
+      preExtractedText: null,
+    });
+    const abs = join(storageRoot, queued.tempFilePath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, csv);
+    const row = await run(queued);
+
+    expect(fake.calls[0].kind).toBe("header");
+    expect(fake.calls.filter((call) => call.kind === "lines").length).toBe(2);
+    expect(fake.calls[1].user).toContain(`│${rowText(rows[0])}`);
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(itemsOf(row.id)).toHaveLength(60);
+    expect(parseExtractionNotes(row.extractionNotes)?.method).toBe("ai_pieces");
   });
 });

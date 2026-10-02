@@ -192,12 +192,13 @@ export interface DocumentReading {
   controlTotal: { matches: boolean; differenceMinor: number } | null;
 }
 
-function formatCount(value: number): string {
+/** A count as a limit's message writes it, such as "200,000". */
+export function formatCount(value: number): string {
   return value.toLocaleString("en-US");
 }
 
 /** "4 minutes", "1 minute" or "0.05 seconds", for a limit's message. */
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms >= 60_000 && ms % 60_000 === 0) {
     const minutes = ms / 60_000;
     return `${minutes} minute${minutes === 1 ? "" : "s"}`;
@@ -206,9 +207,46 @@ function formatDuration(ms: number): string {
   return `${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
+/**
+ * Throws when the document has more text than one reading sends the model
+ * (FR-010). The text is counted as the model receives it, with its line
+ * numbers.
+ */
+export function checkDocumentLength(text: string): void {
+  if (text.length > DOCUMENT_TEXT_MAX_CHARS) {
+    throw new DocumentLimitError(
+      "characters",
+      `This document is too long to read in full: it has ${formatCount(text.length)} characters of text, and the limit is ${formatCount(DOCUMENT_TEXT_MAX_CHARS)}.`,
+    );
+  }
+}
+
+/**
+ * Throws when an answer lists more lines than one document may yield
+ * (FR-010). Every line counts, including those the reading later leaves out.
+ */
+export function checkItemCount(
+  envelope: Pick<ReadEnvelope, "sections">,
+  profile: ReadingProfile,
+): void {
+  const lineCount = profile.sections.reduce(
+    (sum, section) => sum + (envelope.sections[section.key]?.length ?? 0),
+    0,
+  );
+  if (lineCount > DOCUMENT_ITEMS_MAX) throw tooManyItems(lineCount);
+}
+
+/** The error for a document that yields more items than the limit. */
+export function tooManyItems(count: number): DocumentLimitError {
+  return new DocumentLimitError(
+    "items",
+    `This document has too many items to import: ${formatCount(count)} were read, and the limit is ${formatCount(DOCUMENT_ITEMS_MAX)}.`,
+  );
+}
+
 /** The instructions sent with the document. */
 export function buildItemsSystemPrompt(
-  compiled: CompiledProfile,
+  compiled: Pick<CompiledProfile, "wire">,
   params: Omit<DocumentReadingParams, "text">,
 ): string {
   const asksForCategory = params.profile.sections.some(
@@ -258,12 +296,7 @@ export async function readDocumentItems(
   limits: Partial<DocumentReadLimits> = {},
 ): Promise<DocumentReading> {
   const { timeoutMs, maxOutputTokens } = { ...DEFAULT_READ_LIMITS, ...limits };
-  if (params.text.length > DOCUMENT_TEXT_MAX_CHARS) {
-    throw new DocumentLimitError(
-      "characters",
-      `This document is too long to read in full: it has ${formatCount(params.text.length)} characters of text, and the limit is ${formatCount(DOCUMENT_TEXT_MAX_CHARS)}.`,
-    );
-  }
+  checkDocumentLength(params.text);
 
   const today = params.today ?? new Date().toISOString().slice(0, 10);
   const compiled = compileProfile(params.profile);
@@ -324,16 +357,7 @@ export async function readDocumentItems(
     throw error;
   }
 
-  const lineCount = params.profile.sections.reduce(
-    (sum, section) => sum + (envelope.sections[section.key]?.length ?? 0),
-    0,
-  );
-  if (lineCount > DOCUMENT_ITEMS_MAX) {
-    throw new DocumentLimitError(
-      "items",
-      `This document has too many items to import: ${formatCount(lineCount)} were read, and the limit is ${formatCount(DOCUMENT_ITEMS_MAX)}.`,
-    );
-  }
+  checkItemCount(envelope, params.profile);
 
   const reading = readingFromEnvelope(envelope, params.profile, {
     today,

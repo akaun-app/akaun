@@ -24,6 +24,7 @@
 		keepsReadAccount,
 		readAsOfJob,
 		readingLabel,
+		readingProgressLabel,
 		receiptSides,
 		reviewCurrency,
 		reviewRateMissing,
@@ -107,6 +108,10 @@
 		readAgainReason: string | null;
 		// When its last reading finished; a different value is a new reading.
 		processedAt: string | null;
+		// How many parts of a long document are read, and how many it has (FR-043).
+		// Null unless it is being read in parts.
+		progressDone: number | null;
+		progressTotal: number | null;
 		// client-side tracking
 		_edits?: ReviewEdits;
 		// Set from the confirm reply when no category could be read off the document.
@@ -133,6 +138,8 @@
 			canReadAgain: j.canReadAgain === true,
 			readAgainReason: j.readAgainReason ?? null,
 			processedAt: j.processedAt ?? null,
+			progressDone: j.progressDone ?? null,
+			progressTotal: j.progressTotal ?? null,
 			_edits: {},
 		};
 	}
@@ -260,6 +267,19 @@
 		extracting: 45,
 		processing: 78,
 	};
+
+	// How full a queued document's bar is. A long document read in parts fills
+	// the rest of the bar part by part from where reading starts, so it never
+	// moves back (FR-043).
+	function pipeFill(job: Job): number {
+		const total = job.progressTotal ?? 0;
+		if (job.state === 'processing' && total > 1) {
+			const done = Math.min(Math.max(job.progressDone ?? 0, 0), total);
+			const start = PIPE_FILL.processing;
+			return Math.round(start + ((96 - start) * done) / total);
+		}
+		return PIPE_FILL[job.state] ?? 10;
+	}
 
 	// What kind of file a queued document is, by its name: a spreadsheet is read
 	// cell by cell, with no OCR (006 FR-051).
@@ -779,7 +799,7 @@
 								</div>
 								{#if jobReading(job)}<div class="job-reading">{jobReading(job)}</div>{/if}
 								<div class="pipe-track">
-									<div class="pipe-fill" style="width:{PIPE_FILL[job.state] ?? 10}%"></div>
+									<div class="pipe-fill" style="width:{pipeFill(job)}%"></div>
 								</div>
 							</div>
 							<div class="pipe-state" class:is-queued={job.state === 'queued'}>
@@ -788,7 +808,7 @@
 								{:else if job.state === 'extracting'}
 									<span class="spinner sm"></span> Extracting text…
 								{:else}
-									<span class="spinner sm"></span> Reading with AI…
+									<span class="spinner sm"></span> {readingProgressLabel(job) ?? 'Reading with AI'}…
 								{/if}
 							</div>
 						</div>

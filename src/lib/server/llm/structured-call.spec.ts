@@ -287,6 +287,37 @@ describe("callStructured", () => {
     ]);
   });
 
+  it("reports the tokens each request used, the text retry and a cut-off answer too", async () => {
+    const usage = vi.fn();
+    const fits = mockModel([{ text: JSON.stringify(thing) }]);
+    await callStructured(fits, provider("counted"), {
+      ...spec("thing@1"),
+      onUsage: usage,
+    });
+    expect(usage.mock.calls).toEqual([[{ inputTokens: 10, outputTokens: 10 }]]);
+
+    usage.mockClear();
+    const retried = mockModel([
+      { text: JSON.stringify({ name: "apple" }) },
+      { text: JSON.stringify(thing) },
+    ]);
+    await callStructured(retried, provider("counted-retry"), {
+      ...spec("thing@1"),
+      onUsage: usage,
+    });
+    expect(usage).toHaveBeenCalledTimes(2);
+
+    usage.mockClear();
+    const cut = mockModel([{ truncated: '{"name": "app' }]);
+    await expect(
+      callStructured(cut, provider("counted-cut"), {
+        ...spec("thing@1"),
+        onUsage: usage,
+      }),
+    ).rejects.toBeInstanceOf(OutputTruncatedError);
+    expect(usage).toHaveBeenCalledTimes(1);
+  });
+
   it("throws when the text answer does not fit the schema", async () => {
     const model = mockModel([
       { error: httpError(400) },

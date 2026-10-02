@@ -62,8 +62,10 @@ function scheduleTick() {
 }
 
 function recoverStaleJobs() {
+  // A reading stopped part-way starts again from the start, so the count
+  // of pieces it had read goes with it.
   db.update(importQueue)
-    .set({ state: ImportState.Queued })
+    .set({ state: ImportState.Queued, progressDone: null, progressTotal: null })
     .where(
       inArray(importQueue.state, [
         ImportState.Extracting,

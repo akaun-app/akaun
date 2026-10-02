@@ -53,6 +53,31 @@ export interface StructuredSpec<T> {
   // schema is still read from text, because some models wrap correct JSON in a
   // markdown fence (design.md, "S0.5 research results").
   schemaRequired?: boolean;
+  // Called with the tokens each request used, as the provider reported them,
+  // as soon as its answer arrives: an answer cut off at the output limit
+  // reports too, before `OutputTruncatedError` is thrown, and a call that is
+  // asked again in text mode reports once for each request. A caller that
+  // reads a document in pieces uses it to size the next piece by how much the
+  // model actually wrote (006 FR-043). A count the provider did not report is
+  // undefined.
+  onUsage?: (usage: CallUsage) => void;
+}
+
+// The tokens one request used.
+export interface CallUsage {
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
+}
+
+// Passes a request's token counts to the spec's `onUsage`, when it has one.
+function reportUsage<T>(
+  spec: StructuredSpec<T>,
+  usage: Partial<CallUsage> | undefined,
+): void {
+  spec.onUsage?.({
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+  });
 }
 
 // The model stopped before its answer was complete — usually because it hit
@@ -207,6 +232,7 @@ export async function callStructured<T>(
           abortSignal,
         }),
       );
+      reportUsage(spec, result.usage);
       // The SDK reads the answer only when the model finished normally, and
       // otherwise throws NoOutputGeneratedError when `output` is read. So the
       // reason the model stopped is checked first: only running out of output
@@ -255,6 +281,8 @@ export async function callStructured<T>(
           "Structured output rejected (400); using text mode for this model and schema",
         );
       } else if (NoObjectGeneratedError.isInstance(error)) {
+        // The answer arrived, but did not fit; its tokens were still used.
+        reportUsage(spec, error.usage);
         // One answer that did not fit says nothing about the next one, so the
         // model is not moved to text mode for later calls. The reply holds
         // the document's contents, so it goes to trace only, never info.
@@ -296,6 +324,7 @@ export async function callStructured<T>(
       abortSignal,
     }),
   );
+  reportUsage(spec, result.usage);
   log.trace({ ...who, mode: "text", response: result.text }, "LLM response");
   if (result.finishReason === "length") throw new OutputTruncatedError();
   return spec.parse(extractJsonObject(result.text));

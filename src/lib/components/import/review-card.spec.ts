@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AccountType, DocumentType } from "$lib/enums.js";
 import {
   describeReading,
+  readingProgressLabel,
   hasProfileChoice,
   readAsOfJob,
   readCategoryAccountId,
@@ -184,6 +185,42 @@ describe("describeReading", () => {
         extractionNotes: notes(),
       }),
     ).toBe("Read with “Wallet report” (chosen) · Every transaction");
+    // A long document the AI read in parts says so (FR-043).
+    expect(
+      describeReading({
+        readAs: "profile",
+        readHow: "chosen",
+        profile: every,
+        extractionNotes: notes("ai_pieces"),
+      }),
+    ).toBe(
+      "Read with “Wallet report” (chosen) · Every transaction · read in parts",
+    );
+  });
+});
+
+describe("readingProgressLabel", () => {
+  it("names the part being read and how many there are (US8 AS2)", () => {
+    expect(readingProgressLabel({ progressDone: 2, progressTotal: 25 })).toBe(
+      "Reading part 3 of 25",
+    );
+    expect(readingProgressLabel({ progressDone: 0, progressTotal: 2 })).toBe(
+      "Reading part 1 of 2",
+    );
+    // Every part read: the last one is what it is finishing.
+    expect(readingProgressLabel({ progressDone: 25, progressTotal: 25 })).toBe(
+      "Reading part 25 of 25",
+    );
+  });
+
+  it("says nothing for a document read in one call, or not counted", () => {
+    expect(
+      readingProgressLabel({ progressDone: 0, progressTotal: 1 }),
+    ).toBeNull();
+    expect(
+      readingProgressLabel({ progressDone: null, progressTotal: null }),
+    ).toBeNull();
+    expect(readingProgressLabel({})).toBeNull();
   });
 });
 

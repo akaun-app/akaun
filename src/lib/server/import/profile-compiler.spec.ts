@@ -6,6 +6,8 @@ import { IMPORT_PROFILE_STARTERS } from "$lib/import-profile-starters.js";
 import {
   ProfileModeError,
   SEVERAL_ITEMS_PROFILE,
+  compileHeaderPart,
+  compileLinesPart,
   compileProfile,
   savedReadingProfile,
   type ReadingProfile,
@@ -396,6 +398,52 @@ const shopLike = {
     },
   ],
 };
+
+describe("the parts of a reading in pieces (FR-043)", () => {
+  it("splits the whole answer's schema into its header and its lines, unchanged", () => {
+    const whole = compileProfile(feeProfile).wire;
+    const header = compileHeaderPart(feeProfile);
+    const lines = compileLinesPart(feeProfile);
+    const properties = (wire: JSONSchema7) =>
+      wire.properties as Record<string, JSONSchema7>;
+
+    expect(header.schemaId).toBe("test:fees@1#header");
+    expect(lines.schemaId).toBe("test:fees@1#lines");
+    expect(Object.keys(properties(header.wire))).toEqual([
+      "header",
+      "stated_total",
+    ]);
+    expect(Object.keys(properties(lines.wire))).toEqual([
+      "sections",
+      "ignored",
+    ]);
+    expect(properties(header.wire).header).toEqual(properties(whole).header);
+    expect(properties(header.wire).stated_total).toEqual(
+      properties(whole).stated_total,
+    );
+    expect(properties(lines.wire).sections).toEqual(properties(whole).sections);
+    expect(properties(lines.wire).ignored).toEqual(properties(whole).ignored);
+  });
+
+  it("checks each part's answer against its own shape only", () => {
+    const lines = compileLinesPart(feeProfile);
+    // A key the part does not name is dropped, as for the whole answer.
+    expect(
+      lines.parse({
+        sections: { fees: [], payouts: [], refunds: [] },
+        ignored: [],
+        header: { counterparty: "x" },
+      }),
+    ).toEqual({ sections: { fees: [], payouts: [] }, ignored: [] });
+    expect(() => lines.parse({ sections: {}, ignored: [] })).toThrow(
+      /sections\.fees is missing/,
+    );
+    const header = compileHeaderPart(feeProfile);
+    expect(() => header.parse({ stated_total: 1 })).toThrow(
+      /header is missing/,
+    );
+  });
+});
 
 describe("savedReadingProfile", () => {
   const reading = savedReadingProfile(saved(shopLike), ImportMode.Summary);

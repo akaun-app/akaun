@@ -25,13 +25,17 @@
  *   sections in the chosen mode all have row rules is read by code
  *   (`table-reader.ts`), with no AI call. It needs no AI provider, so the check
  *   for one is made only where the AI is asked.
+ * - **In pieces** (006 FR-043): a profile reading in Every transaction mode
+ *   that the AI reads, from a PDF or a spreadsheet with no row rules, is read
+ *   a run of lines at a time (`piece-reader.ts`). The queue row counts the
+ *   pieces in `progress_done` / `progress_total` while it is read.
  *
  * The worker calls this with the app's database and storage folder; the tests
  * call it with their own, so nothing here reaches for either.
  */
 
 import { randomUUID } from "crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -103,6 +107,11 @@ import {
 } from "./transfer-duplicates.js";
 import type { LLMCallParams } from "./providers/types.js";
 import {
+  ReadingStoppedError,
+  readInPieces,
+  type PieceProgress,
+} from "./piece-reader.js";
+import {
   ProfileModeError,
   SEVERAL_ITEMS_PROFILE,
   savedReadingProfile,
@@ -172,7 +181,19 @@ interface ItemsReading {
    * no AI (FR-055): the profile's layout and sections, and the mode.
    */
   columns?: { table: TableProfile; mode: ImportModeValue };
+  /**
+   * The import mode a saved profile reads in; absent for the built-in
+   * reading. An Every transaction reading by the AI is read in pieces
+   * (FR-043).
+   */
+  mode?: ImportModeValue;
 }
+
+/**
+ * A reading's progress, cleared once it ends either way, so a later reading
+ * of the same job never starts out showing the last one's count.
+ */
+const NO_PROGRESS = { progressDone: null, progressTotal: null } as const;
 
 function markFailed(
   db: LedgerDb,
@@ -182,7 +203,7 @@ function markFailed(
 ) {
   log.error({ jobId, error }, "Job failed");
   db.update(importQueue)
-    .set({ state: ImportState.Failed, error })
+    .set({ state: ImportState.Failed, error, ...NO_PROGRESS })
     .where(eq(importQueue.id, jobId))
     .run();
   emitJobUpdate(db, jobId, userId);
@@ -194,7 +215,12 @@ function setState(
   userId: number,
   state: ImportStateCode,
 ) {
-  db.update(importQueue).set({ state }).where(eq(importQueue.id, jobId)).run();
+  // A job starting a stage has read no parts yet, whatever an earlier
+  // reading of it left behind.
+  db.update(importQueue)
+    .set({ state, ...NO_PROGRESS })
+    .where(eq(importQueue.id, jobId))
+    .run();
   emitJobUpdate(db, jobId, userId);
 }
 
@@ -862,6 +888,7 @@ function profileForJob(
       profile: fromColumns ? { ...profile, schemaId } : profile,
       profileId: String(saved.id),
       profileName: saved.name,
+      mode,
       ...(fromColumns && saved.layout
         ? {
             columns: {
@@ -900,6 +927,7 @@ function writeReviewCard(
       state: ImportState.PendingReview,
       ...fields,
       ...extra,
+      ...NO_PROGRESS,
       processedAt: new Date().toISOString(),
     })
     .where(eq(importQueue.id, jobId))
@@ -1155,6 +1183,37 @@ function flagTransferDuplicates(
   }
 }
 
+/**
+ * Shows how far a reading in pieces has got, on the queue row and every open
+ * screen: "Reading part 3 of 25" (FR-043, US8 AS2).
+ */
+function showProgress(
+  db: LedgerDb,
+  jobId: string,
+  userId: number,
+  progress: PieceProgress,
+) {
+  db.update(importQueue)
+    .set({ progressDone: progress.done, progressTotal: progress.total })
+    .where(eq(importQueue.id, jobId))
+    .run();
+  emitJobUpdate(db, jobId, userId);
+}
+
+/**
+ * Whether the job is still being read: it exists, and nothing else has moved
+ * it on. A reading in pieces asks between pieces, so a document discarded
+ * while it is read makes no more AI calls (FR-011).
+ */
+function isStillReading(db: LedgerDb, jobId: string): boolean {
+  const current = db
+    .select({ state: importQueue.state })
+    .from(importQueue)
+    .where(eq(importQueue.id, jobId))
+    .get();
+  return current?.state === ImportState.Processing;
+}
+
 async function readItems(
   db: LedgerDb,
   job: ImportJob,
@@ -1188,6 +1247,18 @@ async function readItems(
           schemaId: profile.schemaId,
         },
       );
+    } else if (chosen.mode === ImportMode.EveryTransaction) {
+      // One record per row, of a document that may run to hundreds of
+      // rows: read in pieces, each sized to finish in time (FR-043).
+      reading = await readInPieces(
+        { text: input.text, profile, ...input.accountLists },
+        input.providers,
+        {
+          intervalMs: input.rateLimitMs,
+          onProgress: (progress) => showProgress(db, job.id, userId, progress),
+          stillWanted: () => isStillReading(db, job.id),
+        },
+      );
     } else {
       reading = await readDocumentItems(
         { text: input.text, profile, ...input.accountLists },
@@ -1196,6 +1267,24 @@ async function readItems(
       );
     }
   } catch (err) {
+    if (err instanceof ReadingStoppedError) {
+      // Deleted, or moved on by something else, between two pieces. A job
+      // moved on keeps its new state, but not this reading's count.
+      db.update(importQueue)
+        .set(NO_PROGRESS)
+        .where(
+          and(
+            eq(importQueue.id, job.id),
+            ne(importQueue.state, ImportState.Processing),
+          ),
+        )
+        .run();
+      log.warn(
+        { jobId: job.id },
+        "Job changed during reading; reading stopped",
+      );
+      return;
+    }
     if (err instanceof DocumentLimitError || err instanceof TableReadError) {
       markFailed(db, job.id, userId, err.message);
       return;
@@ -1352,6 +1441,7 @@ export function saveGroup(
         profileId: notes.profileId,
         extractionNotes: notes.extractionNotes,
         error: null,
+        ...NO_PROGRESS,
         processedAt: new Date().toISOString(),
       })
       .where(eq(importQueue.id, jobId))

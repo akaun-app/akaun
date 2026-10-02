@@ -498,15 +498,35 @@ export function describeReading(job: ReadingOf): string {
       job.profile?.mode === ImportMode.EveryTransaction
         ? ` · ${importModeLabel(ImportMode.EveryTransaction)}`
         : "";
-    const columns =
-      parseExtractionNotes(job.extractionNotes)?.method === "columns"
+    const method = parseExtractionNotes(job.extractionNotes)?.method;
+    const read =
+      method === "columns"
         ? " · read from columns"
-        : "";
-    return `Read with ${name} (${how})${mode}${columns}`;
+        : method === "ai_pieces"
+          ? " · read in parts"
+          : "";
+    return `Read with ${name} (${how})${mode}${read}`;
   }
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).
   return `Standard reading${pickedBy(job.readHow)}`;
+}
+
+/**
+ * What the queue says while a long document is read in parts, such as
+ * "Reading part 3 of 25" (FR-043, US8 AS2), or null when it is not being
+ * read in parts. `done` parts are read, so the one being read is the next.
+ * A document read in one call shows no count.
+ */
+export function readingProgressLabel(job: {
+  progressDone?: number | null;
+  progressTotal?: number | null;
+}): string | null {
+  const total = job.progressTotal ?? 0;
+  if (!Number.isInteger(total) || total < 2) return null;
+  const done = Math.max(0, job.progressDone ?? 0);
+  const part = Math.min(done + 1, total);
+  return `Reading part ${part.toLocaleString("en-US")} of ${total.toLocaleString("en-US")}`;
 }
 
 /**

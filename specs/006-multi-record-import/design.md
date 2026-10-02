@@ -312,6 +312,17 @@ Each stage is built, reviewed by a second agent, fixed and committed, as in S0â€
 - Progress: `progress_done` / `progress_total` (there since `0022`) are emitted, and the queue shows "Reading part 3 of 25".
 - *Exit:* tests with a mock model. A real run waits for a PDF sample (C3).
 
+*Decisions made while building S4.6:*
+
+- **A short document is read in one call.** When the whole document fits one piece (about 37 lines at the first guess of 40 tokens a line), it is read with the whole schema in one call, under the same 3,000-token and 240 s caps as a piece. If that call is cut off or runs out of time on every provider, the document is read in pieces. Such a reading stores no `method`, as any reading in one call (`method` absent means the AI in one call), and so gets no FR-063 reference veto: FR-063 names readings from columns or in pieces only.
+- **The header call** is shown at most 120 lines of the first page and 120 of the last, with one mark for the lines between. A printed page rarely has more; a spreadsheet's rows are all one page, so it is capped. A total printed further into a long first page is not seen, and the reading then has no control total.
+- **Failover inside a call.** A call that runs out of time is tried on the next provider before the piece is split, because a hung provider looks the same as a piece that is too big. A piece of lines cut off at the output limit is split at once, since every provider writes to the same limit; the header call, which cannot be split, is tried on the next provider when cut off too. The provider that answered last reads the next call first.
+- **Piece size** is the running average of the tokens the pieces wrote, a cut-off piece counting as the whole output limit. It is one figure among the others, not a floor, so a dense run of lines does not keep the pieces small for the rest of the document.
+- **One copy of a missed row.** When a piece owns fewer lines than the context, a line can be in the context of two pieces. If its own piece missed it, only the first piece's copy is kept, flagged.
+- **Ignored lines are counted** across the pieces (`ignoredCount`), as for a reading from columns, so the rail can say "Ignored 300 lines (20 shown)". A model that lists a context line as ignored, against its rules, makes the count a little high; it is a guide, as the list is (FR-012).
+- **Progress** is told before each piece and once when all are read, not before the header call, which is not a part. The queue bar fills from where reading starts, so it never moves back. A job that enters a stage, or is moved on while it is read, has its count cleared.
+- **Stopping.** Before each call and once after the last piece, the reading asks whether the job is still being read; if not, it stops, saves nothing and leaves the job as it is.
+
 **S4.7 Guards, starters, editor.**
 
 - Overlap guard: a section option `sameMoneyAs: [profileId]`. When records from that profile already exist for the same dates, income and expense items get a review note. This guards against the wallet report's order income repeating the income statement summary (FR-066).
