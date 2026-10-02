@@ -95,25 +95,54 @@ function startsWith(data: Uint8Array, magic: readonly number[]): boolean {
   return magic.every((byte, i) => data[i] === byte);
 }
 
+const NOT_A_WORKBOOK = "The file is not an Excel workbook (.xlsx).";
+const ZIP_BUT_NOT_A_WORKBOOK =
+  "The file is a zip archive but not an Excel workbook (.xlsx).";
+const BINARY_WORKBOOK =
+  "This is a binary Excel workbook (.xlsb), which cannot be read. Open it in Excel, save it as .xlsx or .csv and upload it again.";
+
+/**
+ * Why an upload cannot be an `.xlsx` workbook, or null when it can be
+ * (006 FR-050). Only the archive's list of parts is read, and nothing is
+ * unpacked, so this is quick enough to run while the file is uploaded. A
+ * workbook it lets through can still fail later, when its cells are read, with
+ * the reason `readXlsx` gives.
+ *
+ * Excel, LibreOffice and Google Sheets all keep the workbook at
+ * `xl/workbook.xml`, so that is the part looked for.
+ */
+export function workbookRefusal(
+  data: Uint8Array,
+  limits: ZipLimits = ZIP_LIMITS,
+): string | null {
+  if (startsWith(data, COMPOUND_FILE_MAGIC))
+    return compoundFileError(data).message;
+  if (!looksLikeZip(data)) return NOT_A_WORKBOOK;
+  let zip: ZipArchive;
+  try {
+    zip = openZip(data, limits);
+  } catch (err) {
+    if (err instanceof SpreadsheetError) return err.message;
+    throw err;
+  }
+  if (zip.has("xl/workbook.xml")) return null;
+  if (zip.has("xl/workbook.bin")) return BINARY_WORKBOOK;
+  return ZIP_BUT_NOT_A_WORKBOOK;
+}
+
 export function readXlsx(
   data: Uint8Array,
   limits: XlsxLimits = XLSX_LIMITS,
 ): Workbook {
   if (startsWith(data, COMPOUND_FILE_MAGIC)) throw compoundFileError(data);
-  if (!looksLikeZip(data)) {
-    throw new SpreadsheetError("The file is not an Excel workbook (.xlsx).");
-  }
+  if (!looksLikeZip(data)) throw new SpreadsheetError(NOT_A_WORKBOOK);
   const zip = openZip(data, limits);
   const workbookPath = findWorkbookPath(zip, limits);
   if (/\.bin$/i.test(workbookPath)) {
-    throw new SpreadsheetError(
-      "This is a binary Excel workbook (.xlsb), which cannot be read. Open it in Excel, save it as .xlsx or .csv and upload it again.",
-    );
+    throw new SpreadsheetError(BINARY_WORKBOOK);
   }
   if (!zip.has(workbookPath)) {
-    throw new SpreadsheetError(
-      "The file is a zip archive but not an Excel workbook (.xlsx).",
-    );
+    throw new SpreadsheetError(ZIP_BUT_NOT_A_WORKBOOK);
   }
 
   const workbook = readWorkbookPart(

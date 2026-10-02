@@ -3,7 +3,8 @@ import { eq, inArray } from 'drizzle-orm';
 import { randomUUID, createHash } from 'crypto';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
+import { saveToTemp, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
+import { importUploadNameRefusal, sniffImportUpload } from '$lib/server/import/upload-type.js';
 import { importEvents } from '$lib/server/import/events.js';
 import { jobForEvent } from '$lib/server/import/job-event.js';
 import { jobEvents } from '$lib/server/import/group-state.js';
@@ -90,10 +91,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		if (trimmed.length > 0) preExtractedText = trimmed;
 	}
 
-	const allowedExtensions = /\.(pdf|jpe?g|png)$/i;
-	if (!allowedExtensions.test(file.name)) {
-		return json({ error: 'Unsupported file type. Upload a PDF, JPG, or PNG.' }, { status: 400 });
-	}
+	// A PDF, a photo, an Excel workbook or a CSV file (006 FR-050). Only Auto
+	// Import takes spreadsheets; Reconciliation and record attachments do not.
+	const nameRefusal = importUploadNameRefusal(file.name);
+	if (nameRefusal) return json({ error: nameRefusal }, { status: 400 });
 
 	if (file.size > MAX_UPLOAD_BYTES) {
 		return json(
@@ -104,10 +105,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 	const buffer = Buffer.from(await file.arrayBuffer());
 
-	// Validate by content, not just the client-supplied name/MIME.
-	if (!sniffAllowedType(buffer)) {
-		return json({ error: 'File content is not a valid PDF, JPG, or PNG.' }, { status: 400 });
-	}
+	// Validate by content, not just the client-supplied name/MIME. A
+	// spreadsheet's content must also match its name, since it is read by it.
+	const sniffed = sniffImportUpload(buffer, file.name);
+	if (!sniffed.ok) return json({ error: sniffed.error }, { status: 400 });
 
 	const tempFilePath = saveToTemp(buffer, file.name);
 	const fileHash = createHash('sha256').update(buffer).digest('hex');

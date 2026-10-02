@@ -221,6 +221,15 @@
 		processing: 78,
 	};
 
+	// What kind of file a queued document is, by its name: a spreadsheet is read
+	// cell by cell, with no OCR (006 FR-051).
+	function fileKindLabel(filename: string): string {
+		const lower = filename.toLowerCase();
+		if (lower.endsWith('.pdf')) return 'PDF';
+		if (lower.endsWith('.xlsx') || lower.endsWith('.csv')) return 'Spreadsheet';
+		return 'Image · OCR';
+	}
+
 	const pipeline = $derived(jobs.filter((j) => PIPE_STATES.includes(j.state)));
 	const failed = $derived(jobs.filter((j) => j.state === 'failed'));
 	const review = $derived(jobs.filter((j) => j.state === 'pending_review'));
@@ -632,13 +641,14 @@
 			<div class="dropzone-icon"><Upload size={26} /></div>
 			<div class="dropzone-title">Drop files here, or <u>browse</u></div>
 			<div class="dropzone-sub">
-				PDF, JPG, PNG · scanned files run through OCR · income &amp; expenses detected automatically
+				PDF, JPG, PNG, Excel (.xlsx) or CSV · scanned files run through OCR · income &amp; expenses detected
+				automatically
 			</div>
 		</div>
 		<input
 			bind:this={fileInput}
 			type="file"
-			accept=".pdf,.jpg,.jpeg,.png"
+			accept=".pdf,.jpg,.jpeg,.png,.xlsx,.csv"
 			multiple
 			style="display:none"
 			onchange={handleFileInput}
@@ -686,7 +696,7 @@
 								<div class="pipe-toprow">
 									<span class="pipe-name">{job.originalFilename}</span>
 									<span class="pipe-type">
-										{job.originalFilename.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image · OCR'}
+										{fileKindLabel(job.originalFilename)}
 									</span>
 								</div>
 								{#if jobReading(job)}<div class="job-reading">{jobReading(job)}</div>{/if}

@@ -20,6 +20,7 @@ import {
   mockModel,
   type Reply,
 } from "../llm/__fixtures__/mock-model.js";
+import { walletReportFixture } from "../extraction/spreadsheet/__fixtures__/build-xlsx.js";
 
 /**
  * Reading a queued document with a saved import profile (006 S2, US6-7).
@@ -1309,5 +1310,107 @@ describe("Auto-detect", () => {
     const row = await run(autoJob({ fileHash: "same-receipt" }));
     expect(row.state).toBe(ImportState.PendingReview);
     expect(row.error).toBeNull();
+  });
+});
+
+// ── Spreadsheets (006 S4.2) ─────────────────────────────────────────────────
+
+describe("a spreadsheet read with a profile, or by Auto-detect", () => {
+  const DETECT_PROMPT = "decides which kind of document this is";
+
+  /**
+   * A job whose file is really in its storage folder, with no text given
+   * with the upload, so the file itself is read.
+   */
+  function queueFile(
+    filename: string,
+    data: Buffer | string,
+    over: Partial<typeof importQueue.$inferInsert> = {},
+  ) {
+    const row = queueJob({
+      originalFilename: filename,
+      preExtractedText: null,
+      ...over,
+    });
+    const abs = join(storageRoot, row.tempFilePath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, data);
+    return row;
+  }
+
+  /** Everything the model was sent on one call, as one string. */
+  function sentPrompt(model: ReturnType<typeof serve>, call = 0): string {
+    return JSON.stringify(model.doGenerateCalls[call].prompt);
+  }
+
+  it("reads a workbook with a chosen profile from its numbered rows (FR-050, FR-051)", async () => {
+    const profileId = saveProfile(statementProfile());
+    const model = serve([json(statementAnswer())]);
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Profile,
+        profileId: String(profileId),
+        importMode: ImportMode.Summary,
+      }),
+    );
+
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(systemPrompt(model)).toContain("PROFILE NOTE");
+    const sent = sentPrompt(model);
+    expect(sent).toContain("L0001│Sheet: Transaction Report");
+    expect(sent).toMatch(
+      /L\d{4}│Date \| Transaction Type \| Description \| Order ID \| Money Direction \| Amount/,
+    );
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(itemsOf(row.id)).toHaveLength(4);
+    // A spreadsheet is quick to read again, so its text is not kept.
+    expect(row.extractedText).toBeNull();
+  });
+
+  it("detects a profile from a workbook's cells and reads it with that profile", async () => {
+    const profileId = saveProfile(
+      statementProfile({ phrases: ["Balance After Transactions"] }),
+    );
+    saveProfile(
+      statementProfile({ name: "Lazada statement", phrases: ["Lazada"] }),
+    );
+    const model = serve([json(statementAnswer())]);
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+      }),
+    );
+
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(systemPrompt(model)).toContain("PROFILE NOTE");
+    expect(sentPrompt(model)).toContain("L0001│Sheet: Transaction Report");
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(row).toMatchObject({
+      readHow: ImportReadHow.Detected,
+      profileId: String(profileId),
+      extractedText: null,
+    });
+  });
+
+  it("refuses a long spreadsheet when detection falls back to the standard reading (FR-052)", async () => {
+    saveProfile(statementProfile({ phrases: ["Lazada"] }));
+    const lines = ["Date,Description,Amount"];
+    for (let i = 0; i < 300; i++) lines.push(`2026-08-14,Order ${i},1.00`);
+    const model = serve([json({ profile: "none" }), json({})]);
+    const row = await run(
+      queueFile("long.csv", lines.join("\n"), {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+      }),
+    );
+
+    // Detection was asked; the receipt reading never was.
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(systemPrompt(model, 0)).toContain(DETECT_PROMPT);
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toMatch(
+      /^This spreadsheet is too long to be read as a receipt or invoice: .* at most 6,000\./,
+    );
   });
 });

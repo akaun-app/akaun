@@ -2,9 +2,9 @@ import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { eq } from "drizzle-orm";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import {
   afterAll,
   afterEach,
@@ -15,6 +15,10 @@ import {
   vi,
 } from "vitest";
 import { mockModel, type Reply } from "../llm/__fixtures__/mock-model.js";
+import {
+  buildXlsx,
+  walletReportFixture,
+} from "../extraction/spreadsheet/__fixtures__/build-xlsx.js";
 
 /**
  * Reading a queued document (`processImportJob`), for a receipt and for a
@@ -102,7 +106,8 @@ const { createAccount } = await import("../services/accounts.js");
 const { insertProvider } = await import("../llmProviders.js");
 const { setSetting, SETTING_KEYS } = await import("../settings.js");
 const { importEvents } = await import("./events.js");
-const { NO_ITEMS_FOUND, processImportJob } = await import("./process-job.js");
+const { EMPTY_SPREADSHEET, NO_ITEMS_FOUND, processImportJob } =
+  await import("./process-job.js");
 type LedgerDb = import("../ledger/types.js").LedgerDb;
 
 let dir: string;
@@ -995,5 +1000,192 @@ describe("the duplicate check for items", () => {
       "date",
       "supplier",
     ]);
+  });
+});
+
+// ── Spreadsheets (006 S4.2) ─────────────────────────────────────────────────
+
+describe("reading a spreadsheet", () => {
+  /**
+   * A job whose file is really in its storage folder, with no text given
+   * with the upload, so the file itself is read.
+   */
+  function queueFile(
+    filename: string,
+    data: Buffer | string,
+    over: Partial<typeof importQueue.$inferInsert> = {},
+  ) {
+    const row = queueJob({
+      originalFilename: filename,
+      preExtractedText: null,
+      ...over,
+    });
+    const tempFilePath = `import/temp/${row.id}_${filename}`;
+    const abs = join(dir, "storage", tempFilePath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, data);
+    db.update(importQueue)
+      .set({ tempFilePath })
+      .where(eq(importQueue.id, row.id))
+      .run();
+    return job(row.id);
+  }
+
+  /** Every piece of text the model was sent on its first call. */
+  function sentText(model: ReturnType<typeof serve>): string {
+    const texts: string[] = [];
+    const walk = (value: unknown) => {
+      if (typeof value === "string") texts.push(value);
+      else if (Array.isArray(value)) value.forEach(walk);
+      else if (value && typeof value === "object")
+        Object.values(value).forEach(walk);
+    };
+    walk(model.doGenerateCalls[0].prompt);
+    return texts.join("\n");
+  }
+
+  const CSV = "Date,Description,Amount\n2026-08-14,Printer paper,12.50\n";
+
+  it("reads a workbook as several items from its numbered rows (FR-051)", async () => {
+    const model = serve([
+      json(
+        itemsAnswer(
+          [
+            { description: "Income from Order #A1", amount: 12.5 },
+            { description: "Withdrawal to bank", amount: 100 },
+          ],
+          { reference: "" },
+        ),
+      ),
+    ]);
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.SeveralItems,
+      }),
+    );
+
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(itemsOf(row.id)).toHaveLength(2);
+    const sent = sentText(model);
+    expect(sent).toContain("--- page 1 ---\nL0001│Sheet: Transaction Report");
+    expect(sent).toMatch(
+      /L\d{4}│Date \| Transaction Type \| Description \| Order ID \| Money Direction \| Amount \| Status \| Balance After Transactions\n/,
+    );
+    expect(sent).toMatch(
+      /L\d{4}│2026-03-28 18:40:00 \| Withdrawal \| Withdrawal to bank \| {2}\| Money Out \| -100\.00 \| Processing \| 230\.25/,
+    );
+    // A spreadsheet is quick to read again, so its text is not kept.
+    expect(row.extractedText).toBeNull();
+  });
+
+  it("reads a CSV file with one item as a receipt card, keeping its text", async () => {
+    const model = serve([
+      json(itemsAnswer([{ description: "Printer paper", amount: 12.5 }])),
+    ]);
+    const row = await run(
+      queueFile("export.csv", CSV, { readAs: ImportReadAs.SeveralItems }),
+    );
+
+    expect(row.state).toBe(ImportState.PendingReview);
+    expect(row.amount).toBe(12.5);
+    expect(sentText(model)).toContain(
+      "L0001│Sheet: Sheet1\nL0002│Date | Description | Amount\nL0003│2026-08-14 | Printer paper | 12.50",
+    );
+    expect(row.extractedText).toBe(
+      "Sheet: Sheet1\nDate | Description | Amount\n2026-08-14 | Printer paper | 12.50",
+    );
+  });
+
+  it("reads a short spreadsheet the standard way", async () => {
+    const model = serve([json(receiptAnswer())]);
+    const row = await run(
+      queueFile("receipt.csv", CSV, { readAs: ImportReadAs.Receipt }),
+    );
+
+    expect(row.state).toBe(ImportState.PendingReview);
+    expect(row.amount).toBe(12.5);
+    expect(sentText(model)).toContain(
+      "Sheet: Sheet1\nDate | Description | Amount\n2026-08-14 | Printer paper | 12.50",
+    );
+  });
+
+  it("refuses a spreadsheet too long for the standard reading, naming the limit (FR-052)", async () => {
+    const lines = ["Date,Description,Amount"];
+    for (let i = 0; i < 300; i++) lines.push(`2026-08-14,Order ${i},1.00`);
+    const model = serve([json(receiptAnswer())]);
+
+    for (const readAs of [ImportReadAs.Receipt, ImportReadAs.Auto]) {
+      const row = await run(
+        queueFile("long.csv", lines.join("\n"), { readAs }),
+      );
+      expect(row.state).toBe(ImportState.Failed);
+      expect(row.error).toMatch(
+        /^This spreadsheet is too long to be read as a receipt or invoice: its text is [\d,]+ characters, and that reading takes at most 6,000\. Read it again as a document with several items, or with an import profile\.$/,
+      );
+    }
+    // Never read from a shortened text: the AI is not asked at all.
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("still cuts a long PDF's text for the standard reading, as before (FR-004)", async () => {
+    const model = serve([json(receiptAnswer())]);
+    const long = `RECEIPT ${"x".repeat(7000)} TAIL-MARKER`;
+    const row = await run(
+      queueJob({ readAs: ImportReadAs.Receipt, preExtractedText: long }),
+    );
+
+    expect(row.state).toBe(ImportState.PendingReview);
+    const sent = sentText(model);
+    expect(sent).toContain("RECEIPT x");
+    expect(sent).not.toContain("TAIL-MARKER");
+  });
+
+  it("fails an empty spreadsheet before asking the AI", async () => {
+    const model = serve([json(receiptAnswer())]);
+    const row = await run(
+      queueFile("empty.csv", ",,\n , ,\n", {
+        readAs: ImportReadAs.SeveralItems,
+      }),
+    );
+
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toBe(EMPTY_SPREADSHEET);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("names the problem with a workbook it cannot read", async () => {
+    const model = serve([json(receiptAnswer())]);
+    const locked = Buffer.alloc(1024);
+    Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(locked);
+    Buffer.from("EncryptedPackage", "utf16le").copy(locked, 600);
+    const row = await run(
+      queueFile("locked.xlsx", locked, { readAs: ImportReadAs.SeveralItems }),
+    );
+
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toMatch(/protected with a password/);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("reads every sheet of a workbook, in order", async () => {
+    const model = serve([
+      json(itemsAnswer([{ description: "Fee", amount: 1 }])),
+    ]);
+    await run(
+      queueFile(
+        "two.xlsx",
+        buildXlsx({
+          sheets: [
+            { name: "March", rows: [["Fee", { raw: "1.00" }]] },
+            { name: "April", rows: [["Fee", { raw: "2.00" }]] },
+          ],
+        }),
+        { readAs: ImportReadAs.SeveralItems },
+      ),
+    );
+
+    expect(sentText(model)).toContain(
+      "--- page 1 ---\nL0001│Sheet: March\nL0002│Fee | 1.00\n--- page 2 ---\nL0003│Sheet: April\nL0004│Fee | 2.00",
+    );
   });
 });

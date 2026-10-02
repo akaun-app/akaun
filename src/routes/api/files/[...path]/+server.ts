@@ -15,7 +15,15 @@ const MIME: Record<string, string> = {
   png: "image/png",
   webp: "image/webp",
   gif: "image/gif",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  csv: "text/csv",
 };
+
+// A spreadsheet imported as a record's source document is offered as a
+// download rather than shown in the page (006 FR-050): a browser has no viewer
+// for a workbook, and a CSV file shown as text would be the uploader's content
+// rendered under the app's address.
+const DOWNLOAD_ONLY = new Set(["xlsx", "csv"]);
 
 export const GET: RequestHandler = ({ locals, params }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
@@ -76,7 +84,8 @@ export const GET: RequestHandler = ({ locals, params }) => {
       })
       .join("") || "file";
   const encoded = encodeURIComponent(displayFilename);
-  const disposition = `inline; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+  const mode = DOWNLOAD_ONLY.has(ext) ? "attachment" : "inline";
+  const disposition = `${mode}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 
   return new Response(content, {
     headers: {

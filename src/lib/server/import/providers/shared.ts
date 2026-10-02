@@ -117,10 +117,16 @@ export function wrapDocument(text: string): string {
   return `<document>\n${text}\n</document>`;
 }
 
-// The receipt reading sends only the start of the document, as it always has
-// (006 FR-004). The several-items reading sends all of it.
+/**
+ * How much of a document the receipt reading sends, in characters. It sends
+ * only the start, as it always has (006 FR-004); the several-items reading
+ * sends all of it. A spreadsheet longer than this is refused rather than cut
+ * (FR-052), so this is also the limit that refusal names.
+ */
+export const RECEIPT_TEXT_LIMIT = 6000;
+
 export function buildUserPrompt(params: Pick<PromptParams, "text">): string {
-  return wrapDocument(params.text.slice(0, 6000));
+  return wrapDocument(params.text.slice(0, RECEIPT_TEXT_LIMIT));
 }
 
 export const MAX_LABEL_LENGTH = 80;

@@ -3,6 +3,10 @@ import { extractText as pdfExtractText, getDocumentProxy, extractImages } from '
 import { createWorker } from 'tesseract.js';
 import { PNG } from 'pngjs';
 import { OCR_CACHE_PATH } from '../env.js';
+import { readCsv } from './spreadsheet/csv.js';
+import { renderWorkbook } from './spreadsheet/render.js';
+import { cellText, type Workbook } from './spreadsheet/types.js';
+import { readXlsx } from './spreadsheet/xlsx.js';
 
 const OCR_LANGS = 'eng+chi_sim';
 
@@ -15,13 +19,27 @@ async function createOcrWorker() {
 	return createWorker(OCR_LANGS, undefined, { cachePath: OCR_CACHE_PATH });
 }
 
+export const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+export const CSV_MIME_TYPE = 'text/csv';
+
 /** Infers the MIME type this module's extractors understand from a filename's extension. */
 export function inferMimeType(filename: string): string {
 	const lower = filename.toLowerCase();
 	if (lower.endsWith('.pdf')) return 'application/pdf';
 	if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
 	if (lower.endsWith('.png')) return 'image/png';
+	if (lower.endsWith('.xlsx')) return XLSX_MIME_TYPE;
+	if (lower.endsWith('.csv')) return CSV_MIME_TYPE;
 	return 'application/octet-stream';
+}
+
+/**
+ * Whether this is an Excel workbook or a CSV file (006 FR-050). Only Auto
+ * Import takes these, and only `extractDocumentSource` reads them: the other
+ * extractors here read a PDF or a photo, as they always have.
+ */
+export function isSpreadsheetMimeType(mimeType: string): boolean {
+	return mimeType === XLSX_MIME_TYPE || mimeType === CSV_MIME_TYPE;
 }
 
 /**
@@ -255,4 +273,58 @@ export async function extractPlainAndNumberedText(
 		return { plain: text, numbered: numberDocumentLines([text]) };
 	}
 	throw new Error(`Unsupported file type. Please upload a PDF, JPG, or PNG.`);
+}
+
+// ── Spreadsheets (006 S4.2) ────────────────────────────────────────────────
+
+/**
+ * A document's text in every form a reading may need, from one pass over the
+ * file. `plain` is one run of text for the receipt reading and for detection,
+ * and `numbered` is its lines numbered for a reading of items. A spreadsheet
+ * also gives back its `workbook`, the cells themselves, so a reading that goes
+ * by the columns can use them without reading the file again.
+ */
+export interface DocumentSource {
+	plain: string;
+	numbered: string;
+	workbook?: Workbook;
+}
+
+/**
+ * The document's text, in every form, from one pass over the file.
+ *
+ * A spreadsheet is read cell by cell and turned into text (FR-051): each sheet
+ * is a page headed `Sheet: <name>`, each row one line with its cells joined by
+ * ` | `, and the lines numbered as a PDF's are. `plain` is the same text
+ * without the numbers and page markers, which is what a reading of items keeps
+ * for search. A file that cannot be read fails with a reason that names the
+ * problem, such as an old `.xls` or a password.
+ *
+ * A PDF or a photo gives what `extractPlainAndNumberedText` gives, unchanged.
+ */
+export async function extractDocumentSource(absPath: string, mimeType: string): Promise<DocumentSource> {
+	if (!isSpreadsheetMimeType(mimeType)) return extractPlainAndNumberedText(absPath, mimeType);
+	const workbook = readSpreadsheet(readFileSync(absPath), mimeType);
+	return { ...spreadsheetText(workbook), workbook };
+}
+
+/** A spreadsheet's bytes as sheets of cells. */
+export function readSpreadsheet(bytes: Uint8Array, mimeType: string): Workbook {
+	return mimeType === XLSX_MIME_TYPE ? readXlsx(bytes) : readCsv(bytes);
+}
+
+/** A workbook as plain and numbered text (FR-051). */
+export function spreadsheetText(workbook: Workbook): { plain: string; numbered: string } {
+	const { pages } = renderWorkbook(workbook);
+	return { plain: pages.join('\n'), numbered: numberDocumentLines(pages) };
+}
+
+/**
+ * Whether no cell of the workbook shows anything, so its text would be no more
+ * than the sheet names. Stops at the first cell that does.
+ */
+export function isEmptyWorkbook(workbook: Workbook): boolean {
+	return workbook.sheets.every((sheet) =>
+		sheet.rows.every((row) => row.cells.every((cell) => cellText(cell).trim() === ''))
+	);
 }

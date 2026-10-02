@@ -45,13 +45,17 @@ import {
 } from "$lib/import-reading.js";
 import { importItems, importQueue, users } from "../db/schema.js";
 import {
+  extractDocumentSource,
   extractNumberedText,
   extractPlainAndNumberedText,
   extractText,
   inferMimeType,
+  isEmptyWorkbook,
+  isSpreadsheetMimeType,
   keepsReadText,
   numberDocumentLines,
   stripLineNumbers,
+  type DocumentSource,
 } from "../extraction/document-text.js";
 import type { LedgerDb } from "../ledger/types.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
@@ -79,6 +83,7 @@ import {
 import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
 import { detectProfile } from "./profile-detect.js";
+import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
 import type { LLMCallParams } from "./providers/types.js";
 import {
   ProfileModeError,
@@ -267,7 +272,10 @@ export function alreadyImported(db: LedgerDb, job: ImportJob): string | null {
  */
 interface TextForm<T> {
   given: (text: string) => T;
+  /** From a PDF or a photo. */
   extract: (absPath: string, mimeType: string) => Promise<T>;
+  /** From a spreadsheet, whose text comes in every form at once (FR-051). */
+  fromSource: (source: DocumentSource) => T;
   /** What the document itself prints, to check there is enough of it. */
   printed: (text: T) => string;
 }
@@ -276,6 +284,7 @@ interface TextForm<T> {
 const PLAIN_TEXT: TextForm<string> = {
   given: (text) => text,
   extract: extractText,
+  fromSource: (source) => source.plain,
   printed: (text) => text,
 };
 
@@ -286,6 +295,7 @@ const PLAIN_TEXT: TextForm<string> = {
 const NUMBERED_TEXT: TextForm<string> = {
   given: (text) => numberDocumentLines([text]),
   extract: extractNumberedText,
+  fromSource: (source) => source.numbered,
   printed: (text) => stripLineNumbers(text).trim(),
 };
 
@@ -296,8 +306,18 @@ const NUMBERED_TEXT: TextForm<string> = {
 const BOTH_TEXTS: TextForm<{ plain: string; numbered: string }> = {
   given: (text) => ({ plain: text, numbered: numberDocumentLines([text]) }),
   extract: extractPlainAndNumberedText,
+  fromSource: ({ plain, numbered }) => ({ plain, numbered }),
   printed: (texts) => texts.plain,
 };
+
+/** The message a spreadsheet with nothing in its cells fails with. */
+export const EMPTY_SPREADSHEET =
+  "This spreadsheet is empty: none of its sheets has anything in its cells.";
+
+/** Whether the job's file is an Excel workbook or a CSV file (FR-050). */
+function isSpreadsheetJob(job: Pick<ImportJob, "originalFilename">): boolean {
+  return isSpreadsheetMimeType(inferMimeType(job.originalFilename));
+}
 
 /**
  * The document's text, in the form the reading needs. Null when the job has
@@ -335,7 +355,18 @@ async function documentText<T>(
     const absPath = join(storageRoot, job.tempFilePath);
     const mimeType = inferMimeType(job.originalFilename);
     try {
-      text = await form.extract(absPath, mimeType);
+      if (isSpreadsheetMimeType(mimeType)) {
+        // Read cell by cell and turned into text (FR-051). A workbook that
+        // cannot be read fails here with its reason, such as a password.
+        const source = await extractDocumentSource(absPath, mimeType);
+        if (source.workbook && isEmptyWorkbook(source.workbook)) {
+          markFailed(db, job.id, userId, EMPTY_SPREADSHEET);
+          return null;
+        }
+        text = form.fromSource(source);
+      } else {
+        text = await form.extract(absPath, mimeType);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error({ jobId: job.id, err }, "Text extraction failed");
@@ -710,6 +741,23 @@ function writeReviewCard(
   emitJobUpdate(db, jobId, userId);
 }
 
+/**
+ * Why a spreadsheet cannot be read the standard way, or null (FR-052). The
+ * receipt reading sends only the start of a document; a spreadsheet longer
+ * than that would be read from a shortened text, with the rows past the cut
+ * never seen, so it is refused and the limit named. A PDF or a photo is cut as
+ * it always has been (FR-004).
+ */
+export function receiptTextRefusal(
+  job: Pick<ImportJob, "originalFilename">,
+  text: string,
+): string | null {
+  if (!isSpreadsheetJob(job) || text.length <= RECEIPT_TEXT_LIMIT) return null;
+  const limit = RECEIPT_TEXT_LIMIT.toLocaleString("en");
+  const length = text.length.toLocaleString("en");
+  return `This spreadsheet is too long to be read as a receipt or invoice: its text is ${length} characters, and that reading takes at most ${limit}. Read it again as a document with several items, or with an import profile.`;
+}
+
 async function readReceipt(
   db: LedgerDb,
   job: ImportJob,
@@ -717,6 +765,12 @@ async function readReceipt(
   ctx: ReviewContext,
   input: ReadingInput,
 ) {
+  const tooLong = receiptTextRefusal(job, input.text);
+  if (tooLong) {
+    markFailed(db, job.id, userId, tooLong);
+    return;
+  }
+
   let result;
   try {
     result = await callLLMWithProviders(
