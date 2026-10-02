@@ -11,7 +11,7 @@
 		isImportMode,
 		type ImportModeValue
 	} from '$lib/import-reading.js';
-	import { hasProfileChoice } from './review-card.js';
+	import { fixedModeOf, hasProfileChoice } from './review-card.js';
 
 	/**
 	 * "Read again" (006 FR-023, US9 AS6): reads a document once more from the
@@ -27,7 +27,8 @@
 	 * profile is on) the dialog also asks which part of a statement to import,
 	 * Summary or Every transaction (FR-002, FR-023), starting from the mode the
 	 * document had, so a statement read as its summary can be read again as
-	 * every transaction.
+	 * every transaction. A profile with sections in one mode only is read in
+	 * that mode whatever is chosen, so the mode is then shown fixed.
 	 */
 	let {
 		open = $bindable(false),
@@ -42,8 +43,11 @@
 		open?: boolean;
 		jobId: string;
 		filename: string;
-		/** The "Read as" choices an upload offers, in its words (FR-001). */
-		choices: { value: string; label: string }[];
+		/**
+		 * The "Read as" choices an upload offers, in its words (FR-001), each
+		 * profile with the modes it has sections in.
+		 */
+		choices: { value: string; label: string; modes?: string[] }[];
 		/** How the document was asked to be read last time, as a "Read as" value. */
 		current: string;
 		/** The import mode it was asked for last time, if it had one. */
@@ -78,6 +82,10 @@
 	const modeShown = $derived(
 		profilesEnabled && (choice === ImportReadAs.Auto || choice.startsWith(PROFILE_READ_AS_PREFIX))
 	);
+	// The one mode a profile with sections in one mode only is read in
+	// (FR-002); null when the choice below decides.
+	const fixedMode = $derived(fixedModeOf(choices, choice));
+	const modeSent = $derived(fixedMode ?? mode);
 
 	async function readAgain() {
 		if (sending) return;
@@ -87,7 +95,7 @@
 			const res = await fetch(`/api/import/${jobId}/reread`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(modeShown ? { readAs: choice, importMode: mode } : { readAs: choice }),
+				body: JSON.stringify(modeShown ? { readAs: choice, importMode: modeSent } : { readAs: choice }),
 				credentials: 'include'
 			});
 			if (!res.ok) {
@@ -145,18 +153,24 @@
 				<div class="ra-mode" role="radiogroup" aria-label="Import">
 					<span class="ra-mode-label">Import</span>
 					{#each MODES as option (option)}
-						<label class="ra-mode-choice" class:on={mode === option}>
+						<label class="ra-mode-choice" class:on={modeSent === option} class:fixed={fixedMode !== null && fixedMode !== option}>
 							<input
 								type="radio"
 								name="read-again-mode-{jobId}"
 								value={option}
-								checked={mode === option}
+								checked={modeSent === option}
+								disabled={fixedMode !== null}
 								onchange={() => (mode = option)}
 							/>
 							{importModeLabel(option)}
 						</label>
 					{/each}
 				</div>
+				{#if fixedMode}
+					<p class="ra-mode-hint">
+						This profile has {importModeLabel(fixedMode)} sections only, so it is always read that way.
+					</p>
+				{/if}
 			{/if}
 
 			{#if error}
@@ -255,6 +269,15 @@
 	}
 	.ra-mode-choice input {
 		accent-color: var(--primary);
+	}
+	.ra-mode-choice.fixed {
+		cursor: default;
+		opacity: 0.6;
+	}
+	.ra-mode-hint {
+		margin: 6px 0 0;
+		font-size: 11.5px;
+		color: var(--muted-foreground);
 	}
 	.ra-error {
 		margin: 12px 0 0;

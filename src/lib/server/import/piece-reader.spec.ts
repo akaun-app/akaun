@@ -170,7 +170,8 @@ describe("a document short enough for one call", () => {
 
     expect(fake.calls.map((call) => call.kind)).toEqual(["whole"]);
     expect(reading.items).toHaveLength(4);
-    expect(reading.notes.method).toBeUndefined();
+    // Marked as read by the AI in one call, for the FR-063 reference check.
+    expect(reading.notes.method).toBe("ai");
     expect(reading.controlTotal).toEqual({ matches: true, differenceMinor: 0 });
     expect(progress).toEqual([]);
   });

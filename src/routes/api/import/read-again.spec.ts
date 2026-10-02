@@ -1102,9 +1102,9 @@ describe("reading it again in the other import mode (FR-023)", () => {
     expect(itemsOf().map((item) => item.sectionKey)).toEqual(["rows", "rows"]);
   });
 
-  it("stops with the profile and mode named when the detected profile has no section in it", async () => {
+  it("reads a detected profile with sections in one mode only in that mode, whatever was chosen (FR-002)", async () => {
     const phrase = "Shopee Malaysia fee notice";
-    saveProfile(feeProfile({ phrases: [phrase] }));
+    const profileId = saveProfile(feeProfile({ phrases: [phrase] }));
     receiptCard();
     expect(
       (
@@ -1115,13 +1115,36 @@ describe("reading it again in the other import mode (FR-023)", () => {
         )
       ).status,
     ).toBe(202);
-    const model = serve([]);
+    // Auto-detect keeps what was chosen until it finds a profile.
+    expect(jobRow().importMode).toBe(ImportMode.EveryTransaction);
+    const model = serve([json(profileAnswer([12.5, 30]))]);
     const read = await runWorker();
-    expect(read.state).toBe(ImportState.Failed);
-    expect(read.error).toBe(
-      'The import profile "Shopee fee notice" has no section for Every transaction, so nothing was read.',
-    );
-    expect(model.doGenerateCalls).toHaveLength(0);
+    expect(read).toMatchObject({
+      state: ImportState.Grouped,
+      readHow: ImportReadHow.Detected,
+      profileId: String(profileId),
+      importMode: ImportMode.Summary,
+    });
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(itemsOf().map((item) => item.sectionKey)).toEqual(["fees", "fees"]);
+  });
+
+  it("stores the one mode of a chosen profile with sections in one mode only (FR-002)", async () => {
+    const profileId = saveProfile(feeProfile());
+    receiptCard();
+    expect(
+      (
+        await routes.readAgain(
+          profileReadAsValue(profileId),
+          jobId,
+          ImportMode.EveryTransaction,
+        )
+      ).status,
+    ).toBe(202);
+    expect(jobRow()).toMatchObject({
+      readAs: ImportReadAs.Profile,
+      importMode: ImportMode.Summary,
+    });
   });
 });
 

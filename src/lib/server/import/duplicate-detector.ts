@@ -24,8 +24,9 @@ type JobSnapshot = {
 	// When true, a record whose own reference differs from this item's is never
 	// its duplicate (006 FR-063): two rows of one table with different references
 	// are different transactions, however alike the rest. Set only for an item
-	// read from a table's columns or in pieces; every other reading keeps the
-	// weighted check below unchanged (FR-024).
+	// read from a table's columns, or in Every transaction mode by the AI (in
+	// one call or in pieces); every other reading keeps the weighted check
+	// below unchanged (FR-024).
 	referenceVeto?: boolean;
 };
 

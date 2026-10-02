@@ -656,14 +656,23 @@ export interface SavedProfile extends ImportProfileDraft {
  * A profile has no section in the import mode the document is to be read in
  * (FR-032, US7 AS6). Nothing is read: no section means no line could become a
  * record, and reading another mode's sections would import the wrong figures.
+ *
+ * The reading never asks for such a mode: a profile with sections in one mode
+ * only is read in that mode (`readingModeFor`, FR-002). This stays as the
+ * safety net, and its message names the other mode, which is the one to
+ * choose under "Import".
  */
 export class ProfileModeError extends Error {
   constructor(
     readonly profileName: string,
     readonly mode: ImportModeValue,
   ) {
+    const other =
+      mode === ImportMode.Summary
+        ? ImportMode.EveryTransaction
+        : ImportMode.Summary;
     super(
-      `The import profile "${profileName}" has no section for ${importModeLabel(mode)}, so nothing was read.`,
+      `The import profile "${profileName}" has no section for ${importModeLabel(mode)}, so nothing was read. Choose ${importModeLabel(other)} under Import.`,
     );
     this.name = "ProfileModeError";
   }

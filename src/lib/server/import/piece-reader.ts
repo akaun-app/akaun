@@ -44,7 +44,8 @@
  * and is told how far the reading has got, for the queue to show.
  *
  * What comes back is a `DocumentReading` made by `readingFromEnvelope`, the
- * same as a reading in one call, with `notes.method` "ai_pieces".
+ * same as a reading in one call, with `notes.method` "ai_pieces"; a document
+ * read whole in one call has "ai".
  */
 
 import type { LanguageModel } from "ai";
@@ -722,7 +723,11 @@ export async function readInPieces(
         true,
       );
       checkItemCount(envelope, profile);
-      return readingFromEnvelope(envelope, profile, context);
+      // Marked as read by the AI in one call, so the reference check of
+      // FR-063 applies to it as it does to a reading in pieces: in Every
+      // transaction mode each item carries only its own reference.
+      const reading = readingFromEnvelope(envelope, profile, context);
+      return { ...reading, notes: { ...reading.notes, method: "ai" } };
     } catch (error) {
       if (!isSizeError(error)) throw error;
       if (lineCount <= 1 || limits.maxSplits < 1) {

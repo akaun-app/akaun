@@ -209,6 +209,52 @@ describe("readingForUpload", () => {
       });
     });
 
+    it("stores the one mode of a profile with sections in one mode only", () => {
+      const section = (mode: "summary" | "every_transaction") =>
+        ({ mode }) as NonNullable<UploadProfile["sections"]>[number];
+      const find = profiles({
+        5: {
+          name: "Wallet withdrawals",
+          enabled: true,
+          sections: [section("every_transaction")],
+        },
+        6: {
+          name: "Fee notice",
+          enabled: true,
+          sections: [section("summary"), section("summary")],
+        },
+        7: {
+          name: "Statement",
+          enabled: true,
+          sections: [section("summary"), section("every_transaction")],
+        },
+      });
+      // Whatever Import says, a one-mode profile is read in its mode.
+      for (const asked of [null, "summary", "every_transaction"]) {
+        expect(readingForUpload("profile:5", asked, find)).toMatchObject({
+          ok: true,
+          importMode: "every_transaction",
+        });
+        expect(readingForUpload("profile:6", asked, find)).toMatchObject({
+          ok: true,
+          importMode: "summary",
+        });
+      }
+      // With both, Import decides.
+      expect(
+        readingForUpload("profile:7", "every_transaction", find),
+      ).toMatchObject({ ok: true, importMode: "every_transaction" });
+      expect(readingForUpload("profile:7", null, find)).toMatchObject({
+        ok: true,
+        importMode: "summary",
+      });
+      // Auto-detect keeps the choice: the profile is not known yet.
+      expect(readingForUpload("auto", null, find)).toMatchObject({
+        ok: true,
+        importMode: "summary",
+      });
+    });
+
     it("names an unknown Read as before an unknown mode", () => {
       const result = readingForUpload("several", "every", enabled);
       expect(result.ok).toBe(false);

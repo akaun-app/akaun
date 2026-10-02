@@ -366,6 +366,34 @@ export function readsFromColumns(
   return sections.length > 0 && sections.every((section) => section.rows);
 }
 
+/**
+ * The import modes a profile has sections in, Summary first. A section saved
+ * before modes existed is a Summary section.
+ */
+export function profileModes(
+  profile: Pick<ImportProfileDraft, "sections">,
+): ImportModeValue[] {
+  return PROFILE_SECTION_MODES.filter((mode) =>
+    profile.sections.some(
+      (section) => (section.mode ?? ImportMode.Summary) === mode,
+    ),
+  );
+}
+
+/**
+ * The mode a profile is read in (FR-002). A profile with sections in one mode
+ * only is always read in that mode, whatever "Import" says: there is nothing
+ * to read in the other one. Only a profile with sections in both modes is
+ * read in the mode the uploader chose.
+ */
+export function readingModeFor(
+  profile: Pick<ImportProfileDraft, "sections">,
+  asked: ImportModeValue,
+): ImportModeValue {
+  const modes = profileModes(profile);
+  return modes.length === 1 ? modes[0] : asked;
+}
+
 /** One part of the document to read (FR-031). */
 export interface ProfileSection {
   /** The section's key in the answer. See `PROFILE_KEY_PATTERN`. */

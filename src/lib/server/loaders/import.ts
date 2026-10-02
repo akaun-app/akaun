@@ -1,7 +1,12 @@
 import { redirect } from "@sveltejs/kit";
 import { desc, eq } from "drizzle-orm";
 import { DefaultAccountPurpose, ImportState } from "$lib/enums.js";
-import { ImportReadAs, profileReadAsValue } from "$lib/import-reading.js";
+import { profileModes } from "$lib/import-profile-schema.js";
+import {
+  ImportReadAs,
+  profileReadAsValue,
+  type ImportModeValue,
+} from "$lib/import-reading.js";
 import { db } from "$lib/server/db/client.js";
 import { importQueue } from "$lib/server/db/schema.js";
 import {
@@ -56,14 +61,19 @@ export const READ_AS_CHOICES: { value: string; label: string }[] = [
  * is not offered (US6 AS12), and the upload refuses it if it is named anyway.
  * Sent from the server, so the screen needs no rule of its own: a choice it
  * remembered that is no longer in this list is simply not restored.
+ *
+ * Each profile carries the modes it has sections in (FR-002). With one mode
+ * only, the screen shows "Import" fixed at that mode, since that is the mode
+ * it is read in whatever is chosen.
  */
 export function readAsChoices(
   database: LedgerDb,
-): { value: string; label: string }[] {
+): { value: string; label: string; modes?: ImportModeValue[] }[] {
   const profiles = listImportProfiles(database, { enabledOnly: true }).map(
     (profile) => ({
       value: profileReadAsValue(profile.id),
       label: profile.name,
+      modes: profileModes(profile),
     }),
   );
   return [...READ_AS_CHOICES, ...profiles];

@@ -121,7 +121,8 @@ const { createAccount } = await import("../services/accounts.js");
 const { createRecord } = await import("../services/ledger.js");
 const { createImportProfile, updateImportProfile } =
   await import("../services/import-profiles.js");
-const { starterDraft } = await import("$lib/import-profile-starters.js");
+const { IMPORT_PROFILE_STARTERS, starterDraft } =
+  await import("$lib/import-profile-starters.js");
 const { confirmGroupItems, setGroupItemsCategory, skipGroupItems } =
   await import("../services/import-items.js");
 const { monthsCoveredBy } = await import("./same-money.js");
@@ -731,6 +732,104 @@ describe("Auto-detect on a spreadsheet", () => {
     );
   });
 
+  it("reads a profile with Every transaction sections only from columns when Summary was chosen, with no provider (FR-002)", async () => {
+    // The default Import is Summary; the profile has nothing to read in it,
+    // so it is read in its one mode, and needs no AI at any step.
+    const profileId = saveProfile(withdrawalsProfile());
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+        importMode: ImportMode.Summary,
+      }),
+    );
+    expect(row).toMatchObject({
+      state: ImportState.Grouped,
+      error: null,
+      readHow: ImportReadHow.Detected,
+      profileId: String(profileId),
+      importMode: ImportMode.EveryTransaction,
+    });
+    expect(itemsOf(row.id)).toHaveLength(2);
+    const snapshot = parseProfileSnapshot(row.profileSnapshot)!;
+    expect(snapshot.mode).toBe(ImportMode.EveryTransaction);
+    expect(describeReading({ ...row, profile: snapshot })).toBe(
+      "Read with “Wallet report, withdrawals only” (detected) · Every transaction · read from columns",
+    );
+  });
+
+  it("never picks by phrases a profile that reads from columns when its headings are not in the sheet", async () => {
+    // Both have every phrase in the sheet, but only one could read it: the
+    // other's table is not there, and would fail "not found".
+    saveProfile({ ...otherLayoutProfile(), phrases: ["Total Money In"] });
+    const readable = saveProfile({
+      ...aiProfile(),
+      phrases: ["Total Money In"],
+    });
+    const row = await run(auto());
+    expect(row).toMatchObject({
+      readHow: ImportReadHow.Detected,
+      profileId: String(readable),
+    });
+    // Read by the AI, which is not set up: that, not a missing table, is
+    // why it stops.
+    expect(row.error).toBe(NO_PROVIDERS);
+  });
+
+  it("falls to the standard reading when the only phrase match reads from columns it cannot find", async () => {
+    saveProfile({ ...otherLayoutProfile(), phrases: ["Total Money In"] });
+    const row = await run(auto());
+    expect(row).toMatchObject({
+      state: ImportState.Failed,
+      readHow: ImportReadHow.Standard,
+      profileId: null,
+      error: NO_PROVIDERS,
+    });
+  });
+
+  it("never detects a profile that reads from columns only for a PDF", async () => {
+    const pdfText =
+      "Wallet report\nTotal Money In 54.15\nTotal Money Out -300.00";
+    saveProfile(withdrawalsProfile({ phrases: ["Total Money In"] }));
+    const readable = saveProfile({
+      ...aiProfile(),
+      phrases: ["Total Money In"],
+    });
+    addProvider();
+    const model = serve([
+      {
+        text: JSON.stringify({
+          header: {
+            counterparty: "Example Marketplace",
+            date: "2026-03-31",
+            reference: null,
+            currency: "MYR",
+          },
+          stated_total: null,
+          sections: { withdrawals: [] },
+          ignored: [],
+        }),
+      },
+    ]);
+    const row = await run(
+      queueFile("wallet.pdf", "%PDF-1.4 not really", {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+        preExtractedText: pdfText,
+      }),
+    );
+    // Found by its phrases alone, with no detection call: the reading is
+    // the only call made.
+    expect(row).toMatchObject({
+      readHow: ImportReadHow.Detected,
+      profileId: String(readable),
+    });
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(JSON.stringify(model.doGenerateCalls[0].prompt)).not.toContain(
+      "saved import profiles",
+    );
+  });
+
   it("refuses a long spreadsheet after the AI finds no profile fits (FR-052)", async () => {
     saveProfile(aiProfile());
     addProvider();
@@ -760,6 +859,56 @@ describe("the wallet report starters", () => {
     edit(draft);
     return saveProfile(draft);
   }
+
+  it("say to turn on only one of the two, since no phrase can tell them apart", () => {
+    for (const id of [
+      "wallet_withdrawals",
+      "wallet_every_transaction",
+    ] as const) {
+      const starter = IMPORT_PROFILE_STARTERS.find((entry) => entry.id === id)!;
+      expect(starter.hint).toContain("Turn on only one of the two");
+      expect(starter.draft.description).toContain("turn on only one");
+      expect(starter.draft.phrases).toEqual([]);
+    }
+  });
+
+  it("read under the default Summary, in their one mode, with no provider (FR-002)", async () => {
+    const profileId = fromStarter("wallet_withdrawals");
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Profile,
+        profileId: String(profileId),
+        importMode: ImportMode.Summary,
+      }),
+    );
+    expect(row).toMatchObject({
+      state: ImportState.Grouped,
+      error: null,
+      importMode: ImportMode.EveryTransaction,
+    });
+    expect(parseExtractionNotes(row.extractionNotes)?.method).toBe("columns");
+  });
+
+  it("both turned on, with no provider, fail naming both and saying to turn one off", async () => {
+    fromStarter("wallet_withdrawals");
+    fromStarter("wallet_every_transaction");
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+        importMode: ImportMode.Summary,
+      }),
+    );
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toBe(
+      severalLayoutsFit([
+        { name: "Marketplace wallet report — every transaction" },
+        { name: "Marketplace wallet report — withdrawals only" },
+      ]),
+    );
+    expect(row.error).toContain("turn off the ones you do not use");
+    expect(row.error).not.toBe(NO_PROVIDERS);
+  });
 
   it("cannot be saved before both accounts are chosen", () => {
     const created = createImportProfile(

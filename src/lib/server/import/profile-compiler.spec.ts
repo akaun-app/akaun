@@ -616,8 +616,9 @@ describe("savedReadingProfile", () => {
     const attempt = () =>
       savedReadingProfile(saved(shopLike), ImportMode.EveryTransaction);
     expect(attempt).toThrow(ProfileModeError);
+    // It names the other mode, the one to choose under Import.
     expect(attempt).toThrow(
-      'The import profile "Shop statement" has no section for Every transaction',
+      'The import profile "Shop statement" has no section for Every transaction, so nothing was read. Choose Summary under Import.',
     );
   });
 

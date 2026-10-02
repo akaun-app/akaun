@@ -58,9 +58,10 @@ export interface ReadFields {
     fileHash: string | null;
     extractedText: string | null;
     /**
-     * True for an item read from a table's columns or in pieces: a record
-     * with a different reference of its own is then never its duplicate
-     * (FR-063). Absent, as for a receipt, keeps the check as it was.
+     * True for an item read from a table's columns, or in Every transaction
+     * mode by the AI: a record with a different reference of its own is then
+     * never its duplicate (FR-063). Absent, as for a receipt, keeps the check
+     * as it was.
      */
     referenceVeto?: boolean;
   };

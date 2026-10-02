@@ -126,8 +126,9 @@ export type ExtractionNotes = {
    */
   ignoredCount?: number;
   /**
-   * How the items were read. Absent on a reading by the AI in one call, which
-   * is how every document was read before the others existed.
+   * How the items were read. "ai" is an Every transaction reading by the AI
+   * in one call. Absent on a Summary reading by the AI in one call, and on
+   * every row from before the methods existed, which were all read that way.
    */
   method?: ReadMethod;
   /**

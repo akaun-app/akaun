@@ -847,18 +847,27 @@ describe("reading a marketplace summary with a profile", () => {
 });
 
 describe("a profile that cannot be used", () => {
-  it("stops before reading when the profile has no section for the chosen mode", async () => {
+  it("reads a profile with sections in one mode only in that mode, whatever Import says (FR-002)", async () => {
+    // Every section is a Summary one, so Every transaction has nothing to
+    // read: the profile is read as Summary, and the row says so.
     const profileId = saveProfile(statementProfile());
     const model = serve([json(statementAnswer())]);
     const row = await run(
       profileJob(profileId, { importMode: ImportMode.EveryTransaction }),
     );
 
-    expect(row.state).toBe(ImportState.Failed);
-    expect(row.error).toBe(
-      'The import profile "Shopee statement" has no section for Every transaction, so nothing was read.',
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(row.importMode).toBe(ImportMode.Summary);
+    expect(parseProfileSnapshot(row.profileSnapshot)?.mode).toBe(
+      ImportMode.Summary,
     );
-    expect(model.doGenerateCalls).toHaveLength(0);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(itemsOf(row.id).map((item) => item.sectionKey)).toEqual([
+      "sales",
+      "fees",
+      "fees",
+      "fees",
+    ]);
   });
 
   it("fails naming a profile disabled before reading started", async () => {
@@ -1516,8 +1525,55 @@ describe("a long document read in pieces (FR-043)", () => {
     expect(fake.calls.map((call) => call.kind)).toEqual(["whole"]);
     expect(row.state).toBe(ImportState.Grouped);
     expect(itemsOf(row.id)).toHaveLength(5);
-    expect(parseExtractionNotes(row.extractionNotes)?.method).toBeUndefined();
+    // Read by the AI in one call, in Every transaction mode (FR-063).
+    expect(parseExtractionNotes(row.extractionNotes)?.method).toBe("ai");
   });
+
+  it("never takes a row read in one call as a duplicate of one under another reference (FR-063)", async () => {
+    const profileId = saveProfile({
+      ...walletProfile(),
+      sections: walletProfile().sections.map((section) => ({
+        ...section,
+        fixedCategoryAccountId: ids.sales,
+      })),
+    });
+    serveFake();
+    const few = fakeRows(5);
+    const short = (list: typeof few) => fakeReportPages(list).join("\n");
+    const first = await run(
+      everyJob(profileId, { preExtractedText: short(few) }),
+    );
+    expect(parseExtractionNotes(first.extractionNotes)?.method).toBe("ai");
+    const file = join(storageRoot, first.tempFilePath);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "%PDF-1.4 report");
+    const confirmed = await confirmGroupItems(db, first.id, "all", {
+      actingUserId: 1,
+      storageRoot,
+    });
+    expect(confirmed.ok).toBe(true);
+
+    // The same rows under other references are other transactions.
+    const renamed = few.map((entry) => ({
+      ...entry,
+      reference: entry.reference.replace("TX-", "RX-"),
+    }));
+    const other = await run(
+      everyJob(profileId, { preExtractedText: short(renamed) }),
+    );
+    expect(other.state).toBe(ImportState.Grouped);
+    expect(
+      itemsOf(other.id).filter((item) => item.duplicateOf !== null),
+    ).toEqual([]);
+
+    // Under the same references, every one is flagged.
+    const again = await run(
+      everyJob(profileId, { preExtractedText: short(few) }),
+    );
+    expect(
+      itemsOf(again.id).filter((item) => item.duplicateOf !== null),
+    ).toHaveLength(few.length);
+  }, 30_000);
 
   it("stops between parts when the document is discarded while it reads, saving nothing", async () => {
     const profileId = saveProfile(walletProfile());

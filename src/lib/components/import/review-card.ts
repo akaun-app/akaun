@@ -5,14 +5,15 @@ import {
   targetAccountsForImportSource,
 } from "$lib/import-account-groups.js";
 import {
-  ImportMode,
   ImportReadAs,
   ImportReadHow,
   PROFILE_READ_AS_PREFIX,
   controlTotal,
   importModeLabel,
+  isImportMode,
   parseExtractionNotes,
   profileReadAsValue,
+  type ImportModeValue,
 } from "$lib/import-reading.js";
 import { formatCurrency } from "$lib/currency.js";
 import type { AccountView } from "$lib/server/ledger/types.js";
@@ -499,12 +500,11 @@ export function describeReading(job: ReadingOf): string {
   ) {
     const name = job.profile ? `“${job.profile.name}”` : "an import profile";
     const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
-    // Summary is the default and goes unsaid, so a summary reading reads as
-    // it did before Every transaction existed.
-    const mode =
-      job.profile?.mode === ImportMode.EveryTransaction
-        ? ` · ${importModeLabel(ImportMode.EveryTransaction)}`
-        : "";
+    // The mode it is read in, always: a profile with sections in one mode
+    // only is read in that mode whatever "Import" said (FR-002), so the
+    // screen says which one it was.
+    const readIn = job.profile?.mode;
+    const mode = isImportMode(readIn) ? ` · ${importModeLabel(readIn)}` : "";
     const method = parseExtractionNotes(job.extractionNotes)?.method;
     const read =
       method === "columns"
@@ -600,6 +600,21 @@ export function hasProfileChoice(choices: { value: string }[]): boolean {
   return choices.some((choice) =>
     choice.value.startsWith(PROFILE_READ_AS_PREFIX),
   );
+}
+
+/**
+ * The one mode a "Read as" choice is read in, when it names a profile with
+ * sections in one mode only (FR-002), or null when "Import" decides. The
+ * server sends each profile's modes with the choices and applies the same
+ * rule itself, so this only says it on the screen.
+ */
+export function fixedModeOf(
+  choices: { value: string; modes?: readonly string[] }[],
+  value: string,
+): ImportModeValue | null {
+  const modes = choices.find((choice) => choice.value === value)?.modes;
+  if (!modes || modes.length !== 1) return null;
+  return isImportMode(modes[0]) ? modes[0] : null;
 }
 
 // ── A document read as several items ────────────────────────────────────────

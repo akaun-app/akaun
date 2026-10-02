@@ -523,7 +523,16 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
   });
 
   it("stores the Import choice for a profile and for Auto-detect (FR-002)", async () => {
-    const id = saved();
+    // A profile with sections in both modes, for which Import decides.
+    const draft = feeDocument("Both modes");
+    draft.sections.push({
+      ...structuredClone(draft.sections[0]),
+      key: "rows",
+      mode: "every_transaction",
+    });
+    const created = createImportProfile(db, 1, draft);
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.value.id;
     expect(
       (await routes.upload(`profile:${id}`, "every_transaction")).status,
     ).toBe(202);
@@ -542,6 +551,20 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(byReadAs.auto.importMode).toBe("every_transaction");
     // A receipt has no mode, so the choice is ignored for it.
     expect(byReadAs.receipt.importMode).toBeNull();
+  });
+
+  it("stores the one mode of a profile with sections in one mode only, whatever Import says (FR-002)", async () => {
+    // A fee document has Summary sections only.
+    const id = saved();
+    expect(
+      (await routes.upload(`profile:${id}`, "every_transaction")).status,
+    ).toBe(202);
+    const [row] = queueRows();
+    expect(row.importMode).toBe("summary");
+    expect(JSON.parse(row.profileSnapshot ?? "null")).toMatchObject({
+      id,
+      mode: "summary",
+    });
   });
 
   it("refuses an unknown Import choice with a clear message, and stores nothing", async () => {
@@ -595,9 +618,15 @@ describe("the Read as choices on the upload screen", () => {
   it("offers each enabled profile by name, after the built-in ones (US6 AS5)", () => {
     const beta = saved("Beta statement");
     const alpha = saved("Alpha fees");
+    // Each with the modes it has sections in (FR-002): a fee document has
+    // Summary sections only.
     expect(choices().slice(3)).toEqual([
-      { value: `profile:${alpha}`, label: "Alpha fees" },
-      { value: `profile:${beta}`, label: "Beta statement" },
+      { value: `profile:${alpha}`, label: "Alpha fees", modes: ["summary"] },
+      {
+        value: `profile:${beta}`,
+        label: "Beta statement",
+        modes: ["summary"],
+      },
     ]);
   });
 
@@ -608,7 +637,25 @@ describe("the Read as choices on the upload screen", () => {
     expect((await routes.patch(off, { enabled: false })).status).toBe(200);
     expect((await routes.remove(gone)).status).toBe(204);
     expect(choices().slice(3)).toEqual([
-      { value: `profile:${kept}`, label: "Kept" },
+      { value: `profile:${kept}`, label: "Kept", modes: ["summary"] },
+    ]);
+  });
+
+  it("sends both modes for a profile with sections in both", () => {
+    const draft = feeDocument("Both modes");
+    draft.sections.push({
+      ...structuredClone(draft.sections[0]),
+      key: "rows",
+      mode: "every_transaction",
+    });
+    const created = createImportProfile(db, 1, draft);
+    if (!created.ok) throw new Error(created.reason);
+    expect(choices().slice(3)).toEqual([
+      {
+        value: `profile:${created.value.id}`,
+        label: "Both modes",
+        modes: ["summary", "every_transaction"],
+      },
     ]);
   });
 

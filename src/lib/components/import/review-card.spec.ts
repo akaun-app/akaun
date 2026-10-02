@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AccountType, DocumentType } from "$lib/enums.js";
 import {
   describeReading,
+  fixedModeOf,
   readingProgressLabel,
   hasProfileChoice,
   readAsOfJob,
@@ -139,7 +140,7 @@ describe("describeReading", () => {
     );
   });
 
-  it("names Every transaction after the profile, and leaves Summary unsaid", () => {
+  it("names the mode it was read in after the profile, Summary too (FR-002)", () => {
     const every = { name: "Wallet report", mode: "every_transaction" };
     expect(
       describeReading({ readAs: "profile", readHow: "chosen", profile: every }),
@@ -147,14 +148,15 @@ describe("describeReading", () => {
     expect(
       describeReading({ readAs: "auto", readHow: "detected", profile: every }),
     ).toBe("Read with “Wallet report” (detected) · Every transaction");
-    // Summary, the default, reads as it did before the mode existed.
+    // A profile with Summary sections only is read as Summary whatever
+    // "Import" said, so the screen says Summary as well.
     expect(
       describeReading({
         readAs: "profile",
         readHow: "chosen",
         profile: { name: "Wallet report", mode: "summary" },
       }),
-    ).toBe("Read with “Wallet report” (chosen)");
+    ).toBe("Read with “Wallet report” (chosen) · Summary");
   });
 
   it("says when a spreadsheet was read from its columns (FR-041)", () => {
@@ -196,6 +198,39 @@ describe("describeReading", () => {
     ).toBe(
       "Read with “Wallet report” (chosen) · Every transaction · read in parts",
     );
+    // Read by the AI in one call, in Every transaction mode: nothing more.
+    expect(
+      describeReading({
+        readAs: "profile",
+        readHow: "chosen",
+        profile: every,
+        extractionNotes: notes("ai"),
+      }),
+    ).toBe("Read with “Wallet report” (chosen) · Every transaction");
+  });
+});
+
+describe("fixedModeOf", () => {
+  const choices = [
+    { value: "auto", label: "Auto-detect" },
+    { value: "profile:1", label: "Wallet", modes: ["every_transaction"] },
+    { value: "profile:2", label: "Fees", modes: ["summary"] },
+    {
+      value: "profile:3",
+      label: "Statement",
+      modes: ["summary", "every_transaction"],
+    },
+  ];
+
+  it("gives the one mode of a profile with sections in one mode only (FR-002)", () => {
+    expect(fixedModeOf(choices, "profile:1")).toBe("every_transaction");
+    expect(fixedModeOf(choices, "profile:2")).toBe("summary");
+  });
+
+  it("leaves the choice to Import for a profile with both, and for anything else", () => {
+    expect(fixedModeOf(choices, "profile:3")).toBeNull();
+    expect(fixedModeOf(choices, "auto")).toBeNull();
+    expect(fixedModeOf(choices, "profile:9")).toBeNull();
   });
 });
 

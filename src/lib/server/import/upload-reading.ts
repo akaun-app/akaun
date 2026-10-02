@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  readingModeFor,
+  type ImportProfileDraft,
+} from "$lib/import-profile-schema.js";
+import {
   ImportMode,
   ImportReadAs,
   ImportReadHow,
@@ -34,8 +38,16 @@ const uploadImportMode = z.enum([
   ImportMode.EveryTransaction,
 ]);
 
-/** What the upload needs to know of a saved profile to accept it. */
-export type UploadProfile = { name: string; enabled: boolean };
+/**
+ * What the upload needs to know of a saved profile to accept it, and its
+ * sections, which say the mode it is read in (FR-002). Without them the mode
+ * the uploader chose is kept, and the reading decides.
+ */
+export type UploadProfile = {
+  name: string;
+  enabled: boolean;
+  sections?: ImportProfileDraft["sections"];
+};
 
 export type UploadReading =
   | {
@@ -73,9 +85,13 @@ const MODE_CHOICES = uploadImportMode.options.join(" or ");
  * Summary or Every transaction. One that is missing or empty is Summary, the
  * default; one the system does not know is refused like an unknown "Read
  * as", whatever "Read as" says, so a mistyped mode never goes unnoticed. The
- * mode is stored for a profile and for Auto-detect, which may find a profile
- * and must then read it in the mode the uploader chose. A receipt or several
- * items has no mode, so the field is ignored for them and none is stored.
+ * mode is stored for a profile and for Auto-detect, which may find a profile.
+ * A chosen profile with sections in one mode only is stored with that mode,
+ * whatever the field says, since it has nothing to read in the other; only a
+ * profile with sections in both is stored with the mode chosen. Auto-detect
+ * keeps the mode chosen, and the reading applies the same rule to the profile
+ * it finds. A receipt or several items has no mode, so the field is ignored
+ * for them and none is stored.
  *
  * An Auto-detect row says Standard from the start. The worker changes that to
  * Detected when it finds a profile that fits (006 US9); with no enabled
@@ -136,7 +152,9 @@ export function readingForUpload(
       readAs: ImportReadAs.Profile,
       readHow: ImportReadHow.Chosen,
       profileId: String(id),
-      importMode: mode.data,
+      importMode: profile.sections
+        ? readingModeFor({ sections: profile.sections }, mode.data)
+        : mode.data,
     };
   }
 

@@ -18,6 +18,7 @@
 	import {
 		describeReading,
 		editedValue,
+		fixedModeOf,
 		formatMoney,
 		hasProfileChoice,
 		isTransferRow,
@@ -217,8 +218,14 @@
 			readAs !== ImportReadAs.SeveralItems
 	);
 
+	// A profile with sections in one mode only is read in that mode whatever
+	// is chosen (FR-002), so "Import" shows that mode, fixed, and the upload
+	// sends it. The mode remembered for other readings stays as it was.
+	const fixedMode = $derived(fixedModeOf(data.readAsChoices, readAs));
+	const importModeSent = $derived(fixedMode ?? importMode);
+
 	function setImportMode(value: string) {
-		if (!isImportMode(value)) return;
+		if (fixedMode || !isImportMode(value)) return;
 		importMode = value;
 		try {
 			localStorage.setItem(IMPORT_MODE_KEY, value);
@@ -409,7 +416,7 @@
 		const form = new FormData();
 		form.append('file', file);
 		form.append('readAs', readAsOverride ?? readAs);
-		const mode = modeOverride ?? (importModeShown ? importMode : undefined);
+		const mode = modeOverride ?? (importModeShown ? importModeSent : undefined);
 		if (mode) form.append('importMode', mode);
 		try {
 			const res = await fetch('/api/import', {
@@ -752,14 +759,17 @@
 			</Select.Root>
 			{#if importModeShown}
 				<span class="upload-option-label">Import</span>
-				<Select.Root type="single" value={importMode} onValueChange={setImportMode}>
-					<Select.Trigger class="upload-readas" aria-label="Import">{importModeLabel(importMode)}</Select.Trigger>
+				<Select.Root type="single" value={importModeSent} onValueChange={setImportMode} disabled={fixedMode !== null}>
+					<Select.Trigger class="upload-readas" aria-label="Import">{importModeLabel(importModeSent)}</Select.Trigger>
 					<Select.Content>
 						{#each IMPORT_MODES as choice (choice.value)}
 							<Select.Item value={choice.value} label={choice.label} />
 						{/each}
 					</Select.Content>
 				</Select.Root>
+			{/if}
+			{#if importModeShown && fixedMode}
+				<span class="upload-option-hint">This profile has {importModeLabel(fixedMode)} sections only, so it is always read that way.</span>
 			{/if}
 			{#if profilesEnabled && readAs === ImportReadAs.Auto}
 				<span class="upload-option-hint">Uses a saved profile that fits the document, or else reads it the standard way.</span>

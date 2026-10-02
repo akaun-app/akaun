@@ -9,6 +9,12 @@
  * editor. The two wallet report starters cannot be saved until both of their
  * accounts are chosen (FR-030, FR-058): the wallet the report lists, and the
  * bank account each withdrawal goes to.
+ *
+ * The two wallet report starters are alternatives for the same report: the
+ * same table, the same headings and the same words, so no recognition phrase
+ * can tell one from the other. They suggest no phrases, and each says to turn
+ * on only one of the two. With both on, Auto-detect cannot choose without an
+ * AI provider and says so, naming them.
  */
 
 import type {
@@ -306,6 +312,10 @@ const WITHDRAWALS: ProfileSection = {
 const WALLET_DESCRIPTION =
   "A marketplace wallet's balance transaction report, as a spreadsheet: the seller's account details and the total money in and out for a period, then one row per transaction (order income, adjustments and withdrawals to the bank) with the balance after each.";
 
+/** What each wallet report starter says about the other. */
+const ONLY_ONE =
+  "Made for the same report as the other wallet report profile: turn on only one of the two.";
+
 const WALLET_INSTRUCTIONS = `- Read only the table of transactions, one item per row. Never list the totals above it or a balance.
 - Copy every amount exactly as printed, with its sign. Never add up or work out a figure yourself.`;
 
@@ -316,7 +326,7 @@ const WALLET_INSTRUCTIONS = `- Read only the table of transactions, one item per
  */
 const WALLET_WITHDRAWALS: ImportProfileDraft = {
   name: "Marketplace wallet report — withdrawals only",
-  description: WALLET_DESCRIPTION,
+  description: `${WALLET_DESCRIPTION} ${ONLY_ONE}`,
   phrases: [],
   instructions: WALLET_INSTRUCTIONS,
   statedTotalLabels: {},
@@ -332,7 +342,7 @@ const WALLET_WITHDRAWALS: ImportProfileDraft = {
  */
 const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
   name: "Marketplace wallet report — every transaction",
-  description: `${WALLET_DESCRIPTION} Its order income repeats the sales of the marketplace's income statement: import both and the sales are counted twice.`,
+  description: `${WALLET_DESCRIPTION} Its order income repeats the sales of the marketplace's income statement: import both and the sales are counted twice. ${ONLY_ONE}`,
   phrases: [],
   instructions: WALLET_INSTRUCTIONS,
   statedTotalLabels: {},
@@ -399,13 +409,13 @@ export const IMPORT_PROFILE_STARTERS: readonly ImportProfileStarter[] = [
   {
     id: "wallet_withdrawals",
     label: "Marketplace wallet report — withdrawals only",
-    hint: "A wallet report spreadsheet, read from its columns: each withdrawal to the bank as a transfer. Recommended beside the statement summary.",
+    hint: "A wallet report spreadsheet, read from its columns: each withdrawal to the bank as a transfer. Recommended beside the statement summary. Turn on only one of the two wallet report profiles.",
     draft: WALLET_WITHDRAWALS,
   },
   {
     id: "wallet_every_transaction",
     label: "Marketplace wallet report — every transaction",
-    hint: "Every row of a wallet report spreadsheet. Its order income repeats the statement summary's sales: import only one of the two, or they are counted twice.",
+    hint: "Every row of a wallet report spreadsheet. Its order income repeats the statement summary's sales: import only one of the two, or they are counted twice. Turn on only one of the two wallet report profiles.",
     draft: WALLET_EVERY_TRANSACTION,
   },
 ];
