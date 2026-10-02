@@ -191,6 +191,7 @@ async function transferReviewFields(
     duplicateReasons: null,
     accountId: moneyAccount(db, ctx, input.documentAccountId),
     reviewNote: null,
+    checkNote: null,
     counterAccountId: moneyAccount(db, ctx, input.counterAccountId),
   };
 }
@@ -290,6 +291,7 @@ export async function buildReviewFields(
     // Only the reading of an item has anything to say here; see `itemFields`
     // in `process-job.ts`.
     reviewNote: null,
+    checkNote: null,
     counterAccountId: null,
   };
 }

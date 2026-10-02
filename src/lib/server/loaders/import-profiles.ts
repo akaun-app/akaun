@@ -4,10 +4,12 @@ import {
   type ImportProfileStarterId,
 } from "$lib/import-profile-starters.js";
 import { db } from "$lib/server/db/client.js";
+import { isImportTransactionAsset } from "$lib/server/import/account-policy.js";
 import { categoryChoices } from "$lib/server/import/category-accounts.js";
 import { profileIdParam } from "$lib/server/import/profile-reply.js";
 import type { LedgerDb } from "$lib/server/ledger/types.js";
 import { hasPermission } from "$lib/server/permissions.js";
+import { listAccounts } from "$lib/server/queries/accounts.js";
 import {
   getImportProfile,
   listImportProfiles,
@@ -57,6 +59,28 @@ function categoryOptions(database: LedgerDb) {
 }
 
 /**
+ * What else the editor offers to choose from: the accounts that hold money,
+ * for the account the document is about and each transfer's other account
+ * (FR-058), checked again on save; and the other profiles, which a section
+ * can name as describing the same money (FR-066). `selfId` is the profile
+ * being edited, left out of its own list.
+ */
+function editorChoices(database: LedgerDb, selfId: number | null) {
+  return {
+    moneyAccounts: listAccounts(database, {})
+      .filter(isImportTransactionAsset)
+      .map((account) => ({
+        id: account.id,
+        code: String(account.code),
+        name: account.name,
+      })),
+    otherProfiles: listImportProfiles(database)
+      .filter((profile) => profile.id !== selfId)
+      .map((profile) => ({ id: profile.id, name: profile.name })),
+  };
+}
+
+/**
  * The profiles as the Settings list shows them: name, whether it is on, and
  * how many sections it has. Empty for a user who may not see imports, and
  * `canChange` false for one who may not change them.
@@ -94,7 +118,11 @@ export function loadImportProfileNew(
   const raw = url.searchParams.get("starter");
   const starter: ImportProfileStarterId | null =
     raw && isStarterId(raw) ? raw : null;
-  return { starter, ...categoryOptions(database) };
+  return {
+    starter,
+    ...categoryOptions(database),
+    ...editorChoices(database, null),
+  };
 }
 
 /**
@@ -117,6 +145,7 @@ export function loadImportProfileDetail(
   return {
     profile,
     ...categoryOptions(database),
+    ...editorChoices(database, profile.id),
     perms: { change: hasPermission(locals, "import", "change") },
   };
 }

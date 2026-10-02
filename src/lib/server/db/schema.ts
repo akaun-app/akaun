@@ -319,6 +319,13 @@ function reviewColumns() {
     // the reviewer to look at. Choosing a category clears it. Null when there
     // is nothing to say, as for every receipt.
     reviewNote: text("review_note"),
+    // What the reviewer is to check that no category choice answers: the
+    // section's flag rule (006 FR-061) and money another profile's records
+    // may already hold (FR-066). Kept apart from `review_note` because
+    // choosing a category clears that one: a bulk "Set category" must not
+    // wipe a warning that the line may be counted twice. While it is set, a
+    // confirm-all leaves the item behind, and it is confirmed on its own.
+    checkNote: text("check_note"),
     // The other side of a transfer (006 FR-058): the account money moved to
     // from `account_id`, or came from into it, as `document_type` says. Null
     // for an expense or an income, which name a category instead, and for
@@ -961,6 +968,26 @@ export const ledgerRecords = sqliteTable(
     // treats nulls as distinct in a unique index, so those never collide.
     uniqueIndex("ledger_records_legacy_idx").on(t.legacyKind, t.legacyId),
   ],
+);
+
+/**
+ * Which saved import profile read the document a record was imported from
+ * (006 FR-066). The overlap guard asks it which months a profile's records
+ * cover. It lives apart from `import_queue` and `import_items`, which
+ * clearing the import history deletes while the records stay: the guard would
+ * then lose sight of them. Deleting the record deletes its row. The profile id
+ * has no foreign key, as `import_queue.profile_id` has none: a profile is
+ * deleted outright, and its records still describe the money they did.
+ */
+export const importRecordProfiles = sqliteTable(
+  "import_record_profiles",
+  {
+    recordId: integer("record_id")
+      .primaryKey()
+      .references(() => ledgerRecords.id, { onDelete: "cascade" }),
+    profileId: integer("profile_id").notNull(),
+  },
+  (t) => [index("import_record_profiles_profile_idx").on(t.profileId)],
 );
 
 // One side of a record: an amount against one account.

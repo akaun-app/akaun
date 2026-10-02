@@ -3,8 +3,10 @@ import {
   PROFILE_ENUM_VALUES_MAX,
   PROFILE_EXTRAS_MAX,
   PROFILE_FEE_TYPES_MAX,
+  PROFILE_SAME_MONEY_MAX,
   PROFILE_SECTIONS_MAX,
   checkProfile,
+  checkTablePreview,
   extraFieldsOf,
   foldTableText,
   formatProfileErrors,
@@ -67,14 +69,79 @@ function paths(errors: ProfileError[]): string[] {
   return errors.map((error) => error.path);
 }
 
+/**
+ * A starter with both its accounts chosen, as the user must before saving a
+ * wallet report starter (FR-030). A starter with no transfer is unchanged.
+ */
+function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
+  if (!draft.sections.some((section) => section.kind === "transfer")) {
+    return draft;
+  }
+  return {
+    ...draft,
+    accountId: 5,
+    sections: draft.sections.map((section) =>
+      section.kind === "transfer"
+        ? { ...section, counterAccountId: 6 }
+        : section,
+    ),
+  };
+}
+
 describe("starters", () => {
   it.each(IMPORT_PROFILE_STARTERS.map((starter) => [starter.id, starter]))(
-    "%s passes the check unchanged",
+    "%s passes the check unchanged, once its accounts are chosen",
     (_id, starter) => {
-      const result = checkProfile(starter.draft);
-      expect(result).toEqual({ ok: true, profile: starter.draft });
+      const draft = withAccounts(starterDraft(starter.id)!);
+      const result = checkProfile(draft);
+      expect(result).toEqual({ ok: true, profile: draft });
     },
   );
+
+  it.each([["wallet_withdrawals"], ["wallet_every_transaction"]])(
+    "%s cannot be saved until both of its accounts are chosen (FR-030)",
+    (id) => {
+      const result = checkProfile(starterDraft(id));
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      const transfer = starterDraft(id)!.sections.findIndex(
+        (section) => section.kind === "transfer",
+      );
+      expect(paths(result.errors).sort()).toEqual(
+        ["accountId", `sections[${transfer}].counterAccountId`].sort(),
+      );
+    },
+  );
+
+  it("gives both wallet report starters the wallet layout, found by its headings", () => {
+    for (const id of ["wallet_withdrawals", "wallet_every_transaction"]) {
+      const draft = starterDraft(id)!;
+      expect(draft.layout?.sheet).toBeNull();
+      expect(draft.layout?.headers).toContain("Transaction Type");
+      expect(draft.layout?.balanceColumn).toBe("Balance After Transactions");
+      for (const mode of ["summary", "every_transaction"] as const) {
+        expect(readsFromColumns(draft, mode)).toBe(
+          mode === "every_transaction",
+        );
+      }
+    }
+    // Withdrawals only has no control total: its rows are a few of the
+    // report's, and the report totals all of them.
+    expect(
+      starterDraft("wallet_withdrawals")!.layout?.statedTotalLabels,
+    ).toEqual({});
+    expect(
+      starterDraft("wallet_every_transaction")!.layout?.statedTotalLabels,
+    ).toEqual({ every_transaction: ["Total Money In", "Total Money Out"] });
+  });
+
+  it("warns on the every-transaction starter that its sales repeat the statement", () => {
+    const starter = IMPORT_PROFILE_STARTERS.find(
+      (entry) => entry.id === "wallet_every_transaction",
+    )!;
+    expect(starter.hint).toMatch(/counted twice/);
+    expect(starter.draft.description).toMatch(/counted twice/);
+  });
 
   it("mirrors the marketplace summary: 15 leaf lines over two sections", () => {
     const draft = starterDraft("marketplace_summary")!;
@@ -98,12 +165,15 @@ describe("starters", () => {
     expect(starterDraft("nothing")).toBeNull();
   });
 
-  it("puts every section in Summary, the only mode there is", () => {
+  it("reads a document starter in Summary and a wallet report in Every transaction", () => {
     for (const starter of IMPORT_PROFILE_STARTERS) {
+      const mode = starter.draft.layout ? "every_transaction" : "summary";
       for (const section of starter.draft.sections) {
-        expect(section.mode).toBe("summary");
+        expect(section.mode).toBe(mode);
       }
-      expect(Object.keys(starter.draft.statedTotalLabels)).toEqual(["summary"]);
+      expect(Object.keys(starter.draft.statedTotalLabels)).toEqual(
+        starter.draft.layout ? [] : ["summary"],
+      );
     }
   });
 });
@@ -867,5 +937,145 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
 
   it("folds case and spacing the one way the reader does", () => {
     expect(foldTableText("  Money\u00a0 In ")).toBe("money in");
+  });
+
+  it("keeps a running balance column only when one is named", () => {
+    const named = checkProfile({
+      ...wallet(),
+      layout: walletLayout({ balanceColumn: "Balance After Transactions" }),
+    });
+    expect(named.ok && named.profile.layout?.balanceColumn).toBe(
+      "Balance After Transactions",
+    );
+    const none = checkProfile({
+      ...wallet(),
+      layout: { ...walletLayout(), balanceColumn: null },
+    });
+    expect(none.ok && "balanceColumn" in none.profile.layout!).toBe(false);
+  });
+
+  it("refuses a balance column that is not a heading, or is the amount", () => {
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.layout.balanceColumn = "Running total";
+        }),
+      ),
+    ).toEqual(["layout.balanceColumn"]);
+    expect(
+      errorsOf((value) => {
+        value.layout.balanceColumn = "amount";
+      }),
+    ).toEqual([
+      {
+        path: "layout.balanceColumn",
+        message:
+          "The balance column is the balance after each row, not its amount. Choose another column, or none.",
+      },
+    ]);
+  });
+
+  it("keeps the profiles a section names as the same money (FR-066)", () => {
+    const value = wallet() as Loose;
+    value.sections[0].sameMoneyAs = [3, 9];
+    const result = checkProfile(value);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.sections[0].sameMoneyAs).toEqual([3, 9]);
+    // A section that names none carries no key, as one saved before it.
+    expect("sameMoneyAs" in result.profile.sections[1]).toBe(false);
+  });
+
+  it("refuses a same-money list on a transfer, twice the same profile, or a bad id", () => {
+    const errors = errorsOf((value) => {
+      value.sections[0].sameMoneyAs = [3, 3, "x"];
+      value.sections[2].sameMoneyAs = [3];
+    });
+    expect(paths(errors)).toEqual([
+      "sections[0].sameMoneyAs[1]",
+      "sections[0].sameMoneyAs[2]",
+      "sections[2].sameMoneyAs",
+    ]);
+    expect(
+      paths(
+        errorsOf((value) => {
+          value.sections[0].sameMoneyAs = Array.from(
+            { length: PROFILE_SAME_MONEY_MAX + 1 },
+            (_, i) => i + 1,
+          );
+        }),
+      ),
+    ).toEqual(["sections[0].sameMoneyAs"]);
+  });
+});
+
+describe("checkTablePreview", () => {
+  function draft(): Record<string, unknown> {
+    return {
+      name: "",
+      description: "",
+      phrases: [],
+      instructions: "",
+      statedTotalLabels: {},
+      layout: walletLayout(),
+      sections: [withdrawalSection(41)],
+    };
+  }
+
+  it("previews a profile still being filled in: no name, no accounts", () => {
+    const value = draft();
+    (value.sections as Record<string, unknown>[])[0].counterAccountId = null;
+    const result = checkTablePreview(value);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.layout).toEqual(walletLayout());
+    expect(paths(result.unsaved).sort()).toEqual(
+      [
+        "accountId",
+        "description",
+        "name",
+        "sections[0].counterAccountId",
+      ].sort(),
+    );
+  });
+
+  it("stops at a problem with the layout or a section's row rules", () => {
+    const value = draft();
+    (value.layout as Record<string, unknown>).headers = [];
+    const result = checkTablePreview(value);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(paths(result.errors)).toContain("layout.headers");
+    // Every column named is then not a heading either, in the layout and in
+    // the row rules; nothing about a name or an account.
+    expect(
+      result.errors.every((error) =>
+        /^(layout\.|sections\[0\]\.rows\.)/.test(error.path),
+      ),
+    ).toBe(true);
+    const rules = draft();
+    (
+      rules.sections as Record<string, Record<string, unknown>>[]
+    )[0].rows.where = [{ column: "Nope", op: "is", value: "x" }];
+    const refused = checkTablePreview(rules);
+    expect(refused.ok === false && paths(refused.errors)).toEqual([
+      "sections[0].rows.where[0].column",
+    ]);
+  });
+
+  it("needs a layout, and a section with row rules", () => {
+    const none = draft();
+    delete none.layout;
+    (none.sections as Record<string, unknown>[])[0].rows = undefined;
+    expect(checkTablePreview(none)).toMatchObject({
+      ok: false,
+      errors: [{ path: "layout" }],
+    });
+    const noRules = draft();
+    (noRules.sections as Record<string, unknown>[])[0].rows = undefined;
+    expect(checkTablePreview(noRules)).toMatchObject({
+      ok: false,
+      errors: [{ path: "sections" }],
+    });
   });
 });

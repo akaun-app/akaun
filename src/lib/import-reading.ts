@@ -130,6 +130,14 @@ export type ExtractionNotes = {
    * is how every document was read before the others existed.
    */
   method?: ReadMethod;
+  /**
+   * What the running-balance check of a reading from columns found, when the
+   * profile's layout names a balance column: whether each row's balance
+   * follows from the row before it and its amount, and a sentence saying so
+   * for the reviewer. A note only: it never holds an item back. Absent when
+   * nothing was checked.
+   */
+  balance?: { matches: boolean; message: string };
 };
 
 /** Cuts the ignored lines to the kept number and length. */
@@ -163,6 +171,7 @@ export function serializeExtractionNotes(notes: ExtractionNotes): string {
       ? { ignoredCount: notes.ignoredCount }
       : {}),
     ...(notes.method !== undefined ? { method: notes.method } : {}),
+    ...(notes.balance !== undefined ? { balance: notes.balance } : {}),
   } satisfies ExtractionNotes);
 }
 
@@ -205,6 +214,15 @@ export function parseExtractionNotes(
   }
   if ((READ_METHODS as readonly unknown[]).includes(value.method)) {
     notes.method = value.method as ReadMethod;
+  }
+  const balance = value.balance as Record<string, unknown> | null | undefined;
+  if (
+    balance &&
+    typeof balance === "object" &&
+    typeof balance.matches === "boolean" &&
+    typeof balance.message === "string"
+  ) {
+    notes.balance = { matches: balance.matches, message: balance.message };
   }
   return notes;
 }

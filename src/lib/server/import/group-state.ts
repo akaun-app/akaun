@@ -42,9 +42,12 @@ const WAITING: number[] = [ImportState.PendingReview, ImportState.Confirmed];
  *   (FR-059).
  * - No account that paid or received it, or for a transfer either of its two
  *   accounts: the record cannot be built.
- * - A note from the reading, such as a fee type's tied category that is for
- *   the other kind (FR-034): the category it has instead is a guess the
- *   reviewer should check. Choosing a category clears the note.
+ * - A note from the reading. A fee type's tied category that is for the
+ *   other kind (FR-034) makes the category it has instead a guess the
+ *   reviewer should check, and choosing a category clears that note. A
+ *   section's flag rule (FR-061) and money another profile's records may
+ *   already hold (FR-066) are what to check before confirming, and no
+ *   category choice clears them: the item is confirmed on its own.
  */
 export function itemAttention(
   item: Pick<
@@ -56,6 +59,7 @@ export function itemAttention(
     | "accountId"
     | "documentType"
     | "reviewNote"
+    | "checkNote"
     | "counterAccountId"
   >,
   mainCurrency: string,
@@ -72,7 +76,7 @@ export function itemAttention(
     if (item.accountId == null || item.counterAccountId == null) {
       return "Choose both accounts of this transfer.";
     }
-    return item.reviewNote ?? null;
+    return readingNotes(item);
   }
   if (
     currency !== mainCurrency &&
@@ -85,7 +89,15 @@ export function itemAttention(
       ? "Say which account received it."
       : "Say which account paid for it.";
   }
-  return item.reviewNote ?? null;
+  return readingNotes(item);
+}
+
+/** What the reading says to check on an item, or null: see above. */
+function readingNotes(
+  item: Pick<ImportItemRow, "reviewNote" | "checkNote">,
+): string | null {
+  const notes = [item.checkNote, item.reviewNote].filter(Boolean);
+  return notes.length ? notes.join(" ") : null;
 }
 
 /** An item as the screens receive it, with its attention worked out. */
@@ -172,6 +184,7 @@ export function groupCounts(
         accountId: importItems.accountId,
         documentType: importItems.documentType,
         reviewNote: importItems.reviewNote,
+        checkNote: importItems.checkNote,
         counterAccountId: importItems.counterAccountId,
       })
       .from(importItems)

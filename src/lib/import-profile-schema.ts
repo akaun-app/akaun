@@ -43,6 +43,8 @@ export const PROFILE_ENUM_VALUES_MAX = 200;
 export const PROFILE_EXTRAS_MAX = 20;
 /** Most recognition phrases in one profile. */
 export const PROFILE_PHRASES_MAX = 10;
+/** Most other profiles one section can name as the same money (FR-066). */
+export const PROFILE_SAME_MONEY_MAX = 10;
 
 const NAME_MAX = 80;
 const RECOGNITION_MAX = 1000;
@@ -316,6 +318,14 @@ export interface TableLayout {
    * code. A mode with none has no control total.
    */
   statedTotalLabels: Partial<Record<ImportModeValue, string[]>>;
+  /**
+   * A column that holds the balance after each row, such as "Balance After
+   * Transactions". When set, the reading checks that each row's balance
+   * follows from the row before it and its amount, and says so in a note: a
+   * row missing from the export shows up as a break. Absent when the layout
+   * names none, as on every layout saved before the check existed.
+   */
+  balanceColumn?: string | null;
 }
 
 /** Most headings a layout names. */
@@ -387,6 +397,14 @@ export interface ProfileSection {
    * a section the AI reads.
    */
   rows?: SectionRows;
+  /**
+   * Other profiles whose records describe the same money, such as the income
+   * statement whose summary already holds the sales a wallet report lists one
+   * by one (FR-066). When records made with one of them already cover an
+   * item's month, the item gets a review note. Absent, never empty, when the
+   * section names none; a transfer section names none.
+   */
+  sameMoneyAs?: number[];
 }
 
 /** A profile as the editor fills it in and the server saves it. */
@@ -820,6 +838,24 @@ function tableLayout(
     }
   }
 
+  const balanceColumn = columnRef(
+    raw.balanceColumn,
+    at("balanceColumn"),
+    headings,
+    errors,
+    { required: false, label: "The balance column" },
+  );
+  if (
+    balanceColumn !== null &&
+    foldTableText(balanceColumn) === foldTableText(columns.amount)
+  ) {
+    errors.push({
+      path: at("balanceColumn"),
+      message:
+        "The balance column is the balance after each row, not its amount. Choose another column, or none.",
+    });
+  }
+
   return {
     sheet,
     headers,
@@ -833,6 +869,9 @@ function tableLayout(
     documentDateLabel,
     remarkColumns,
     statedTotalLabels,
+    // Only a layout that names one carries the key, as one saved before the
+    // check existed does not.
+    ...(balanceColumn !== null ? { balanceColumn } : {}),
   };
 }
 
@@ -1396,6 +1435,44 @@ function feeTypes(
   });
 }
 
+/**
+ * Reads the other profiles a section names as the same money (FR-066): whole
+ * profile ids, none twice. Whether each still exists is the server's check.
+ */
+function sameMoneyList(
+  raw: unknown,
+  path: string,
+  errors: ProfileError[],
+): number[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push({ path, message: "The profiles must be a list." });
+    return [];
+  }
+  if (raw.length > PROFILE_SAME_MONEY_MAX) {
+    errors.push({
+      path,
+      message: `A section can name at most ${PROFILE_SAME_MONEY_MAX} other profiles; this has ${raw.length}.`,
+    });
+  }
+  const out: number[] = [];
+  raw.forEach((entry, index) => {
+    const at = `${path}[${index}]`;
+    if (
+      typeof entry !== "number" ||
+      !Number.isSafeInteger(entry) ||
+      entry <= 0
+    ) {
+      errors.push({ path: at, message: "Choose a profile from the list." });
+    } else if (out.includes(entry)) {
+      errors.push({ path: at, message: "This profile is named twice." });
+    } else {
+      out.push(entry);
+    }
+  });
+  return out;
+}
+
 function section(
   raw: unknown,
   path: string,
@@ -1511,6 +1588,19 @@ function section(
     }
   }
 
+  const sameMoneyAs = sameMoneyList(
+    value.sameMoneyAs,
+    `${path}.sameMoneyAs`,
+    errors,
+  );
+  if (kind === "transfer" && sameMoneyAs.length > 0) {
+    errors.push({
+      path: `${path}.sameMoneyAs`,
+      message:
+        "A transfer moves money between two of your own accounts, so it cannot count another document's sales twice. Remove the profiles named here.",
+    });
+  }
+
   return {
     section: {
       key,
@@ -1525,6 +1615,8 @@ function section(
       ...(kind === "transfer" ? { counterAccountId } : {}),
       // Only a section read from columns has row rules.
       ...(rows ? { rows } : {}),
+      // Only a section that names another profile carries the list.
+      ...(sameMoneyAs.length > 0 ? { sameMoneyAs } : {}),
     },
     enumCount: fees.length + (extras.ok ? extras.enumCount : 0),
   };
@@ -1543,10 +1635,23 @@ export function checkProfile(
 ):
   | { ok: true; profile: ImportProfileDraft }
   | { ok: false; errors: ProfileError[] } {
+  const { profile, errors } = readProfile(input);
+  if (profile === null || errors.length > 0) return { ok: false, errors };
+  return { ok: true, profile };
+}
+
+/**
+ * Reads a profile as far as it can: the cleaned copy, even when some of it is
+ * wrong, and every problem found. Null for a value that is not an object.
+ */
+function readProfile(input: unknown): {
+  profile: ImportProfileDraft | null;
+  errors: ProfileError[];
+} {
   const errors: ProfileError[] = [];
   if (!isRecord(input)) {
     return {
-      ok: false,
+      profile: null,
       errors: [{ path: "", message: "The profile must be an object." }],
     };
   }
@@ -1694,9 +1799,8 @@ export function checkProfile(
     }
   });
 
-  if (errors.length > 0) return { ok: false, errors };
   return {
-    ok: true,
+    errors,
     profile: {
       name,
       description,
@@ -1710,6 +1814,63 @@ export function checkProfile(
       ...(layout ? { layout } : {}),
       sections,
     },
+  };
+}
+
+/**
+ * Whether a problem stops a table from being read: one about the layout, or
+ * about a section's key, mode, row rules or fee types, which say which rows
+ * it takes. A missing name, description or account does not.
+ */
+function stopsTableReading(path: string): boolean {
+  if (path === "sections" || path === "layout" || path.startsWith("layout."))
+    return true;
+  return /^sections\[\d+\](?:$|\.(?:key|mode|kind|rows|feeTypes)(?:$|[.[]))/.test(
+    path,
+  );
+}
+
+/**
+ * Checks a profile only as far as a preview of its table needs (FR-053,
+ * FR-054): the layout, and which rows each section takes. A profile still
+ * being filled in can be previewed before it can be saved, so a missing name
+ * or account is left for the save to report, in `unsaved`.
+ */
+export function checkTablePreview(input: unknown):
+  | {
+      ok: true;
+      profile: ImportProfileDraft & { layout: TableLayout };
+      unsaved: ProfileError[];
+    }
+  | { ok: false; errors: ProfileError[] } {
+  const { profile, errors } = readProfile(input);
+  if (profile === null) return { ok: false, errors };
+  const stopping = errors.filter((error) => stopsTableReading(error.path));
+  if (!profile.layout && stopping.length === 0) {
+    stopping.push({
+      path: "layout",
+      message:
+        "Add the table layout first: the preview reads the spreadsheet by its columns.",
+    });
+  }
+  if (
+    profile.layout &&
+    !profile.sections.some((section) => section.rows) &&
+    stopping.length === 0
+  ) {
+    stopping.push({
+      path: "sections",
+      message:
+        "Give at least one section row rules: they say which rows it takes.",
+    });
+  }
+  if (stopping.length > 0 || !profile.layout) {
+    return { ok: false, errors: stopping };
+  }
+  return {
+    ok: true,
+    profile: profile as ImportProfileDraft & { layout: TableLayout },
+    unsaved: errors.filter((error) => !stopsTableReading(error.path)),
   };
 }
 

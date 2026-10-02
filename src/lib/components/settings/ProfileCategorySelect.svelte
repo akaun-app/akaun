@@ -5,7 +5,8 @@
 	 * A category for an import profile: a section's fixed category, or the one
 	 * a fee type is pinned to (006 FR-031, FR-034). Leaving it empty is a real
 	 * choice, named by `noneLabel` ("None" or "Auto"), so the list starts with
-	 * it.
+	 * it. The profile's accounts use it too (FR-058), with their own
+	 * `missingLabel`.
 	 *
 	 * The groups are the categories the section's kind can take; the server
 	 * checks the same lists when the profile is saved.
@@ -18,6 +19,7 @@
 		noneLabel,
 		ariaLabel,
 		disabled = false,
+		missingLabel = 'Category no longer available',
 		onchange
 	}: {
 		groups: { label: string; choices: Choice[] }[];
@@ -25,6 +27,8 @@
 		noneLabel: string;
 		ariaLabel: string;
 		disabled?: boolean;
+		/** What the select shows for a saved choice that is no longer offered. */
+		missingLabel?: string;
 		onchange: (value: number | null) => void;
 	} = $props();
 
@@ -54,7 +58,7 @@
 		{:else}
 			<!-- Saved before the category was archived or its kind changed. Saving
 			     names the problem; the reading passes it over meanwhile. -->
-			Category no longer available
+			{missingLabel}
 		{/if}
 	</Select.Trigger>
 	<Select.Content>

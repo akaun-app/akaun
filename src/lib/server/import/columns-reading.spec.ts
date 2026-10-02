@@ -113,13 +113,18 @@ const {
   contacts,
   importItems,
   importQueue,
+  importRecordProfiles,
   ledgerRecords,
   users,
 } = schema;
 const { createAccount } = await import("../services/accounts.js");
 const { createRecord } = await import("../services/ledger.js");
-const { createImportProfile } = await import("../services/import-profiles.js");
-const { confirmGroupItems } = await import("../services/import-items.js");
+const { createImportProfile, updateImportProfile } =
+  await import("../services/import-profiles.js");
+const { starterDraft } = await import("$lib/import-profile-starters.js");
+const { confirmGroupItems, setGroupItemsCategory, skipGroupItems } =
+  await import("../services/import-items.js");
+const { monthsCoveredBy } = await import("./same-money.js");
 const { insertProvider } = await import("../llmProviders.js");
 const { setSetting, SETTING_KEYS } = await import("../settings.js");
 const { NO_PROVIDERS, processImportJob, severalLayoutsFit } =
@@ -422,11 +427,11 @@ describe("reading a spreadsheet from its columns", () => {
     const items = itemsOf(row.id);
     expect(items).toHaveLength(2);
     const [processing, completed] = items;
-    expect(processing.reviewNote).toBe("Check that this withdrawal completed.");
+    expect(processing.checkNote).toBe("Check that this withdrawal completed.");
     expect(itemAttention(processing, "MYR")).toBe(
       "Check that this withdrawal completed.",
     );
-    expect(completed.reviewNote).toBeNull();
+    expect(completed.checkNote).toBeNull();
 
     const outcomes = await confirmGroupItems(db, row.id, "all", {
       actingUserId: 1,
@@ -456,7 +461,7 @@ describe("reading a spreadsheet from its columns", () => {
     expect(
       items.every((i) => i.documentType === DocumentType.TransferOut),
     ).toBe(true);
-    expect(items.filter((item) => item.reviewNote)).toHaveLength(1);
+    expect(items.filter((item) => item.checkNote)).toHaveLength(1);
     const notes = parseExtractionNotes(row.extractionNotes)!;
     expect(notes.statedTotal).toBeNull();
     expect(ignoredSummary(notes)).toBe("Ignored 726 lines (20 shown)");
@@ -736,5 +741,316 @@ describe("Auto-detect on a spreadsheet", () => {
     expect(row.error).toMatch(
       /^This spreadsheet is too long to be read as a receipt or invoice/,
     );
+  });
+});
+
+// ── The wallet report starters and the overlap guard (006 S4.7) ─────────────
+
+describe("the wallet report starters", () => {
+  /** A starter as the user saves it: both accounts chosen (FR-030). */
+  function fromStarter(
+    id: "wallet_withdrawals" | "wallet_every_transaction",
+    edit: (draft: ProfileInput) => void = () => {},
+  ): number {
+    const draft = starterDraft(id)!;
+    draft.accountId = ids.wallet;
+    for (const section of draft.sections) {
+      if (section.kind === "transfer") section.counterAccountId = ids.bank;
+    }
+    edit(draft);
+    return saveProfile(draft);
+  }
+
+  it("cannot be saved before both accounts are chosen", () => {
+    const created = createImportProfile(
+      db,
+      1,
+      starterDraft("wallet_withdrawals"),
+    );
+    expect(created.ok).toBe(false);
+    if (created.ok) return;
+    expect(created.errors.map((error) => error.path).sort()).toEqual([
+      "accountId",
+      "sections[0].counterAccountId",
+    ]);
+  });
+
+  it("reads withdrawals only, with no AI: 10 transfers, one flagged, 726 left out", async () => {
+    const report = walletWorkbook();
+    const row = await run(
+      withProfile(fromStarter("wallet_withdrawals"), report.xlsx),
+    );
+    expect(row.state).toBe(ImportState.Grouped);
+    const items = itemsOf(row.id);
+    expect(items).toHaveLength(10);
+    expect(
+      items.every(
+        (item) =>
+          item.documentType === DocumentType.TransferOut &&
+          item.accountId === ids.wallet &&
+          item.counterAccountId === ids.bank,
+      ),
+    ).toBe(true);
+    expect(items.filter((item) => item.checkNote)).toHaveLength(1);
+    const notes = parseExtractionNotes(row.extractionNotes)!;
+    expect(notes.statedTotal).toBeNull();
+    expect(ignoredSummary(notes)).toBe("Ignored 726 lines (20 shown)");
+    // The running balance is checked over every row, the ones left out too.
+    expect(notes.balance?.matches).toBe(true);
+  });
+
+  it("reads every transaction, with a matching control total", async () => {
+    const row = await run(withProfile(fromStarter("wallet_every_transaction")));
+    const items = itemsOf(row.id);
+    expect(items).toHaveLength(walletReportFixture().transactions);
+    const notes = parseExtractionNotes(row.extractionNotes)!;
+    expect(notes.statedTotal?.minor).toBe(notes.itemsTotalMinor);
+    expect(notes.balance?.matches).toBe(true);
+    expect(
+      items
+        .filter((item) => item.documentType === DocumentType.TransferOut)
+        .map((item) => item.checkNote)
+        .filter(Boolean),
+    ).toEqual([
+      "Check that this withdrawal completed: the report still showed it as not completed.",
+    ]);
+  });
+
+  describe("the overlap guard (FR-066)", () => {
+    /**
+     * A record made from a document read with `profileId`, as confirming its
+     * one review card leaves it: the queue row names the profile and the
+     * record.
+     */
+    function recordReadWith(profileId: number, date: string) {
+      const created = createRecord(db, 1, {
+        kind: "income",
+        date,
+        description: "Sales for the month",
+        amount: 999.99,
+        currency: "MYR",
+        exchangeRate: 1,
+        reference: "",
+        receivedIntoAccountId: ids.wallet,
+        categoryAccountId: ids.sales,
+      });
+      if (!created.ok) throw new Error(created.reason);
+      const statement = queueFile("statement.pdf", "%PDF-1.4", {
+        readAs: ImportReadAs.Profile,
+        profileId: String(profileId),
+        importMode: ImportMode.Summary,
+        state: ImportState.Imported,
+      });
+      db.update(importQueue)
+        .set({ resultId: created.value.id })
+        .where(eq(importQueue.id, statement.id))
+        .run();
+      return created.value.id;
+    }
+
+    function statementProfile(): number {
+      return saveProfile({
+        ...starterDraft("marketplace_summary")!,
+        name: "Income statement",
+      });
+    }
+
+    it("notes order income in a month the statement's records cover, never a transfer", async () => {
+      const statement = statementProfile();
+      recordReadWith(statement, "2026-03-31");
+      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+        draft.sections[0].sameMoneyAs = [statement];
+      });
+      const row = await run(withProfile(wallet));
+      const items = itemsOf(row.id);
+      const noted = (item: (typeof items)[number]) =>
+        item.checkNote?.includes("Income statement") ?? false;
+
+      const orders = items.filter((item) => item.sectionKey === "order_income");
+      expect(orders.length).toBeGreaterThan(0);
+      expect(orders.every(noted)).toBe(true);
+      expect(orders[0].checkNote).toBe(
+        "Records imported with “Income statement” already cover March 2026, and that profile describes the same money. Check that this line is not counted twice before you confirm it.",
+      );
+      expect(itemAttention(orders[0], "MYR")).toBe(orders[0].checkNote);
+      // Adjustments name no other profile; withdrawals are transfers.
+      expect(
+        items.filter((item) => item.sectionKey !== "order_income").some(noted),
+      ).toBe(false);
+    });
+
+    it("keeps the note when a category is chosen, so Confirm all still leaves the item behind", async () => {
+      const statement = statementProfile();
+      recordReadWith(statement, "2026-03-31");
+      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+        draft.sections[0].sameMoneyAs = [statement];
+      });
+      const row = await run(withProfile(wallet));
+      const orders = itemsOf(row.id).filter(
+        (item) =>
+          item.sectionKey === "order_income" &&
+          item.documentType === DocumentType.Income,
+      );
+      expect(orders.length).toBeGreaterThan(0);
+      const options = { actingUserId: 1, storageRoot };
+
+      // The obvious bulk action on order income, which has no fixed category.
+      const filed = setGroupItemsCategory(
+        db,
+        row.id,
+        orders.map((item) => item.id),
+        ids.sales,
+        options,
+      );
+      expect(filed.ok && filed.value.every((outcome) => outcome.ok)).toBe(true);
+      const filedIds = new Set(orders.map((item) => item.id));
+      const after = itemsOf(row.id).filter((item) => filedIds.has(item.id));
+      expect(after.every((item) => item.categoryAccountId === ids.sales)).toBe(
+        true,
+      );
+      expect(after.every((item) => item.checkNote?.includes("cover"))).toBe(
+        true,
+      );
+      expect(after.every((item) => itemAttention(item, "MYR"))).toBe(true);
+
+      const outcomes = await confirmGroupItems(db, row.id, "all", options);
+      expect(outcomes.ok).toBe(true);
+      if (!outcomes.ok) return;
+      const left = new Set(
+        outcomes.value
+          .filter((outcome) => !outcome.ok)
+          .map((outcome) => outcome.id),
+      );
+      expect(orders.every((item) => left.has(item.id))).toBe(true);
+      expect(
+        itemsOf(row.id)
+          .filter((item) => filedIds.has(item.id))
+          .every((item) => item.state === ImportState.PendingReview),
+      ).toBe(true);
+    });
+
+    it("still sees records a group made after the import history is cleared", async () => {
+      const options = { actingUserId: 1, storageRoot };
+      // The first reading, with no guard, confirms three of its order income
+      // lines and skips the rest, so the group finishes and joins the history.
+      const first = fromStarter("wallet_every_transaction");
+      const firstRow = await run(withProfile(first));
+      const firstItems = itemsOf(firstRow.id);
+      const confirmed = firstItems
+        .filter((item) => item.sectionKey === "order_income")
+        .slice(0, 3)
+        .map((item) => item.id);
+      const done = await confirmGroupItems(db, firstRow.id, confirmed, options);
+      expect(done.ok && done.value.every((outcome) => outcome.ok)).toBe(true);
+      const months = monthsCoveredBy(db, first, "none");
+      expect(months.size).toBeGreaterThan(0);
+      skipGroupItems(
+        db,
+        firstRow.id,
+        firstItems
+          .map((item) => item.id)
+          .filter((id) => !confirmed.includes(id)),
+        options,
+      );
+      expect(job(firstRow.id).state).toBe(ImportState.Imported);
+      expect(db.select().from(importRecordProfiles).all()).toHaveLength(3);
+
+      const { DELETE } =
+        await import("../../../routes/api/import/history/+server.js");
+      const cleared = await DELETE({ locals: { user: { id: 1 } } } as never);
+      expect(cleared.status).toBe(204);
+      expect(db.select().from(importQueue).all()).toHaveLength(0);
+      expect(db.select().from(importItems).all()).toHaveLength(0);
+      expect(monthsCoveredBy(db, first, "none")).toEqual(months);
+
+      // A second profile that names the first finds its records all the same.
+      const second = fromStarter("wallet_every_transaction", (draft) => {
+        draft.name = "Wallet report, read again";
+        draft.sections[0].sameMoneyAs = [first];
+      });
+      const row = await run(withProfile(second));
+      const orders = itemsOf(row.id).filter(
+        (item) => item.sectionKey === "order_income",
+      );
+      expect(orders.length).toBeGreaterThan(0);
+      expect(
+        orders.every((item) => item.checkNote?.includes("already cover")),
+      ).toBe(true);
+    });
+
+    it("says nothing when the statement's records cover another month, or none exist", async () => {
+      const statement = statementProfile();
+      recordReadWith(statement, "2026-02-28");
+      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+        draft.sections[0].sameMoneyAs = [statement];
+      });
+      const row = await run(withProfile(wallet));
+      expect(
+        itemsOf(row.id).some((item) =>
+          item.checkNote?.includes("Income statement"),
+        ),
+      ).toBe(false);
+    });
+
+    it("leaves out a record deleted since, and one from a document read another way", async () => {
+      const statement = statementProfile();
+      // Read as a plain receipt: not a reading with the profile.
+      const created = createRecord(db, 1, {
+        kind: "income",
+        date: "2026-03-31",
+        description: "Sales",
+        amount: 999.99,
+        currency: "MYR",
+        exchangeRate: 1,
+        reference: "",
+        receivedIntoAccountId: ids.wallet,
+        categoryAccountId: ids.sales,
+      });
+      if (!created.ok) throw new Error(created.reason);
+      const receipt = queueFile("statement.pdf", "%PDF-1.4", {
+        readAs: ImportReadAs.Receipt,
+        profileId: String(statement),
+        state: ImportState.Imported,
+      });
+      db.update(importQueue)
+        .set({ resultId: created.value.id })
+        .where(eq(importQueue.id, receipt.id))
+        .run();
+      const gone = recordReadWith(statement, "2026-03-30");
+      db.delete(ledgerRecords).where(eq(ledgerRecords.id, gone)).run();
+
+      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+        draft.sections[0].sameMoneyAs = [statement];
+      });
+      const row = await run(withProfile(wallet));
+      expect(
+        itemsOf(row.id).some((item) => item.checkNote?.includes("cover")),
+      ).toBe(false);
+    });
+
+    it("refuses to save a section naming a profile that is gone, or itself", () => {
+      const statement = statementProfile();
+      const draft = starterDraft("wallet_every_transaction")!;
+      draft.accountId = ids.wallet;
+      draft.sections[2].counterAccountId = ids.bank;
+      draft.sections[0].sameMoneyAs = [statement + 100];
+      const created = createImportProfile(db, 1, draft);
+      expect(created.ok === false && created.errors).toEqual([
+        {
+          path: "sections[0].sameMoneyAs[0]",
+          message: "That import profile no longer exists. Remove it.",
+        },
+      ]);
+
+      draft.sections[0].sameMoneyAs = [statement];
+      const saved = createImportProfile(db, 1, draft);
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+      draft.sections[0].sameMoneyAs = [saved.value.id];
+      const self = updateImportProfile(db, 1, saved.value.id, draft);
+      expect(
+        self.ok === false && self.errors.map((error) => error.path),
+      ).toEqual(["sections[0].sameMoneyAs[0]"]);
+    });
   });
 });

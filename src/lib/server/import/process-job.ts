@@ -101,6 +101,7 @@ import { callLLMWithProviders } from "./llm.js";
 import { detectProfile, phraseMatch } from "./profile-detect.js";
 import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
 import { alreadyImported } from "./repeat-file.js";
+import { sameMoneyNotes } from "./same-money.js";
 import {
   detectTransferDuplicates,
   type TransferProbe,
@@ -1078,6 +1079,7 @@ export function tiedCategoryNote(
 
 async function itemFields(
   db: LedgerDb,
+  jobId: string,
   reading: DocumentReading,
   ctx: ReviewContext,
   profile: ReadingProfile,
@@ -1085,12 +1087,23 @@ async function itemFields(
   const sectionKinds = new Map(
     profile.sections.map((section) => [section.key, section.kind]),
   );
+  // Income and expenses another profile's records may already hold (FR-066).
+  const overlaps = sameMoneyNotes(
+    db,
+    reading.items.map((item) => ({
+      sectionKey: item.sectionKey,
+      kind: item.kind,
+      date: item.date,
+    })),
+    profile.sections,
+    jobId,
+  );
   // A row read from a table, or in pieces, carries its own reference, and a
   // record with a different one is a different transaction (FR-063).
   const referenceVeto =
     reading.notes.method === "columns" || reading.notes.method === "ai_pieces";
   const out: ReviewFields[] = [];
-  for (const item of reading.items) {
+  for (const [index, item] of reading.items.entries()) {
     // The first category the item could take that is still one of its kind
     // (FR-034): a tied category archived since the profile was saved is
     // passed over. None leaves Uncategorised to `buildReviewFields`.
@@ -1131,14 +1144,22 @@ async function itemFields(
       },
       ctx,
     );
-    // What the reading says to check: its section's flag rule (FR-061), and
-    // a tied category it could not use (FR-034). Either holds it back from
-    // "Confirm all" until the reviewer has looked.
-    const notes = [
-      item.reviewNote,
-      tiedCategoryNote(item, sectionKinds.get(item.sectionKey), fields, ctx),
-    ].filter((note): note is string => Boolean(note));
-    fields.reviewNote = notes.length ? notes.join(" ") : null;
+    // What the reading says to check. Any of it holds the item back from
+    // "Confirm all" until the reviewer has looked. A tied category it could
+    // not use (FR-034) is answered by choosing a category, so it is kept
+    // apart from its section's flag rule (FR-061) and money another
+    // profile's records may already hold (FR-066), which no category choice
+    // answers: a bulk "Set category" must not clear a double-count warning.
+    fields.reviewNote = tiedCategoryNote(
+      item,
+      sectionKinds.get(item.sectionKey),
+      fields,
+      ctx,
+    );
+    const checks = [item.reviewNote, overlaps[index]].filter(
+      (note): note is string => Boolean(note),
+    );
+    fields.checkNote = checks.length ? checks.join(" ") : null;
     out.push(fields);
   }
   flagTransferDuplicates(db, reading, out, ctx);
@@ -1327,7 +1348,7 @@ async function readItems(
 
   // Every look-up that waits (exchange rates) is done here, before the write,
   // so the write below can be one transaction that never waits.
-  const fields = await itemFields(db, reading, ctx, profile);
+  const fields = await itemFields(db, job.id, reading, ctx, profile);
   const extractionNotes = serializeExtractionNotes(reading.notes);
 
   if (fields.length === 1) {

@@ -4,13 +4,24 @@
  * for the user to change, and nothing reads a starter directly, so editing a
  * starter here never changes a saved profile.
  *
- * No starter pins a category. The categories are the user's own accounts,
- * which a starter cannot know; the user picks them in the editor.
+ * No starter pins a category or an account. The categories and accounts are
+ * the user's own, which a starter cannot know; the user picks them in the
+ * editor. The two wallet report starters cannot be saved until both of their
+ * accounts are chosen (FR-030, FR-058): the wallet the report lists, and the
+ * bank account each withdrawal goes to.
  */
 
-import type { ImportProfileDraft } from "./import-profile-schema.js";
+import type {
+  ImportProfileDraft,
+  ProfileSection,
+  TableLayout,
+} from "./import-profile-schema.js";
 
-export type ImportProfileStarterId = "fee_document" | "marketplace_summary";
+export type ImportProfileStarterId =
+  | "fee_document"
+  | "marketplace_summary"
+  | "wallet_withdrawals"
+  | "wallet_every_transaction";
 
 export interface ImportProfileStarter {
   id: ImportProfileStarterId;
@@ -204,6 +215,174 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
   ],
 };
 
+/**
+ * The table of a marketplace wallet report, read from its columns (FR-053):
+ * the layout of Shopee's "balance transaction report" export, one row per
+ * transaction under a heading row, which sits some way down the sheet below
+ * a block of account details and the two totals. The table is found by its
+ * headings, wherever they are, never by a fixed row.
+ *
+ * The amounts are printed with their sign, and "Money Direction" says the
+ * same again; the direction gives the sign, so an amount printed without one
+ * is still read the right way. Each row's balance after it is checked from
+ * row to row, as a note (a row missing from the export breaks it).
+ *
+ * No other party and no currency: a wallet report names neither on its rows.
+ * The amounts are taken to be in the main currency; set the currency if the
+ * wallet is in another one.
+ */
+function walletReportLayout(over: Partial<TableLayout> = {}): TableLayout {
+  return {
+    sheet: null,
+    headers: [
+      "Date",
+      "Transaction Type",
+      "Description",
+      "Order ID",
+      "Money Direction",
+      "Amount",
+      "Status",
+      "Balance After Transactions",
+    ],
+    columns: {
+      date: "Date",
+      description: "Description",
+      amount: "Amount",
+      reference: "Order ID",
+    },
+    dateFormat: "YYYY-MM-DD",
+    direction: {
+      column: "Money Direction",
+      in: ["Money In"],
+      out: ["Money Out"],
+    },
+    decimalSeparator: ".",
+    csvDelimiter: null,
+    counterparty: null,
+    currency: null,
+    // The end of the period the report covers.
+    documentDateLabel: "To",
+    remarkColumns: [],
+    statedTotalLabels: {},
+    balanceColumn: "Balance After Transactions",
+    ...over,
+  };
+}
+
+/**
+ * Each withdrawal from the wallet to the bank, as a transfer (FR-058). One
+ * still being paid out is imported, flagged for the reviewer, rather than
+ * left out (FR-061): it is real money leaving the wallet, and leaving it out
+ * would make the books disagree with the report.
+ */
+const WITHDRAWALS: ProfileSection = {
+  key: "withdrawals",
+  name: "Withdrawals",
+  description:
+    "Each withdrawal of money from the wallet to the seller's bank account.",
+  mode: "every_transaction",
+  kind: "transfer",
+  fixedCategoryAccountId: null,
+  feeTypes: [],
+  extras: null,
+  counterAccountId: null,
+  rows: {
+    where: [
+      {
+        column: "Transaction Type",
+        op: "is_one_of",
+        values: ["Withdrawals", "Withdrawal"],
+      },
+    ],
+    flagWhen: [
+      { column: "Status", op: "is_not", value: "Transaction Completed" },
+    ],
+    flagNote:
+      "Check that this withdrawal completed: the report still showed it as not completed.",
+    feeTypeColumn: null,
+  },
+};
+
+const WALLET_DESCRIPTION =
+  "A marketplace wallet's balance transaction report, as a spreadsheet: the seller's account details and the total money in and out for a period, then one row per transaction (order income, adjustments and withdrawals to the bank) with the balance after each.";
+
+const WALLET_INSTRUCTIONS = `- Read only the table of transactions, one item per row. Never list the totals above it or a balance.
+- Copy every amount exactly as printed, with its sign. Never add up or work out a figure yourself.`;
+
+/**
+ * A wallet report, for its withdrawals only: the recommended use beside the
+ * same marketplace's income statement summary, which already holds the sales
+ * and fees. Every other row is left out and counted (FR-056).
+ */
+const WALLET_WITHDRAWALS: ImportProfileDraft = {
+  name: "Marketplace wallet report — withdrawals only",
+  description: WALLET_DESCRIPTION,
+  phrases: [],
+  instructions: WALLET_INSTRUCTIONS,
+  statedTotalLabels: {},
+  layout: walletReportLayout(),
+  sections: [structuredClone(WITHDRAWALS)],
+};
+
+/**
+ * A wallet report, every row: order income and adjustments by their sign, and
+ * withdrawals as transfers. Its order income repeats the sales an income
+ * statement summary already holds, so a section can name that profile
+ * ("Same money as") to have each such line noted (FR-066).
+ */
+const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
+  name: "Marketplace wallet report — every transaction",
+  description: `${WALLET_DESCRIPTION} Its order income repeats the sales of the marketplace's income statement: import both and the sales are counted twice.`,
+  phrases: [],
+  instructions: WALLET_INSTRUCTIONS,
+  statedTotalLabels: {},
+  layout: walletReportLayout({
+    remarkColumns: ["Transaction Type"],
+    statedTotalLabels: {
+      every_transaction: ["Total Money In", "Total Money Out"],
+    },
+  }),
+  sections: [
+    {
+      key: "order_income",
+      name: "Order income",
+      description:
+        "Each order paid into the wallet, and each amount taken back for an order.",
+      mode: "every_transaction",
+      kind: "by_sign",
+      fixedCategoryAccountId: null,
+      feeTypes: [],
+      extras: null,
+      rows: {
+        where: [
+          { column: "Transaction Type", op: "is", value: "Order Income" },
+        ],
+        flagWhen: [],
+        flagNote: "",
+        feeTypeColumn: null,
+      },
+    },
+    {
+      key: "adjustments",
+      name: "Adjustments",
+      description:
+        "Each adjustment the marketplace made to the wallet, such as a compensation or a fee corrected.",
+      mode: "every_transaction",
+      kind: "by_sign",
+      fixedCategoryAccountId: null,
+      feeTypes: [],
+      extras: null,
+      rows: {
+        where: [{ column: "Transaction Type", op: "is", value: "Adjustment" }],
+        flagWhen: [],
+        flagNote: "",
+        feeTypeColumn: null,
+      },
+    },
+    structuredClone(WITHDRAWALS),
+  ],
+};
+
 export const IMPORT_PROFILE_STARTERS: readonly ImportProfileStarter[] = [
   {
     id: "fee_document",
@@ -216,6 +395,18 @@ export const IMPORT_PROFILE_STARTERS: readonly ImportProfileStarter[] = [
     label: "Marketplace statement summary",
     hint: "The summary of a marketplace statement: sales as income, and each fee or rebate by its sign.",
     draft: MARKETPLACE_SUMMARY,
+  },
+  {
+    id: "wallet_withdrawals",
+    label: "Marketplace wallet report — withdrawals only",
+    hint: "A wallet report spreadsheet, read from its columns: each withdrawal to the bank as a transfer. Recommended beside the statement summary.",
+    draft: WALLET_WITHDRAWALS,
+  },
+  {
+    id: "wallet_every_transaction",
+    label: "Marketplace wallet report — every transaction",
+    hint: "Every row of a wallet report spreadsheet. Its order income repeats the statement summary's sales: import only one of the two, or they are counted twice.",
+    draft: WALLET_EVERY_TRANSACTION,
   },
 ];
 

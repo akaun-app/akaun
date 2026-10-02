@@ -558,7 +558,9 @@ export function setGroupItemsCategory(
             : "That category is not one an expense can be filed under.",
       };
     }
-    // A category chosen by the reviewer answers the reading's note about it.
+    // A category chosen by the reviewer answers the reading's note about it
+    // (FR-034). The check note stays: a flag rule or a possible double count
+    // is not answered by a category (FR-061, FR-066).
     return {
       ok: true,
       value: {
@@ -854,7 +856,7 @@ function itemChanges(
       overrides.category,
     );
     // The reviewer has chosen the category, which answers the reading's
-    // note about it (FR-034).
+    // note about it (FR-034), and only that one: see `checkNote`.
     out.reviewNote = null;
   }
 

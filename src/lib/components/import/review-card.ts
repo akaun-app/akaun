@@ -67,6 +67,12 @@ export type ReviewRow = {
    */
   reviewNote: string | null;
   /**
+   * What to check before confirming that no category choice answers: a
+   * section's flag rule (006 FR-061), or money another profile's records may
+   * already hold (FR-066). Null when there is nothing to say.
+   */
+  checkNote: string | null;
+  /**
    * A transfer's other account: where the money went from `accountId`, or
    * came from. Null for anything else.
    */
@@ -121,6 +127,7 @@ export function reviewRowFrom(raw: any): ReviewRow {
     duplicateConfidence: raw.duplicateConfidence ?? null,
     duplicateReasons: parseList<string>(raw.duplicateReasons),
     reviewNote: raw.reviewNote ?? null,
+    checkNote: raw.checkNote ?? null,
     counterAccountId: raw.counterAccountId ?? null,
   };
 }

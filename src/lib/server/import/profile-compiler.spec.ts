@@ -449,7 +449,13 @@ describe("savedReadingProfile", () => {
   const reading = savedReadingProfile(saved(shopLike), ImportMode.Summary);
   const compiled = compileProfile(reading);
 
-  it.each(IMPORT_PROFILE_STARTERS.map((starter) => [starter.id, starter]))(
+  // A wallet report starter is read from its columns, by code: it sends no
+  // schema anywhere unless its row rules are removed (columns-reading.spec).
+  it.each(
+    IMPORT_PROFILE_STARTERS.filter((starter) => !starter.draft.layout).map(
+      (starter) => [starter.id, starter],
+    ),
+  )(
     "compiles the %s starter to the schema the providers receive",
     (_id, starter) => {
       const profile = savedReadingProfile(saved(starter.draft, 1));

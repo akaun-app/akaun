@@ -471,7 +471,7 @@ describe("readFromColumns", () => {
     expect(() =>
       read(small([row({ "Money Direction": "Pending" })]), profile),
     ).toThrow(
-      'Row 2, column E ("Money Direction"): "Pending" is neither a money-in value (Money In) nor a money-out value (Money Out).',
+      'Row 2, column E ("Money Direction"): "Pending" is neither an inflow value (Money In) nor an outflow value (Money Out).',
     );
   });
 
@@ -667,5 +667,106 @@ describe("readFromColumns", () => {
     expect(
       envelope.sections.withdrawals.map((line) => line.amount_minor),
     ).toEqual([-10000, -20000]);
+  });
+});
+
+describe("the running-balance check", () => {
+  const withBalance = (over: Partial<TableLayout> = {}) =>
+    walletLayout({ balanceColumn: "Balance After Transactions", ...over });
+
+  it("finds the balance following row to row, newest first", () => {
+    const reading = read(
+      readXlsx(walletReportFixture().xlsx),
+      draft([...orderSections(), withdrawalSection(BANK)], withBalance()),
+    );
+    expect(reading.notes.balance).toEqual({
+      matches: true,
+      message:
+        "The running balance in “Balance After Transactions” follows from row to row, so no row between the first and the last is missing.",
+    });
+  });
+
+  it("finds it following oldest first too, over rows no section takes", () => {
+    const reading = read(
+      readXlsx(walletWorkbook().xlsx),
+      draft([withdrawalSection(BANK)], withBalance({ statedTotalLabels: {} })),
+    );
+    expect(reading.items).toHaveLength(10);
+    expect(reading.notes.balance?.matches).toBe(true);
+  });
+
+  it("names the first row where it breaks, as a note that holds nothing back", () => {
+    const reading = read(
+      small([
+        row({
+          Amount: { raw: "10.00" },
+          "Balance After Transactions": { raw: "130.00" },
+        }),
+        // A row of 20.00 is missing here: the balance moves by 30.00.
+        row({
+          Amount: { raw: "10.00" },
+          "Balance After Transactions": { raw: "100.00" },
+        }),
+        row({
+          Amount: { raw: "5.00" },
+          "Balance After Transactions": { raw: "90.00" },
+        }),
+      ]),
+      draft(
+        orderSections(),
+        withBalance({ statedTotalLabels: {}, documentDateLabel: null }),
+      ),
+    );
+    expect(reading.items).toHaveLength(3);
+    expect(reading.items.every((item) => item.reviewNote === null)).toBe(true);
+    expect(reading.notes.balance).toEqual({
+      matches: false,
+      message:
+        "The running balance in “Balance After Transactions” does not follow at row 2: the balance moves by 30.00, but the row's amount is 10.00. A row may be missing from the export or changed; compare the items with the spreadsheet.",
+    });
+  });
+
+  it("says it could not check a balance it cannot read, and still reads the rows", () => {
+    const reading = read(
+      small([row(), row({ "Balance After Transactions": "pending" })]),
+      draft(
+        orderSections(),
+        withBalance({ statedTotalLabels: {}, documentDateLabel: null }),
+      ),
+    );
+    expect(reading.items).toHaveLength(2);
+    expect(reading.notes.balance?.matches).toBe(false);
+    expect(reading.notes.balance?.message).toMatch(
+      /could not be checked: Row 3, column H \("Balance After Transactions"\): "pending" is not an amount\./,
+    );
+  });
+
+  it("checks nothing with no balance column, or a single row", () => {
+    expect(
+      read(readXlsx(walletReportFixture().xlsx), full()).notes.balance,
+    ).toBeUndefined();
+    expect(
+      read(
+        small([row()]),
+        draft(
+          orderSections(),
+          withBalance({ statedTotalLabels: {}, documentDateLabel: null }),
+        ),
+      ).notes.balance,
+    ).toBeUndefined();
+  });
+
+  it("says where it found the table, for a preview", () => {
+    const report = walletWorkbook();
+    const found = readTable(
+      readXlsx(report.xlsx),
+      { name: "Wallet", layout: walletLayout(), sections: full().sections },
+      EVERY,
+    ).found;
+    expect(found).toEqual({
+      sheet: "Transaction Report",
+      headerRow: report.headerRow,
+      rows: report.rows,
+    });
   });
 });

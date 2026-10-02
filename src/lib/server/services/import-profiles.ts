@@ -6,9 +6,9 @@
  * (`$lib/import-profile-schema.ts`), the same one the editor runs, and then
  * checks what only the server can know: that each chosen category is still a
  * category of the right kind, that the profile's account and each transfer's
- * other account still hold money (FR-058), and that no other profile has the
- * same name. A
- * profile with any problem is refused with every problem and its path, and
+ * other account still hold money (FR-058), that each profile a section names
+ * as the same money still exists (FR-066), and that no other profile has the
+ * same name. A profile with any problem is refused with every problem and its path, and
  * nothing is written (FR-035 AS8).
  *
  * Every change is audited as an 'import_profile' entry in the same transaction
@@ -258,6 +258,37 @@ function checkCategories(
   return errors;
 }
 
+/**
+ * What the shared check cannot see about the profiles a section names as the
+ * same money (FR-066): that each one still exists, and is not this profile
+ * itself. `selfId` is the profile being saved, absent for a new one.
+ */
+function checkSameMoney(
+  db: LedgerDb,
+  profile: ImportProfileDraft,
+  selfId?: number,
+): ProfileError[] {
+  const errors: ProfileError[] = [];
+  profile.sections.forEach((section, index) => {
+    (section.sameMoneyAs ?? []).forEach((id, at) => {
+      const path = `sections[${index}].sameMoneyAs[${at}]`;
+      if (id === selfId) {
+        errors.push({
+          path,
+          message:
+            "A profile cannot repeat its own records. Choose another profile, or none.",
+        });
+      } else if (!getImportProfile(db, id)) {
+        errors.push({
+          path,
+          message: "That import profile no longer exists. Remove it.",
+        });
+      }
+    });
+  });
+  return errors;
+}
+
 /** Another profile already called `name`, ignoring case. */
 function nameTaken(db: LedgerDb, name: string, exceptId?: number): boolean {
   const sameName = sql`lower(${importProfiles.name}) = lower(${name})`;
@@ -284,6 +315,7 @@ function prepare(
   const errors = [
     ...checkAccounts(db, checked.profile),
     ...checkCategories(db, checked.profile),
+    ...checkSameMoney(db, checked.profile, exceptId),
   ];
   if (nameTaken(db, checked.profile.name, exceptId)) {
     errors.unshift({

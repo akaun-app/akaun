@@ -351,6 +351,13 @@ export interface TableReading {
   envelope: ReadEnvelope;
   /** How many rows no section took, or whose fee type is not listed. */
   ignoredCount: number;
+  /**
+   * What the running-balance check found, when the layout names a balance
+   * column and the table has two rows or more.
+   */
+  balance?: { matches: boolean; message: string };
+  /** Where the table was found, for a preview. */
+  found: { sheet: string; headerRow: number; rows: number };
 }
 
 /** What the table reader needs from a profile. */
@@ -442,6 +449,42 @@ export function readTable(
   const meetsAll = (row: SheetRow, conditions: readonly RowCondition[]) =>
     conditions.every((condition) => holds(row, condition));
 
+  /**
+   * A row's amount in whole cents, with the sign its direction column gives
+   * when the layout has one, or why it cannot be read, naming the row and the
+   * column.
+   */
+  const signedAmount = (
+    row: SheetRow,
+  ): { ok: true; minor: number } | { ok: false; reason: string } => {
+    const amountCell = cellAt(row, layout.columns.amount);
+    const amount = cellAmount(amountCell, layout, currency);
+    if (!amount.ok) {
+      const shown = cellText(amountCell).trim();
+      return {
+        ok: false,
+        reason: shown
+          ? `${where(row, layout.columns.amount)}: "${brief(shown)}" ${amount.reason}.`
+          : `${where(row, layout.columns.amount)} is empty: every row a section takes needs an amount.`,
+      };
+    }
+    if (!layout.direction) return amount;
+    const value = foldTableText(cellText(cellAt(row, layout.direction.column)));
+    const isIn = layout.direction.in.some((v) => foldTableText(v) === value);
+    const isOut = layout.direction.out.some((v) => foldTableText(v) === value);
+    if (!isIn && !isOut) {
+      const shown = cellText(cellAt(row, layout.direction.column)).trim();
+      return {
+        ok: false,
+        reason: `${where(row, layout.direction.column)}: "${brief(shown)}" is neither an inflow value (${layout.direction.in.join(", ")}) nor an outflow value (${layout.direction.out.join(", ")}).`,
+      };
+    }
+    return {
+      ok: true,
+      minor: isIn ? Math.abs(amount.minor) : -Math.abs(amount.minor),
+    };
+  };
+
   const sections = profile.sections.filter(
     (section) => (section.mode ?? ImportMode.Summary) === mode && section.rows,
   );
@@ -506,33 +549,9 @@ export function readTable(
       }
     }
 
-    const amountCell = cellAt(row, layout.columns.amount);
-    const amount = cellAmount(amountCell, layout, currency);
-    if (!amount.ok) {
-      const shown = cellText(amountCell).trim();
-      throw new TableReadError(
-        shown
-          ? `${where(row, layout.columns.amount)}: "${brief(shown)}" ${amount.reason}.`
-          : `${where(row, layout.columns.amount)} is empty: every row a section takes needs an amount.`,
-      );
-    }
-    let minor = amount.minor;
-    if (layout.direction) {
-      const value = foldTableText(
-        cellText(cellAt(row, layout.direction.column)),
-      );
-      const isIn = layout.direction.in.some((v) => foldTableText(v) === value);
-      const isOut = layout.direction.out.some(
-        (v) => foldTableText(v) === value,
-      );
-      if (!isIn && !isOut) {
-        const shown = cellText(cellAt(row, layout.direction.column)).trim();
-        throw new TableReadError(
-          `${where(row, layout.direction.column)}: "${brief(shown)}" is neither a money-in value (${layout.direction.in.join(", ")}) nor a money-out value (${layout.direction.out.join(", ")}).`,
-        );
-      }
-      minor = isIn ? Math.abs(minor) : -Math.abs(minor);
-    }
+    const amount = signedAmount(row);
+    if (!amount.ok) throw new TableReadError(amount.reason);
+    const minor = amount.minor;
 
     const dateCell = cellAt(row, layout.columns.date);
     const date = parseTableDate(dateCell, layout.dateFormat);
@@ -630,7 +649,122 @@ export function readTable(
     envelope.header.date = date;
   }
 
-  return { envelope, ignoredCount };
+  const balance =
+    layout.balanceColumn == null
+      ? undefined
+      : checkRunningBalance(dataRows, layout.balanceColumn, (row) => {
+          // Any row may be empty here, the ones no section takes too.
+          if (cellText(cellAt(row, layout.columns.amount)).trim() === "") {
+            return {
+              ok: false,
+              reason: `${where(row, layout.columns.amount)} is empty.`,
+            };
+          }
+          const amount = signedAmount(row);
+          if (!amount.ok) return amount;
+          const cell = cellAt(row, layout.balanceColumn!);
+          const figure = cellAmount(cell, layout, currency);
+          if (!figure.ok) {
+            const shown = cellText(cell).trim();
+            return {
+              ok: false,
+              reason: shown
+                ? `${where(row, layout.balanceColumn!)}: "${brief(shown)}" ${figure.reason}.`
+                : `${where(row, layout.balanceColumn!)} is empty.`,
+            };
+          }
+          return { ok: true, minor: amount.minor, balance: figure.minor };
+        });
+
+  return {
+    envelope,
+    ignoredCount,
+    ...(balance ? { balance } : {}),
+    found: {
+      sheet: sheet.name,
+      headerRow: sheet.rows[table.headerAt].number,
+      rows: dataRows.length,
+    },
+  };
+}
+
+/** Whole cents as a figure with two decimals and its sign: "-1,234.50". */
+function showMinor(minor: number): string {
+  const abs = Math.abs(minor);
+  const whole = Math.floor(abs / 100).toLocaleString("en-US");
+  return `${minor < 0 ? "-" : ""}${whole}.${String(abs % 100).padStart(2, "0")}`;
+}
+
+/** One row as the running-balance check reads it. */
+type BalanceRow =
+  | { ok: true; minor: number; balance: number }
+  | { ok: false; reason: string };
+
+/**
+ * Checks a table's running balance: that each row's balance is the balance of
+ * the row before it plus its own amount. Every row of the table is checked,
+ * those no section takes too, since a row missing from the export breaks the
+ * balance wherever it was. A table may list its rows newest first or oldest
+ * first, so both orders are tried and the one that fits more rows is used.
+ *
+ * A note only, never a reason to fail the reading: the amounts the items
+ * have were read and checked on their own. Undefined when there are fewer
+ * than two rows, and so nothing to compare.
+ */
+export function checkRunningBalance(
+  rows: readonly SheetRow[],
+  column: string,
+  read: (row: SheetRow) => BalanceRow,
+): { matches: boolean; message: string } | undefined {
+  if (rows.length < 2) return undefined;
+  const values: { row: SheetRow; minor: number; balance: number }[] = [];
+  for (const row of rows) {
+    const value = read(row);
+    if (!value.ok) {
+      return {
+        matches: false,
+        message: `The running balance in “${column}” could not be checked: ${value.reason}`,
+      };
+    }
+    values.push({ row, ...value });
+  }
+  // Newest first: a row's balance is the next row's plus its own amount.
+  // Oldest first: it is the row before's plus its own amount.
+  const breaks = (newestFirst: boolean) => {
+    const found: { at: number; moved: number; amount: number }[] = [];
+    for (let i = 1; i < values.length; i++) {
+      const [later, earlier] = newestFirst
+        ? [values[i - 1], values[i]]
+        : [values[i], values[i - 1]];
+      const moved = later.balance - earlier.balance;
+      if (moved !== later.minor) {
+        found.push({
+          at: newestFirst ? i - 1 : i,
+          moved,
+          amount: later.minor,
+        });
+      }
+    }
+    return found;
+  };
+  const newest = breaks(true);
+  const oldest = breaks(false);
+  const best = newest.length <= oldest.length ? newest : oldest;
+  if (best.length === 0) {
+    return {
+      matches: true,
+      message: `The running balance in “${column}” follows from row to row, so no row between the first and the last is missing.`,
+    };
+  }
+  const first = best[0];
+  const more =
+    best.length > 1
+      ? ` It does not follow at ${best.length.toLocaleString("en-US")} rows in all.`
+      : "";
+  return {
+    matches: false,
+    message: `The running balance in “${column}” does not follow at row ${values[first.at].row.number}: the balance moves by ${showMinor(first.moved)}, but the row's amount is ${showMinor(first.amount)}.${more} A row may be missing from the export or changed; compare the items with the spreadsheet.`,
+  };
 }
 
 /**
@@ -673,7 +807,7 @@ export function readFromColumns(
   reading: ReadingProfile,
   context: { today: string; mainCurrency: string; schemaId: string },
 ): DocumentReading {
-  const { envelope, ignoredCount } = readTable(
+  const { envelope, ignoredCount, balance } = readTable(
     workbook,
     profile,
     mode,
@@ -705,5 +839,6 @@ export function readFromColumns(
   // own rules left out (an amount of zero, say).
   result.notes.ignoredCount = ignoredCount + lineCount - result.items.length;
   result.notes.method = "columns";
+  if (balance) result.notes.balance = balance;
   return result;
 }

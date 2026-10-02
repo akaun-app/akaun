@@ -249,6 +249,12 @@ export interface SectionSpec {
    * reading; the model is never told of it.
    */
   counterAccountId?: number | null;
+  /**
+   * Other saved profiles whose records describe the same money (FR-066).
+   * Code uses it after the reading, to note an item whose month records from
+   * one of them already cover; the model is never told of it.
+   */
+  sameMoneyAs?: readonly number[];
 }
 
 /** Everything a reading needs to know about what to read. */
@@ -779,6 +785,9 @@ export function savedReadingProfile(
         ...(Object.keys(extras).length ? { extras } : {}),
         ...(section.kind === "transfer"
           ? { counterAccountId: section.counterAccountId ?? null }
+          : {}),
+        ...(section.sameMoneyAs?.length
+          ? { sameMoneyAs: [...section.sameMoneyAs] }
           : {}),
       };
     });

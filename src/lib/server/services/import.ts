@@ -20,6 +20,7 @@ import {
   validateTransferPair,
 } from "../import/account-policy.js";
 import { alreadyImportedAtConfirm } from "../import/repeat-file.js";
+import { rememberProfile } from "../import/same-money.js";
 import {
   categoryAccountForImport,
   categoryChoices,
@@ -335,6 +336,8 @@ function finishConfirmation(
     // record's own (FR-029).
     { groupDocument: Boolean(job.itemId) },
   );
+  // The profile it was read with outlives the import history (FR-066).
+  rememberProfile(db, job.jobId, recordId);
 
   if (job.itemId) {
     db.update(importItems)

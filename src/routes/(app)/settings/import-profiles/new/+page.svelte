@@ -10,5 +10,7 @@
 	starter={data.starter}
 	expenseCategories={data.expenseCategories}
 	incomeCategories={data.incomeCategories}
+	moneyAccounts={data.moneyAccounts}
+	otherProfiles={data.otherProfiles}
 	canChange={true}
 />

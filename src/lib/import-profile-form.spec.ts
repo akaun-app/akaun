@@ -5,14 +5,22 @@ import {
   errorsUnder,
   formFingerprint,
   formFromDraft,
+  layoutHeadings,
+  newCondition,
   newFeeType,
+  newLayout,
+  newRows,
   newSection,
   payloadFromForm,
   sectionKeys,
   slugifyKey,
   typingKey,
 } from "./import-profile-form.js";
-import { checkProfile } from "./import-profile-schema.js";
+import {
+  checkProfile,
+  readsFromColumns,
+  type ImportProfileDraft,
+} from "./import-profile-schema.js";
 import {
   orderSections,
   walletLayout,
@@ -83,15 +91,133 @@ describe("section keys", () => {
   });
 });
 
+/** A starter with both its accounts chosen, as a wallet report one needs. */
+function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
+  if (!draft.sections.some((section) => section.kind === "transfer")) {
+    return draft;
+  }
+  return {
+    ...draft,
+    accountId: 5,
+    sections: draft.sections.map((section) =>
+      section.kind === "transfer"
+        ? { ...section, counterAccountId: 6 }
+        : section,
+    ),
+  };
+}
+
 describe("the form and the profile", () => {
   it.each(IMPORT_PROFILE_STARTERS.map((starter) => [starter.id]))(
     "%s comes back unchanged through the form",
     (id) => {
-      const draft = starterDraft(id)!;
+      const draft = withAccounts(starterDraft(id)!);
       const result = checkProfile(payloadFromForm(formFromDraft(draft)));
       expect(result).toEqual({ ok: true, profile: draft });
     },
   );
+
+  it("is not dirty the moment a saved profile with a layout is opened", () => {
+    const draft = withAccounts(starterDraft("wallet_every_transaction")!);
+    const checked = checkProfile(draft);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(formFingerprint(formFromDraft(checked.profile))).toBe(
+      formFingerprint(formFromDraft(draft)),
+    );
+  });
+
+  it("edits a table layout: headings, columns, direction and totals, one per line", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_withdrawals")!),
+    );
+    const layout = form.layout!;
+    expect(layoutHeadings(layout)).toContain("Money Direction");
+    layout.headersText = `${layout.headersText}\n  Fee  \n\n`;
+    layout.directionInText = "Money In\nCredit";
+    layout.totalsText.every_transaction = "Total Money In\n";
+    layout.balanceColumn = "";
+    layout.remarkColumns = ["Fee"];
+    layout.csvDelimiter = ";";
+    layout.currency = "myr";
+    const result = checkProfile(payloadFromForm(form));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.layout).toMatchObject({
+      headers: [...walletLayout().headers, "Fee"],
+      direction: {
+        column: "Money Direction",
+        in: ["Money In", "Credit"],
+        out: ["Money Out"],
+      },
+      statedTotalLabels: { every_transaction: ["Total Money In"] },
+      remarkColumns: ["Fee"],
+      csvDelimiter: ";",
+      currency: "MYR",
+    });
+    expect("balanceColumn" in result.profile.layout!).toBe(false);
+  });
+
+  it("reports a direction with values but no column, rather than dropping it", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_withdrawals")!),
+    );
+    form.layout!.directionColumn = "";
+    const result = checkProfile(payloadFromForm(form));
+    expect(
+      result.ok === false && errorsAt(result.errors, "layout.direction.column"),
+    ).toHaveLength(1);
+  });
+
+  it("adds a layout and row rules from nothing, and removes them", () => {
+    const form = blankForm();
+    form.name = "Bank export";
+    form.description = "A bank's CSV export.";
+    form.sections[0].name = "Charges";
+    form.sections[0].description = "Each charge.";
+    form.layout = newLayout();
+    form.layout.headersText = "Date\nDetails\nAmount\nType";
+    form.layout.date = "Date";
+    form.layout.description = "Details";
+    form.layout.amount = "Amount";
+    form.sections[0].rows = newRows();
+    const condition = newCondition("Type");
+    condition.op = "is_one_of";
+    condition.value = "left behind";
+    condition.valuesText = "Fee\n Charge \n";
+    form.sections[0].rows.where.push(condition);
+    const result = checkProfile(payloadFromForm(form));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.sections[0].rows).toEqual({
+      where: [{ column: "Type", op: "is_one_of", values: ["Fee", "Charge"] }],
+      flagWhen: [],
+      flagNote: "",
+      feeTypeColumn: null,
+    });
+    expect(readsFromColumns(result.profile, "summary")).toBe(true);
+
+    form.layout = null;
+    const refused = checkProfile(payloadFromForm(form));
+    expect(refused.ok === false && refused.errors.map((e) => e.path)).toEqual([
+      "sections[0].rows",
+    ]);
+  });
+
+  it("sends the profiles a section names as the same money, never for a transfer (FR-066)", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_every_transaction")!),
+    );
+    form.sections[0].sameMoneyAs = [4];
+    form.sections[2].sameMoneyAs = [4];
+    const result = checkProfile(payloadFromForm(form));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.profile.sections.map((section) => section.sameMoneyAs),
+    ).toEqual([[4], undefined, undefined]);
+    expect(formFromDraft(result.profile).sections[0].sameMoneyAs).toEqual([4]);
+  });
 
   it("keeps a transfer section's accounts through the form (FR-058)", () => {
     const draft = starterDraft(IMPORT_PROFILE_STARTERS[0].id)!;
@@ -129,7 +255,7 @@ describe("the form and the profile", () => {
     expect(payload.sections.at(-1)).not.toHaveProperty("counterAccountId");
   });
 
-  it("keeps a table layout, row rules and fee type values it does not edit yet", () => {
+  it("keeps a table layout, row rules and fee type values through the form", () => {
     const sections = [...orderSections(), withdrawalSection(8)];
     sections[0] = {
       ...sections[0],

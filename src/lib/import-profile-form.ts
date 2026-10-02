@@ -3,7 +3,7 @@
  * (006 US6, FR-030, FR-031, FR-035).
  *
  * The editor stages the whole profile in this shape and sends it once, as the
- * Settings page does. It differs from a saved profile in three ways:
+ * Settings page does. It differs from a saved profile in four ways:
  *
  * - Each section and fee type carries a `uid`, so a list that is reordered or
  *   shortened keeps each row's own inputs.
@@ -14,6 +14,11 @@
  *   fragment. The shared check (`import-profile-schema.ts`) reads text and
  *   reports a typing mistake with its path, so the editor never parses it on
  *   its own and the server sees exactly what was typed.
+ * - The table layout and row rules (FR-053, FR-054) hold every list as text,
+ *   one entry per line, and every optional value as "" for none, so each
+ *   field binds to an input as it is. `payloadFromForm` turns them into the
+ *   layout the shared check reads, and a saved layout comes back through the
+ *   form unchanged.
  *
  * Pure TypeScript with no server imports, so the editor and the server specs
  * read the same rules.
@@ -26,7 +31,11 @@ import {
   type ProfileError,
   type ProfileSectionKind,
   type ProfileSectionMode,
+  type RowCondition,
+  type RowConditionOp,
   type SectionRows,
+  type TableCsvDelimiter,
+  type TableDateFormat,
   type TableLayout,
 } from "./import-profile-schema.js";
 import { ImportMode } from "./import-reading.js";
@@ -39,11 +48,64 @@ export interface FeeTypeForm {
   /** The pinned category, or null for "Auto". */
   categoryAccountId: number | null;
   /**
-   * The cell values that mean this fee type in a fee type column (FR-054).
-   * The editor does not show them yet; they are kept as saved, so a save from
-   * the editor never drops them.
+   * The cell values that mean this fee type in its section's fee type column
+   * (FR-054), one per line as typed. Empty for a section the AI reads.
    */
-  values: string[];
+  valuesText: string;
+}
+
+/** One condition of a row rule, as typed (FR-054). */
+export interface ConditionForm {
+  uid: string;
+  /** A heading of the table. */
+  column: string;
+  op: RowConditionOp;
+  /** For is, is not and contains. Kept while another op is chosen. */
+  value: string;
+  /** For is one of: one value per line. Kept likewise. */
+  valuesText: string;
+}
+
+/** A section's row rules, as typed (FR-054). */
+export interface RowsForm {
+  where: ConditionForm[];
+  flagWhen: ConditionForm[];
+  flagNote: string;
+  /** The heading of the fee type column, or "" for none. */
+  feeTypeColumn: string;
+}
+
+/**
+ * A profile's table layout, as typed (FR-053). Text that is a list is one
+ * entry per line, and text that may be empty is "" for none, so every field
+ * binds to an input as it is; `payloadFromForm` makes the layout from it.
+ */
+export interface LayoutForm {
+  /** The sheet's name, or "" for the first sheet that has the headings. */
+  sheet: string;
+  /** The table's headings, one per line. */
+  headersText: string;
+  date: string;
+  description: string;
+  amount: string;
+  /** "" for none. */
+  reference: string;
+  dateFormat: TableDateFormat;
+  /** The direction column, or "" for none: the amount then has its sign. */
+  directionColumn: string;
+  directionInText: string;
+  directionOutText: string;
+  decimalSeparator: "." | ",";
+  /** "" to work it out from the file. */
+  csvDelimiter: TableCsvDelimiter | "";
+  counterparty: string;
+  currency: string;
+  documentDateLabel: string;
+  remarkColumns: string[];
+  /** Each mode's stated-total labels, one per line. */
+  totalsText: Record<ProfileSectionMode, string>;
+  /** The running-balance column, or "" for none. */
+  balanceColumn: string;
 }
 
 export interface SectionForm {
@@ -63,11 +125,13 @@ export interface SectionForm {
   extrasText: string;
   /** A transfer section's other account (FR-058); null for any other kind. */
   counterAccountId: number | null;
+  /** The section's row rules for reading from columns (FR-054), or null. */
+  rows: RowsForm | null;
   /**
-   * The section's row rules for reading from columns (FR-054), or null. Kept
-   * as saved, like the layout below.
+   * Other profiles whose records describe the same money (FR-066). Sent only
+   * for a section that is not a transfer.
    */
-  rows: SectionRows | null;
+  sameMoneyAs: number[];
 }
 
 export interface ProfileForm {
@@ -85,10 +149,9 @@ export interface ProfileForm {
   accountId: number | null;
   /**
    * The table layout for reading a spreadsheet from its columns (FR-053), or
-   * null. The editor does not edit it yet; it is kept as saved and sent back
-   * unchanged, so editing another field never drops it.
+   * null when the profile has none.
    */
-  layout: TableLayout | null;
+  layout: LayoutForm | null;
   sections: SectionForm[];
 }
 
@@ -141,7 +204,164 @@ export function newFeeType(): FeeTypeForm {
     key: "",
     description: "",
     categoryAccountId: null,
-    values: [],
+    valuesText: "",
+  };
+}
+
+/** Text typed one entry per line, as a list: trimmed, empty lines left out. */
+export function linesOf(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/** An empty condition: the first heading, compared with "is". */
+export function newCondition(column = ""): ConditionForm {
+  return { uid: newUid(), column, op: "is", value: "", valuesText: "" };
+}
+
+/** Row rules that take every row, with nothing flagged. */
+export function newRows(): RowsForm {
+  return { where: [], flagWhen: [], flagNote: "", feeTypeColumn: "" };
+}
+
+/** An empty table layout. */
+export function newLayout(): LayoutForm {
+  return {
+    sheet: "",
+    headersText: "",
+    date: "",
+    description: "",
+    amount: "",
+    reference: "",
+    dateFormat: "YYYY-MM-DD",
+    directionColumn: "",
+    directionInText: "",
+    directionOutText: "",
+    decimalSeparator: ".",
+    csvDelimiter: "",
+    counterparty: "",
+    currency: "",
+    documentDateLabel: "",
+    remarkColumns: [],
+    totalsText: { [ImportMode.Summary]: "", [ImportMode.EveryTransaction]: "" },
+    balanceColumn: "",
+  };
+}
+
+function conditionForm(condition: RowCondition): ConditionForm {
+  return {
+    uid: newUid(),
+    column: condition.column,
+    op: condition.op,
+    value: condition.value ?? "",
+    valuesText: (condition.values ?? []).join("\n"),
+  };
+}
+
+function rowsForm(rows: SectionRows): RowsForm {
+  return {
+    where: rows.where.map(conditionForm),
+    flagWhen: rows.flagWhen.map(conditionForm),
+    flagNote: rows.flagNote,
+    feeTypeColumn: rows.feeTypeColumn ?? "",
+  };
+}
+
+function layoutForm(layout: TableLayout): LayoutForm {
+  return {
+    sheet: layout.sheet ?? "",
+    headersText: layout.headers.join("\n"),
+    date: layout.columns.date,
+    description: layout.columns.description,
+    amount: layout.columns.amount,
+    reference: layout.columns.reference ?? "",
+    dateFormat: layout.dateFormat,
+    directionColumn: layout.direction?.column ?? "",
+    directionInText: (layout.direction?.in ?? []).join("\n"),
+    directionOutText: (layout.direction?.out ?? []).join("\n"),
+    decimalSeparator: layout.decimalSeparator,
+    csvDelimiter: layout.csvDelimiter ?? "",
+    counterparty: layout.counterparty ?? "",
+    currency: layout.currency ?? "",
+    documentDateLabel: layout.documentDateLabel ?? "",
+    remarkColumns: [...layout.remarkColumns],
+    totalsText: {
+      [ImportMode.Summary]: (
+        layout.statedTotalLabels[ImportMode.Summary] ?? []
+      ).join("\n"),
+      [ImportMode.EveryTransaction]: (
+        layout.statedTotalLabels[ImportMode.EveryTransaction] ?? []
+      ).join("\n"),
+    },
+    balanceColumn: layout.balanceColumn ?? "",
+  };
+}
+
+/** The headings a layout form names, for the column choices. */
+export function layoutHeadings(layout: LayoutForm | null): string[] {
+  return layout ? linesOf(layout.headersText) : [];
+}
+
+function conditionPayload(condition: ConditionForm): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    column: condition.column,
+    op: condition.op,
+  };
+  if (["is", "is_not", "contains"].includes(condition.op)) {
+    out.value = condition.value;
+  } else if (condition.op === "is_one_of") {
+    out.values = linesOf(condition.valuesText);
+  }
+  return out;
+}
+
+function rowsPayload(rows: RowsForm): Record<string, unknown> {
+  return {
+    where: rows.where.map(conditionPayload),
+    flagWhen: rows.flagWhen.map(conditionPayload),
+    flagNote: rows.flagNote,
+    feeTypeColumn: rows.feeTypeColumn || null,
+  };
+}
+
+function layoutPayload(layout: LayoutForm): Record<string, unknown> {
+  const statedTotalLabels: Record<string, string[]> = {};
+  for (const mode of PROFILE_SECTION_MODES) {
+    const labels = linesOf(layout.totalsText[mode] ?? "");
+    if (labels.length) statedTotalLabels[mode] = labels;
+  }
+  const directionIn = linesOf(layout.directionInText);
+  const directionOut = linesOf(layout.directionOutText);
+  return {
+    sheet: layout.sheet || null,
+    headers: linesOf(layout.headersText),
+    columns: {
+      date: layout.date,
+      description: layout.description,
+      amount: layout.amount,
+      reference: layout.reference || null,
+    },
+    dateFormat: layout.dateFormat,
+    // Sent when any part of it is filled in, so a direction with values but
+    // no column is reported rather than dropped.
+    direction:
+      layout.directionColumn || directionIn.length || directionOut.length
+        ? {
+            column: layout.directionColumn,
+            in: directionIn,
+            out: directionOut,
+          }
+        : null,
+    decimalSeparator: layout.decimalSeparator,
+    csvDelimiter: layout.csvDelimiter || null,
+    counterparty: layout.counterparty || null,
+    currency: layout.currency || null,
+    documentDateLabel: layout.documentDateLabel || null,
+    remarkColumns: layout.remarkColumns,
+    statedTotalLabels,
+    balanceColumn: layout.balanceColumn || null,
   };
 }
 
@@ -165,6 +385,7 @@ export function newSection(
     extrasText: "",
     counterAccountId: null,
     rows: null,
+    sameMoneyAs: [],
   };
 }
 
@@ -204,7 +425,7 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
         draft.statedTotalLabels[ImportMode.EveryTransaction] ?? "",
     },
     accountId: draft.accountId ?? null,
-    layout: draft.layout ?? null,
+    layout: draft.layout ? layoutForm(draft.layout) : null,
     sections: draft.sections.map((section) => ({
       uid: newUid(),
       key: section.key,
@@ -219,11 +440,12 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
         key: feeType.key,
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
-        values: [...(feeType.values ?? [])],
+        valuesText: (feeType.values ?? []).join("\n"),
       })),
       extrasText: section.extras ? JSON.stringify(section.extras, null, 2) : "",
       counterAccountId: section.counterAccountId ?? null,
-      rows: section.rows ?? null,
+      rows: section.rows ? rowsForm(section.rows) : null,
+      sameMoneyAs: [...(section.sameMoneyAs ?? [])],
     })),
   };
 }
@@ -276,7 +498,7 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
     statedTotalLabels,
     accountId: form.accountId,
     // Sent only when there is one, as a profile without one is saved.
-    ...(form.layout ? { layout: form.layout } : {}),
+    ...(form.layout ? { layout: layoutPayload(form.layout) } : {}),
     sections: form.sections.map((section, index) => ({
       key: keys[index],
       name: section.name,
@@ -288,14 +510,20 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
         key: feeType.key,
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
-        ...(feeType.values.length ? { values: feeType.values } : {}),
+        ...(linesOf(feeType.valuesText).length
+          ? { values: linesOf(feeType.valuesText) }
+          : {}),
       })),
       extras: section.extrasText,
       // Sent only for a transfer, the one kind that names it.
       ...(section.kind === "transfer"
         ? { counterAccountId: section.counterAccountId }
         : {}),
-      ...(section.rows ? { rows: section.rows } : {}),
+      ...(section.rows ? { rows: rowsPayload(section.rows) } : {}),
+      // Never for a transfer, which the editor gives no such field (FR-066).
+      ...(section.kind !== "transfer" && section.sameMoneyAs.length
+        ? { sameMoneyAs: section.sameMoneyAs }
+        : {}),
     })),
   };
 }

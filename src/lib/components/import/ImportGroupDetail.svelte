@@ -1249,6 +1249,15 @@
 				</section>
 			{/if}
 
+			{#if notes?.balance}
+				<!-- The running-balance check of a reading from columns: a note, never
+				     a reason an item is held back. -->
+				<section class="detail-card">
+					<div class="detail-card-head"><span class="detail-card-title">Running balance</span></div>
+					<p class="hint balance-note" class:balance-off={!notes.balance.matches}>{notes.balance.message}</p>
+				</section>
+			{/if}
+
 			{#if canOfferReadAgain}
 				<!-- Shown even when it cannot be used, so the page says why (US9 AS7). -->
 				<section class="detail-card">
@@ -1730,5 +1739,11 @@
 		.group-screen :global(.bulk-actions) {
 			flex-wrap: wrap;
 		}
+	}
+	.balance-note {
+		margin: 0;
+	}
+	.balance-off {
+		color: var(--amber);
 	}
 </style>

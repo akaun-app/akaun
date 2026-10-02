@@ -139,10 +139,16 @@
 	const reviewNoteShown = $derived(
 		!done &&
 			!!row.reviewNote &&
-			row.reviewNote !== error &&
+			!error?.includes(row.reviewNote) &&
 			(transfer ||
 				(row.documentType === 'income' ? sourceAccountId : targetAccountId) ===
 					readCategoryAccountId(row, options))
+	);
+	// What to check before confirming that no category choice answers: a
+	// flag rule (FR-061) or a possible double count (FR-066). It stays until
+	// the item is finished. The error line may already say it.
+	const checkNoteShown = $derived(
+		!done && !!row.checkNote && !error?.includes(row.checkNote)
 	);
 	const numEdits = $derived(Object.keys(edits).filter((k) => k !== 'document_type').length);
 
@@ -208,6 +214,14 @@
 			AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
 		{/if}
 	</div>
+
+	{#if checkNoteShown}
+		<!-- What to check before confirming (FR-061, FR-066). -->
+		<div class="dup-note review-note">
+			<AlertTriangle size={12} />
+			{row.checkNote}
+		</div>
+	{/if}
 
 	{#if reviewNoteShown}
 		<!-- What the reading could not do as the profile asked (FR-034). -->
