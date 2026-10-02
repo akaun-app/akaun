@@ -14,11 +14,32 @@
 
 > just to update the source document could be a receipt, invoice, market income statement. But for statement like document, it might have various fees summary and table (transactions), but for book keeping simplicity user might choose to only import summarize records, such as market place income (sales income), and fees (market place fees, ads fees, etc), or user might choose to import all records but not the summaries. The profile / logic need to be able to robust enough to do that. Also we might need change our auto import LLM to become something like a agentic loop, something like loop with tool call, but for profile, something like identify source document see whether is there any available profile, if not then only go for standard import flow (legacy). Please review current agentic loop approach and reuse if possible, without reinventing the wheel.
 
+**Update, 2026-10-02** (decided with the maintainer; the reasoning is in `design.md` § S4):
+
+Some platforms export only a spreadsheet, and the maintainer's marketplace wallet report (a
+spreadsheet with one transaction per line, including withdrawals to the bank) is the document
+that User Story 8 was waiting for. So:
+
+1. Auto Import also accepts spreadsheets: `.xlsx` (Excel) and `.csv`. **CSV import is no longer
+   out of scope**, although the original request above lists it there.
+2. A profile can say which spreadsheet column holds what. Code then reads the rows itself, with
+   **no AI**. A spreadsheet with no such profile is turned into numbered text and read by the AI,
+   like a PDF.
+3. **User Story 8 (Every transaction) is no longer deferred.** It is built for spreadsheets (read
+   from their columns) and for long PDFs (read in pieces, FR-043). There is no long PDF sample
+   yet, so only the spreadsheet path can be checked against a real document for now.
+4. A withdrawal from the wallet to the bank becomes a **Transfer** record. Items can therefore be
+   of a third kind, Transfer, beside Income and Expense.
+
+"One row producing several records" stays out of scope.
+
 ## Glossary
 
 | Term | Plain meaning |
 |---|---|
-| Source document | A file (PDF or photo) that is itself the evidence of the transactions on it: a receipt, an invoice, a supplier's fee notice, a marketplace income statement. A bank statement is *not* one: it only lists money that moved, and is matched against records (`001-bank-reconciliation`). |
+| Source document | A file (PDF, photo, or a spreadsheet in `.xlsx` or `.csv`) that is itself the evidence of the transactions on it: a receipt, an invoice, a supplier's fee notice, a marketplace income statement, or a marketplace wallet report. A bank statement is *not* one: it only lists money that moved, and is matched against records (`001-bank-reconciliation`). |
+| Spreadsheet | A table file exported by a platform: Excel (`.xlsx`) or comma-separated text (`.csv`). Old Excel files (`.xls`) are not accepted. |
+| Marketplace wallet report | A marketplace's list of every movement in the seller's wallet on the platform, one per line: order income in, adjustments, and withdrawals to the bank. It is the only document behind a withdrawal, so it counts as a source document for that money. It is not a bank statement. |
 | Standard reading | How Auto Import reads a document today: one document, one record. Used for receipts and invoices, and whenever nothing better fits. |
 | Item | One line of a source document that becomes its own record, for example one fee or one transaction. |
 | Header numbers | Figures in a document's heading or summary that are not lines to import: subtotals, totals, amount due, balance brought forward, payments received, account and reference numbers. |
@@ -28,12 +49,19 @@
 | Marketplace income statement | A document from an online marketplace that settles a period's sales. It has a summary (sales, several kinds of fee, the net amount released) and a table of the transactions behind that summary. |
 | Import mode | Which part of a statement-like document to import: **Summary** (the summary lines) or **Every transaction** (each row of the transaction table). |
 | Stated total | The total the document itself prints for exactly the lines being imported, such as "Total charges" on a fee notice or "Total released" on a marketplace statement. It is not the amount due, a balance, or a grand total that includes other things. |
-| Control total | A check that adds up the items (income counted as plus, expenses as minus) and compares the result with the stated total, to the cent. It catches a line that was missed or counted twice. |
+| Control total | A check that adds up the items (income and money transferred in counted as plus, expenses and money transferred out as minus) and compares the result with the stated total, to the cent. It catches a line that was missed or counted twice. |
 | Possible duplicate | The existing warning on a review card that a proposed record looks like one already in the books. |
 | Accounts payable / Accounts receivable | What the business owes / what the business is owed. An imported document starts on one of these because it proves an amount is owed, not that money moved. |
 | Import profile | A saved recipe for one kind of document: how to recognise it, instructions for reading it, and its sections. |
 | Section | One part of a document that a profile knows how to read, such as "Sales", "Fees" or "Transactions". It says which import mode it belongs to and what kind of record its lines become. |
-| Kind | Whether a line becomes an Income or an Expense. A section can fix it (Income, Expense) or use **By sign**: a positive amount is Income and a negative amount is an Expense, and the record keeps the amount without its sign. |
+| Kind | What a line becomes: Income, an Expense, or a Transfer. A section can fix it (Income, Expense, Transfer) or use **By sign**: a positive amount is Income and a negative amount is an Expense, and the record keeps the amount without its sign. |
+| Transfer | Money moved between two of the business's own accounts, for example from the marketplace wallet to the bank. It is neither income nor an expense, so it has no category and no other party. In a Transfer section the sign of a line says the direction: a negative amount is money moving out of the "Money moves in" account, a positive amount is money moving into it. |
+| "Money moves in" account | The account a profile's document is about, such as the marketplace wallet. This is the plan's working name; the screen label follows the accounting-term rule (Constitution VII) and is settled when the editor is built. When a profile names it, its items start on that account instead of on Accounts payable or Accounts receivable, and its transfers have this account as one side. |
+| Other account | The second account of a Transfer, such as the bank account a withdrawal goes to. A Transfer section names it. |
+| Reading from columns | Reading a spreadsheet with a profile that says which column holds the date, the description, the amount and so on. Code reads every row itself; no AI is involved, so no AI provider is needed. |
+| Table layout | The part of a profile that describes a spreadsheet's table: which sheet, its column headings, which column holds what, and where its stated totals are printed. It belongs to the profile as a whole, because one document has one table. |
+| Row rule | The part of a section that says which rows of the table belong to it, for example "the Transaction Type column is Withdrawal". Every row belongs to at most one section. A row rule can also say which rows to flag for the reviewer. |
+| Piece | A run of consecutive lines of a long document, read in one AI call. Every line belongs to exactly one piece. |
 | Fee type | A named kind of charge in a section, such as "Commission". It can be tied to a category so lines of that type always land in it. |
 | Item layout | The description of what one line of a section looks like, written as a JSON Schema: a standard, machine-checkable way to list fields and the values each may hold. Advanced use only; profiles have a sensible layout by default. |
 | Recognition phrase | A phrase that appears in every document of a kind, such as the marketplace's name plus "Income Statement". Helps pick the right profile without asking the AI. |
@@ -164,9 +192,9 @@ The generic reading of a document is general. A user who receives the same kind 
 **Acceptance Scenarios**:
 
 1. **Given** the place in Settings where the AI providers are managed, **When** a user allowed to change imports opens it, **Then** they can add, edit, disable and delete import profiles.
-2. **Given** a new profile, **When** the user starts from a built-in starter ("Fee document" or "Marketplace statement summary"), **Then** its sections and instructions are filled in for them to edit. (The statement starter has only the summary half for now; its transactions half waits for User Story 8, every transaction.)
-3. **Given** a profile, **When** the user edits it, **Then** they can set its name, how to recognise it (a plain description and, optionally, recognition phrases), its instructions, which stated total applies to each import mode, and one or more sections.
-4. **Given** a section, **When** the user edits it, **Then** they can set its name, what it is and where to find it, which import mode it belongs to (Summary or Every transaction), its kind (Income, Expense or By sign), an optional fixed category, and an optional list of fee types each optionally tied to a category.
+2. **Given** a new profile, **When** the user starts from a built-in starter ("Fee document", "Marketplace statement summary", "Marketplace wallet report — withdrawals only" or "Marketplace wallet report — every transaction"), **Then** its sections and instructions are filled in for them to edit. (The statement starter has only the summary half, because that statement's transaction table has one row per day with many amount columns, which would need one row to make several records. Every transaction is offered through the wallet report starters instead.)
+3. **Given** a profile, **When** the user edits it, **Then** they can set its name, how to recognise it (a plain description and, optionally, recognition phrases), its instructions, which stated total applies to each import mode, optionally the "Money moves in" account, optionally a table layout for spreadsheets, and one or more sections.
+4. **Given** a section, **When** the user edits it, **Then** they can set its name, what it is and where to find it, which import mode it belongs to (Summary or Every transaction), its kind (Income, Expense, By sign or Transfer, and for Transfer the other account), an optional fixed category, an optional list of fee types each optionally tied to a category, and, for a profile with a table layout, its row rules.
 5. **Given** an enabled profile, **When** the user opens "Read as", **Then** the profile is listed by name, and a document read with it uses the profile's instructions in place of the general import instructions.
 6. **Given** a section with fee types, **When** a document is read with the profile, **Then** lines that match no listed type are not proposed, and each proposed item's remark names its fee type.
 7. **Given** a fee type tied to a category, **When** an item of that type is proposed, **Then** it gets that category; a type not tied to one gets the system's suggestion if it is valid, and Uncategorised otherwise; and a line with no fee type gets the section's fixed category if it has one.
@@ -199,27 +227,29 @@ A marketplace pays out a period's sales in one statement: a summary (sales, seve
 
 ---
 
-### User Story 8 - Import every transaction of a marketplace statement (Priority: P3, deferred)
+### User Story 8 - Import every transaction of a one-transaction-per-line table (Priority: P3)
 
-**Deferred 2026-09-30.** On the maintainer's marketplace statement the transaction table has one row per day with fifteen amount columns, so each row would have to become several records, which is out of scope. Summary covers the real case. This story waits for a document whose table has one transaction per line. See `design.md` § S0.5.
+**Deferred 2026-09-30, taken up again 2026-10-02.** It was deferred because the maintainer's marketplace income statement has a transaction table with one row per day and fifteen amount columns, so each row would have to become several records, which is out of scope. That is still true, so the statement starter still has no Every transaction section. The story is now aimed at tables with **one transaction per line**, such as the maintainer's marketplace wallet report. It is built for spreadsheets read from their columns (User Story 10) and for long PDFs read in pieces (FR-043). **There is no long one-transaction-per-line PDF sample yet**, so the PDF path is tested only with a stand-in AI until the maintainer supplies one; only the spreadsheet path can be accepted against a real document now. See `design.md` § S0.5 and § S4.
 
-Some users want every transaction on the statement as its own record, and none of the summary. Each row of the transaction table becomes one income or expense record. The table can run to hundreds of rows, so all of them must be read, and reviewing them must stay practical.
+Some users want every transaction in a document as its own record, and none of the summary. Each row of the transaction table becomes one record. The table can run to hundreds of rows, so all of them must be read, and reviewing them must stay practical.
 
 **Why this priority**: It is the second choice the user described, and the heaviest: it needs long documents read in full and a group page that copes with hundreds of items. It builds on User Stories 4, 6 and 7.
 
-**Independent Test**: Upload a statement of about 300 transactions with Import: Every transaction. The group holds one item per row, none from the summary, and the number of items equals the number of rows.
+**Independent Test**: Upload a wallet report spreadsheet of several hundred transactions, with a profile that reads its columns, choosing Import: Every transaction. The group holds one item per row, none from the report's summary block, and the number of items equals the number of rows. (For a PDF: the same with a statement of about 300 one-line transactions, once a sample exists.)
 
 **Acceptance Scenarios**:
 
-1. **Given** a profile with a "Transactions" section (Every transaction, By sign), **When** a statement is uploaded with Import: Every transaction, **Then** each transaction row becomes one item, income or expense by its sign, and the summary produces none.
-2. **Given** a statement with several hundred rows, **When** it is read, **Then** every row is read and none is dropped, and the queue shows progress while reading.
-3. **Given** the statement's stated net amount released, **When** the group is shown, **Then** the Control total compares the rows, income less expenses, with it.
-4. **Given** a statement already imported in Summary mode with at least one record created, **When** the identical file is uploaded again with Import: Every transaction, **Then** it is stopped, with a message saying it was already imported as a summary and how many records that produced.
-5. **Given** a later statement that overlaps an earlier one, **When** its rows are read, **Then** rows already in the books with the same reference are flagged as possible duplicates and rows with different references are not.
+1. **Given** a profile with a "Transactions" section (Every transaction, By sign), **When** a document is uploaded with Import: Every transaction, **Then** each transaction row becomes one item, income or expense by its sign, and the summary produces none.
+2. **Given** a document with several hundred rows, **When** it is read, **Then** every row is read and none is dropped, and, for a PDF read in pieces, the queue shows progress while reading, such as "Reading part 3 of 25".
+3. **Given** the document's stated total for the rows, **When** the group is shown, **Then** the Control total compares the rows with it, income and money transferred in as plus, expenses and money transferred out as minus.
+4. **Given** a document already imported in Summary mode with at least one record created, **When** the identical file is uploaded again with Import: Every transaction, **Then** it is stopped, with a message saying it was already imported as a summary and how many records that produced.
+5. **Given** a later document that overlaps an earlier one, **When** its rows are read, **Then** rows already in the books with the same reference are flagged as possible duplicates, and a row whose own reference differs from the existing record's reference is not, even when the date and amount match.
 6. **Given** a group that was read as Summary and has no confirmed items, **When** the user chooses "Read again" as Every transaction, **Then** the pending items are replaced by the new reading of the same file.
-7. **Given** a statement too long to be read in full within the limits, **When** it is uploaded, **Then** it fails with a reason naming the limit, and no partial group appears.
-8. **Given** each transaction row has its own date and reference, **When** the statement is read, **Then** each item carries its own date and reference, while the other party and currency come from the document.
-9. **Given** a transaction that falls across the boundary between two pieces of a long document, **When** the statement is read, **Then** it appears once, neither lost nor listed twice.
+7. **Given** a PDF too long to be read in full within the limits, **When** it is uploaded, **Then** it fails with a reason naming the limit, and no partial group appears.
+8. **Given** each transaction row has its own date and reference, **When** the document is read, **Then** each item carries its own date and reference, while the other party and currency come from the document. A row with no reference of its own has no reference: it does not take the document's reference.
+9. **Given** a transaction that falls across the boundary between two pieces of a long PDF, **When** it is read, **Then** it appears once, neither lost nor listed twice.
+10. **Given** a long PDF whose twentieth piece fails with the first AI provider, **When** the next provider is tried, **Then** it reads only that piece again, and the pieces already read are kept.
+11. **Given** the same file uploaded twice, once read as Summary and once as Every transaction, both waiting for review, **When** the user confirms an item from one after the other has made a record, **Then** the confirm is refused with a message saying the file was already imported the other way.
 
 ---
 
@@ -244,6 +274,53 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 
 ---
 
+### User Story 10 - Import a spreadsheet export (Priority: P2)
+
+Some platforms give their reports only as a spreadsheet. The user wants to upload it to Auto Import like a PDF. For a report that arrives every month, the user also wants it read the same way every time, without the AI guessing: a profile says which column holds the date, the description, the amount and the reference, and code reads every row.
+
+**Why this priority**: Without it the user has to retype a spreadsheet or print it to PDF, which loses the columns. Reading from columns is also the most dependable reading there is: no AI, no cost, and the same answer every time.
+
+**Independent Test**: Upload a synthetic wallet report spreadsheet with a profile that maps its columns, with no AI provider configured. The group holds one item per matching row, the ignored lines count the rows no section wanted, and the group says "read from columns".
+
+**Acceptance Scenarios**:
+
+1. **Given** the upload screen, **When** the user picks a file, **Then** `.xlsx` and `.csv` files are accepted as well as PDF, JPG and PNG, and a spreadsheet is labelled "Spreadsheet" in the queue.
+2. **Given** an old `.xls` file or a password-protected workbook, **When** it is uploaded, **Then** it is refused with a message that names the problem.
+3. **Given** a spreadsheet and no profile with a table layout, **When** it is read as several items or with a profile, **Then** it is read by the AI from its text, one sheet after another, like a PDF.
+4. **Given** a spreadsheet read as "Receipt or invoice (one record)" whose text is longer than a receipt reading allows, **When** it is read, **Then** it fails with a reason that names the limit, instead of being read from a shortened text.
+5. **Given** a profile with a table layout whose sections in the chosen mode all have row rules, **When** a spreadsheet is read with it, **Then** code reads every row, no AI is asked, and it works even with no AI provider configured.
+6. **Given** a row that matches the rules of two sections, **When** the spreadsheet is read, **Then** the reading fails and names the row, because the profile is ambiguous.
+7. **Given** rows that match no section, **When** the spreadsheet is read, **Then** they are left out and counted as ignored lines, for example "Ignored 726 lines (20 shown)".
+8. **Given** a date or amount that cannot be read, **When** the spreadsheet is read, **Then** the reading fails, naming the row and the column, and no partial group appears.
+9. **Given** amounts written as `(12.50)` or with the minus sign `−`, **When** they are read, **Then** they are read as negative, to the exact cent.
+10. **Given** a cell that holds a formula, **When** it is read, **Then** the value the spreadsheet last showed is used; the formula is never worked out again.
+11. **Given** a row that matches a section's flag rule (for example a withdrawal still marked "Processing"), **When** it is read, **Then** it becomes an item with a note asking the reviewer to check it, and "Confirm all" leaves it behind.
+12. **Given** a spreadsheet uploaded with Auto-detect, **When** one profile's table headings match it, **Then** that profile is used without asking the AI.
+13. **Given** a spreadsheet uploaded to Reconciliation or attached to a record, **When** it is uploaded, **Then** it is refused, as today.
+
+---
+
+### User Story 11 - Money moved between your own accounts becomes a transfer (Priority: P2)
+
+A marketplace wallet report lists withdrawals: money moved from the wallet to the business's bank account. That is neither income nor an expense, so it must not become either. It is a Transfer between two of the business's own accounts, and the wallet report is the only document that shows it.
+
+**Why this priority**: Recording a withdrawal as income or an expense would make the profit wrong. Without transfers the user must key every withdrawal in by hand, or leave the wallet's balance wrong.
+
+**Independent Test**: With a "withdrawals only" profile whose "Money moves in" account is the wallet and whose Transfer section names the bank as the other account, read a wallet report with ten withdrawals. The group holds ten transfer items, one flagged; "Confirm all" makes nine Transfer records from the wallet to the bank and leaves the flagged one.
+
+**Acceptance Scenarios**:
+
+1. **Given** a Transfer section, **When** a negative line is read, **Then** it becomes a transfer out of the "Money moves in" account to the other account; a positive line becomes a transfer the other way.
+2. **Given** a transfer item, **When** it is shown, **Then** it has no other party and no category, it shows both accounts, and its kind says Transfer.
+3. **Given** a transfer item, **When** it is confirmed, **Then** one Transfer record is created between the two accounts, audited and with the source document attached, as for any imported record.
+4. **Given** a transfer item in a currency other than the main currency, **When** the group is shown, **Then** it needs attention and "Confirm all" leaves it behind, saying why.
+5. **Given** a withdrawal already recorded as a transfer, for example matched in Reconciliation, with the same amount, between the same two accounts and dated within seven days, **When** the report is read, **Then** the item is flagged as a possible duplicate; one existing transfer flags at most one item.
+6. **Given** a profile that names a "Money moves in" account, **When** its income and expense items are proposed, **Then** they start on that account instead of Accounts payable or Accounts receivable, and the group's Source account can still change them.
+7. **Given** a profile whose Transfer section names the same account as the "Money moves in" account, or an account that does not hold money, **When** it is saved, **Then** saving is refused with a message saying why.
+8. **Given** a receipt read the standard way, **When** it is read, **Then** it never becomes a transfer.
+
+---
+
 ### Edge Cases
 
 - The document lists the same line twice. Both appear as items and the reviewer can skip one. When the document states a total, the Control total shows the difference.
@@ -260,6 +337,12 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 - Every item of a group is confirmed or skipped. The group leaves the review queue and appears in history.
 - The AI provider is unavailable. The upload fails with the same message a receipt gets today, and entering records by hand is unaffected.
 - The server restarts while a document is being read. Reading starts again, as it does for a receipt.
+- A workbook has several sheets. Read by the AI, every sheet is read, one after another, each headed by its name. Read from columns, only the sheet the table layout names is read.
+- A `.csv` file is saved in an older Windows encoding or uses semicolons. The encoding and the separator are recognised; an Excel `sep=` first line is honoured.
+- A spreadsheet's table ends with a blank row and a summary below it. Reading from columns stops at the first blank row after the headings, so the summary does not become items.
+- A wallet report's order income repeats money already imported from the same marketplace's income statement summary. Importing both would count the sales twice. The "withdrawals only" starter avoids this, and a section can name the profile it overlaps with so that its income and expense items get a review note when records from that profile already cover the same dates (FR-066).
+- A withdrawal is still "Processing" in the report. It is imported but flagged for the reviewer, because it may not complete; it is not left out.
+- Two copies of the same file are uploaded in different modes before either is confirmed. Both are read, and the first confirm wins; any later confirm from the other copy is refused (FR-064).
 
 ## Requirements *(mandatory)*
 
@@ -275,26 +358,26 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 **Reading a document with several items**
 
 - **FR-005**: The system MUST propose one record per item and MUST NOT propose anything for header numbers, subtotals, totals, amount due, balance brought forward, payments received, account or reference numbers, or parts of the document that are not being read. When a document is read with a profile, only the sections of the chosen import mode are read.
-- **FR-006**: All items from one document MUST share the document's other party (the supplier for an expense, the customer for income), date, reference and currency. An item that states its own date or reference uses that one for itself only.
+- **FR-006**: All items from one document MUST share the document's other party (the supplier for an expense, the customer for income), date, reference and currency. An item that states its own date or reference uses that one for itself only. In Every transaction mode an item takes its reference only from its own row (FR-062). A transfer item has no other party (FR-058).
 - **FR-007**: Each item MUST be handled as a receipt is: the other party is matched to an existing contact or offered as a new one, a foreign-currency amount gets an exchange rate, the category is one of the user's categories or Uncategorised, and amounts are kept in whole cents.
-- **FR-008**: In the several-items reading the whole document is one kind, expense or income, as for a receipt. In a profile each section sets the kind of its lines (Income, Expense or By sign), so one group can hold both kinds. Under By sign a positive amount is Income and a negative amount is an Expense, and the record keeps the amount without its sign.
+- **FR-008**: In the several-items reading the whole document is one kind, expense or income, as for a receipt. In a profile each section sets the kind of its lines (Income, Expense, By sign or Transfer), so one group can hold several kinds. Under By sign a positive amount is Income and a negative amount is an Expense, and the record keeps the amount without its sign. Under Transfer a negative amount is money moving out of the profile's "Money moves in" account to the section's other account, and a positive amount is money moving the other way; the record again keeps the amount without its sign (FR-058). A profile MAY name a "Money moves in" account; its income and expense items then start on that account instead of on Accounts payable or Accounts receivable. The standard and several-items readings never produce a transfer.
 - **FR-009**: A document that yields exactly one item MUST behave as a receipt: one review card, no group. A document that yields none MUST fail with "No items found".
-- **FR-010**: The system MUST NOT silently drop lines. A document too long to be read in full, or with more items than the limit, MUST fail with a reason that names the limit reached (initial limits are in Assumptions).
+- **FR-010**: The system MUST NOT silently drop lines. A document too long to be read in full, or with more items than the limit, MUST fail with a reason that names the limit reached (initial limits are in Assumptions). Reading from columns counts the items against the limit after rows that match no section are left out. A spreadsheet read the standard way has the receipt reading's text limit, and is refused over it (FR-052).
 - **FR-011**: Items MUST appear only when the whole document was read successfully. If reading fails part-way, no partial group is shown.
 - **FR-012**: The system MUST keep a short list of the lines it deliberately left out and show it on the group as an expandable "Ignored N lines". The screen MUST NOT claim the list is complete.
 
 **Checking the result**
 
-- **FR-013**: When the document states its own total for the lines being imported, the group MUST show a Control total: the items added up, income as plus and expenses as minus, in whole cents of the document's own currency, against the stated total, as either "matches" or "differs by" the amount. The check reflects the items as read, not later edits or skips.
+- **FR-013**: When the document states its own total for the lines being imported, the group MUST show a Control total: the items added up, income and money transferred in as plus, expenses and money transferred out as minus, in whole cents of the document's own currency, against the stated total, as either "matches" or "differs by" the amount. The check reflects the items as read, not later edits or skips.
 - **FR-014**: A difference MUST warn but MUST NOT block confirming. When the document states no such total, no Control total is shown.
-- **FR-015**: The stated total means the total of exactly the lines being imported. An amount due, a balance, or a grand total that includes other charges MUST NOT be used as the stated total. A profile names which stated total applies to each import mode.
+- **FR-015**: The stated total means the total of exactly the lines being imported. An amount due, a balance, or a grand total that includes other charges MUST NOT be used as the stated total. A profile names which stated total applies to each import mode. When reading from columns, a mode MAY name several labels (for example a total of money in and a total of money out); the number printed next to each is read and code adds them up. A mode with no label shows no Control total.
 
 **Reviewing a group**
 
 - **FR-016**: In the review queue a group MUST appear as one card showing the file name, how the document was read, how many items are ready, need attention, are confirmed and are skipped, the Control total, and a link to the group's own page. That page MUST have its own address that can be shared.
 - **FR-017**: The group's page MUST list its items in a table showing date, description, other party, category, amount, kind and status. Any item MUST be openable in place to show and edit the same fields as a receipt review card. A long group MUST be shown a page at a time and MUST be filterable to items that need attention or are possible duplicates, and, for a profile, by section.
 - **FR-018**: The group MUST offer one Source account choice that fills the Source account of every item at once, and the same for the selected items. Each item can still be changed afterwards without affecting the others. It MUST also offer "Confirm all", "Skip all", "Confirm selected", "Skip selected" and setting a category for the selected items.
-- **FR-019**: Confirming several items MUST happen one after another. Items that need attention (flagged as a possible duplicate, or missing something required such as an exchange rate or an account) MUST be left behind and the user told which and why. One item failing MUST NOT stop or undo the others. If the run is interrupted, items already confirmed stay confirmed, the rest stay ready, and running it again MUST NOT create any record twice. Progress MUST be shown for a long run.
+- **FR-019**: Confirming several items MUST happen one after another. Items that need attention (flagged as a possible duplicate, carrying a review note, a transfer not in the main currency, or missing something required such as an exchange rate or an account) MUST be left behind and the user told which and why. One item failing MUST NOT stop or undo the others. If the run is interrupted, items already confirmed stay confirmed, the rest stay ready, and running it again MUST NOT create any record twice. Progress MUST be shown for a long run.
 - **FR-020**: Each item MUST stay individually editable, confirmable and skippable. Skipping or discarding one item MUST NOT change the other items, and MUST NOT remove the source file while any other item or record still uses it. Discarding the whole document MUST remove only the items still awaiting review; records already created stay, and so does the source file while a record uses it.
 - **FR-021**: A confirmed item's history entry MUST link to the record it created. Confirmed receipts get the same link.
 - **FR-022**: The queue card and the group's page MUST be usable at phone widths.
@@ -314,10 +397,10 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 
 **Import profiles**
 
-- **FR-030**: A user allowed to change imports MUST be able to add, edit, disable and delete import profiles. A profile has a name, how to recognise it (a plain description and, optionally, recognition phrases), instructions, and one or more sections. Enabled profiles appear in "Read as". A new profile can start from a built-in starter ("Fee document" or "Marketplace statement summary"). The statement starter holds only the Summary sections; its Every transaction sections wait for User Story 8.
-- **FR-031**: A section has a name; what it is and where to find it; the import mode it belongs to (Summary or Every transaction); its kind (Income, Expense or By sign); optionally a fixed category; and optionally a list of fee types, each optionally tied to a category.
+- **FR-030**: A user allowed to change imports MUST be able to add, edit, disable and delete import profiles. A profile has a name, how to recognise it (a plain description and, optionally, recognition phrases), instructions, and one or more sections. Enabled profiles appear in "Read as". A new profile can start from a built-in starter ("Fee document" or "Marketplace statement summary"). The statement starter holds only the Summary sections, because that statement's transaction table needs one row to make several records (out of scope). Two more starters cover a marketplace wallet report: "withdrawals only" (transfers to the bank, the recommended choice next to the income statement summary) and "every transaction" (every row, with a warning that its order income repeats the income statement summary). Both come with a table layout and need both accounts chosen before they can be saved: the other account of each transfer, and the "Money moves in" account (FR-058). A profile MAY also name a "Money moves in" account and a table layout (FR-053).
+- **FR-031**: A section has a name; what it is and where to find it; the import mode it belongs to (Summary or Every transaction); its kind (Income, Expense, By sign or Transfer, and for Transfer the other account); optionally a fixed category; optionally a list of fee types, each optionally tied to a category; and, in a profile with a table layout, optionally its row rules (FR-054). A Transfer section has no fee types and no fixed category.
 - **FR-032**: Reading with a profile MUST read only the sections of the chosen import mode, so nothing from any other section can become a record. If the profile has no section in that mode, reading MUST stop with a message naming the profile and the mode.
-- **FR-033**: One document MUST be imported in one import mode only, because summary and transaction figures describe the same money. The identical file uploaded again in the other mode after records exist is stopped under FR-026.
+- **FR-033**: One document MUST be imported in one import mode only, because summary and transaction figures describe the same money. The identical file uploaded again in the other mode after records exist is stopped under FR-026. Two copies uploaded before either made a record are both read, and the guard at confirm (FR-064) stops the second from making records.
 - **FR-034**: When a section lists fee types, the system MUST propose only lines that match a listed type. A type MAY be tied to a category: the tied category wins, otherwise the system's suggested category is used if valid, otherwise Uncategorised, and a section's fixed category applies to lines with no fee type. The item's fee type MUST be added to its remark. A tied category of the other kind (an income category on a by-sign line printed negative, or the reverse) is not used: the item takes the next valid choice, and it says on the item which tied category did not apply and why, so a confirm-all leaves it for the reviewer until a category is chosen.
 - **FR-035**: A section's item layout is built from the profile form: the fixed fields the books understand (description, amount, date, reference, and the category and fee type where the section needs them; the other party and currency come from the document once) are generated by the system and cannot be retyped or renamed. A user MAY add extra fields as a JSON Schema fragment of plain values (text, number, true/false), which are shown on the item and added to the record's remark as "name: value". A fragment that breaks the rules (a feature the system does not support, a name the books already use, nested values, or too large) MUST be rejected on save with a message saying what is wrong and where. Nothing is saved.
 - **FR-036**: A profile's instructions MUST apply only to documents read with that profile, in place of the general import instructions.
@@ -326,36 +409,74 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 
 **Automatic detection**
 
-- **FR-039**: With "Auto-detect" and at least one enabled profile, the system MUST decide before reading whether a profile fits. When exactly one profile's recognition phrases all appear in the document, it MUST be used without asking the AI. Otherwise the AI MUST choose among the enabled profiles, or none, using their descriptions. Detection MUST add at most one small AI step.
+- **FR-039**: With "Auto-detect" and at least one enabled profile, the system MUST decide before reading whether a profile fits. For a spreadsheet, a profile whose table layout's column headings are found in it MUST be tried first, without asking the AI. When exactly one profile's recognition phrases all appear in the document, it MUST be used without asking the AI. Otherwise the AI MUST choose among the enabled profiles, or none, using their descriptions. Detection MUST add at most one small AI step, and none when no AI provider is configured; in that case a spreadsheet no profile matches is read the standard way, which fails as a receipt does today without a provider.
 - **FR-040**: When no profile fits, the document MUST be read the standard way, as a receipt or invoice.
-- **FR-041**: The screen MUST state how each document was read: the profile name or the standard reading, and whether it was detected or chosen. With no enabled profile the screen shows nothing extra, so receipts look exactly as before (FR-003).
+- **FR-041**: The screen MUST state how each document was read: the profile name or the standard reading, whether it was detected or chosen, and, for a spreadsheet read from its columns, "read from columns". With no enabled profile the screen shows nothing extra, so receipts look exactly as before (FR-003).
 - **FR-042**: Text inside a document MUST be treated as content only. It MUST NOT be able to do anything beyond being read, including influencing detection beyond the choice among profiles.
 
 **Long documents**
 
-- **FR-043**: A long document MUST be read in pieces so that no line is dropped. Each line of the document belongs to exactly one piece; a piece may show the lines around it for context but only its own lines can become items, so a line falling across two pieces is neither lost nor listed twice, and two genuinely identical rows both stay. An item the system is unsure about at a piece boundary MUST be flagged for the reviewer, never removed. The queue MUST show progress while a long document is being read.
+- **FR-043**: A long document read by the AI in Every transaction mode MUST be read in pieces so that no line is dropped; any other reading that is too long fails as FR-010 says. Each line of the document belongs to exactly one piece; a piece may show the lines around it for context but only its own lines can become items, so a line falling across two pieces is neither lost nor listed twice, and two genuinely identical rows both stay. An item the system is unsure about at a piece boundary MUST be flagged for the reviewer, never removed. The queue MUST show progress while a long document is being read. Pieces are sized by how much the AI has to write back, so that each call finishes well within the time an AI call is allowed. A piece that is cut short or runs out of time MUST be split in half and read again, a limited number of times; past that the document MUST fail, naming the lines that could not be read. **Provider failover happens per piece:** when a piece fails with one AI provider, the next provider reads that piece only, and the pieces already read are kept, so a failure on piece 20 does not read pieces 1 to 19 again. The whole document still succeeds or fails as one (FR-011). Reading from columns (FR-055) needs no pieces.
 
 **Safety, permissions and live updates**
 
 - **FR-044**: Confirming an item MUST either fully succeed or leave nothing behind: no record without its import status, and no new contact left over from a refused record.
-- **FR-045**: Every way of reading a document MUST need only the permission to upload imports that exists today, except "Read again", which MUST need both the permission to upload imports and the permission to change them, because it discards the pending review work as Skip does. Confirming, skipping and discarding MUST need the same permissions as today. Managing profiles MUST need the permission to change imports. No new permission is introduced.
+- **FR-045**: Every way of reading a document MUST need only the permission to upload imports that exists today, except "Read again", which MUST need both the permission to upload imports and the permission to change them, because it discards the pending review work as Skip does. Confirming, skipping and discarding MUST need the same permissions as today. Managing profiles MUST need the permission to change imports, and so does trying a profile's table layout against a sample file, which stores nothing. No new permission is introduced.
 - **FR-046**: Every record created MUST be audited exactly as records from a receipt import are today.
 - **FR-047**: As items are proposed, confirmed, skipped or discarded, every open Auto Import screen, including a group's page, MUST update without a reload.
 - **FR-048**: Upgrading MUST NOT change or remove anything already in the queue, the import history, the records or the settings.
 
 **Boundaries**
 
-- **FR-049**: Bank statements stay in Reconciliation. Nothing uploaded to Auto Import creates statement lines, and statement lines never enter Auto Import (unchanged from `001-bank-reconciliation` FR-012).
+- **FR-049**: Bank statements stay in Reconciliation. Nothing uploaded to Auto Import creates statement lines, and statement lines never enter Auto Import (unchanged from `001-bank-reconciliation` FR-012). A marketplace wallet report is not a bank statement: it is the source document for money that no other document proves, such as a withdrawal to the bank, and reading it creates records, never statement lines.
+
+**Spreadsheets**
+
+- **FR-050**: Auto Import MUST accept `.xlsx` and `.csv` files as well as PDF, JPG and PNG, in every way of reading. It MUST refuse an old `.xls` file or a password-protected workbook with a message that names the problem. Only Auto Import accepts spreadsheets: Reconciliation and record attachments MUST still refuse them. A stored spreadsheet is offered for download when opened, not shown in the page.
+- **FR-051**: A spreadsheet read by the AI (the standard reading, several items, or a profile that does not read it from its columns) MUST first be turned into text: every sheet in order, headed by its name, one row per line with its cells side by side, dates written as year-month-day, and the lines numbered as for a PDF. A cell that holds a formula MUST give the value the spreadsheet last showed; formulas are never worked out again.
+- **FR-052**: A spreadsheet read the standard way whose text is longer than the standard reading takes (6,000 characters today) MUST fail with a reason naming the limit. It MUST NOT be read from a shortened text. PDFs and photos read the standard way are unchanged (FR-004).
+
+**Reading from columns**
+
+- **FR-053**: A profile MAY carry a table layout: which sheet; the column headings that identify the table; which column holds the date (and how dates are written), the description, the amount and the reference; and optionally a column that says the direction of the money with the values that mean in and out, the decimal separator, the separator of a `.csv` file, the other party, the currency, a label beside which the document's date is printed, columns to add to the remark, and the labels of the stated totals for each import mode. The layout belongs to the profile, not to a section, because one document has one table.
+- **FR-054**: In a profile with a table layout, a section MAY carry row rules: which rows belong to it, as conditions on a column's value (is, is not, is one of, contains, is empty, is not empty); which of its rows to flag for the reviewer, with a note; and which column holds the fee type, with each fee type listing the cell values that mean it.
+- **FR-055**: When every section of the chosen import mode has row rules, a spreadsheet read with that profile MUST be read from its columns by code, with no AI call and without needing an AI provider. The reading MUST:
+  - find the table by its column headings, and read the rows below them up to the first blank row;
+  - fail, naming the row, when a row matches the rules of more than one section;
+  - leave out a row that matches no section, and count it among the ignored lines;
+  - fail, naming the row and the column, when a date or an amount cannot be read, so no partial group appears (FR-011);
+  - read amounts as exact decimals, never as rounded numbers, with an amount in brackets or with a minus sign (including the typographic `−`) read as negative;
+  - leave out a row whose fee type is not listed (FR-034);
+  - read each stated total from the number printed next to its label, and add them up in code;
+  - give each item the row's line number in the text of FR-051, so the reviewer can find it.
+- **FR-056**: A reading from columns can leave out hundreds of rows. The group MUST show how many were left out and a sample of them, such as "Ignored 726 lines (20 shown)".
+- **FR-057**: When a section of the chosen mode has no row rules, the spreadsheet MUST be read by the AI (FR-051) with that profile, as a PDF would be.
+
+**Transfers**
+
+- **FR-058**: A section of kind Transfer MUST name its other account. It MUST be saved only when the profile names a "Money moves in" account, and the two MUST be different accounts that hold money (such as a bank account, cash or a marketplace wallet), checked when the profile is saved. A transfer item has no other party and no category; the group's table shows the other account where other items show a category, and its kind says Transfer. The reviewer MAY change either account of one transfer item, within the same rule.
+- **FR-059**: Confirming a transfer item MUST create one Transfer record between its two accounts, audited and with the source document attached as for any imported record (FR-027, FR-046). A transfer MUST be in the main currency: a transfer item in another currency needs attention and is left behind by "Confirm all". A document read the standard way never produces a transfer.
+- **FR-060**: A transfer item MUST be flagged as a possible duplicate when an existing Transfer record has the same amount, the same two accounts and a date within seven days, including one created in Reconciliation. One existing transfer MUST flag at most one item of a reading.
+
+**Rows to check, references and the same money twice**
+
+- **FR-061**: A row that matches a section's flag rule MUST become an item with a review note saying what to check (for example "Check that this withdrawal completed"). It MUST NOT be left out. It needs attention, so "Confirm all" leaves it behind until the reviewer confirms it on its own.
+- **FR-062**: In Every transaction mode an item MUST take its reference only from its own row. When a row has none, the item has none; it MUST NOT take the reference printed in the document's header.
+- **FR-063**: For items read from columns or read in pieces, an item that has its own reference MUST NOT be flagged as a duplicate of an existing record that has a different reference, even when the date, amount and other party match. Two transactions with different references are different transactions. Every other reading keeps the check of FR-024 unchanged.
+- **FR-064**: Confirming anything from a document read as several items or with a profile (an item of a group, or the one review card of a reading that found a single item) MUST be refused when another upload of the identical file has already made a record. The refusal MUST say how the file was already imported. The check MUST happen in the same step that writes the record, so two confirms arriving together cannot both pass it. A document read the standard way keeps today's behaviour (FR-004).
+- **FR-065**: When a long document is read in pieces, an item with no line number, or with a line number outside the lines its piece was shown, MUST be kept and flagged for the reviewer, never removed. An item read from the context lines of a piece is dropped only when the piece that owns that line listed it too; otherwise it is kept and flagged (FR-043).
+- **FR-066**: A section MAY name another profile whose records describe the same money (for example a wallet report's order income and an income statement's sales). When records made with that profile already cover the same dates, the section's income and expense items MUST get a review note saying the money may be counted twice. Transfers are not affected.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Source document**: The uploaded file. It keeps how it was to be read (standard, several items, or a profile and import mode), whether that was chosen or detected, its stored copy, the stated total and the ignored lines.
-- **Item**: One proposed record from a source document. It has the same details as today's proposed record, plus its group, its kind and, for a profile, its section and fee type. It ends confirmed, skipped or discarded.
+- **Source document**: The uploaded file. It keeps how it was to be read (standard, several items, or a profile and import mode), whether that was chosen or detected, whether it was read by the AI, in pieces or from columns, its stored copy, the stated total, the ignored lines and how many lines were ignored.
+- **Item**: One proposed record from a source document. It has the same details as today's proposed record, plus its group, its kind (Income, Expense, or Transfer out of or into the "Money moves in" account), for a transfer its other account, and, for a profile, its section and fee type. It ends confirmed, skipped or discarded.
 - **Group**: The items of one source document, reviewed together on the group's own page. It exists only when a document yielded more than one item.
 - **Ignored line**: A short piece of text for a line the system saw and left out, kept with the source document for the reviewer.
-- **Import profile**: A named recipe: how to recognise the document, instructions, and sections. It can be enabled or disabled.
-- **Section**: A part of a document a profile can read: its import mode, its kind, its optional fixed category, its fee types and its item layout.
-- **Fee type**: A named kind of charge in a section, optionally tied to a category.
+- **Import profile**: A named recipe: how to recognise the document, instructions, sections, and optionally a "Money moves in" account and a table layout for spreadsheets. It can be enabled or disabled.
+- **Section**: A part of a document a profile can read: its import mode, its kind (and for a transfer, its other account), its optional fixed category, its fee types, its item layout, and, with a table layout, its row rules.
+- **Fee type**: A named kind of charge in a section, optionally tied to a category. When reading from columns, it lists the cell values that mean it.
+- **Table layout**: The description of a spreadsheet's table on a profile: sheet, column headings, which column holds what, and the labels of its stated totals.
 
 ## Success Criteria *(mandatory)*
 
@@ -369,15 +490,22 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 - **SC-006**: After "Confirm all" on N items there are exactly N new records and one stored file. After the attachment is deleted from one record the other N−1 still open the file, and after it is deleted from the last one no stored file remains.
 - **SC-007**: No item is flagged as a duplicate of another item from its own document, and a document repeating last month's lines is not flagged on wording alone (checked with a two-month example).
 - **SC-008**: The same file uploaded twice is stopped before reading every time the first upload created at least one record, whichever mode it was imported in.
-- **SC-009**: On a sample marketplace statement, importing the Summary gives income and expense items whose total (income less expenses) equals the stated net amount released, and importing Every transaction gives exactly one item per row of the transaction table.
+- **SC-009**: On a sample marketplace statement, importing the Summary gives income and expense items whose total (income less expenses) equals the stated net amount released. On a sample with one transaction per line (the maintainer's wallet report), importing Every transaction gives exactly one item per row of the transaction table.
 - **SC-010**: A statement of several hundred rows is read completely, and its group page opens and pages without a noticeable wait (each page of items appears in under two seconds).
 - **SC-011**: Pressing "Confirm all" again after an interruption never creates a record twice.
 - **SC-012**: On the maintainer's sample documents, Auto-detect uses the intended profile for every document that has one and the standard reading for the rest. A wrong pick is always visible on screen and can be corrected with "Read again" without uploading again.
 - **SC-013**: A user can create a profile for a new kind of document from a built-in starter and import its first document without any change to the software, in under fifteen minutes.
+- **SC-014**: On the maintainer's wallet report spreadsheet, with no AI provider configured: a "withdrawals only" profile gives one transfer item per withdrawal (ten), the one still processing is flagged, and "Confirm all" makes a Transfer record from the wallet to the bank for each of the others; a full "every transaction" profile gives one item per row (736) and a Control total that matches the report's own totals of money in and money out.
+- **SC-015**: Reading the same spreadsheet with the same profile twice gives the same items every time, because no AI is involved.
+- **SC-016**: A withdrawal already recorded as a transfer in Reconciliation is flagged as a possible duplicate when the wallet report is imported.
+- **SC-017**: A long one-transaction-per-line PDF is read in pieces with every row read once and none dropped. *Not checkable on real data until the maintainer supplies such a PDF;* until then it is shown with tests that use a stand-in AI.
 
 ## Assumptions
 
-- **Sources are receipts, invoices and marketplace income statements** (confirmed with the user). A statement has a summary and a table of transactions, and the user chooses to import one or the other, never both.
+- **Sources are receipts, invoices, marketplace income statements and marketplace wallet reports** (confirmed with the user; wallet reports added 2026-10-02). A statement has a summary and a table of transactions, and the user chooses to import one or the other, never both.
+- **A marketplace wallet report is a source document for money that has no other one** (confirmed with the user, 2026-10-02). A withdrawal from the wallet to the bank is proved by nothing else the business receives, so the report is its evidence. It is not a bank statement: it never creates statement lines (FR-049), and the bank side of the same withdrawal is still matched in Reconciliation against the record it made.
+- **A wallet report's order income usually repeats the income statement** (from the maintainer's samples). The same sales appear in the income statement's summary and, line by line, in the wallet report. The recommended use is the summary from the income statement and only the withdrawals from the wallet report. Importing every row of the wallet report as well would count the sales twice, which is why the "every transaction" starter carries a warning and FR-066 adds a review note.
+- **Spreadsheets are `.xlsx` and `.csv` only** (confirmed with the user, 2026-10-02). Old `.xls` files, password-protected workbooks and other formats are refused with a reason, and can be saved as `.xlsx` by the user. The spreadsheet is read by code written for this feature, with no new library (Constitution II).
 - **Every transaction means one record per row** (confirmed with the user). Fees that are already inside a row's amount stay inside it; the user picks Summary when fees should be booked separately.
 - **Scope is source documents, not bank statements** (confirmed with the user). A bank statement only lists money that moved, and is matched against records in Reconciliation (`001-bank-reconciliation` FR-012). Importing it as records would risk counting the same spending twice.
 - **The standard reading is the fallback** (confirmed with the user): detect a profile first, and if none fits read the document as today.
@@ -387,21 +515,26 @@ Choosing a profile at every upload is a chore, and a wrong choice is easy to mak
 - **Credits, discounts and refunds** are not turned into records by the several-items reading. A profile imports them with a By sign section.
 - **One table for every group.** A group is reviewed in a table on its own page whether it holds three items or three hundred, rather than cards for small groups and a table for large ones. This replaces the earlier plan for cards.
 - **A missed item is added by hand.** The group has no "add item"; the reviewer uses the ordinary new-record screen.
-- **Initial limits are about 200,000 characters of document text and 1,000 items per document.** They are starting values, to be adjusted after real use.
+- **Initial limits are about 200,000 characters of document text and 1,000 items per document.** They are starting values, to be adjusted after real use. The text limit applies to what the AI reads; reading from columns has no AI and is bounded instead by caps on the size of the file, the number of rows and the size of a cell. A spreadsheet read the standard way is bounded by the standard reading's 6,000 characters (FR-052).
 - **Only the text of a document is sent to the AI provider, not page images.** Tables can come out scrambled on some PDFs. This is checked on real sample documents, including a marketplace statement, during planning, before any screen is built. If it proves inadequate, sending page images is a separate feature.
-- **Imports keep starting on Accounts payable or Accounts receivable, as today.** The group's Source account changes that for all items at once.
+- **Imports keep starting on Accounts payable or Accounts receivable, as today,** unless the profile names a "Money moves in" account (confirmed with the user, 2026-10-02). A wallet report is about money already in the wallet, so its items start on the wallet. The group's Source account changes either for all items at once.
+- **A transfer is in the main currency.** The books record a transfer between two accounts at one rate, so a transfer in another currency is left for the reviewer rather than guessed.
+- **Pieces are for long documents read by the AI in Every transaction mode.** A spreadsheet read from its columns is read whole by code and never in pieces. A spreadsheet read by the AI is read like a PDF, so a long one is read in pieces too. Every other reading of a document that is too long fails with the limit named (FR-010).
 - **The general import instructions still apply** to the several-items reading. A profile's instructions replace them for that profile.
 - **No new permission.** The existing import permissions cover reading, confirming, skipping and discarding. Managing profiles uses the permission to change imports.
-- **An AI provider is still optional**, as today. Without one, imports fail as they do now, and entering records by hand is unaffected.
+- **An AI provider is still optional**, as today. Without one, imports fail as they do now, and entering records by hand is unaffected. The exception is a spreadsheet read from its columns, which needs no AI provider at all.
 - **Profiles are written by hand.** Drafting a profile from a sample document with AI help is out of scope.
 - **This supersedes three earlier statements, for source documents only:** the note in `002-double-entry-ledger` that pulling more than one record out of a single imported document is out of scope, the design note in `docs/DEVELOPMENT_PLAN.md` that a receipt is one file and one record, and this spec's own first draft, which treated profiles, a table review page and mixed kinds as out of scope. `001-bank-reconciliation` FR-012 is unchanged.
-- **Delivery is in stages, in the order of the priorities above.** User Stories 1 to 3 first, then 4 to 7, then 8 and 9. Each stage stands on its own.
+- **Delivery is in stages.** User Stories 1 to 3 first, then 4 to 7, then 9, then spreadsheets, transfers and every transaction (User Stories 8, 10 and 11; `design.md` § S4). User Stories 10 and 11 are P2 but come last, because they were found after the earlier stages were built. Each stage stands on its own.
 
 ## Out of Scope
 
 - Bank statements, which stay in Reconciliation.
-- CSV import.
-- One row producing several records, for example a sale plus its fee columns.
+- One row producing several records, for example a sale plus its fee columns. For this reason Every transaction is not offered for a table with one row per day and many amount columns.
+- Old Excel (`.xls`) files, password-protected workbooks, and spreadsheet formats other than `.xlsx` and `.csv`.
+- Working out a spreadsheet's formulas. The value the spreadsheet last showed is used.
+- Accepting spreadsheets in Reconciliation or as record attachments, which keep accepting PDF and images only.
+- Transfers in a currency other than the main currency.
 - Drafting a profile from a sample document with AI help.
 - Sending page images to a vision model.
 - Adding a missed item inside a group.
