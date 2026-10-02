@@ -5,9 +5,13 @@ import {
   hasProfileChoice,
   readAsOfJob,
   readCategoryAccountId,
+  isTransferRow,
+  itemSides,
+  keepsReadAccount,
   readingLabel,
   receiptSides,
   reviewRowFrom,
+  transferChoices,
   type ReviewOptions,
 } from "./review-card.js";
 
@@ -49,6 +53,56 @@ describe("readCategoryAccountId", () => {
       category: "Sales",
     });
     expect(readCategoryAccountId(read, options)).toBe(20);
+  });
+});
+
+describe("a transfer's two accounts (FR-058)", () => {
+  it("runs from the document's account to the other one, or back", () => {
+    const out = reviewRowFrom({
+      documentType: DocumentType.TransferOut,
+      accountId: 5,
+      counterAccountId: 6,
+    });
+    expect(out.documentType).toBe("transfer_out");
+    expect(isTransferRow(out)).toBe(true);
+    expect(receiptSides(out, options)).toEqual({ source: 5, target: 6 });
+    expect(itemSides(out, options)).toEqual({ source: 5, target: 6 });
+
+    const back = reviewRowFrom({
+      documentType: DocumentType.TransferIn,
+      accountId: 5,
+      counterAccountId: 6,
+    });
+    expect(itemSides(back, options)).toEqual({ source: 6, target: 5 });
+    expect(isTransferRow(reviewRowFrom({ documentType: 1 }))).toBe(false);
+  });
+
+  it("starts a one-item profile card on the account its reading chose (FR-008)", () => {
+    const row = reviewRowFrom({
+      documentType: DocumentType.Income,
+      accountId: 9,
+    });
+    // The standard reading starts an income on Accounts receivable, as before.
+    expect(receiptSides(row, options).target).toBe(2);
+    expect(receiptSides(row, options, true).target).toBe(9);
+    const expense = reviewRowFrom({
+      documentType: DocumentType.Expense,
+      accountId: 9,
+    });
+    expect(receiptSides(expense, options).source).toBe(1);
+    expect(receiptSides(expense, options, true).source).toBe(9);
+    expect(keepsReadAccount({ readAs: "profile" })).toBe(true);
+    expect(keepsReadAccount({ readAs: "receipt", readHow: "chosen" })).toBe(
+      false,
+    );
+  });
+
+  it("offers either side every money account but the other side", () => {
+    const withAccounts = {
+      ...options,
+      transferAccounts: [{ id: 5 }, { id: 6 }, { id: 7 }],
+    } as unknown as ReviewOptions;
+    expect(transferChoices(withAccounts, 6).map((a) => a.id)).toEqual([5, 7]);
   });
 });
 

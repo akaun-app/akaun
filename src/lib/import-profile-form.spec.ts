@@ -88,6 +88,42 @@ describe("the form and the profile", () => {
     },
   );
 
+  it("keeps a transfer section's accounts through the form (FR-058)", () => {
+    const draft = starterDraft(IMPORT_PROFILE_STARTERS[0].id)!;
+    const transfer = {
+      ...draft,
+      accountId: 7,
+      sections: [
+        ...draft.sections,
+        {
+          key: "withdrawals",
+          name: "Withdrawals",
+          description: "Each withdrawal to the bank.",
+          mode: "summary" as const,
+          kind: "transfer" as const,
+          fixedCategoryAccountId: null,
+          feeTypes: [],
+          extras: null,
+          counterAccountId: 8,
+        },
+      ],
+    };
+    const form = formFromDraft(transfer);
+    expect(form.accountId).toBe(7);
+    expect(checkProfile(payloadFromForm(form))).toEqual({
+      ok: true,
+      profile: transfer,
+    });
+
+    // Another kind sends no other account, even when one was left behind.
+    const last = form.sections[form.sections.length - 1];
+    last.kind = "expense";
+    const payload = payloadFromForm(form) as {
+      sections: Record<string, unknown>[];
+    };
+    expect(payload.sections.at(-1)).not.toHaveProperty("counterAccountId");
+  });
+
   it("starts a new section in Summary, and sends each section's own mode", () => {
     const form = blankForm();
     form.sections.push(newSection("every_transaction"));

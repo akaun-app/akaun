@@ -5,7 +5,9 @@
  * Every write runs the profile through the one shared check
  * (`$lib/import-profile-schema.ts`), the same one the editor runs, and then
  * checks what only the server can know: that each chosen category is still a
- * category of the right kind, and that no other profile has the same name. A
+ * category of the right kind, that the profile's account and each transfer's
+ * other account still hold money (FR-058), and that no other profile has the
+ * same name. A
  * profile with any problem is refused with every problem and its path, and
  * nothing is written (FR-035 AS8).
  *
@@ -32,8 +34,10 @@ import {
 import { ImportReadAs, ImportReadHow } from "$lib/import-reading.js";
 import { diffRecords, getAuditTrail, recordAudit } from "../audit.js";
 import { importProfiles } from "../db/schema.js";
+import { isImportTransactionAsset } from "../import/account-policy.js";
 import { categoryChoices } from "../import/category-accounts.js";
 import type { LedgerDb } from "../ledger/types.js";
+import { getAccount } from "../queries/accounts.js";
 
 /** A saved profile, as the screens and the reading use it. */
 export interface ImportProfileView extends ImportProfileDraft {
@@ -91,7 +95,23 @@ function parseColumn<T>(
 const isPlainObject = (value: unknown) =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** What `options_json` holds. Each part is optional. */
+type ProfileOptions = { accountId?: number | null };
+
+/** The account the profile names, from its options, or null. */
+function optionAccountId(options: ProfileOptions): number | null {
+  const id = options.accountId;
+  return typeof id === "number" && Number.isSafeInteger(id) && id > 0
+    ? id
+    : null;
+}
+
 function toView(row: ProfileRow): ImportProfileView {
+  const options = parseColumn<ProfileOptions>(
+    row.optionsJson,
+    {},
+    isPlainObject,
+  );
   return {
     id: row.id,
     name: row.name,
@@ -103,6 +123,7 @@ function toView(row: ProfileRow): ImportProfileView {
       {},
       isPlainObject,
     ),
+    accountId: optionAccountId(options),
     sections: parseColumn<ProfileSection[]>(
       row.sectionsJson,
       [],
@@ -122,6 +143,7 @@ function audited(profile: ImportProfileDraft) {
     phrases: profile.phrases,
     instructions: profile.instructions,
     statedTotalLabels: profile.statedTotalLabels,
+    accountId: profile.accountId ?? null,
     sections: profile.sections,
   };
 }
@@ -134,6 +156,9 @@ function columns(profile: ImportProfileDraft) {
     instructions: profile.instructions,
     sectionsJson: JSON.stringify(profile.sections),
     statedTotalLabelsJson: JSON.stringify(profile.statedTotalLabels),
+    optionsJson: JSON.stringify(
+      profile.accountId == null ? {} : { accountId: profile.accountId },
+    ),
   };
 }
 
@@ -141,6 +166,8 @@ function columns(profile: ImportProfileDraft) {
 function categoryKinds(kind: ProfileSectionKind): ("expense" | "income")[] {
   if (kind === "income") return ["income"];
   if (kind === "expense") return ["expense"];
+  // A transfer has no category; the shared check refuses one already.
+  if (kind === "transfer") return [];
   return ["expense", "income"];
 }
 
@@ -148,7 +175,41 @@ const KIND_WORDS: Record<ProfileSectionKind, string> = {
   income: "an income category",
   expense: "an expense category",
   by_sign: "an income or expense category",
+  transfer: "a category",
 };
+
+const NOT_A_MONEY_ACCOUNT =
+  "That account is archived, no longer exists, or does not hold money. Choose a bank account, cash, a card or a wallet.";
+
+/**
+ * What the shared check cannot see about the profile's accounts (FR-058):
+ * that the account the document is about, and each transfer's other
+ * account, is still an account that holds money and can take records. The
+ * shared check has already made sure the two differ.
+ */
+function checkAccounts(
+  db: LedgerDb,
+  profile: ImportProfileDraft,
+): ProfileError[] {
+  const errors: ProfileError[] = [];
+  const holdsMoney = (id: number) => {
+    const account = getAccount(db, id);
+    return account != null && isImportTransactionAsset(account);
+  };
+  if (profile.accountId != null && !holdsMoney(profile.accountId)) {
+    errors.push({ path: "accountId", message: NOT_A_MONEY_ACCOUNT });
+  }
+  profile.sections.forEach((section, index) => {
+    if (section.kind !== "transfer" || section.counterAccountId == null) return;
+    if (!holdsMoney(section.counterAccountId)) {
+      errors.push({
+        path: `sections[${index}].counterAccountId`,
+        message: NOT_A_MONEY_ACCOUNT,
+      });
+    }
+  });
+  return errors;
+}
 
 /**
  * What the shared check cannot see: whether each chosen category is a
@@ -212,7 +273,10 @@ function prepare(
 ): { ok: true; profile: ImportProfileDraft } | ProfileRefusal {
   const checked = checkProfile(input);
   if (!checked.ok) return refuse(checked.errors);
-  const errors = checkCategories(db, checked.profile);
+  const errors = [
+    ...checkAccounts(db, checked.profile),
+    ...checkCategories(db, checked.profile),
+  ];
   if (nameTaken(db, checked.profile.name, exceptId)) {
     errors.unshift({
       path: "name",

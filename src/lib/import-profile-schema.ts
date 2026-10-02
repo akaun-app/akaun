@@ -123,15 +123,18 @@ function builtinNameMessage(key: string, what: string): string {
 // ── The profile ─────────────────────────────────────────────────────────────
 
 /**
- * Whether a section's lines are income or expenses (FR-031). `by_sign` reads
- * a positive amount as income and a negative one as an expense, and both are
- * stored without their sign (FR-008).
+ * What a section's lines become (FR-031). `by_sign` reads a positive amount
+ * as income and a negative one as an expense, and both are stored without
+ * their sign (FR-008). `transfer` reads each line as money moved between the
+ * profile's own account and the section's other account: a negative amount
+ * out of the profile's account, a positive one into it (FR-058).
  */
-export type ProfileSectionKind = "income" | "expense" | "by_sign";
+export type ProfileSectionKind = "income" | "expense" | "by_sign" | "transfer";
 export const PROFILE_SECTION_KINDS: readonly ProfileSectionKind[] = [
   "income",
   "expense",
   "by_sign",
+  "transfer",
 ];
 
 /**
@@ -203,6 +206,12 @@ export interface ProfileSection {
   feeTypes: ProfileFeeType[];
   /** "Advanced: extra fields". Null when there are none. */
   extras: ExtrasFragment | null;
+  /**
+   * A transfer section's other account: where the money went from the
+   * profile's account, or came from (FR-058). Null, or absent on a section
+   * saved before transfers existed, for every other kind.
+   */
+  counterAccountId?: number | null;
 }
 
 /** A profile as the editor fills it in and the server saves it. */
@@ -225,6 +234,14 @@ export interface ImportProfileDraft {
    * total is shown.
    */
   statedTotalLabels: Partial<Record<ProfileSectionMode, string>>;
+  /**
+   * The account the document is about, such as the marketplace wallet a
+   * wallet report lists (FR-008, FR-058). Its income and expense items start
+   * on it instead of on Accounts payable or Accounts receivable, and it is one
+   * side of every transfer. Null, or absent on a profile saved before it
+   * existed, when the profile names none.
+   */
+  accountId?: number | null;
   sections: ProfileSection[];
 }
 
@@ -285,18 +302,33 @@ function text(
   return trimmed;
 }
 
+/** Reads an optional account: null, or a whole account id. */
+function accountRef(
+  value: unknown,
+  path: string,
+  errors: ProfileError[],
+  message: string,
+): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+  errors.push({ path, message });
+  return null;
+}
+
 /** Reads an optional category: null, or a whole account id. */
 function categoryId(
   value: unknown,
   path: string,
   errors: ProfileError[],
 ): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-    return value;
-  }
-  errors.push({ path, message: "Choose a category from the list, or none." });
-  return null;
+  return accountRef(
+    value,
+    path,
+    errors,
+    "Choose a category from the list, or none.",
+  );
 }
 
 // ── Extra fields ────────────────────────────────────────────────────────────
@@ -731,7 +763,8 @@ function section(
   if (!(PROFILE_SECTION_KINDS as readonly unknown[]).includes(kind)) {
     errors.push({
       path: `${path}.kind`,
-      message: "Choose whether the section is Income, Expense or By sign.",
+      message:
+        "Choose whether the section is Income, Expense, By sign or Transfer.",
     });
   }
 
@@ -744,6 +777,43 @@ function section(
   const extras = validateExtrasFragment(value.extras, `${path}.extras`);
   if (!extras.ok) errors.push(...extras.errors);
 
+  // A transfer is neither income nor an expense, so it has no category, and
+  // it names the other account instead (FR-031, FR-058). Whether that account
+  // holds money is the server's check, against the chart of accounts.
+  let counterAccountId: number | null = null;
+  if (kind === "transfer") {
+    counterAccountId = accountRef(
+      value.counterAccountId,
+      `${path}.counterAccountId`,
+      errors,
+      "Choose the other account from the list.",
+    );
+    if (
+      counterAccountId === null &&
+      !errors.some((error) => error.path === `${path}.counterAccountId`)
+    ) {
+      errors.push({
+        path: `${path}.counterAccountId`,
+        message:
+          "Choose the other account of these transfers, such as the bank account a withdrawal goes to.",
+      });
+    }
+    if (fixedCategoryAccountId !== null) {
+      errors.push({
+        path: `${path}.fixedCategoryAccountId`,
+        message:
+          "A transfer has no category: it moves money between two of your own accounts. Remove the category.",
+      });
+    }
+    if (fees.length > 0) {
+      errors.push({
+        path: `${path}.feeTypes`,
+        message:
+          "A transfer section has no fee types. Remove them, or make the section Income, Expense or By sign.",
+      });
+    }
+  }
+
   return {
     section: {
       key,
@@ -754,6 +824,8 @@ function section(
       fixedCategoryAccountId,
       feeTypes: fees,
       extras: extras.ok ? extras.fragment : null,
+      // Only a transfer names one, so no other section carries the key.
+      ...(kind === "transfer" ? { counterAccountId } : {}),
     },
     enumCount: fees.length + (extras.ok ? extras.enumCount : 0),
   };
@@ -856,6 +928,15 @@ export function checkProfile(
     }
   }
 
+  // The account the document is about (FR-058). Optional, except that a
+  // transfer needs it: it is the transfer's other side.
+  const accountId = accountRef(
+    input.accountId,
+    "accountId",
+    errors,
+    "Choose the account from the list, or none.",
+  );
+
   // The sections, and the listed values they add up to.
   const sections: ProfileSection[] = [];
   let enumCount = 0;
@@ -889,6 +970,26 @@ export function checkProfile(
     });
   }
 
+  sections.forEach((section, index) => {
+    if (section.kind !== "transfer") return;
+    const at = `sections[${index}].counterAccountId`;
+    if (accountId === null) {
+      if (!errors.some((error) => error.path === "accountId")) {
+        errors.push({
+          path: "accountId",
+          message:
+            "A transfer section needs the account this document is about, such as the marketplace wallet. Choose it.",
+        });
+      }
+    } else if (section.counterAccountId === accountId) {
+      errors.push({
+        path: at,
+        message:
+          "The other account must be a different account from the one this document is about.",
+      });
+    }
+  });
+
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -898,6 +999,9 @@ export function checkProfile(
       phrases,
       instructions,
       statedTotalLabels,
+      // A profile that names no account carries no key for it, as one saved
+      // before the account existed does.
+      ...(accountId !== null ? { accountId } : {}),
       sections,
     },
   };

@@ -4,6 +4,7 @@ import {
   DocumentType,
   ImportState,
   Role,
+  isTransferType,
 } from "$lib/enums.js";
 import { importItems, importQueue, recordAttachments } from "../db/schema.js";
 import { STORAGE_PATH } from "../env.js";
@@ -14,7 +15,10 @@ import {
   moveToRecordStorage,
   returnToTemp,
 } from "../file-storage.js";
-import { validateImportAccountPair } from "../import/account-policy.js";
+import {
+  validateImportAccountPair,
+  validateTransferPair,
+} from "../import/account-policy.js";
 import { alreadyImportedAtConfirm } from "../import/repeat-file.js";
 import {
   categoryAccountForImport,
@@ -30,9 +34,12 @@ import {
 import type { ReviewFields } from "../import/review-fields.js";
 import {
   settleReviewFields,
+  transferAccountsOf,
+  transferCurrencyReason,
   type ReviewOverrides,
   type SettleRefusal,
 } from "../import/settle-review.js";
+import { mainCurrencyCode } from "../currency/form.js";
 import type {
   LedgerDb,
   RecordCreate,
@@ -129,8 +136,13 @@ export type ImportReviewFields = {
   /** The category account the reader matched, if any. */
   categoryAccountId: number | null;
   remark: string;
-  /** The account that paid or received it. Null means use the default. */
+  /**
+   * The account that paid or received it. Null means use the default. On a
+   * transfer, the account the document is about (FR-058).
+   */
   accountId: number | null;
+  /** A transfer's other account; null or absent for anything else. */
+  counterAccountId?: number | null;
   /** Both accounts, when the reviewer chose them. */
   sides: { fromAccountId: number; toAccountId: number } | null;
   /** A contact the reviewer picked. */
@@ -234,6 +246,9 @@ function writeConfirmation(
   emits: DeferredEmits,
   file: { moved: { from: string; to: string } | null },
 ): Refusable<ImportConfirmed> {
+  if (isTransferType(fields.documentType)) {
+    return writeTransferConfirmation(db, job, fields, root, emits, file);
+  }
   const resolved = resolveSides(db, fields);
   if (!resolved.ok) return resolved;
   const {
@@ -250,27 +265,7 @@ function writeConfirmation(
   // confirm-all run again) changes no row.
   const claimed = job.itemId
     ? claimItem(db, job.jobId, job.itemId, accountId, docCode)
-    : db
-        .update(importQueue)
-        .set({
-          state: ImportState.Confirmed,
-          accountId,
-          documentType: docCode,
-          confirmedAt: new Date().toISOString(),
-        })
-        .where(
-          and(
-            eq(importQueue.id, job.jobId),
-            eq(importQueue.state, ImportState.PendingReview),
-            job.readAt === undefined
-              ? undefined
-              : job.readAt === null
-                ? isNull(importQueue.processedAt)
-                : eq(importQueue.processedAt, job.readAt),
-          ),
-        )
-        .returning({ id: importQueue.id })
-        .get();
+    : claimReceipt(db, job, accountId, docCode);
   if (!claimed) {
     return {
       ok: false,
@@ -310,12 +305,30 @@ function writeConfirmation(
   const created = createRecord(db, job.uploadedBy, sides, emits);
   if (!created.ok) return created;
 
+  finishConfirmation(db, job, fields, root, file, created.value.id, docCode);
+  return { ok: true, value: { record: created.value, uncategorised } };
+}
+
+/**
+ * Attaches the document to the new record and marks what was confirmed as
+ * imported: the item, finishing its group when it was the last, or the
+ * receipt. The same for every kind of record an import makes.
+ */
+function finishConfirmation(
+  db: LedgerDb,
+  job: ImportJobSource,
+  fields: ImportReviewFields,
+  root: string,
+  file: { moved: { from: string; to: string } | null },
+  recordId: number,
+  docCode: number,
+) {
   const attachmentPath = job.itemId
     ? sharedFileForItem(db, job, root, file)
     : movedReceiptFile(job, fields.date, root, file);
   addAttachment(
     db,
-    created.value.id,
+    recordId,
     attachmentPath,
     displayName(attachmentPath),
     // An item's file is the whole document, so it is never searched as this
@@ -327,7 +340,7 @@ function writeConfirmation(
     db.update(importItems)
       .set({
         state: ImportState.Imported,
-        resultId: created.value.id,
+        resultId: recordId,
         resultType: docCode,
         updatedAt: new Date().toISOString(),
       })
@@ -339,15 +352,142 @@ function writeConfirmation(
     db.update(importQueue)
       .set({
         state: ImportState.Imported,
-        resultId: created.value.id,
+        resultId: recordId,
         resultType: docCode,
         completedAt: new Date().toISOString(),
       })
       .where(eq(importQueue.id, job.jobId))
       .run();
   }
+}
 
-  return { ok: true, value: { record: created.value, uncategorised } };
+/**
+ * Every write of confirming a transfer (FR-059): one Transfer record between
+ * its two accounts, with no other party and no category, audited and with the
+ * document attached as any imported record is. Runs inside the caller's
+ * transaction, and claims what it confirms first, as `writeConfirmation` does.
+ *
+ * A transfer is in the main currency at rate 1, the only way the books record
+ * one; a transfer read in another currency is refused here as well as at
+ * review, so no route can get past it.
+ */
+function writeTransferConfirmation(
+  db: LedgerDb,
+  job: ImportJobSource,
+  fields: ImportReviewFields,
+  root: string,
+  emits: DeferredEmits,
+  file: { moved: { from: string; to: string } | null },
+): Refusable<ImportConfirmed> {
+  const docCode = fields.documentType;
+  const main = mainCurrencyCode(db);
+  if (fields.currency.toUpperCase() !== main) {
+    return {
+      ok: false,
+      reason: transferCurrencyReason(fields.currency.toUpperCase(), main),
+    };
+  }
+  if (!fields.sides) {
+    return {
+      ok: false,
+      reason: "Choose both accounts of this transfer before importing it.",
+    };
+  }
+  const from = getAccount(db, fields.sides.fromAccountId);
+  const to = getAccount(db, fields.sides.toAccountId);
+  if (!from || !to) {
+    return { ok: false, reason: "Choose accounts that are still available." };
+  }
+  const pair = validateTransferPair(from, to);
+  if (!pair.ok) return pair;
+  const { accountId, counterAccountId } = transferAccountsOf(docCode, {
+    fromAccountId: from.id,
+    toAccountId: to.id,
+  });
+
+  const claimed = job.itemId
+    ? claimItem(db, job.jobId, job.itemId, accountId, docCode)
+    : claimReceipt(db, job, accountId, docCode);
+  if (!claimed) {
+    return {
+      ok: false,
+      reason: job.itemId
+        ? "This item is no longer waiting for review, so it was not imported again."
+        : RECEIPT_NOT_AS_SHOWN,
+    };
+  }
+  const repeat = alreadyImportedAtConfirm(db, job.jobId);
+  if (repeat) return { ok: false, reason: repeat };
+
+  // The other account as it is confirmed, so the item says what was made.
+  if (job.itemId) {
+    db.update(importItems)
+      .set({ counterAccountId })
+      .where(eq(importItems.id, job.itemId))
+      .run();
+  } else {
+    db.update(importQueue)
+      .set({ counterAccountId })
+      .where(eq(importQueue.id, job.jobId))
+      .run();
+  }
+
+  const created = createRecord(
+    db,
+    job.uploadedBy,
+    {
+      kind: "transfer",
+      fromAccountId: from.id,
+      toAccountId: to.id,
+      date: fields.date,
+      description: fields.description,
+      amount: fields.amount,
+      currency: main,
+      exchangeRate: 1,
+      contactId: null,
+      reference: fields.reference,
+      remark: fields.remark,
+      extractedText: job.itemId ? null : job.extractedText,
+    },
+    emits,
+  );
+  if (!created.ok) return created;
+
+  finishConfirmation(db, job, fields, root, file, created.value.id, docCode);
+  return { ok: true, value: { record: created.value, uncategorised: false } };
+}
+
+/**
+ * Claims a receipt's queue row: it moves out of review only if it is still in
+ * review, and is still the reading the reviewer saw when that is given.
+ */
+function claimReceipt(
+  db: LedgerDb,
+  job: ImportJobSource,
+  accountId: number,
+  docCode: number,
+): { id: string } | undefined {
+  return db
+    .update(importQueue)
+    .set({
+      state: ImportState.Confirmed,
+      accountId,
+      documentType: docCode,
+      confirmedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(importQueue.id, job.jobId),
+        eq(importQueue.state, ImportState.PendingReview),
+        job.readAt === undefined
+          ? undefined
+          : job.readAt === null
+            ? isNull(importQueue.processedAt)
+            : eq(importQueue.processedAt, job.readAt),
+      ),
+    )
+    .returning({ id: importQueue.id })
+    .get();
 }
 
 /**

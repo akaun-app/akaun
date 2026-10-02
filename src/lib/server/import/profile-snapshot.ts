@@ -68,6 +68,7 @@ export function profileSnapshotOf(
       phrases: saved.phrases,
       instructions: saved.instructions,
       statedTotalLabels: saved.statedTotalLabels,
+      accountId: saved.accountId ?? null,
       sections: saved.sections,
     },
   };

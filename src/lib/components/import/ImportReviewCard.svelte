@@ -4,6 +4,7 @@
 	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
 	import ImportSourceAccountSelect from '$lib/components/import/ImportSourceAccountSelect.svelte';
 	import ImportCategoryAccountSelect from '$lib/components/import/ImportCategoryAccountSelect.svelte';
+	import ImportTransferAccountSelect from '$lib/components/import/ImportTransferAccountSelect.svelte';
 	import AmountInput from '$lib/components/ui/AmountInput.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
@@ -15,6 +16,7 @@
 		dupReasonsLabel,
 		editedValue,
 		formatMoney,
+		isTransferRow,
 		readCategoryAccountId,
 		reviewConverted,
 		reviewCurrency,
@@ -23,6 +25,7 @@
 		reviewRateText,
 		sideIsIncome,
 		targetChoices,
+		transferChoices,
 		type ReviewEdits,
 		type ReviewOptions,
 		type ReviewRow
@@ -115,7 +118,10 @@
 	let amountDraft = $state<string | null>(null);
 
 	const main = $derived(mainCurrency());
-	const isIncome = $derived(sideIsIncome(row, options, sourceAccountId));
+	// A transfer between two of the business's own accounts (FR-058): it has
+	// no other party and no category, and both its sides hold money.
+	const transfer = $derived(isTransferRow(row));
+	const isIncome = $derived(!transfer && sideIsIncome(row, options, sourceAccountId));
 	const dup = $derived(!!row.duplicateOf);
 	const currency = $derived(reviewCurrency(row, edits, main));
 	const foreign = $derived(reviewIsForeign(row, edits, main));
@@ -123,6 +129,9 @@
 	const converted = $derived(reviewConverted(row, edits, main));
 	const rateMissing = $derived(reviewRateMissing(row, edits, main));
 	const accountMissing = $derived(sourceAccountId == null || targetAccountId == null);
+	// The books record a transfer in the main currency only (FR-059). The
+	// server refuses one in another currency; the card says why up front.
+	const transferForeign = $derived(transfer && foreign);
 	// The review note asks the reviewer to choose a category. Once they have
 	// picked another one here, or the item is finished, it has nothing left to
 	// ask. The error line already says it when it is the only thing left. The
@@ -131,8 +140,9 @@
 		!done &&
 			!!row.reviewNote &&
 			row.reviewNote !== error &&
-			(row.documentType === 'income' ? sourceAccountId : targetAccountId) ===
-				readCategoryAccountId(row, options)
+			(transfer ||
+				(row.documentType === 'income' ? sourceAccountId : targetAccountId) ===
+					readCategoryAccountId(row, options))
 	);
 	const numEdits = $derived(Object.keys(edits).filter((k) => k !== 'document_type').length);
 
@@ -192,7 +202,11 @@
 	<div class="review-detected">
 		<Upload size={12} />
 		{#if reading}<span class="review-reading">{reading}</span> ·{/if}
-		AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
+		{#if transfer}
+			Read as a transfer between two of your own accounts — check both accounts before importing
+		{:else}
+			AI classified this as {isIncome ? 'income' : 'an expense'} — change the category or edit any field before importing
+		{/if}
 	</div>
 
 	{#if reviewNoteShown}
@@ -221,20 +235,22 @@
 				/>
 			</div>
 
-			<!-- Contact (role follows the chosen category) -->
-			<div class="rfield">
-				<span class="rfield-label">
-					Contact
-					{#if isEdited('contactId') || isEdited('newContactName')}<span class="edited-tag">edited</span>{/if}
-				</span>
-				<ContactSelect
-					role={isIncome ? Role.Customer : Role.Supplier}
-					initialLabel={row.supplier}
-					suggestions={row.matchCandidates}
-					disabled={readonly}
-					onChange={oncontact}
-				/>
-			</div>
+			<!-- Contact (role follows the chosen category). A transfer has none. -->
+			{#if !transfer}
+				<div class="rfield">
+					<span class="rfield-label">
+						Contact
+						{#if isEdited('contactId') || isEdited('newContactName')}<span class="edited-tag">edited</span>{/if}
+					</span>
+					<ContactSelect
+						role={isIncome ? Role.Customer : Role.Supplier}
+						initialLabel={row.supplier}
+						suggestions={row.matchCandidates}
+						disabled={readonly}
+						onChange={oncontact}
+					/>
+				</div>
+			{/if}
 
 			<!-- Amount (main currency; read-only & converted when foreign) -->
 			<div class="rfield">
@@ -291,29 +307,53 @@
 				</div>
 			{/if}
 
-			<!-- Source establishes direction; Target is then narrowed by policy. -->
-			<div class="rfield">
-				<span class="rfield-label">Source account</span>
-				<ImportSourceAccountSelect
-					accounts={options.allAccounts}
-					payableAccountId={options.payableAccountId}
-					value={sourceAccountId}
-					incomeFirst={isIncome}
-					onChange={onsource}
-				/>
-			</div>
+			{#if transfer}
+				<!-- A transfer: the money moves from the first account to the second,
+				     and both hold money (FR-058). Each list leaves out the other side. -->
+				<div class="rfield">
+					<span class="rfield-label">Transfer from</span>
+					<ImportTransferAccountSelect
+						accounts={transferChoices(options, targetAccountId)}
+						value={sourceAccountId}
+						label="Transfer from"
+						onChange={onsource}
+					/>
+				</div>
 
-			<div class="rfield">
-				<span class="rfield-label">
-					Target account
-					{#if isEdited('category')}<span class="edited-tag">edited</span>{/if}
-				</span>
-				<ImportCategoryAccountSelect
-					accounts={targetChoices(options, sourceAccountId)}
-					value={targetAccountId}
-					onChange={ontarget}
-				/>
-			</div>
+				<div class="rfield">
+					<span class="rfield-label">Transfer to</span>
+					<ImportTransferAccountSelect
+						accounts={transferChoices(options, sourceAccountId)}
+						value={targetAccountId}
+						label="Transfer to"
+						onChange={(value) => ontarget(String(value))}
+					/>
+				</div>
+			{:else}
+				<!-- Source establishes direction; Target is then narrowed by policy. -->
+				<div class="rfield">
+					<span class="rfield-label">Source account</span>
+					<ImportSourceAccountSelect
+						accounts={options.allAccounts}
+						payableAccountId={options.payableAccountId}
+						value={sourceAccountId}
+						incomeFirst={isIncome}
+						onChange={onsource}
+					/>
+				</div>
+
+				<div class="rfield">
+					<span class="rfield-label">
+						Target account
+						{#if isEdited('category')}<span class="edited-tag">edited</span>{/if}
+					</span>
+					<ImportCategoryAccountSelect
+						accounts={targetChoices(options, sourceAccountId)}
+						value={targetAccountId}
+						onChange={ontarget}
+					/>
+				</div>
+			{/if}
 
 			<!-- Date -->
 			<div class="rfield">
@@ -374,9 +414,13 @@
 			<span class="merge-note">
 				{#if error}
 					{error}
+				{:else if transferForeign}
+					A transfer is recorded in {main} only, and this one is in {currency}. Record it by hand, or skip it.
 				{:else if accountMissing}
-					Choose both the source and target account before importing it.
-				{:else if !isIncome && sourceAccountId === options.payableAccountId}
+					{transfer
+						? 'Choose both accounts of this transfer before importing it.'
+						: 'Choose both the source and target account before importing it.'}
+				{:else if !transfer && !isIncome && sourceAccountId === options.payableAccountId}
 					Marked as paid personally — owed to the contact above until reimbursed.
 				{:else if note}
 					{note}
@@ -399,7 +443,7 @@
 					</Button>
 				{/if}
 				<Button variant="ghost" size="sm" disabled={busy} onclick={onskip}>Skip</Button>
-				<Button size="sm" disabled={busy || rateMissing || accountMissing} onclick={onconfirm}>
+				<Button size="sm" disabled={busy || rateMissing || accountMissing || transferForeign} onclick={onconfirm}>
 					<Check size={15} />
 					{dup ? 'Import anyway' : 'Confirm & import'}
 				</Button>

@@ -18,6 +18,7 @@ import {
   DefaultAccountPurpose,
   DocumentType,
   ImportState,
+  isTransferType,
 } from "$lib/enums.js";
 import { DOCUMENT_ITEMS_MAX } from "$lib/import-reading.js";
 import { mainCurrencyCode } from "../currency/form.js";
@@ -28,7 +29,9 @@ import { releaseIfUnreferenced } from "../file-storage.js";
 import {
   isImportIncomeTarget,
   isImportPurchaseSource,
+  isImportTransactionAsset,
   validateImportAccountPair,
+  validateTransferPair,
 } from "../import/account-policy.js";
 import {
   categoryChoices,
@@ -46,6 +49,9 @@ import {
 import type { ImportItemEvent } from "../import/job-event.js";
 import {
   documentTypeOf,
+  kindChangeRefusal,
+  transferAccountsOf,
+  transferSidesOf,
   type ReviewOverrides,
   type SettleRefusal,
 } from "../import/settle-review.js";
@@ -76,9 +82,20 @@ const NOT_A_GROUP = "This document is not a group of items waiting for review.";
 const ITEM_GONE = "That item is no longer part of this document.";
 const NOT_WAITING = "This item is no longer waiting for review.";
 
-function kindOf(item: Pick<ImportItemRow, "documentType">) {
+/**
+ * What an item becomes: an expense, an income, or a transfer between two of
+ * the business's own accounts (FR-058). A transfer either way is one kind
+ * here; its direction only says which of its two accounts the money left.
+ */
+function kindOf(
+  item: Pick<ImportItemRow, "documentType">,
+): "income" | "expense" | "transfer" {
+  if (isTransferType(item.documentType)) return "transfer";
   return item.documentType === DocumentType.Income ? "income" : "expense";
 }
+
+const TRANSFER_HAS_NO_CATEGORY =
+  "A transfer has no category: it moves money between two of your own accounts.";
 
 function now() {
   return new Date().toISOString();
@@ -211,6 +228,22 @@ function storedOverrides(
   item: ImportItemRow,
   look: Lookups,
 ): Refusable<ReviewOverrides> {
+  const kind = kindOf(item);
+  if (kind === "transfer") {
+    // A transfer's two accounts, the way the money moved (FR-058).
+    const sides = transferSidesOf(
+      item.documentType ?? DocumentType.TransferOut,
+      item.accountId,
+      item.counterAccountId,
+    );
+    if (!sides) {
+      return {
+        ok: false,
+        reason: "Choose both accounts of this transfer before importing it.",
+      };
+    }
+    return { ok: true, value: { remark: item.remark ?? "", ...sides } };
+  }
   if (item.accountId == null) {
     return {
       ok: false,
@@ -220,7 +253,6 @@ function storedOverrides(
           : "Say which account paid for this before importing it.",
     };
   }
-  const kind = kindOf(item);
   // The stored category counts only while it is still one this kind can be
   // filed under: it may be archived since, or be for the other kind. Then the
   // name is matched again, or the item goes to Uncategorised, as a receipt's
@@ -511,6 +543,9 @@ export function setGroupItemsCategory(
   const look = lookups(db);
   return updateEach(db, jobId, selection, options, (item) => {
     const kind = kindOf(item);
+    if (kind === "transfer") {
+      return { ok: false, reason: TRANSFER_HAS_NO_CATEGORY };
+    }
     const choice = look
       .choices(kind)
       .find((candidate) => candidate.id === categoryAccountId);
@@ -535,11 +570,16 @@ export function setGroupItemsCategory(
   });
 }
 
-type AccountFit = (item: Pick<ImportItemRow, "documentType">) => boolean;
+type AccountFit = (
+  item: Pick<ImportItemRow, "documentType" | "counterAccountId">,
+) => boolean;
 
 /**
  * Whether an account can be the side of an item that paid (an expense) or
- * received (an income): the same lists the receipt card offers.
+ * received (an income): the same lists the receipt card offers. For a
+ * transfer it is the account the document is about, and it must hold money
+ * and differ from the transfer's other account (FR-058), so the group's one
+ * account changes that side of every transfer too.
  */
 function accountFits(db: LedgerDb, account: AccountView): AccountFit {
   const payable = requireAccountDefault(db, DefaultAccountPurpose.Payable);
@@ -555,11 +595,22 @@ function accountFits(db: LedgerDb, account: AccountView): AccountFit {
     account,
     receivable.ok ? receivable.value : null,
   );
-  return (item) => (kindOf(item) === "income" ? forIncome : forExpense);
+  const forTransfer = isImportTransactionAsset(account);
+  return (item) => {
+    const kind = kindOf(item);
+    if (kind === "transfer") {
+      return forTransfer && item.counterAccountId !== account.id;
+    }
+    return kind === "income" ? forIncome : forExpense;
+  };
 }
 
 function accountMisfit(item: Pick<ImportItemRow, "documentType">): string {
-  return kindOf(item) === "income"
+  const kind = kindOf(item);
+  if (kind === "transfer") {
+    return "That account cannot be this transfer's side: it must hold money and differ from the transfer's other account.";
+  }
+  return kind === "income"
     ? "That account cannot receive an income."
     : "That account cannot pay for an expense.";
 }
@@ -715,13 +766,36 @@ function itemChanges(
   const out: Partial<ImportItemRow> = {};
 
   const docCode = documentTypeOf(overrides, item.documentType);
-  if (docCode !== DocumentType.Expense && docCode !== DocumentType.Income) {
+  if (
+    docCode !== DocumentType.Expense &&
+    docCode !== DocumentType.Income &&
+    !isTransferType(docCode)
+  ) {
     return {
       ok: false,
       reason: "Say whether this is an expense or an income.",
     };
   }
+  const kindRefusal = kindChangeRefusal(item.documentType, docCode);
+  if (kindRefusal) return { ok: false, reason: kindRefusal };
   if (overrides.document_type !== undefined) out.documentType = docCode;
+  const transfer = isTransferType(docCode);
+  if (
+    transfer &&
+    (overrides.category !== undefined ||
+      overrides.supplier !== undefined ||
+      overrides.contactId !== undefined ||
+      overrides.newContactName !== undefined)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "A transfer has no other party and no category: it moves money between two of your own accounts.",
+    };
+  }
+  if (!transfer && overrides.counterAccountId != null) {
+    return { ok: false, reason: "Only a transfer has another account." };
+  }
 
   if (overrides.item_name !== undefined) out.itemName = overrides.item_name;
   if (overrides.date !== undefined) {
@@ -769,6 +843,8 @@ function itemChanges(
     const rate = Number(overrides.exchangeRate);
     out.exchangeRate = Number.isFinite(rate) && rate > 0 ? rate : null;
   }
+
+  if (transfer) return transferChanges(db, item, overrides, docCode, out);
 
   const kind = docCode === DocumentType.Income ? "income" : "expense";
   if (overrides.category !== undefined) {
@@ -833,6 +909,8 @@ function itemChanges(
   // from (or received into), as the receipt card offers.
   const finalDoc = out.documentType ?? item.documentType;
   const flipped = isFlip(item, finalDoc);
+  // An expense or an income here: a transfer returned above.
+  const entryKind = { documentType: finalDoc, counterAccountId: null };
   if (overrides.accountId != null) {
     const account = getAccount(db, overrides.accountId);
     if (!account) {
@@ -841,8 +919,8 @@ function itemChanges(
         reason: "Choose an account that is still available.",
       };
     }
-    if (!accountFits(db, account)({ documentType: finalDoc })) {
-      return { ok: false, reason: accountMisfit({ documentType: finalDoc }) };
+    if (!accountFits(db, account)(entryKind)) {
+      return { ok: false, reason: accountMisfit(entryKind) };
     }
     out.accountId = account.id;
   } else if (overrides.accountId === null) {
@@ -851,7 +929,7 @@ function itemChanges(
     // The account was chosen for the other kind. Keep it only if it still fits
     // (a bank account pays and receives); otherwise the item asks for one.
     const account = getAccount(db, item.accountId);
-    if (!account || !accountFits(db, account)({ documentType: finalDoc })) {
+    if (!account || !accountFits(db, account)(entryKind)) {
       out.accountId = null;
     }
   }
@@ -864,6 +942,83 @@ function itemChanges(
     if (overrides.contactId === undefined) out.matchedContactId = null;
   }
 
+  return { ok: true, value: out };
+}
+
+/**
+ * The accounts a set of corrections writes on a transfer item (FR-058), on
+ * top of the plain fields `itemChanges` has already put in `out`. A transfer
+ * has no other party and no category, which `itemChanges` refuses. Its two
+ * accounts may change, both at once as the review card sends them, or one at
+ * a time: the account the document is about (`accountId`) or the other one
+ * (`counterAccountId`). Either way both must hold money and differ. An edit
+ * that names no account checks none, so an account archived since the
+ * reading does not stop a change to the description.
+ */
+function transferChanges(
+  db: LedgerDb,
+  item: ImportItemRow,
+  overrides: ReviewOverrides,
+  docCode: number,
+  out: Partial<ImportItemRow>,
+): Refusable<Partial<ImportItemRow>> {
+  if (
+    (overrides.fromAccountId === undefined) !==
+    (overrides.toAccountId === undefined)
+  ) {
+    return { ok: false, reason: "Choose both accounts of the transfer." };
+  }
+
+  const namesAccount =
+    overrides.fromAccountId !== undefined ||
+    overrides.accountId !== undefined ||
+    overrides.counterAccountId !== undefined;
+  if (!namesAccount) return { ok: true, value: out };
+
+  let accountId = item.accountId;
+  let counterAccountId = item.counterAccountId;
+  if (
+    overrides.fromAccountId !== undefined &&
+    overrides.toAccountId !== undefined
+  ) {
+    ({ accountId, counterAccountId } = transferAccountsOf(docCode, {
+      fromAccountId: overrides.fromAccountId,
+      toAccountId: overrides.toAccountId,
+    }));
+  } else {
+    if (overrides.accountId !== undefined) accountId = overrides.accountId;
+    if (overrides.counterAccountId !== undefined) {
+      counterAccountId = overrides.counterAccountId;
+    }
+  }
+
+  // Each side named in this edit is checked; a side left empty is allowed,
+  // and the item then asks for it (`itemAttention`).
+  if (accountId != null && counterAccountId != null) {
+    const from = getAccount(db, accountId);
+    const to = getAccount(db, counterAccountId);
+    if (!from || !to) {
+      return { ok: false, reason: "Choose accounts that are still available." };
+    }
+    const pair = validateTransferPair(from, to);
+    if (!pair.ok) return pair;
+  } else {
+    for (const id of [accountId, counterAccountId]) {
+      if (id == null) continue;
+      const account = getAccount(db, id);
+      if (!account || !isImportTransactionAsset(account)) {
+        return {
+          ok: false,
+          reason:
+            "Both sides of a transfer must be accounts that hold money, such as a bank account, cash, a card or a wallet.",
+        };
+      }
+    }
+  }
+  if (accountId !== item.accountId) out.accountId = accountId;
+  if (counterAccountId !== item.counterAccountId) {
+    out.counterAccountId = counterAccountId;
+  }
   return { ok: true, value: out };
 }
 

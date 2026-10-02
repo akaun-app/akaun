@@ -20,6 +20,8 @@
 		editedValue,
 		formatMoney,
 		hasProfileChoice,
+		isTransferRow,
+		keepsReadAccount,
 		readAsOfJob,
 		readingLabel,
 		receiptSides,
@@ -60,20 +62,22 @@
 		ready: number;
 		needsAttention: number;
 		confirmed: number;
-		// How many of the confirmed items are income; the rest are expenses.
+		// How many of the confirmed items are income, and how many are transfers;
+		// the rest are expenses. A group from before transfers has no count of them.
 		confirmedIncome: number;
+		confirmedTransfer?: number;
 		skipped: number;
 	};
 
 	/**
 	 * The chip tone of a finished group, from the records it made: income when
 	 * every one is income, expense when every one is an expense, and plain when
-	 * they are mixed or there are none.
+	 * they are mixed, are transfers, or there are none.
 	 */
 	function groupTone(counts: ItemCounts): 'income' | 'expense' | 'mixed' {
 		if (counts.confirmed === 0) return 'mixed';
 		if (counts.confirmedIncome === counts.confirmed) return 'income';
-		if (counts.confirmedIncome === 0) return 'expense';
+		if (counts.confirmedIncome === 0 && !counts.confirmedTransfer) return 'expense';
 		return 'mixed';
 	}
 
@@ -136,6 +140,7 @@
 	const reviewOptions = $derived<ReviewOptions>({
 		allAccounts: data.allAccounts,
 		categoryAccounts: data.categoryAccounts,
+		transferAccounts: data.transferAccounts,
 		payableAccountId: data.payableAccountId,
 		receivableAccountId: data.receivableAccountId,
 		uncategorisedAccountId: data.uncategorisedAccountId,
@@ -149,11 +154,11 @@
 	// Source determines direction. Target is always the narrowed other side.
 	// svelte-ignore state_referenced_locally
 	let sourceAccountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions).source]))
+		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions, keepsReadAccount(j)).source]))
 	);
 	// svelte-ignore state_referenced_locally
 	let targetAccountByJob = $state<Record<string, number | null>>(
-		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions).target]))
+		Object.fromEntries(jobs.map((j) => [j.id, receiptSides(j, reviewOptions, keepsReadAccount(j)).target]))
 	);
 	let sourceAccountTouched = $state<Record<string, boolean>>({});
 	let targetAccountTouched = $state<Record<string, boolean>>({});
@@ -349,7 +354,7 @@
 		// Live extraction may replace an automatic fallback. Only an actual reviewer
 		// choice is protected from subsequent server updates.
 		for (const j of incoming) {
-			const sides = receiptSides(j, reviewOptions);
+			const sides = receiptSides(j, reviewOptions, keepsReadAccount(j));
 			sourceAccountByJob[j.id] = syncImportAccountSelection(
 				sourceAccountByJob[j.id],
 				sides.source,
@@ -465,7 +470,8 @@
 				? {
 						...j,
 						state: 'confirmed' as JobState,
-						documentType: isIncome ? 'income' : 'expense',
+						// A transfer stays a transfer; the accounts chose the kind of anything else.
+						documentType: isTransferRow(j) ? j.documentType : isIncome ? 'income' : 'expense',
 						// The reply names the new record, so the history row can link to it
 						// before the live update arrives.
 						resultId: typeof result.id === 'number' ? result.id : j.resultId,
@@ -583,6 +589,16 @@
 
 	function setSourceAccount(jobId: string, value: number): void {
 		const job = jobs.find((candidate) => candidate.id === jobId);
+		if (job && isTransferRow(job)) {
+			// A transfer (FR-058): the other side stays, unless it is now the same account.
+			sourceAccountByJob[jobId] = value;
+			sourceAccountTouched[jobId] = true;
+			if (targetAccountByJob[jobId] === value) {
+				targetAccountByJob[jobId] = null;
+				targetAccountTouched[jobId] = true;
+			}
+			return;
+		}
 		const wasIncome = job ? jobIsIncome(job) : false;
 		sourceAccountByJob[jobId] = value;
 		sourceAccountTouched[jobId] = true;
@@ -631,10 +647,16 @@
 		else fetchJobRate(jobId);
 	}
 
+	/** What a finished receipt became, for its chip. */
+	function historyKind(job: Job): { label: string; tone: 'income' | 'expense' | 'mixed' } {
+		if (isTransferRow(job)) return { label: 'Transfer', tone: 'mixed' };
+		return job.documentType === 'income' ? { label: 'Income', tone: 'income' } : { label: 'Expense', tone: 'expense' };
+	}
+
 	function bucketPath(job: Job): string {
 		if (!job.date) return '—';
 		const [y, m] = job.date.split('-');
-		const base = job.documentType === 'income' ? 'income' : 'expenses';
+		const base = isTransferRow(job) ? 'transfers' : job.documentType === 'income' ? 'income' : 'expenses';
 		return `${base}/${y}/${m}`;
 	}
 
@@ -936,10 +958,11 @@
 									<span>{displayTitle(job)}</span>
 									<span
 										class="type-chip"
-										class:income={job.documentType === 'income'}
-										class:expense={job.documentType !== 'income'}
+										class:income={historyKind(job).tone === 'income'}
+										class:expense={historyKind(job).tone === 'expense'}
+										class:mixed={historyKind(job).tone === 'mixed'}
 									>
-										{job.documentType === 'income' ? 'Income' : 'Expense'}
+										{historyKind(job).label}
 									</span>
 								</div>
 								{#if jobReading(job)}<span class="history-reading">{jobReading(job)}</span>{/if}

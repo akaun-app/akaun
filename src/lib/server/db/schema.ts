@@ -270,7 +270,8 @@ export const llmProviders = sqliteTable("llm_providers", {
  */
 function reviewColumns() {
   return {
-    // DocumentType code (1 = expense, 2 = income). See enums.ts. On an item it
+    // DocumentType code (1 = expense, 2 = income, 3 and 4 = a transfer out of
+    // or into the account the document is about). See enums.ts. On an item it
     // is the item's kind: set by its section, or by the sign of its amount.
     documentType: integer("document_type"),
     itemName: text("item_name"),
@@ -318,6 +319,16 @@ function reviewColumns() {
     // the reviewer to look at. Choosing a category clears it. Null when there
     // is nothing to say, as for every receipt.
     reviewNote: text("review_note"),
+    // The other side of a transfer (006 FR-058): the account money moved to
+    // from `account_id`, or came from into it, as `document_type` says. Null
+    // for an expense or an income, which name a category instead, and for
+    // every receipt.
+    counterAccountId: integer("counter_account_id").references(
+      () => accounts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
   };
 }
 
@@ -481,6 +492,11 @@ export const importProfiles = sqliteTable("import_profiles", {
   statedTotalLabelsJson: text("stated_total_labels_json")
     .notNull()
     .default("{}"),
+  // The rest of the profile's form that is about the whole document, as a
+  // JSON object: `accountId`, the account the document is about (the
+  // marketplace wallet of a wallet report, FR-058), and later the table
+  // layout of a spreadsheet (FR-053). "{}" names neither.
+  optionsJson: text("options_json").notNull().default("{}"),
   // A disabled profile is not offered under "Read as" (US6 AS12).
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   createdBy: integer("created_by").references(() => users.id, {

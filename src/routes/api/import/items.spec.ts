@@ -517,6 +517,7 @@ describe("confirming every item", () => {
       needsAttention: 0,
       confirmed: 1,
       confirmedIncome: 0,
+      confirmedTransfer: 0,
       skipped: 0,
     });
     expect(sentJob).not.toHaveProperty("extractedText");
@@ -1064,6 +1065,7 @@ describe("editing items", () => {
       needsAttention: 1,
       confirmed: 0,
       confirmedIncome: 0,
+      confirmedTransfer: 0,
       skipped: 1,
     });
     expect(jobs[0]).not.toHaveProperty("extractedText");

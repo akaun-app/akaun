@@ -16,10 +16,12 @@ export type ImportGroupCounts = {
   needsAttention: number;
   confirmed: number;
   /**
-   * How many of the confirmed items are income; the rest are expenses. The
-   * history row colours a finished group by what its records are.
+   * How many of the confirmed items are income. The history row colours a
+   * finished group by what its records are.
    */
   confirmedIncome: number;
+  /** How many of the confirmed items are transfers (FR-058). */
+  confirmedTransfer: number;
   skipped: number;
 };
 

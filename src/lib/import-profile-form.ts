@@ -53,6 +53,8 @@ export interface SectionForm {
   feeTypes: FeeTypeForm[];
   /** "Advanced: extra fields" as typed. Empty means none. */
   extrasText: string;
+  /** A transfer section's other account (FR-058); null for any other kind. */
+  counterAccountId: number | null;
 }
 
 export interface ProfileForm {
@@ -66,6 +68,8 @@ export interface ProfileForm {
    * different lines, so each mode has its own.
    */
   statedTotals: Record<ProfileSectionMode, string>;
+  /** The account the document is about (FR-058), or null for none. */
+  accountId: number | null;
   sections: SectionForm[];
 }
 
@@ -134,6 +138,7 @@ export function newSection(
     fixedCategoryAccountId: null,
     feeTypes: [],
     extrasText: "",
+    counterAccountId: null,
   };
 }
 
@@ -150,6 +155,7 @@ export function blankForm(): ProfileForm {
     phrases: [],
     instructions: "",
     statedTotals: noStatedTotals(),
+    accountId: null,
     sections: [newSection()],
   };
 }
@@ -170,6 +176,7 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
       [ImportMode.EveryTransaction]:
         draft.statedTotalLabels[ImportMode.EveryTransaction] ?? "",
     },
+    accountId: draft.accountId ?? null,
     sections: draft.sections.map((section) => ({
       uid: newUid(),
       key: section.key,
@@ -186,6 +193,7 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
         categoryAccountId: feeType.categoryAccountId,
       })),
       extrasText: section.extras ? JSON.stringify(section.extras, null, 2) : "",
+      counterAccountId: section.counterAccountId ?? null,
     })),
   };
 }
@@ -236,6 +244,7 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
     phrases: form.phrases,
     instructions: form.instructions,
     statedTotalLabels,
+    accountId: form.accountId,
     sections: form.sections.map((section, index) => ({
       key: keys[index],
       name: section.name,
@@ -249,6 +258,10 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
         categoryAccountId: feeType.categoryAccountId,
       })),
       extras: section.extrasText,
+      // Sent only for a transfer, the one kind that names it.
+      ...(section.kind === "transfer"
+        ? { counterAccountId: section.counterAccountId }
+        : {}),
     })),
   };
 }

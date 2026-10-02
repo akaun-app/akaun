@@ -10,11 +10,12 @@
  */
 
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { DocumentType, ImportState } from "$lib/enums.js";
+import { DocumentType, ImportState, isTransferType } from "$lib/enums.js";
 import { mainCurrencyCode } from "../currency/form.js";
 import { importItems, importQueue } from "../db/schema.js";
 import type { LedgerDb } from "../ledger/types.js";
 import { importEvents } from "./events.js";
+import { transferCurrencyReason } from "./settle-review.js";
 import {
   itemForEvent,
   jobForEvent,
@@ -36,7 +37,11 @@ const WAITING: number[] = [ImportState.PendingReview, ImportState.Confirmed];
  * - A possible duplicate: the reviewer must look at it and confirm it on its
  *   own, which is the "Import anyway" a receipt card offers.
  * - A foreign currency with no exchange rate: the record cannot be valued.
- * - No account that paid or received it: the record cannot be built.
+ * - A transfer in another currency: the books record a transfer at one rate
+ *   between the business's own accounts, so it cannot be imported as it is
+ *   (FR-059).
+ * - No account that paid or received it, or for a transfer either of its two
+ *   accounts: the record cannot be built.
  * - A note from the reading, such as a fee type's tied category that is for
  *   the other kind (FR-034): the category it has instead is a guess the
  *   reviewer should check. Choosing a category clears the note.
@@ -51,6 +56,7 @@ export function itemAttention(
     | "accountId"
     | "documentType"
     | "reviewNote"
+    | "counterAccountId"
   >,
   mainCurrency: string,
 ): string | null {
@@ -59,6 +65,15 @@ export function itemAttention(
     return "It may already be in the books. Open it and choose Import anyway if it is a separate transaction.";
   }
   const currency = (item.currency ?? mainCurrency).toUpperCase();
+  if (isTransferType(item.documentType)) {
+    if (currency !== mainCurrency) {
+      return transferCurrencyReason(currency, mainCurrency);
+    }
+    if (item.accountId == null || item.counterAccountId == null) {
+      return "Choose both accounts of this transfer.";
+    }
+    return item.reviewNote ?? null;
+  }
   if (
     currency !== mainCurrency &&
     !(item.exchangeRate != null && item.exchangeRate > 0)
@@ -102,6 +117,7 @@ export function groupCounts(
         needsAttention: 0,
         confirmed: 0,
         confirmedIncome: 0,
+        confirmedTransfer: 0,
         skipped: 0,
       };
       counts.set(jobId, found);
@@ -140,6 +156,8 @@ export function groupCounts(
         c.confirmed += row.n;
         if (row.documentType === DocumentType.Income) {
           c.confirmedIncome += row.n;
+        } else if (isTransferType(row.documentType)) {
+          c.confirmedTransfer += row.n;
         }
       }
     }
@@ -154,6 +172,7 @@ export function groupCounts(
         accountId: importItems.accountId,
         documentType: importItems.documentType,
         reviewNote: importItems.reviewNote,
+        counterAccountId: importItems.counterAccountId,
       })
       .from(importItems)
       .where(

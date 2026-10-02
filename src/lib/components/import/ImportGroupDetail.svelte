@@ -25,6 +25,7 @@
 		extraFieldsShown,
 		dupMessage,
 		formatMoney,
+		isTransferRow,
 		itemSides,
 		readAsOfJob,
 		readingLabel,
@@ -97,6 +98,7 @@
 	const options = $derived<ReviewOptions>({
 		allAccounts: data.allAccounts,
 		categoryAccounts: data.categoryAccounts,
+		transferAccounts: data.transferAccounts,
 		payableAccountId: data.payableAccountId,
 		receivableAccountId: data.receivableAccountId,
 		uncategorisedAccountId: data.uncategorisedAccountId,
@@ -112,6 +114,26 @@
 		if (isDone(item)) return 'import-confirmed';
 		if (item.state === 'skipped') return 'import-skipped';
 		return item.attention ? 'import-attention' : 'import-ready';
+	}
+
+	/** What an item becomes: an expense, an income, or a transfer (FR-058). */
+	type Kind = 'expense' | 'income' | 'transfer';
+	function kindOf(item: Pick<Item, 'documentType'>): Kind {
+		if (isTransferRow(item)) return 'transfer';
+		return item.documentType === 'income' ? 'income' : 'expense';
+	}
+	const KINDS: Kind[] = ['expense', 'income', 'transfer'];
+	const KIND_LABELS: Record<Kind, string> = { expense: 'Expense', income: 'Income', transfer: 'Transfer' };
+
+	/**
+	 * What the Category column says. A transfer has no category, so it names its
+	 * other account there, and which way the money went (FR-058).
+	 */
+	function categoryCell(item: Item): string {
+		if (!isTransferRow(item)) return item.category || '—';
+		const other = accountName(item.counterAccountId);
+		if (!other) return '—';
+		return item.documentType === 'transfer_in' ? `From ${other}` : `To ${other}`;
 	}
 
 	function itemTitle(item: Item): string {
@@ -190,6 +212,10 @@
 	let filter = $state<Filter>('all');
 	// One section of the profile, or '' for every section (FR-017).
 	let sectionFilter = $state('');
+	// One kind, or '' for every kind. Offered when the group holds more than one.
+	let kindFilter = $state<Kind | ''>('');
+	const kindsPresent = $derived(new Set(items.map(kindOf)));
+	const showKinds = $derived(kindsPresent.size > 1);
 	let pageNo = $state(1);
 
 	function matches(item: Item, f: Filter): boolean {
@@ -210,7 +236,12 @@
 	}
 
 	// The items of the chosen section; the status tabs count within it.
-	const inSection = $derived(sectionFilter ? items.filter((item) => item.sectionKey === sectionFilter) : items);
+	const inSection = $derived(
+		items.filter(
+			(item) =>
+				(!sectionFilter || item.sectionKey === sectionFilter) && (!kindFilter || kindOf(item) === kindFilter)
+		)
+	);
 	const tabCounts = $derived.by(() => {
 		const tally: Record<Filter, number> = { all: 0, ready: 0, attention: 0, duplicate: 0, confirmed: 0, skipped: 0 };
 		for (const item of inSection) for (const [id] of FILTERS) if (matches(item, id)) tally[id]++;
@@ -238,6 +269,14 @@
 	}
 	const sectionLabel = $derived(sectionFilter ? (sectionNames.get(sectionFilter) ?? 'Section') : 'All sections');
 
+	// The select holds text; this stands for "every kind".
+	const ALL_KINDS = '*';
+	function setKindFilter(next: string) {
+		kindFilter = next === 'expense' || next === 'income' || next === 'transfer' ? next : '';
+		pageNo = 1;
+	}
+	const kindLabel = $derived(kindFilter ? KIND_LABELS[kindFilter] : 'All kinds');
+
 	// A filtered view is a thing people send each other, so it survives being
 	// copied out of the address bar. The URL is written from the state, never the
 	// other way round after the first read.
@@ -249,6 +288,8 @@
 		if (show && FILTERS.some(([id]) => id === show)) filter = show as Filter;
 		const section = q.get('section');
 		if (section && data.sections.some((candidate) => candidate.key === section)) sectionFilter = section;
+		const kind = q.get('kind');
+		if (kind === 'expense' || kind === 'income' || kind === 'transfer') kindFilter = kind;
 		const p = Number(q.get('page'));
 		if (Number.isInteger(p) && p > 1) pageNo = p;
 	}
@@ -258,6 +299,7 @@
 		const q = new SvelteURLSearchParams();
 		if (filter !== 'all') q.set('show', filter);
 		if (sectionFilter) q.set('section', sectionFilter);
+		if (kindFilter) q.set('kind', kindFilter);
 		if (currentPage > 1) q.set('page', String(currentPage));
 		const query = q.toString();
 		// The live address, not page.url: a shallow replaceState does not
@@ -534,7 +576,13 @@
 
 	function onSource(item: Item, value: number) {
 		const current = sidesOf(item);
-		void saveSides(item.id, value, targetAfterSourceChange(options, value, current.target));
+		// A transfer's other side stays, unless it is now the same account.
+		const target = isTransferRow(item)
+			? current.target === value
+				? null
+				: current.target
+			: targetAfterSourceChange(options, value, current.target);
+		void saveSides(item.id, value, target);
 	}
 
 	function onTarget(item: Item, raw: string) {
@@ -738,12 +786,21 @@
 	const kinds = $derived.by(() => {
 		const pool = items.some(isWaiting) ? items.filter(isWaiting) : items;
 		return {
-			expense: pool.some((item) => item.documentType !== 'income'),
-			income: pool.some((item) => item.documentType === 'income')
+			expense: pool.some((item) => kindOf(item) === 'expense'),
+			income: pool.some((item) => kindOf(item) === 'income'),
+			transfer: pool.some((item) => kindOf(item) === 'transfer')
 		};
 	});
+	// With transfers among the items, the one account is the account the
+	// document is about: it pays, receives, and is one side of each transfer.
 	const accountLabel = $derived(
-		kinds.expense && kinds.income ? 'Paid from or received into' : kinds.income ? 'Received into' : 'Paid from'
+		kinds.transfer
+			? 'Statement account'
+			: kinds.expense && kinds.income
+				? 'Paid from or received into'
+				: kinds.income
+					? 'Received into'
+					: 'Paid from'
 	);
 	/**
 	 * The accounts an item of this group can be paid from or received into: the
@@ -756,6 +813,10 @@
 		if (kinds.income) {
 			const shown = new Set(groups.flatMap((g) => g.accounts.map((a) => a.id)));
 			groups.push({ label: 'Received into', accounts: data.accounts.filter((a) => !shown.has(a.id)) });
+		}
+		if (kinds.transfer) {
+			const shown = new Set(groups.flatMap((g) => g.accounts.map((a) => a.id)));
+			groups.push({ label: 'Transfer', accounts: data.transferAccounts.filter((a) => !shown.has(a.id)) });
 		}
 		return groups.filter((g) => g.accounts.length > 0);
 	});
@@ -795,9 +856,10 @@
 	const categoryGroups = $derived.by(() => {
 		const groups: { label: string; choices: { id: number; name: string }[] }[] = [];
 		const pool = selectedItems.length > 0 ? selectedItems : items.filter(isWaiting);
-		if (pool.some((item) => item.documentType !== 'income'))
+		// A transfer has no category, so it adds no list.
+		if (pool.some((item) => kindOf(item) === 'expense'))
 			groups.push({ label: 'Expense', choices: data.expenseCategories });
-		if (pool.some((item) => item.documentType === 'income'))
+		if (pool.some((item) => kindOf(item) === 'income'))
 			groups.push({ label: 'Income', choices: data.incomeCategories });
 		return groups;
 	});
@@ -937,6 +999,22 @@
 						</button>
 					{/each}
 				</div>
+				{#if showKinds}
+					<!-- Expenses, income and transfers in one document: one kind at a time. -->
+					<div class="section-filter">
+						<Select.Root type="single" value={kindFilter || ALL_KINDS} onValueChange={setKindFilter}>
+							<Select.Trigger class="rinput w-full" aria-label="Kind">{kindLabel}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value={ALL_KINDS} label="All kinds" />
+								{#each KINDS as kind (kind)}
+									{#if kindsPresent.has(kind)}
+										<Select.Item value={kind} label={KIND_LABELS[kind]} />
+									{/if}
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				{/if}
 				{#if showSections}
 					<!-- Read with a profile of several sections: one section at a time (FR-017). -->
 					<div class="section-filter">
@@ -1013,10 +1091,15 @@
 									{/if}
 								</td>
 								<td data-label="Other party">{item.supplier || '—'}</td>
-								<td data-label="Category">{item.category || '—'}</td>
+								<td data-label="Category">{categoryCell(item)}</td>
 								<td data-label="Kind">
-									<span class="type-chip" class:income={item.documentType === 'income'} class:expense={item.documentType !== 'income'}>
-										{item.documentType === 'income' ? 'Income' : 'Expense'}
+									<span
+										class="type-chip"
+										class:income={kindOf(item) === 'income'}
+										class:expense={kindOf(item) === 'expense'}
+										class:mixed={kindOf(item) === 'transfer'}
+									>
+										{KIND_LABELS[kindOf(item)]}
 									</span>
 								</td>
 								<td class="td-status" data-label="Status">

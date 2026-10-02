@@ -156,6 +156,11 @@ export interface DocumentItem {
    */
   categoryCandidates: number[];
   /**
+   * A transfer's other account, from its section (FR-058). Null for an
+   * income or an expense.
+   */
+  counterAccountId: number | null;
+  /**
    * The category the item's fee type is tied to, when it is tied to one. The
    * worker says on the item when it could not be used (FR-034), for example an
    * income category on a line a by-sign section reads as an expense.
@@ -424,7 +429,8 @@ function sharedKind(
           ? DocumentType.Income
           : section.kind === "expense"
             ? DocumentType.Expense
-            : null,
+            : // By sign and transfer: each line's own sign says.
+              null,
     ),
   );
   if (kinds.size !== 1 || kinds.has(null)) return null;
@@ -500,8 +506,9 @@ export function readingFromEnvelope(
     // Which sign the section's own lines carry, from the lines it can keep.
     // Only a section of one kind has one; a by-sign section takes both.
     const keptAmounts = amounts.filter((_, index) => typed(lines[index]));
+    // A by-sign or transfer section takes both signs: the sign is the kind.
     const charges =
-      section.kind === "by_sign"
+      section.kind === "by_sign" || section.kind === "transfer"
         ? 1
         : section.kind === "document"
           ? chargeSign(keptAmounts, printedTotal)
@@ -522,6 +529,10 @@ export function readingFromEnvelope(
       let kind: DocumentTypeCode;
       if (section.kind === "by_sign") {
         kind = minor > 0 ? DocumentType.Income : DocumentType.Expense;
+      } else if (section.kind === "transfer") {
+        // A minus left the document's account; anything else came into it
+        // (FR-058). The amount is kept without its sign, as for the others.
+        kind = minor < 0 ? DocumentType.TransferOut : DocumentType.TransferIn;
       } else {
         // Against the sign of the section's lines: a credit, discount or
         // refund among charges, or a deduction among sales. It is not
@@ -561,17 +572,23 @@ export function readingFromEnvelope(
         feeType: line.fee_type ?? null,
         categoryAccountId: categoryCandidates[0] ?? null,
         categoryCandidates,
+        counterAccountId:
+          section.kind === "transfer"
+            ? (section.counterAccountId ?? null)
+            : null,
         tiedCategoryAccountId: tiedCategoryFor(section, line),
         extras: line.extras ?? null,
       });
     });
   }
 
-  // Income counts as plus and expenses as minus (FR-013).
+  // Income and money transferred in count as plus, expenses and money
+  // transferred out as minus (FR-013).
   const itemsTotalMinor = items.reduce(
     (sum, item) =>
       sum +
-      (item.kind === DocumentType.Income
+      (item.kind === DocumentType.Income ||
+      item.kind === DocumentType.TransferIn
         ? item.amountMinor
         : -item.amountMinor),
     0,

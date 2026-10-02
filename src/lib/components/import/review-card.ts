@@ -37,7 +37,11 @@ export type ReviewEdits = Record<string, string | number>;
 /** The review fields of a receipt or an item, as the screen holds them. */
 export type ReviewRow = {
   id: string;
-  /** "expense" or "income", as read; null when the reading did not say. */
+  /**
+   * "expense" or "income", as read, or "transfer_out" / "transfer_in" for an
+   * item of a profile's transfer section (006 FR-058); null when the reading
+   * did not say.
+   */
   documentType: string | null;
   itemName: string | null;
   supplier: string | null;
@@ -62,12 +66,19 @@ export type ReviewRow = {
    * there is nothing to say.
    */
   reviewNote: string | null;
+  /**
+   * A transfer's other account: where the money went from `accountId`, or
+   * came from. Null for anything else.
+   */
+  counterAccountId: number | null;
 };
 
 /** The accounts and defaults a review card chooses from. */
 export type ReviewOptions = {
   allAccounts: AccountView[];
   categoryAccounts: AccountView[];
+  /** The accounts either side of a transfer can be: those that hold money. */
+  transferAccounts: AccountView[];
   payableAccountId: number | null;
   receivableAccountId: number | null;
   uncategorisedAccountId: number | null;
@@ -110,6 +121,7 @@ export function reviewRowFrom(raw: any): ReviewRow {
     duplicateConfidence: raw.duplicateConfidence ?? null,
     duplicateReasons: parseList<string>(raw.duplicateReasons),
     reviewNote: raw.reviewNote ?? null,
+    counterAccountId: raw.counterAccountId ?? null,
   };
 }
 
@@ -237,6 +249,7 @@ const DUP_REASON_LABELS: Record<string, string> = {
   supplier: "supplier",
   filename: "filename",
   content: "content",
+  accounts: "accounts",
 };
 
 export function dupReasonsLabel(row: ReviewRow): string {
@@ -250,6 +263,37 @@ export function dupMessage(row: ReviewRow): string {
 }
 
 // ── Accounts ────────────────────────────────────────────────────────────────
+
+/** Whether a row is a transfer between two of the business's own accounts. */
+export function isTransferRow(row: Pick<ReviewRow, "documentType">): boolean {
+  return (
+    row.documentType === "transfer_out" || row.documentType === "transfer_in"
+  );
+}
+
+/**
+ * A transfer's two accounts as the card shows them, the money moving from the
+ * source to the target: out of the document's account (`accountId`) to the
+ * other one, or into it from there.
+ */
+// Mirrors src/lib/server/import/settle-review.ts's transferSidesOf — the card
+// sends the pair back as fromAccountId/toAccountId, which the server turns
+// into the two columns again, so both must read the direction the same way.
+export function transferSides(
+  row: Pick<ReviewRow, "documentType" | "accountId" | "counterAccountId">,
+): { source: number | null; target: number | null } {
+  return row.documentType === "transfer_in"
+    ? { source: row.counterAccountId, target: row.accountId }
+    : { source: row.accountId, target: row.counterAccountId };
+}
+
+/** The accounts a transfer's side may be: any that holds money but the other side. */
+export function transferChoices(
+  options: ReviewOptions,
+  otherSide: number | null,
+): AccountView[] {
+  return options.transferAccounts.filter((account) => account.id !== otherSide);
+}
 
 /**
  * The category account a row was read under: its own when that is still one of
@@ -300,21 +344,30 @@ export function readCategoryAccountId(
  * direction: an income starts from its category, an expense from Accounts
  * Payable (an imported document proves an amount is owed, not that it was
  * paid).
+ *
+ * `keepReadAccount` is for a document read with a profile that gave one item
+ * (FR-009): the reading chose its account, which is the profile's own account
+ * when it names one (FR-008), so the card starts there instead. A receipt read
+ * the standard way starts as it always has (FR-004).
  */
 export function receiptSides(
   row: ReviewRow,
   options: ReviewOptions,
+  keepReadAccount = false,
 ): { source: number | null; target: number | null } {
+  // A document read with a profile that gave one transfer (FR-009).
+  if (isTransferRow(row)) return transferSides(row);
+  const read = keepReadAccount ? row.accountId : null;
   if (row.documentType === "income") {
     return {
       source:
         initialCategoryAccountId(row, options) ??
         options.uncategorisedIncomeAccountId,
-      target: options.receivableAccountId ?? row.accountId ?? null,
+      target: read ?? options.receivableAccountId ?? row.accountId ?? null,
     };
   }
   return {
-    source: options.payableAccountId ?? row.accountId ?? null,
+    source: read ?? options.payableAccountId ?? row.accountId ?? null,
     target:
       initialCategoryAccountId(row, options) ?? options.uncategorisedAccountId,
   };
@@ -330,6 +383,7 @@ export function itemSides(
   row: ReviewRow,
   options: ReviewOptions,
 ): { source: number | null; target: number | null } {
+  if (isTransferRow(row)) return transferSides(row);
   if (row.documentType === "income") {
     return {
       source:
@@ -444,6 +498,18 @@ export function describeReading(job: ReadingOf): string {
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).
   return `Standard reading${pickedBy(job.readHow)}`;
+}
+
+/**
+ * Whether a one-item card keeps the account its reading chose: a document
+ * read with a profile, which may name the account its items start on (FR-008).
+ * See `receiptSides`.
+ */
+export function keepsReadAccount(job: ReadingOf): boolean {
+  return (
+    job.readAs === ImportReadAs.Profile ||
+    job.readHow === ImportReadHow.Detected
+  );
 }
 
 /** Whether a document is, or was, read the standard way (one record). */

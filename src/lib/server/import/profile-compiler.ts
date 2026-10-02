@@ -190,8 +190,16 @@ const ERRORS_SHOWN = 10;
  *   header, as it does for a receipt. The built-in reading uses this.
  * - `income` / `expense`: every line of the section is that kind.
  * - `by_sign`: a positive amount is income and a negative one an expense.
+ * - `transfer`: money moved between the profile's account and the section's
+ *   other account; a negative amount left the profile's account, a positive
+ *   one came into it (FR-058). Only a saved profile has one.
  */
-export type SectionKind = "document" | "income" | "expense" | "by_sign";
+export type SectionKind =
+  | "document"
+  | "income"
+  | "expense"
+  | "by_sign"
+  | "transfer";
 
 /** One fee type a section lists, and the category it is tied to. */
 export interface FeeTypeSpec {
@@ -236,6 +244,11 @@ export interface SectionSpec {
   categoryFromModel: boolean;
   /** More fields to read for each line. Flat: text, numbers or true/false. */
   extras?: Record<string, FieldSpec>;
+  /**
+   * A transfer section's other account (FR-058). Code uses it after the
+   * reading; the model is never told of it.
+   */
+  counterAccountId?: number | null;
 }
 
 /** Everything a reading needs to know about what to read. */
@@ -272,6 +285,12 @@ export interface ReadingProfile {
    * fee type list that decides which lines count.
    */
   schemaRequired?: boolean;
+  /**
+   * The account the document is about, when a saved profile names one
+   * (FR-008, FR-058): every item starts on it, and it is one side of every
+   * transfer. Code uses it after the reading; it is not part of the schema.
+   */
+  documentAccountId?: number | null;
   sections: readonly SectionSpec[];
 }
 
@@ -577,6 +596,8 @@ const KIND_GUIDANCE: Record<ProfileSectionKind, string> = {
   expense: "Every line of this section is money the user pays out.",
   by_sign:
     "A line printed as a deduction (with a minus sign or in brackets) is money the user pays out; any other line is money the user receives. Keep each amount's sign as printed.",
+  transfer:
+    "Every line of this section is money moved between this document's account and another account of the user's own, such as a withdrawal to the bank. It is neither income nor an expense. Keep each amount's sign as printed: a minus sign or brackets means the money left this document's account.",
 };
 
 /** What the model is told about one section's lines. */
@@ -642,9 +663,12 @@ export function savedReadingProfile(
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
       }));
-      const categoryFromModel = feeTypes.length
-        ? feeTypes.some((feeType) => feeType.categoryAccountId == null)
-        : section.fixedCategoryAccountId == null;
+      // A transfer has no category, so the model is never asked for one.
+      const categoryFromModel =
+        section.kind !== "transfer" &&
+        (feeTypes.length
+          ? feeTypes.some((feeType) => feeType.categoryAccountId == null)
+          : section.fixedCategoryAccountId == null);
       const extras: Record<string, FieldSpec> = {};
       for (const field of extraFieldsOf(section.extras)) {
         extras[field.key] = extraSpec(field);
@@ -662,6 +686,9 @@ export function savedReadingProfile(
         fixedCategoryAccountId: section.fixedCategoryAccountId,
         categoryFromModel,
         ...(Object.keys(extras).length ? { extras } : {}),
+        ...(section.kind === "transfer"
+          ? { counterAccountId: section.counterAccountId ?? null }
+          : {}),
       };
     });
   if (sections.length === 0) throw new ProfileModeError(saved.name, mode);
@@ -676,6 +703,7 @@ export function savedReadingProfile(
       ? `The figure the document prints for: ${label}. It is the total of exactly the lines read under sections. Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.`
       : null,
     schemaRequired: true,
+    documentAccountId: saved.accountId ?? null,
     sections,
   };
   const wire = toWireSchema(envelopeField(profile));

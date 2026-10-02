@@ -7,6 +7,7 @@ import { importQueue } from "$lib/server/db/schema.js";
 import {
   isImportIncomeTarget,
   isImportPurchaseSource,
+  isImportTransactionAsset,
 } from "$lib/server/import/account-policy.js";
 import { categoryChoices } from "$lib/server/import/category-accounts.js";
 import { jobEvents } from "$lib/server/import/group-state.js";
@@ -222,6 +223,9 @@ function reviewOptions(database: LedgerDb) {
   const incomeReceiptAccounts = allAccounts.filter((account) =>
     isImportIncomeTarget(account, receivableAccount?.id ?? null),
   );
+  // The accounts either side of a transfer can be (FR-058): the ones that
+  // hold money. Sent from here so no screen copies the rule.
+  const transferAccounts = allAccounts.filter(isImportTransactionAsset);
   const categoryIds = new Set(
     [...expenseChoices, ...incomeChoices].map((choice) => choice.id),
   );
@@ -234,6 +238,7 @@ function reviewOptions(database: LedgerDb) {
     allAccounts,
     accounts: incomeReceiptAccounts,
     expensePaymentAccounts,
+    transferAccounts,
     payableAccountId: payableAccount?.id ?? null,
     receivableAccountId: receivableAccount?.id ?? null,
     uncategorisedAccountId: uncategorised.ok ? uncategorised.value : null,

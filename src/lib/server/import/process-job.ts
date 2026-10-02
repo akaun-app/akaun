@@ -33,6 +33,7 @@ import {
   DocumentType,
   ImportState,
   documentTypeEnum,
+  isTransferType,
   type ImportStateCode,
 } from "$lib/enums.js";
 import {
@@ -84,6 +85,10 @@ import { callLLMWithProviders } from "./llm.js";
 import { detectProfile } from "./profile-detect.js";
 import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
 import { alreadyImported } from "./repeat-file.js";
+import {
+  detectTransferDuplicates,
+  type TransferProbe,
+} from "./transfer-duplicates.js";
 import type { LLMCallParams } from "./providers/types.js";
 import {
   ProfileModeError,
@@ -731,9 +736,12 @@ async function readReceipt(
   const fields = await buildReviewFields(
     db,
     {
+      // A receipt is an expense or an income, never a transfer (FR-059):
+      // only a profile's transfer section reads one.
       documentType:
-        documentTypeEnum.fromLabel(result.document_type) ??
-        DocumentType.Expense,
+        documentTypeEnum.fromLabel(result.document_type) === DocumentType.Income
+          ? DocumentType.Income
+          : DocumentType.Expense,
       itemName: result.item_name,
       supplier: result.supplier,
       amount: result.amount,
@@ -852,6 +860,9 @@ async function itemFields(
           fileHash: null,
           extractedText: null,
         },
+        // The profile's own account, and a transfer's other one (FR-058).
+        documentAccountId: profile.documentAccountId ?? null,
+        counterAccountId: item.counterAccountId,
       },
       ctx,
     );
@@ -863,7 +874,46 @@ async function itemFields(
     );
     out.push(fields);
   }
+  flagTransferDuplicates(db, reading, out, ctx);
   return out;
+}
+
+/**
+ * Flags each transfer item that repeats a transfer already in the books
+ * (FR-060), such as one made in Reconciliation. Asked for the whole reading at
+ * once, so one existing transfer flags one item only. A transfer in another
+ * currency is not looked for: it cannot be imported as it is (FR-059), and
+ * its amount is not in the books' cents.
+ */
+function flagTransferDuplicates(
+  db: LedgerDb,
+  reading: DocumentReading,
+  fields: ReviewFields[],
+  ctx: ReviewContext,
+) {
+  const probed: number[] = [];
+  const probes: TransferProbe[] = [];
+  for (const [index, item] of reading.items.entries()) {
+    const row = fields[index];
+    if (!isTransferType(item.kind)) continue;
+    if (row.accountId == null || row.counterAccountId == null) continue;
+    if (row.currency !== ctx.mainCurrency) continue;
+    probed.push(index);
+    probes.push({
+      documentType: item.kind,
+      accountId: row.accountId,
+      counterAccountId: row.counterAccountId,
+      amountMinor: item.amountMinor,
+      date: item.date,
+    });
+  }
+  if (probes.length === 0) return;
+  for (const [at, found] of detectTransferDuplicates(db, probes)) {
+    const row = fields[probed[at]];
+    row.duplicateOf = found.duplicateOf;
+    row.duplicateConfidence = found.confidence;
+    row.duplicateReasons = JSON.stringify(found.reasons);
+  }
 }
 
 async function readItems(

@@ -8,10 +8,16 @@
  * same kind of proposal worked out the same way (006 FR-007, FR-024).
  */
 
-import { DefaultAccountPurpose, DocumentType, Role } from "$lib/enums.js";
+import {
+  DefaultAccountPurpose,
+  DocumentType,
+  Role,
+  isTransferType,
+} from "$lib/enums.js";
 import { getExchangeRate } from "../currency/rates.js";
 import { mainCurrencyCode } from "../currency/form.js";
 import type { LedgerDb } from "../ledger/types.js";
+import { getAccount } from "../queries/accounts.js";
 import { resolveContactCandidates } from "../queries/contacts.js";
 import { requireAccountDefault } from "../services/account-defaults.js";
 import {
@@ -19,12 +25,16 @@ import {
   categoryChoices,
   type CategoryChoice,
 } from "./category-accounts.js";
+import { isImportTransactionAsset } from "./account-policy.js";
 import { detectDuplicate } from "./duplicate-detector.js";
 import type { ReviewFields } from "./review-fields.js";
 
 /** What was read off the document for one record. */
 export interface ReadFields {
-  /** A DocumentType code: expense or income. */
+  /**
+   * A DocumentType code: expense or income, or for an item of a profile's
+   * transfer section a transfer out of or into the document's account.
+   */
   documentType: number;
   itemName: string;
   /** The other party's name, whether it was paid or it paid. */
@@ -48,6 +58,15 @@ export interface ReadFields {
     fileHash: string | null;
     extractedText: string | null;
   };
+  /**
+   * The account the document is about, when its profile names one (FR-008,
+   * FR-058): the item starts on it instead of on Accounts payable or
+   * Accounts receivable, and a transfer has it as one side. Absent for a
+   * receipt.
+   */
+  documentAccountId?: number | null;
+  /** A transfer's other account, from its section. Absent otherwise. */
+  counterAccountId?: number | null;
 }
 
 type ContactMatch = ReturnType<typeof resolveContactCandidates>;
@@ -64,6 +83,8 @@ export interface ReviewContext {
   incomeChoices: CategoryChoice[];
   rates: Map<string, Promise<number | null>>;
   contacts: Map<string, ContactMatch>;
+  /** Whether an account still holds money, by id; see `moneyAccount`. */
+  moneyAccounts: Map<number, number | null>;
 }
 
 export function createReviewContext(db: LedgerDb): ReviewContext {
@@ -75,6 +96,7 @@ export function createReviewContext(db: LedgerDb): ReviewContext {
     incomeChoices: categoryChoices(db, "income"),
     rates: new Map(),
     contacts: new Map(),
+    moneyAccounts: new Map(),
   };
 }
 
@@ -113,6 +135,60 @@ function contactFor(
   return match;
 }
 
+/**
+ * The account, when it is still one that holds money and can take records,
+ * else null. A profile's account may have been archived since it was saved.
+ */
+function moneyAccount(
+  db: LedgerDb,
+  ctx: ReviewContext,
+  id: number | null | undefined,
+): number | null {
+  if (id == null) return null;
+  let found = ctx.moneyAccounts.get(id);
+  if (found === undefined) {
+    const account = getAccount(db, id);
+    found = account && isImportTransactionAsset(account) ? account.id : null;
+    ctx.moneyAccounts.set(id, found);
+  }
+  return found;
+}
+
+/**
+ * The review fields of a transfer item (FR-058): its two accounts, and no
+ * other party, no category and no receipt duplicate check. Whether it repeats
+ * a transfer already in the books is asked for the whole reading at once
+ * (`detectTransferDuplicates`), because one transfer may flag one item only.
+ */
+async function transferReviewFields(
+  db: LedgerDb,
+  input: ReadFields,
+  ctx: ReviewContext,
+): Promise<ReviewFields> {
+  const currency = input.currency.toUpperCase();
+  return {
+    documentType: input.documentType,
+    itemName: input.itemName,
+    supplier: null,
+    matchedContactId: null,
+    matchCandidates: null,
+    date: input.date,
+    amount: input.amount,
+    currency,
+    exchangeRate: await rateFor(db, ctx, currency, input.date),
+    reference: input.reference,
+    category: null,
+    categoryAccountId: null,
+    remark: input.remark,
+    duplicateOf: null,
+    duplicateConfidence: null,
+    duplicateReasons: null,
+    accountId: moneyAccount(db, ctx, input.documentAccountId),
+    reviewNote: null,
+    counterAccountId: moneyAccount(db, ctx, input.counterAccountId),
+  };
+}
+
 /** The review fields for one record read off a document. */
 export async function buildReviewFields(
   db: LedgerDb,
@@ -120,6 +196,7 @@ export async function buildReviewFields(
   ctx: ReviewContext,
 ): Promise<ReviewFields> {
   const docType = input.documentType;
+  if (isTransferType(docType)) return transferReviewFields(db, input, ctx);
   const isIncome = docType === DocumentType.Income;
 
   const dup = detectDuplicate(db, {
@@ -198,9 +275,14 @@ export async function buildReviewFields(
     duplicateOf: dup?.duplicateOf ?? null,
     duplicateConfidence: dup?.confidence ?? null,
     duplicateReasons: dup ? JSON.stringify(dup.reasons) : null,
-    accountId: settlementDefault.ok ? settlementDefault.value : null,
+    // The profile's own account when it names one that still holds money:
+    // a wallet report is about money already in the wallet (FR-008).
+    accountId:
+      moneyAccount(db, ctx, input.documentAccountId) ??
+      (settlementDefault.ok ? settlementDefault.value : null),
     // Only the reading of an item has anything to say here; see `itemFields`
     // in `process-job.ts`.
     reviewNote: null,
+    counterAccountId: null,
   };
 }

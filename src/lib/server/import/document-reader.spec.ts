@@ -173,6 +173,7 @@ describe("readDocumentItems", () => {
         feeType: null,
         categoryAccountId: 11,
         categoryCandidates: [11],
+        counterAccountId: null,
         tiedCategoryAccountId: null,
         extras: null,
       },
