@@ -150,6 +150,47 @@ Database migrations are generated with `bun run db:generate` and applied automat
 
 For the curious: Akaun is built with [SvelteKit](https://kit.svelte.dev/) (Svelte 5) and runs on the [Bun](https://bun.sh) runtime. Data is stored in **SQLite** via the [Drizzle ORM](https://orm.drizzle.team/), styling is [Tailwind CSS](https://tailwindcss.com/), and live updates are pushed to the browser over Server-Sent Events. Receipt import uses [Tesseract.js](https://github.com/naptha/tesseract.js) to OCR the raw text off a photo/PDF, then an LLM (via the [Vercel AI SDK](https://sdk.vercel.ai/), bring-your-own-key against OpenRouter, Google AI Studio, or Groq) turns that text into structured amount/date/supplier/category fields. PDFs (quotations, invoices, claim summaries) are generated with pdfkit/jsPDF from user-customizable templates.
 
+## MCP access
+
+Akaun exposes read-only bookkeeping tools at `/mcp`. Agents can query records, accounts, contacts, outstanding amounts, financial reports and Auto Import jobs, and suggest standardized descriptions for manual review.
+
+### Connect an MCP client
+
+1. Open **Users & Groups** in Akaun and create a dedicated integration user. Assign it a group with **View** permissions for Records, Accounts, Contacts, Reports and Auto Import, or just the features the agent needs. Keep it out of superuser groups and leave Add/Change/Delete permissions disabled.
+2. **Issue an API token** for that user and copy the one-time reveal into your client's secret configuration. This token inherits the user's REST permissions too, so a restricted integration user matters even though MCP itself is read-only.
+3. Add an MCP server to your client using these connection settings:
+
+   | Setting        | Value                                                                   |
+   | -------------- | ----------------------------------------------------------------------- |
+   | Transport      | Streamable HTTP                                                         |
+   | Server URL     | Your Akaun URL followed by `/mcp`, e.g. `https://books.example.com/mcp` |
+   | Authentication | HTTP header `Authorization: Bearer <your-api-token>`                    |
+
+For the default local Docker setup, the URL is `http://localhost:6969/mcp`. Use HTTPS for remote connections. The client must be able to reach the Akaun server; a client running on another machine needs that server's reachable address instead of `localhost`.
+
+### Codex example
+
+Add the following to your Codex MCP configuration, replacing the URL with your Akaun address:
+
+```toml
+[mcp_servers.akaun]
+url = "https://books.example.com/mcp"
+bearer_token_env_var = "AKAUN_MCP_TOKEN"
+```
+
+Set `AKAUN_MCP_TOKEN` to the issued token in the environment of the Codex process, then restart or reconnect the client so it loads the configuration. Keep the token out of committed configuration files.
+
+Once connected, try asking: **“Show my expenses for September 2026 by category”** or **“Which suppliers still have unpaid records?”** The client discovers only tools allowed by the integration user's permissions.
+
+### Connection troubleshooting
+
+- **401 Unauthorized:** check the bearer token and whether it has been revoked or regenerated. Browser login cookies do not authenticate MCP.
+- **403 Forbidden:** check the integration user's View permissions. If your client sends an `Origin` header, it must exactly match Akaun's public origin, including scheme and port; configure `ORIGIN` correctly behind a reverse proxy.
+- **Client asks for OAuth login:** this release supports clients that accept configured bearer-token headers; OAuth discovery is not implemented.
+- **GET returns 405:** the endpoint uses stateless Streamable HTTP with POST requests. Select Streamable HTTP in your client rather than a legacy SSE transport.
+
+See [MCP setup and tool reference](docs/MCP.md) for connection details, permissions, financial semantics and limits.
+
 ## Development
 
 ```sh

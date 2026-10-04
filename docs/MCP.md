@@ -1,0 +1,122 @@
+# MCP: read-only bookkeeping access
+
+Akaun serves MCP at **`https://<your-akaun-host>/mcp`**, alongside its existing REST API. Phase one exposes ten read tools, two context resources and a description-review prompt. It does not save edits, upload documents, confirm imports or change reconciliation/settlements.
+
+## Connect
+
+1. In **Users & Groups**, create a dedicated integration user and assign a group with **View** permissions for Records, Accounts, Contacts, Reports and Auto Import. Grant only the resources the agent needs. Do not make the user a superuser or grant Add/Change/Delete for read-only use.
+2. Issue the user's API token and store the one-time reveal in your MCP client's secret configuration. Revoking/regenerating it immediately affects subsequent requests.
+3. Configure a **Streamable HTTP** connection to `https://<your-akaun-host>/mcp`, with `Authorization: Bearer <token>`.
+
+For Codex clients supporting remote HTTP MCP, the configuration is:
+
+```toml
+[mcp_servers.akaun]
+url = "https://books.example.com/mcp"
+bearer_token_env_var = "AKAUN_MCP_TOKEN"
+```
+
+Set `AKAUN_MCP_TOKEN` in the client's environment without committing its value. Other clients should use their own URL/header configuration. This release supports configured bearer tokens; clients that require OAuth discovery need a later auth integration. No stdio bridge is bundled.
+
+The token inherits the user's existing REST permissions. The absence of MCP write tools does not restrict a privileged token's access to REST mutations. Use the dedicated restricted user above.
+
+Use HTTPS for remote connections. For a desktop sidecar, use its actual local server address/port while the app is running; do not assume the Docker or desktop ports are identical.
+
+## Available tools
+
+| Tool                    | Inputs                                                                                                   | Permission                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `list_records`          | Date range, kinds, account/category/contact IDs, search, paid/cleared, amount bounds, sort, limit/offset | Records View                  |
+| `get_record`            | `recordId`, optional `includeEvidence`/`includeSettlements`                                              | Records View                  |
+| `list_accounts`         | Type, category toggle, search, archived toggle, limit/offset                                             | Accounts View                 |
+| `get_account_statement` | `accountId`, optional dates, limit                                                                       | Records View                  |
+| `list_contacts`         | Search, role, entity type, limit/offset                                                                  | Contacts View                 |
+| `get_contact_balance`   | `contactId`                                                                                              | Contacts **and** Records View |
+| `list_outstanding`      | `direction`: `owed-to-us` or `we-owe`, optional contact ID, limit/offset                                 | Records View                  |
+| `get_financial_report`  | `type`, required dates or as-at date                                                                     | Reports View                  |
+| `list_import_jobs`      | States, upload date range, duplicate-only toggle, limit/offset                                           | Auto Import View              |
+| `get_import_job`        | `jobId`, optional evidence                                                                               | Auto Import View              |
+
+Tool discovery reflects the authenticated user's permissions. Calls also enforce permissions, including direct calls to tools not listed for that user. Authentication and permissions are evaluated afresh on each HTTP request.
+
+Record kinds are `expense`, `income`, `transfer`, `payment`, `opening_balance`, `invoice_issue`, and `journal`. Import states use `queued`, `extracting`, `processing`, `pending_review`, `confirmed`, `imported`, `skipped`, and `failed`. Account types use `asset`, `liability`, `equity`, `revenue`, and `expense`.
+
+Report types:
+
+- `profit-loss`, `cash-flow`, `partner-statement`: require `dateFrom` and `dateTo`.
+- `balance-sheet`: requires `asAt`; does not accept period dates.
+
+Example tool arguments:
+
+```json
+{
+  "name": "get_financial_report",
+  "arguments": {
+    "type": "profit-loss",
+    "dateFrom": "2026-09-01",
+    "dateTo": "2026-09-30"
+  }
+}
+```
+
+Successful results expose the same envelope in structured MCP content and text:
+
+```json
+{
+  "data": { "...": "tool-specific result" },
+  "meta": {
+    "observedAt": "2026-10-03T00:00:00.000Z",
+    "mainCurrency": "MYR",
+    "minorUnitScale": 100
+  }
+}
+```
+
+## Reading the answers correctly
+
+- Reports use canonical ledger movements in whole cents of the **main currency**. Never sum every record's displayed amount: transfers and payment records are different events, and original currencies can differ.
+- Record `amount` is the original entered amount in `currency`; `mainCurrencyAmountMinor` and movement amounts use the stored exchange rate. Record amount bounds and sorting compare original entered amounts.
+- Positive movement value enters the account. `list_accounts` exposes signed ledger `balanceMinor` and the app's normal-balance `displayBalanceMinor` separately. These are current all-time balances.
+- Contact and outstanding queries show **current** remaining amounts after all saved settlements, including unallocated payment sides according to the existing app rules. They do not reconstruct past outstanding balances. Ageing uses UTC today.
+- Report notes preserve warnings about incomplete history or accounts requiring classification. Keep those notes in any agent analysis.
+- Date ranges are inclusive, in `YYYY-MM-DD`. Import date filters apply to upload dates, independently of document dates.
+- Lists default to 50 rows, maximum 200. `pagination.total` describes the full filtered set, and `nextOffset` supports subsequent pages. Offset paging can shift if another user edits data; rerun the query when necessary. Account discovery reads the chart as one set before output paging.
+- Statements default to 100 movements, maximum 500. They do not accept offset or arbitrary filters. When truncated, `periodClosingBalanceMinor` is null and `returnedClosingBalanceMinor` covers only returned movements. Narrow the dates for a complete statement.
+- Stored evidence is optional, capped at 6,000 characters and labeled as untrusted content. Reads do not trigger OCR, extraction or provider calls. Attachment responses contain display metadata, not storage paths.
+- Tool results are limited to 512 KiB of serialized data; requests are limited to 128 KiB. Narrow the query if the output budget is exceeded. Raw server errors, tokens, file paths and provider settings are withheld.
+
+## Description review
+
+`akaun://description-policy` provides the same versioned wording guidance used by Auto Import. It favors short noun phrases, sentence case, consistent terminology, supported product/service details and no invented billing periods. Default output is English; existing Auto Import custom instructions can request another language or supply preferred vocabulary.
+
+Use `review-record-descriptions` to ask the agent for a bounded before/after table with IDs, reasons, evidence and ambiguity flags. It is available to users who can read Records or Auto Import. Apply accepted suggestions manually in Akaun; MCP cannot save them in phase one.
+
+`akaun://context` describes money/date conventions, capabilities and query limits. Clients need not support resources/prompts to use tools: essential semantics are also present in tool descriptions/results.
+
+## Deployment and transport
+
+`/mcp` is a single MCP protocol endpoint; tools are dispatched by `tools/call`, not individual REST paths. The server uses the official TypeScript SDK's Web Standard Streamable HTTP transport, with request-scoped servers and stateless JSON responses.
+
+- POST handles initialization, requests and notifications. Clients must send the protocol's JSON content type and Accept headers.
+- GET, DELETE and other methods return 405 (`Allow: POST`). No session IDs or standalone event stream are issued.
+- Cookie sessions are not accepted; missing/invalid bearer credentials return 401 with a Bearer challenge, without a login redirect.
+- Native clients may omit Origin. If provided, Origin must exactly match the application's public origin, including scheme and port. Configure the app's trusted public `ORIGIN` correctly behind a reverse proxy. Cross-origin browser access is not enabled.
+- Responses use `Cache-Control: no-store`. Existing `/api/*/stream` endpoints continue serving browser SSE updates independently.
+
+Reverse proxies need to forward `/mcp`, Authorization, Accept, Content-Type and MCP protocol headers without changing the request body. This phase does not need MCP streaming-specific proxy tuning.
+
+## Implementation and verification
+
+The route and authentication hook connect callers to request-scoped tool registrations. Reads reuse existing query/report functions; contact counts and paged outstanding/import queries run against SQLite. No second database-owning service or model call is introduced.
+
+The integration suite uses the official MCP client and exclusively in-memory SQLite fixtures with `PRAGMA query_only = ON` during reads. It covers transport negotiation, authentication, permissions, concurrent actors, date/limit validation, mixed currency and settlements, statement truncation, safe evidence projections and output budgets.
+
+```sh
+bun run check
+bun run lint
+bun run test:mcp
+```
+
+`test:mcp` runs the MCP integration specs and relevant bookkeeping regressions directly with Bun. A small preload maps the shared Vitest assertion/hook imports to Bun's native test API, avoiding the current Vitest 4/Bun worker-startup failure. The specs also remain usable by the normal Vitest runner when its workers are compatible. The adapter supports only the APIs these selected fixtures use; it is not a replacement for the repository's full test suite.
+
+Phase two will add aggregates and persisted description review/apply/undo workflows, with narrow write permissions and conflict checks.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { descriptionPolicyPrompt } from "../../description-policy.js";
 
 export const LLMResultSchema = z.object({
   document_type: z.enum(["expense", "income"]),
@@ -68,6 +69,7 @@ Instructions:
 - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use ${mainCurrency}.
 - reference = invoice/receipt/transaction number if present, else empty string.
 - If a field cannot be determined, use an empty string or 0 for amount.
+${descriptionPolicyPrompt()}
 ${customInstructions ? `\nAdditional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):\n${customInstructions}\n` : ""}
 Respond with valid JSON only, matching the schema exactly. No markdown, no extra text.`;
 }
