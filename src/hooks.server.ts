@@ -1,6 +1,5 @@
 import { redirect, type Handle } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
-import { eq } from "drizzle-orm";
 import {
   db,
   ensureDefaultAdmin,
@@ -10,7 +9,7 @@ import {
 } from "$lib/server/db/client.js";
 import { seedAccounts } from "$lib/server/db/seed-accounts.js";
 import { getSessionUser } from "$lib/server/auth.js";
-import { users } from "$lib/server/db/schema.js";
+import { bearerLocals } from "$lib/server/bearer-auth.js";
 import { getEffectivePermissions } from "$lib/server/permissions.js";
 import { setLogLevel } from "$lib/server/logger.js";
 import { startImportWorker } from "$lib/server/import/worker.js";
@@ -55,31 +54,33 @@ function withSecurityHeaders(response: Response): Response {
 export const handle: Handle = async ({ event, resolve }) => {
   const { pathname } = event.url;
 
+  // MCP is a protocol interface beside REST. Cookie sessions must never turn
+  // an unauthenticated MCP request into a browser login redirect.
+  if (pathname === "/mcp" || pathname === "/mcp/") {
+    const actor = bearerLocals(db, event.request.headers.get("Authorization"));
+    if (!actor) {
+      return withSecurityHeaders(
+        new Response("Unauthorized", {
+          status: 401,
+          headers: {
+            "WWW-Authenticate": 'Bearer realm="akaun-mcp"',
+            "Cache-Control": "no-store",
+          },
+        }),
+      );
+    }
+    Object.assign(event.locals, actor);
+    return withSecurityHeaders(await resolve(event));
+  }
+
   if (pathname.startsWith("/api/")) {
     const header = event.request.headers.get("Authorization");
     if (header?.startsWith("Bearer ")) {
-      const rawToken = header.slice(7);
-      const apiUser = db
-        .select({
-          id: users.id,
-          email: users.email,
-          username: users.username,
-          name: users.name,
-          role: users.role,
-        })
-        .from(users)
-        .where(eq(users.bearerToken, rawToken))
-        .get();
-      if (!apiUser) {
+      const actor = bearerLocals(db, header);
+      if (!actor) {
         return new Response("Unauthorized", { status: 401 });
       }
-      event.locals.user = apiUser;
-      const { permissions, isSuperuser } = getEffectivePermissions(
-        db,
-        apiUser.id,
-      );
-      event.locals.permissions = permissions;
-      event.locals.isSuperuser = isSuperuser;
+      Object.assign(event.locals, actor);
     } else {
       const sessionId = event.cookies.get("session");
       const sessionUser = sessionId ? getSessionUser(db, sessionId) : null;

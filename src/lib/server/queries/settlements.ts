@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import {
   accounts,
   accountDefaults,
@@ -120,7 +120,13 @@ export type AgeingItem = OutstandingItem & {
 function collectOutstanding(
   db: LedgerDb,
   filters: OutstandingFilters,
-): { asOf: string; items: AgeingItem[]; totalOutstandingMinor: Minor } {
+  page?: { limit: number; offset: number },
+): {
+  asOf: string;
+  items: AgeingItem[];
+  totalOutstandingMinor: Minor;
+  total: number;
+} {
   const asOf = filters.asOf ?? new Date().toISOString().slice(0, 10);
   const openOnly = filters.openOnly ?? true;
 
@@ -129,6 +135,29 @@ function collectOutstanding(
   if (filters.contactId !== undefined) {
     conditions.push(eq(ledgerRecords.contactId, filters.contactId));
   }
+
+  // SQL equivalent of outstandingOf(): clamp abs(side) minus settlements at
+  // zero. Apply before LIMIT so fully paid items do not consume a page.
+  const remaining = sql<number>`max(0, abs(${ledgerMovements.amountMinor}) - coalesce((
+    SELECT sum(${settlements.amountMinor}) FROM ${settlements}
+    WHERE ${settlements.owedMovementId} = ${ledgerMovements.id}
+       OR ${settlements.paymentMovementId} = ${ledgerMovements.id}
+  ), 0))`;
+  if (openOnly) conditions.push(sql`${remaining} > 0`);
+  const totals = page
+    ? db
+        .select({
+          total: sql<number>`count(*)`,
+          totalOutstandingMinor: sql<number>`coalesce(sum(${remaining}), 0)`,
+        })
+        .from(ledgerMovements)
+        .innerJoin(
+          ledgerRecords,
+          eq(ledgerRecords.id, ledgerMovements.recordId),
+        )
+        .where(and(...conditions))
+        .get()
+    : null;
 
   const rows = db
     .select({
@@ -150,7 +179,13 @@ function collectOutstanding(
     .leftJoin(contacts, eq(contacts.id, ledgerRecords.contactId))
     .leftJoin(invoices, eq(invoices.ledgerRecordId, ledgerRecords.id))
     .where(and(...conditions))
-    .orderBy(asc(ledgerRecords.date), asc(ledgerRecords.id))
+    .orderBy(
+      asc(ledgerRecords.date),
+      asc(ledgerRecords.id),
+      asc(ledgerMovements.id),
+    )
+    .limit(page?.limit ?? -1)
+    .offset(page?.offset ?? 0)
     .all();
 
   const settled = settledMinorFor(
@@ -192,10 +227,10 @@ function collectOutstanding(
   return {
     asOf,
     items,
-    totalOutstandingMinor: items.reduce(
-      (sum, i) => sum + i.outstandingMinor,
-      0,
-    ),
+    total: totals?.total ?? items.length,
+    totalOutstandingMinor:
+      totals?.totalOutstandingMinor ??
+      items.reduce((sum, i) => sum + i.outstandingMinor, 0),
   };
 }
 
@@ -203,7 +238,21 @@ export function listOutstanding(
   db: LedgerDb,
   filters: OutstandingFilters,
 ): OutstandingResult {
-  return collectOutstanding(db, filters);
+  const { asOf, items, totalOutstandingMinor } = collectOutstanding(
+    db,
+    filters,
+  );
+  const result = { asOf, items, totalOutstandingMinor };
+  return result;
+}
+
+/** Bounded rows with totals over the whole filtered set, using the same rules. */
+export function listOutstandingPage(
+  db: LedgerDb,
+  filters: OutstandingFilters,
+  page: { limit: number; offset: number },
+) {
+  return collectOutstanding(db, filters, page);
 }
 
 /** One outstanding side, for the allocation check on the way in. */
@@ -282,8 +331,13 @@ export type ContactBalance = {
 export function contactBalances(
   db: LedgerDb,
   direction: OutstandingDirection,
+  contactId?: number,
 ): ContactBalance[] {
-  const { items } = listOutstanding(db, { direction, openOnly: true });
+  const { items } = listOutstanding(db, {
+    direction,
+    contactId,
+    openOnly: true,
+  });
   const byContact = new Map<number, ContactBalance>();
   for (const item of items) {
     if (item.contactId === null) continue;
