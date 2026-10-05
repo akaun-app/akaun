@@ -542,10 +542,10 @@ function recordConditions(filters: RecordListFilters): SQL[] {
     // attribution lives in `settlements`, not on the payment's own row.
     conditions.push(
       sql`(${eq(ledgerRecords.contactId, filters.contactId)} OR EXISTS (
-        SELECT 1 FROM ${paymentMovementsForContact}
+        SELECT 1 FROM ${ledgerMovements} AS "payment_movements_for_contact"
         INNER JOIN ${settlements} ON ${settlements.paymentMovementId} = ${paymentMovementsForContact.id}
-        INNER JOIN ${owedMovementsForContact} ON ${owedMovementsForContact.id} = ${settlements.owedMovementId}
-        INNER JOIN ${owedRecordsForContact} ON ${owedRecordsForContact.id} = ${owedMovementsForContact.recordId}
+        INNER JOIN ${ledgerMovements} AS "owed_movements_for_contact" ON ${owedMovementsForContact.id} = ${settlements.owedMovementId}
+        INNER JOIN ${ledgerRecords} AS "owed_records_for_contact" ON ${owedRecordsForContact.id} = ${owedMovementsForContact.recordId}
         WHERE ${paymentMovementsForContact.recordId} = ${ledgerRecords.id}
           AND ${owedRecordsForContact.contactId} = ${filters.contactId}
       ))`,

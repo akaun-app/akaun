@@ -109,9 +109,8 @@ function withLabels<T extends { entityType: number }>(c: T, roles: number[]) {
   };
 }
 
-export function listContacts(db: Db, filters: ContactFilters = {}) {
-  const { role, entityType, search, limit = 200, offset = 0 } = filters;
-
+function contactConditions(filters: ContactFilters) {
+  const { role, entityType, search } = filters;
   const conditions = [];
   if (entityType !== undefined)
     conditions.push(eq(contacts.entityType, entityType));
@@ -133,11 +132,28 @@ export function listContacts(db: Db, filters: ContactFilters = {}) {
     );
   }
 
+  return conditions;
+}
+
+export function countContacts(db: Db, filters: ContactFilters = {}): number {
+  const conditions = contactConditions(filters);
+  return (
+    db
+      .select({ total: sql<number>`count(*)` })
+      .from(contacts)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .get()?.total ?? 0
+  );
+}
+
+export function listContacts(db: Db, filters: ContactFilters = {}) {
+  const { limit = 200, offset = 0 } = filters;
+  const conditions = contactConditions(filters);
   const rows = db
     .select()
     .from(contacts)
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(asc(contacts.legalName))
+    .orderBy(asc(contacts.legalName), asc(contacts.id))
     .limit(limit)
     .offset(offset)
     .all();
