@@ -59,6 +59,7 @@ function draft(
     description: "A marketplace wallet report.",
     phrases: [],
     instructions: "",
+    mode: EVERY,
     statedTotalLabels: {},
     accountId: 40,
     layout,
@@ -75,11 +76,15 @@ function read(workbook: Workbook, profile: ImportProfileDraft) {
   const checked = checkProfile(profile);
   if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
   const saved = { id: 7, ...checked.profile };
-  const reading = savedReadingProfile(saved, EVERY);
+  const reading = savedReadingProfile(saved);
   return readFromColumns(
     workbook,
-    { name: saved.name, layout: saved.layout!, sections: saved.sections },
-    EVERY,
+    {
+      name: saved.name,
+      mode: saved.mode,
+      layout: saved.layout!,
+      sections: saved.sections,
+    },
     reading,
     { today: "2026-10-02", mainCurrency: "MYR", schemaId: "columns:test" },
   );
@@ -643,13 +648,20 @@ describe("readFromColumns", () => {
     ]);
   });
 
-  it("names what it read by the layout and the mode's sections", () => {
+  it("names what it read by the layout and the sections it reads", () => {
     const saved = { id: 7, ...full() };
-    const id = columnsReadingId(saved, EVERY);
+    const id = columnsReadingId(saved);
     expect(id).toMatch(/^columns:7:[0-9a-f]{64}$/);
-    expect(columnsReadingId({ ...saved, layout: noTotals }, EVERY)).not.toBe(
-      id,
-    );
+    expect(columnsReadingId({ ...saved, layout: noTotals })).not.toBe(id);
+    // A legacy section in the other mode is not read, so it is not named.
+    const legacy = {
+      ...saved,
+      sections: [
+        ...saved.sections,
+        { ...withdrawalSection(BANK), key: "old", mode: ImportMode.Summary },
+      ],
+    };
+    expect(columnsReadingId(legacy)).toBe(id);
   });
 
   it("reads the table only, never a model's answer: the envelope it gives is code's own", () => {
@@ -657,10 +669,10 @@ describe("readFromColumns", () => {
       readXlsx(walletReportFixture().xlsx),
       {
         name: "Wallet report",
+        mode: EVERY,
         layout: walletLayout(),
         sections: full().sections,
       },
-      EVERY,
     );
     expect(ignoredCount).toBe(0);
     expect(envelope.stated_total_minor).toBe(5415 - 30415);
@@ -756,13 +768,30 @@ describe("the running-balance check", () => {
     ).toBeUndefined();
   });
 
+  it("leaves out a legacy section saved in the other mode (FR-032)", () => {
+    // Saved when each section had its own mode, it would take the same rows
+    // as the withdrawals; read in the profile's mode, it is not read at all.
+    const { envelope } = readTable(readXlsx(walletReportFixture().xlsx), {
+      name: "Wallet report",
+      mode: EVERY,
+      layout: walletLayout(),
+      sections: [
+        ...full().sections,
+        { ...withdrawalSection(BANK), key: "old", mode: ImportMode.Summary },
+      ],
+    });
+    expect(Object.keys(envelope.sections)).not.toContain("old");
+    expect(envelope.sections.withdrawals).toHaveLength(2);
+  });
+
   it("says where it found the table, for a preview", () => {
     const report = walletWorkbook();
-    const found = readTable(
-      readXlsx(report.xlsx),
-      { name: "Wallet", layout: walletLayout(), sections: full().sections },
-      EVERY,
-    ).found;
+    const found = readTable(readXlsx(report.xlsx), {
+      name: "Wallet",
+      mode: EVERY,
+      layout: walletLayout(),
+      sections: full().sections,
+    }).found;
     expect(found).toEqual({
       sheet: "Transaction Report",
       headerRow: report.headerRow,

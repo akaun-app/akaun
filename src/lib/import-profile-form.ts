@@ -26,11 +26,9 @@
 
 import {
   PROFILE_KEY_PATTERN,
-  PROFILE_SECTION_MODES,
   type ImportProfileDraft,
   type ProfileError,
   type ProfileSectionKind,
-  type ProfileSectionMode,
   type RowCondition,
   type RowConditionOp,
   type SectionRows,
@@ -38,7 +36,7 @@ import {
   type TableDateFormat,
   type TableLayout,
 } from "./import-profile-schema.js";
-import { ImportMode } from "./import-reading.js";
+import { ImportMode, type ImportModeValue } from "./import-reading.js";
 
 export interface FeeTypeForm {
   uid: string;
@@ -102,8 +100,8 @@ export interface LayoutForm {
   currency: string;
   documentDateLabel: string;
   remarkColumns: string[];
-  /** Each mode's stated-total labels, one per line. */
-  totalsText: Record<ProfileSectionMode, string>;
+  /** The stated-total labels, one per line. */
+  totalsText: string;
   /** The running-balance column, or "" for none. */
   balanceColumn: string;
 }
@@ -116,8 +114,13 @@ export interface SectionForm {
   keyFromName: boolean;
   name: string;
   description: string;
-  /** Which import mode reads this section: Summary or Every transaction. */
-  mode: ProfileSectionMode;
+  /**
+   * The other import mode, for a section saved when each section had its own
+   * and the profile had sections in both (FR-032). It is sent back as it was,
+   * so the save is refused until the section is moved, kept on purpose
+   * (`null`), or the profile is changed to it. Null for every other section.
+   */
+  legacyMode: ImportModeValue | null;
   kind: ProfileSectionKind;
   fixedCategoryAccountId: number | null;
   feeTypes: FeeTypeForm[];
@@ -139,12 +142,10 @@ export interface ProfileForm {
   description: string;
   phrases: string[];
   instructions: string;
-  /**
-   * The stated total of each import mode, as typed. Empty means the profile
-   * names no total for that mode. A summary and a transaction table total
-   * different lines, so each mode has its own.
-   */
-  statedTotals: Record<ProfileSectionMode, string>;
+  /** What the profile imports: Summary lines or Every transaction. */
+  mode: ImportModeValue;
+  /** The stated total, as typed. Empty means the profile names none. */
+  statedTotal: string;
   /** The account the document is about (FR-058), or null for none. */
   accountId: number | null;
   /**
@@ -245,7 +246,7 @@ export function newLayout(): LayoutForm {
     currency: "",
     documentDateLabel: "",
     remarkColumns: [],
-    totalsText: { [ImportMode.Summary]: "", [ImportMode.EveryTransaction]: "" },
+    totalsText: "",
     balanceColumn: "",
   };
 }
@@ -269,7 +270,7 @@ function rowsForm(rows: SectionRows): RowsForm {
   };
 }
 
-function layoutForm(layout: TableLayout): LayoutForm {
+function layoutForm(layout: TableLayout, mode: ImportModeValue): LayoutForm {
   return {
     sheet: layout.sheet ?? "",
     headersText: layout.headers.join("\n"),
@@ -287,14 +288,7 @@ function layoutForm(layout: TableLayout): LayoutForm {
     currency: layout.currency ?? "",
     documentDateLabel: layout.documentDateLabel ?? "",
     remarkColumns: [...layout.remarkColumns],
-    totalsText: {
-      [ImportMode.Summary]: (
-        layout.statedTotalLabels[ImportMode.Summary] ?? []
-      ).join("\n"),
-      [ImportMode.EveryTransaction]: (
-        layout.statedTotalLabels[ImportMode.EveryTransaction] ?? []
-      ).join("\n"),
-    },
+    totalsText: (layout.statedTotalLabels[mode] ?? []).join("\n"),
     balanceColumn: layout.balanceColumn ?? "",
   };
 }
@@ -326,12 +320,12 @@ function rowsPayload(rows: RowsForm): Record<string, unknown> {
   };
 }
 
-function layoutPayload(layout: LayoutForm): Record<string, unknown> {
-  const statedTotalLabels: Record<string, string[]> = {};
-  for (const mode of PROFILE_SECTION_MODES) {
-    const labels = linesOf(layout.totalsText[mode] ?? "");
-    if (labels.length) statedTotalLabels[mode] = labels;
-  }
+function layoutPayload(
+  layout: LayoutForm,
+  mode: ImportModeValue,
+): Record<string, unknown> {
+  const labels = linesOf(layout.totalsText);
+  const statedTotalLabels = labels.length ? { [mode]: labels } : {};
   const directionIn = linesOf(layout.directionInText);
   const directionOut = linesOf(layout.directionOutText);
   return {
@@ -365,20 +359,15 @@ function layoutPayload(layout: LayoutForm): Record<string, unknown> {
   };
 }
 
-/**
- * An empty section, in Summary unless another mode is given. Expense is the
- * commonest kind on a fee document.
- */
-export function newSection(
-  mode: ProfileSectionMode = ImportMode.Summary,
-): SectionForm {
+/** An empty section. Expense is the commonest kind on a fee document. */
+export function newSection(): SectionForm {
   return {
     uid: newUid(),
     key: "",
     keyFromName: true,
     name: "",
     description: "",
-    mode,
+    legacyMode: null,
     kind: "expense",
     fixedCategoryAccountId: null,
     feeTypes: [],
@@ -389,11 +378,6 @@ export function newSection(
   };
 }
 
-/** No stated total for any mode. */
-function noStatedTotals(): Record<ProfileSectionMode, string> {
-  return { [ImportMode.Summary]: "", [ImportMode.EveryTransaction]: "" };
-}
-
 /** A blank profile with one empty section, since a profile needs one. */
 export function blankForm(): ProfileForm {
   return {
@@ -401,7 +385,8 @@ export function blankForm(): ProfileForm {
     description: "",
     phrases: [],
     instructions: "",
-    statedTotals: noStatedTotals(),
+    mode: ImportMode.Summary,
+    statedTotal: "",
     accountId: null,
     layout: null,
     sections: [newSection()],
@@ -419,20 +404,22 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
     description: draft.description,
     phrases: [...draft.phrases],
     instructions: draft.instructions,
-    statedTotals: {
-      [ImportMode.Summary]: draft.statedTotalLabels[ImportMode.Summary] ?? "",
-      [ImportMode.EveryTransaction]:
-        draft.statedTotalLabels[ImportMode.EveryTransaction] ?? "",
-    },
+    mode: draft.mode,
+    statedTotal: draft.statedTotalLabels[draft.mode] ?? "",
     accountId: draft.accountId ?? null,
-    layout: draft.layout ? layoutForm(draft.layout) : null,
+    layout: draft.layout ? layoutForm(draft.layout, draft.mode) : null,
     sections: draft.sections.map((section) => ({
       uid: newUid(),
       key: section.key,
       keyFromName: false,
       name: section.name,
       description: section.description,
-      mode: section.mode,
+      // Only a section in the other mode keeps it; one in the profile's mode
+      // needs none.
+      legacyMode:
+        section.mode !== undefined && section.mode !== draft.mode
+          ? section.mode
+          : null,
       kind: section.kind,
       fixedCategoryAccountId: section.fixedCategoryAccountId,
       feeTypes: section.feeTypes.map((feeType) => ({
@@ -480,30 +467,29 @@ export function sectionKeys(sections: readonly SectionForm[]): string[] {
 
 /**
  * What the editor sends: the profile's form in the shape the shared check
- * reads. Each section goes with its own import mode, and each mode's stated
- * total only when one is typed. The extra fields go as the text typed.
+ * reads. The stated total goes under the profile's mode, and only when one is
+ * typed. The extra fields go as the text typed.
  */
 export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
   const keys = sectionKeys(form.sections);
-  const statedTotalLabels: Partial<Record<ProfileSectionMode, string>> = {};
-  for (const mode of PROFILE_SECTION_MODES) {
-    const label = (form.statedTotals[mode] ?? "").trim();
-    if (label) statedTotalLabels[mode] = label;
-  }
+  const label = form.statedTotal.trim();
   return {
     name: form.name,
     description: form.description,
     phrases: form.phrases,
     instructions: form.instructions,
-    statedTotalLabels,
+    mode: form.mode,
+    statedTotalLabels: label ? { [form.mode]: label } : {},
     accountId: form.accountId,
     // Sent only when there is one, as a profile without one is saved.
-    ...(form.layout ? { layout: layoutPayload(form.layout) } : {}),
+    ...(form.layout ? { layout: layoutPayload(form.layout, form.mode) } : {}),
     sections: form.sections.map((section, index) => ({
       key: keys[index],
       name: section.name,
       description: section.description,
-      mode: section.mode,
+      // Only a section saved in the other mode sends one, for the check to
+      // refuse (see `legacyMode`).
+      ...(section.legacyMode ? { mode: section.legacyMode } : {}),
       kind: section.kind,
       fixedCategoryAccountId: section.fixedCategoryAccountId,
       feeTypes: section.feeTypes.map((feeType) => ({

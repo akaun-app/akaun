@@ -25,7 +25,12 @@
  * and with a plain sentence saying what is wrong.
  */
 
-import { ImportMode, type ImportModeValue } from "./import-reading.js";
+import {
+  ImportMode,
+  importModeLabel,
+  isImportMode,
+  type ImportModeValue,
+} from "./import-reading.js";
 
 // ── Limits ──────────────────────────────────────────────────────────────────
 
@@ -141,18 +146,6 @@ export const PROFILE_SECTION_KINDS: readonly ProfileSectionKind[] = [
   "expense",
   "by_sign",
   "transfer",
-];
-
-/**
- * Which import mode a section belongs to (FR-031, FR-032): Summary (the
- * statement's summary lines) or Every transaction (each row of its
- * transaction table, US8). A document is read in one mode only (FR-033), and
- * only the sections of that mode are read.
- */
-export type ProfileSectionMode = ImportModeValue;
-export const PROFILE_SECTION_MODES: readonly ProfileSectionMode[] = [
-  ImportMode.Summary,
-  ImportMode.EveryTransaction,
 ];
 
 /** A plain value an extra field can hold. */
@@ -313,9 +306,11 @@ export interface TableLayout {
   /** Columns whose values are added to each item's remark. */
   remarkColumns: string[];
   /**
-   * The labels each mode's stated total is printed beside, such as "Total
-   * Money In" and "Total Money Out". The figures beside them are added up in
-   * code. A mode with none has no control total.
+   * The labels the stated total is printed beside, such as "Total Money In"
+   * and "Total Money Out". The figures beside them are added up in code. The
+   * list is kept under the profile's import mode, the only key allowed, so a
+   * layout saved when each mode had its own list still reads. None means no
+   * control total.
    */
   statedTotalLabels: Partial<Record<ImportModeValue, string[]>>;
   /**
@@ -334,7 +329,7 @@ export const LAYOUT_HEADERS_MAX = 50;
 export const ROW_CONDITIONS_MAX = 10;
 /** Most values one list (is one of, a fee type, a direction) holds. */
 export const ROW_VALUES_MAX = 50;
-/** Most remark columns, and most stated-total labels per mode. */
+/** Most remark columns, and most stated-total labels. */
 const LAYOUT_LIST_MAX = 10;
 const CELL_VALUE_MAX = 100;
 /** Excel's own limit on a sheet's name. */
@@ -351,47 +346,49 @@ export function foldTableText(text: string): string {
 }
 
 /**
- * Whether a profile reads documents of this mode from their columns, with no
- * AI (FR-055, FR-057): it has a table layout, and every one of its sections in
- * that mode has row rules. Only a spreadsheet can be read this way.
+ * The sections a profile reads (FR-032): all of them, except a section saved
+ * when each section had its own import mode and that mode is not the
+ * profile's. Such a section is only on a profile that had sections in both
+ * modes; it is left out until the profile is fixed in the editor.
+ */
+export function profileSections<
+  S extends Pick<ProfileSection, "mode">,
+>(profile: { mode: ImportModeValue; sections: readonly S[] }): S[] {
+  return profile.sections.filter(
+    (section) => section.mode === undefined || section.mode === profile.mode,
+  );
+}
+
+/**
+ * The import mode of a profile saved before the mode was set on the profile,
+ * worked out from its sections (FR-032). Every section in one mode gives that
+ * mode. A section with none was a Summary section, so none at all gives
+ * Summary. Sections in both modes also give Summary; the editor then shows a
+ * problem on the Every transaction ones, and the profile cannot be saved
+ * until they are moved or the profile is changed.
+ */
+export function legacyProfileMode(
+  sections: readonly Pick<ProfileSection, "mode">[],
+): ImportModeValue {
+  const modes = new Set(
+    sections.map((section) => section.mode ?? ImportMode.Summary),
+  );
+  return modes.size === 1 && modes.has(ImportMode.EveryTransaction)
+    ? ImportMode.EveryTransaction
+    : ImportMode.Summary;
+}
+
+/**
+ * Whether a profile reads documents from their columns, with no AI (FR-055,
+ * FR-057): it has a table layout, and every section it reads has row rules.
+ * Only a spreadsheet can be read this way.
  */
 export function readsFromColumns(
-  profile: Pick<ImportProfileDraft, "layout" | "sections">,
-  mode: ImportModeValue,
+  profile: Pick<ImportProfileDraft, "layout" | "sections" | "mode">,
 ): boolean {
   if (!profile.layout) return false;
-  const sections = profile.sections.filter(
-    (section) => (section.mode ?? ImportMode.Summary) === mode,
-  );
+  const sections = profileSections(profile);
   return sections.length > 0 && sections.every((section) => section.rows);
-}
-
-/**
- * The import modes a profile has sections in, Summary first. A section saved
- * before modes existed is a Summary section.
- */
-export function profileModes(
-  profile: Pick<ImportProfileDraft, "sections">,
-): ImportModeValue[] {
-  return PROFILE_SECTION_MODES.filter((mode) =>
-    profile.sections.some(
-      (section) => (section.mode ?? ImportMode.Summary) === mode,
-    ),
-  );
-}
-
-/**
- * The mode a profile is read in (FR-002). A profile with sections in one mode
- * only is always read in that mode, whatever "Import" says: there is nothing
- * to read in the other one. Only a profile with sections in both modes is
- * read in the mode the uploader chose.
- */
-export function readingModeFor(
-  profile: Pick<ImportProfileDraft, "sections">,
-  asked: ImportModeValue,
-): ImportModeValue {
-  const modes = profileModes(profile);
-  return modes.length === 1 ? modes[0] : asked;
 }
 
 /** One part of the document to read (FR-031). */
@@ -402,7 +399,14 @@ export interface ProfileSection {
   name: string;
   /** What the section is and where to find it on the document. */
   description: string;
-  mode: ProfileSectionMode;
+  /**
+   * The import mode a section was saved with when each section had its own,
+   * before the mode moved to the profile. Never written now. Kept only so a
+   * profile saved then still reads: a section whose mode is not the
+   * profile's is left out (`profileSections`), and the editor shows it as a
+   * problem.
+   */
+  mode?: ImportModeValue;
   kind: ProfileSectionKind;
   /** The category of a line with no fee type. */
   fixedCategoryAccountId: number | null;
@@ -448,13 +452,19 @@ export interface ImportProfileDraft {
    */
   instructions: string;
   /**
-   * Which printed total each import mode compares against, such as "Total
-   * payout released" for Summary. Keyed by mode, since the summary and the
-   * transaction table of one statement total different lines. Empty or
-   * missing means the profile names no total for that mode, and no control
-   * total is shown.
+   * What the profile imports (FR-002, FR-032): the summary lines of a
+   * statement, or every row of its transaction table. Every document read
+   * with the profile is read this way, and there is no other choice at
+   * upload. To read one kind of document both ways, make two profiles.
    */
-  statedTotalLabels: Partial<Record<ProfileSectionMode, string>>;
+  mode: ImportModeValue;
+  /**
+   * The printed total the reading compares against, such as "Total payout
+   * released". It is kept under the profile's mode, the only key allowed, so
+   * a profile saved when each mode had its own total still reads. Empty
+   * means no control total is shown.
+   */
+  statedTotalLabels: Partial<Record<ImportModeValue, string>>;
   /**
    * The account the document is about, such as the marketplace wallet a
    * wallet report lists (FR-008, FR-058). Its income and expense items start
@@ -662,6 +672,7 @@ function optionalText(
 function tableLayout(
   raw: unknown,
   path: string,
+  mode: ImportModeValue,
   errors: ProfileError[],
 ): TableLayout | null {
   if (raw === undefined || raw === null) return null;
@@ -838,21 +849,21 @@ function tableLayout(
     });
   }
 
+  // One list of labels, kept under the profile's mode (see the type).
   const statedTotalLabels: TableLayout["statedTotalLabels"] = {};
   const rawTotals = raw.statedTotalLabels ?? {};
   if (!isRecord(rawTotals)) {
     errors.push({
       path: at("statedTotalLabels"),
-      message: "The stated totals must be given per import mode.",
+      message: "The stated total labels must be given under the import mode.",
     });
   } else {
-    for (const [mode, labels] of Object.entries(rawTotals)) {
-      const totalPath = `${at("statedTotalLabels")}.${mode}`;
-      if (!(PROFILE_SECTION_MODES as readonly string[]).includes(mode)) {
+    for (const [key, labels] of Object.entries(rawTotals)) {
+      const totalPath = `${at("statedTotalLabels")}.${key}`;
+      if (key !== mode) {
         errors.push({
           path: totalPath,
-          message:
-            "A stated total is given for Summary or for Every transaction only.",
+          message: `This profile imports ${importModeLabel(mode)}, so its stated total is given for that only.`,
         });
         continue;
       }
@@ -860,9 +871,7 @@ function tableLayout(
         min: 0,
         max: LAYOUT_LIST_MAX,
       });
-      if (list.length > 0) {
-        statedTotalLabels[mode as ImportModeValue] = list;
-      }
+      if (list.length > 0) statedTotalLabels[mode] = list;
     }
   }
 
@@ -1506,6 +1515,7 @@ function section(
   path: string,
   seenKeys: Set<string>,
   headings: ReadonlySet<string> | null,
+  profileMode: ImportModeValue,
   errors: ProfileError[],
 ): { section: ProfileSection; enumCount: number } {
   const value = isRecord(raw) ? raw : {};
@@ -1548,14 +1558,14 @@ function section(
     { max: SECTION_DESCRIPTION_MAX, required: true },
   );
 
-  // Missing means Summary: every section saved before Every transaction
-  // existed is a Summary section.
-  const mode = value.mode ?? ImportMode.Summary;
-  if (!(PROFILE_SECTION_MODES as readonly unknown[]).includes(mode)) {
+  // A section no longer has a mode of its own: the profile's decides. One
+  // still sent with the other mode was saved when each section had its own,
+  // on a profile with sections in both modes, and saving it now would quietly
+  // read it the other way. It is refused until it is moved or kept on purpose.
+  if (isImportMode(value.mode) && value.mode !== profileMode) {
     errors.push({
       path: `${path}.mode`,
-      message:
-        "Choose whether the section is read in Summary or Every transaction.",
+      message: `This profile now reads one way: ${importModeLabel(profileMode)}. This section was read as ${importModeLabel(value.mode)}: move it to a new profile, or change the profile to ${importModeLabel(value.mode)}.`,
     });
   }
 
@@ -1634,7 +1644,6 @@ function section(
       key,
       name,
       description,
-      mode: mode as ProfileSectionMode,
       kind: kind as ProfileSectionKind,
       fixedCategoryAccountId,
       feeTypes: fees,
@@ -1733,22 +1742,45 @@ function readProfile(input: unknown): {
     });
   }
 
-  // The stated total each mode compares against, keyed by mode.
+  // What the profile imports (FR-002, FR-032). A profile sent without one,
+  // as an editor opened before the mode was on the profile sends it, gets the
+  // mode its sections were saved in.
+  let mode: ImportModeValue;
+  if (input.mode === undefined || input.mode === null) {
+    mode = legacyProfileMode(
+      Array.isArray(input.sections)
+        ? input.sections.map((raw) => ({
+            mode:
+              isRecord(raw) && isImportMode(raw.mode) ? raw.mode : undefined,
+          }))
+        : [],
+    );
+  } else if (isImportMode(input.mode)) {
+    mode = input.mode;
+  } else {
+    mode = ImportMode.Summary;
+    errors.push({
+      path: "mode",
+      message:
+        "Choose what the profile imports: Summary lines or Every transaction.",
+    });
+  }
+
+  // The stated total, kept under the profile's mode (see the type).
   const statedTotalLabels: ImportProfileDraft["statedTotalLabels"] = {};
   const rawLabels = input.statedTotalLabels ?? {};
   if (!isRecord(rawLabels)) {
     errors.push({
       path: "statedTotalLabels",
-      message: "The stated totals must be given per import mode.",
+      message: "The stated total must be given under the import mode.",
     });
   } else {
-    for (const [mode, label] of Object.entries(rawLabels)) {
-      const at = `statedTotalLabels.${mode}`;
-      if (!(PROFILE_SECTION_MODES as readonly string[]).includes(mode)) {
+    for (const [key, label] of Object.entries(rawLabels)) {
+      const at = `statedTotalLabels.${key}`;
+      if (key !== mode) {
         errors.push({
           path: at,
-          message:
-            "A stated total is given for Summary or for Every transaction only.",
+          message: `This profile imports ${importModeLabel(mode)}, so its stated total is given for that only.`,
         });
         continue;
       }
@@ -1756,7 +1788,7 @@ function readProfile(input: unknown): {
         max: SHORT_DESCRIPTION_MAX,
         required: false,
       });
-      if (cleaned) statedTotalLabels[mode as ProfileSectionMode] = cleaned;
+      if (cleaned) statedTotalLabels[mode] = cleaned;
     }
   }
 
@@ -1771,7 +1803,7 @@ function readProfile(input: unknown): {
 
   // The table layout, read before the sections: their row rules name its
   // columns (FR-053, FR-054).
-  const layout = tableLayout(input.layout, "layout", errors);
+  const layout = tableLayout(input.layout, "layout", mode, errors);
   const headings = layout ? new Set(layout.headers.map(foldTableText)) : null;
 
   // The sections, and the listed values they add up to.
@@ -1794,7 +1826,7 @@ function readProfile(input: unknown): {
     const seenKeys = new Set<string>();
     rawSections.forEach((raw, index) => {
       const path = `sections[${index}]`;
-      const read = section(raw, path, seenKeys, headings, errors);
+      const read = section(raw, path, seenKeys, headings, mode, errors);
       sections.push(read.section);
       enumCount += read.enumCount;
       if (enumCount > PROFILE_ENUM_VALUES_MAX && !enumReported) {
@@ -1834,6 +1866,7 @@ function readProfile(input: unknown): {
       description,
       phrases,
       instructions,
+      mode,
       statedTotalLabels,
       // A profile that names no account carries no key for it, as one saved
       // before the account existed does.
@@ -1846,12 +1879,18 @@ function readProfile(input: unknown): {
 }
 
 /**
- * Whether a problem stops a table from being read: one about the layout, or
- * about a section's key, mode, row rules or fee types, which say which rows
- * it takes. A missing name, description or account does not.
+ * Whether a problem stops a table from being read: one about the profile's
+ * mode or layout, or about a section's key, mode, row rules or fee types,
+ * which say which rows it takes. A missing name, description or account does
+ * not.
  */
 function stopsTableReading(path: string): boolean {
-  if (path === "sections" || path === "layout" || path.startsWith("layout."))
+  if (
+    path === "mode" ||
+    path === "sections" ||
+    path === "layout" ||
+    path.startsWith("layout.")
+  )
     return true;
   return /^sections\[\d+\](?:$|\.(?:key|mode|kind|rows|feeTypes)(?:$|[.[]))/.test(
     path,

@@ -135,7 +135,7 @@ describe("the form and the profile", () => {
     expect(layoutHeadings(layout)).toContain("Money Direction");
     layout.headersText = `${layout.headersText}\n  Fee  \n\n`;
     layout.directionInText = "Money In\nCredit";
-    layout.totalsText.every_transaction = "Total Money In\n";
+    layout.totalsText = "Total Money In\n";
     layout.balanceColumn = "";
     layout.remarkColumns = ["Fee"];
     layout.csvDelimiter = ";";
@@ -195,7 +195,8 @@ describe("the form and the profile", () => {
       flagNote: "",
       feeTypeColumn: null,
     });
-    expect(readsFromColumns(result.profile, "summary")).toBe(true);
+    expect(result.profile.mode).toBe("summary");
+    expect(readsFromColumns(result.profile)).toBe(true);
 
     form.layout = null;
     const refused = checkProfile(payloadFromForm(form));
@@ -230,7 +231,6 @@ describe("the form and the profile", () => {
           key: "withdrawals",
           name: "Withdrawals",
           description: "Each withdrawal to the bank.",
-          mode: "summary" as const,
           kind: "transfer" as const,
           fixedCategoryAccountId: null,
           feeTypes: [],
@@ -278,6 +278,7 @@ describe("the form and the profile", () => {
       description: "A marketplace wallet report.",
       phrases: [],
       instructions: "",
+      mode: "every_transaction" as const,
       statedTotalLabels: {},
       accountId: 7,
       layout: walletLayout(),
@@ -291,46 +292,114 @@ describe("the form and the profile", () => {
     });
   });
 
-  it("starts a new section in Summary, and sends each section's own mode", () => {
+  it("starts a new profile in Summary, and sends the mode on the profile, never on a section", () => {
     const form = blankForm();
-    form.sections.push(newSection("every_transaction"));
+    expect(form.mode).toBe("summary");
+    form.sections.push(newSection());
+    form.mode = "every_transaction";
     const payload = payloadFromForm(form) as {
-      sections: { mode: string }[];
+      mode: string;
+      sections: Record<string, unknown>[];
     };
-    expect(payload.sections.map((section) => section.mode)).toEqual([
-      "summary",
-      "every_transaction",
-    ]);
+    expect(payload.mode).toBe("every_transaction");
+    for (const section of payload.sections) {
+      expect(section).not.toHaveProperty("mode");
+    }
   });
 
-  it("sends no stated total when the label is empty", () => {
+  it("sends the one stated total under the profile's mode, and none when empty", () => {
     const form = blankForm();
-    form.statedTotals.summary = "   ";
+    form.statedTotal = "   ";
     expect(payloadFromForm(form).statedTotalLabels).toEqual({});
-    form.statedTotals.summary = "Total charges";
+    form.statedTotal = "Total charges";
     expect(payloadFromForm(form).statedTotalLabels).toEqual({
       summary: "Total charges",
     });
+    // Changing what the profile imports moves the total with it.
+    form.mode = "every_transaction";
+    expect(payloadFromForm(form).statedTotalLabels).toEqual({
+      every_transaction: "Total charges",
+    });
   });
 
-  it("keeps each mode's sections and stated total through the form", () => {
-    const draft = starterDraft("marketplace_summary")!;
-    draft.sections[1] = { ...draft.sections[1], mode: "every_transaction" };
-    draft.statedTotalLabels = {
-      summary: "Total payout released",
-      every_transaction: " Total money in ",
-    };
-    const result = checkProfile(payloadFromForm(formFromDraft(draft)));
+  it("keeps the profile's mode and its stated totals through the form", () => {
+    const draft = withAccounts(starterDraft("wallet_every_transaction")!);
+    draft.statedTotalLabels = { every_transaction: " Total money in " };
+    const form = formFromDraft(draft);
+    expect(form.mode).toBe("every_transaction");
+    expect(form.statedTotal).toBe(" Total money in ");
+    expect(form.layout!.totalsText).toBe("Total Money In\nTotal Money Out");
+    const result = checkProfile(payloadFromForm(form));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.profile.sections.map((section) => section.mode)).toEqual([
-      "summary",
-      "every_transaction",
-    ]);
+    expect(result.profile.mode).toBe("every_transaction");
     expect(result.profile.statedTotalLabels).toEqual({
-      summary: "Total payout released",
       every_transaction: "Total money in",
     });
+    expect(result.profile.layout!.statedTotalLabels).toEqual({
+      every_transaction: ["Total Money In", "Total Money Out"],
+    });
+  });
+
+  it("reads only the profile mode's stated total of a profile saved with one per mode", () => {
+    const draft: ImportProfileDraft = {
+      ...starterDraft("marketplace_summary")!,
+      statedTotalLabels: {
+        summary: "Total payout released",
+        every_transaction: "Total money in",
+      },
+    };
+    const form = formFromDraft(draft);
+    expect(form.statedTotal).toBe("Total payout released");
+    const result = checkProfile(payloadFromForm(form));
+    expect(result.ok && result.profile.statedTotalLabels).toEqual({
+      summary: "Total payout released",
+    });
+  });
+
+  it("keeps a section saved in the other mode as a problem until it is moved or kept (FR-032)", () => {
+    // A profile from when each section had its own mode, with both: it
+    // reads Summary, and its Every transaction section is flagged.
+    const base = starterDraft("marketplace_summary")!;
+    const draft: ImportProfileDraft = {
+      ...base,
+      mode: "summary",
+      sections: [
+        { ...base.sections[0], mode: "summary" },
+        { ...base.sections[1], mode: "every_transaction" },
+      ],
+    };
+    const form = formFromDraft(draft);
+    expect(form.sections.map((section) => section.legacyMode)).toEqual([
+      null,
+      "every_transaction",
+    ]);
+    const payload = payloadFromForm(form) as {
+      sections: Record<string, unknown>[];
+    };
+    expect(payload.sections[0]).not.toHaveProperty("mode");
+    expect(payload.sections[1].mode).toBe("every_transaction");
+    const refused = checkProfile(payload);
+    expect(refused.ok === false && refused.errors.map((e) => e.path)).toEqual([
+      "sections[1].mode",
+    ]);
+
+    // Changing the profile to that mode settles it: every section then reads
+    // Every transaction, as the user chose.
+    form.mode = "every_transaction";
+    const changed = checkProfile(payloadFromForm(form));
+    expect(changed.ok).toBe(true);
+
+    // So does keeping the section, which reads it in the profile's mode.
+    form.mode = "summary";
+    form.sections[1].legacyMode = null;
+    const kept = checkProfile(payloadFromForm(form));
+    expect(kept.ok).toBe(true);
+    if (!kept.ok) return;
+    expect(kept.profile.mode).toBe("summary");
+    expect(kept.profile.sections.every((section) => !("mode" in section))).toBe(
+      true,
+    );
   });
 
   it("sends the extra fields as typed, and the check reads them", () => {

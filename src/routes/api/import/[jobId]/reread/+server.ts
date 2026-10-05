@@ -15,8 +15,9 @@ import type { RequestHandler } from "./$types.js";
  * "Read again" (006 FR-023, US9 AS6-7): reads the document once more from
  * the file already uploaded, as `readAs` now names it, and replaces what the
  * last reading proposed. `readAs` takes the words an upload's "Read as" takes:
- * `auto`, `receipt`, `items` or `profile:<id>`; `importMode` the words its
- * "Import" takes, `summary` (when left out) or `every_transaction` (FR-023).
+ * `auto`, `receipt`, `items` or `profile:<id>`. A profile is read in its own
+ * import mode (FR-023), so there is no other choice; an `importMode` field
+ * an older screen still sends is dropped unread.
  *
  * It needs two permissions. Reading a document needs the upload permission
  * and nothing more (FR-045), so `import.add`. It also throws away the items
@@ -31,7 +32,6 @@ import type { RequestHandler } from "./$types.js";
  */
 const bodySchema = z.object({
   readAs: z.string().max(64),
-  importMode: z.string().max(64).optional(),
 });
 
 export const POST: RequestHandler = async ({ locals, params, request }) => {
@@ -46,13 +46,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return badRequest(parsed.error);
 
-  const done = readDocumentAgain(
-    db,
-    params.jobId,
-    parsed.data.readAs,
-    parsed.data.importMode,
-    { actingUserId: locals.user.id },
-  );
+  const done = readDocumentAgain(db, params.jobId, parsed.data.readAs, {
+    actingUserId: locals.user.id,
+  });
   if (!done.ok) {
     if (done.kind === "missing") return notFound(done.reason);
     if (done.kind === "invalid") {

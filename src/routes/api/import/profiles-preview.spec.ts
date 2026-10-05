@@ -256,13 +256,34 @@ describe("POST /api/import/profiles/preview", { timeout: 30_000 }, () => {
     storedNothing();
   });
 
-  it("refuses a mode no section is read in", async () => {
+  it("reads in the profile's own mode, and does not read a mode field", async () => {
     const res = await preview(
       { name: "wallet.xlsx", data: walletWorkbook().xlsx },
       editorPayload("wallet_withdrawals"),
       { mode: "summary" },
     );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      mode: "every_transaction",
+      itemCount: 10,
+    });
+  });
+
+  it("refuses a section saved in the other mode until it is moved or kept (FR-032)", async () => {
+    const payload = editorPayload("wallet_withdrawals") as {
+      sections: Record<string, unknown>[];
+    };
+    // As a profile saved when each section had its own mode sends it.
+    payload.sections[0].mode = "summary";
+    const res = await preview(
+      { name: "wallet.xlsx", data: walletWorkbook().xlsx },
+      payload,
+    );
     expect(res.status).toBe(422);
-    expect((await res.json()).error).toMatch(/No section is read in Summary/);
+    const body = await res.json();
+    expect(body.errors.map((e: { path: string }) => e.path)).toEqual([
+      "sections[0].mode",
+    ]);
+    storedNothing();
   });
 });

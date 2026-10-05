@@ -230,6 +230,7 @@ function fullProfile(over: Partial<ProfileInput> = {}): ProfileInput {
     description: "A marketplace wallet's list of money in and out.",
     phrases: [],
     instructions: "",
+    mode: ImportMode.EveryTransaction,
     statedTotalLabels: {},
     accountId: ids.wallet,
     layout: walletLayout(),
@@ -324,7 +325,6 @@ function queueFile(
       tempFilePath,
       originalFilename: filename,
       fileHash: `hash-${id}`,
-      importMode: ImportMode.EveryTransaction,
       ...over,
     })
     .run();
@@ -533,21 +533,19 @@ describe("reading a spreadsheet from its columns", () => {
     );
   });
 
-  it("still asks the AI for a mode whose sections have no row rules, and needs a provider for it (FR-057)", async () => {
-    const summary = fullProfile().sections.map((section) => ({
-      ...section,
-      key: `${section.key}_s`,
-      mode: ImportMode.Summary,
-      rows: undefined,
-    }));
+  it("still asks the AI when a section has no row rules, and needs a provider for it (FR-057)", async () => {
+    // One section without row rules is enough: the table layout alone does
+    // not say which rows it takes.
+    const [first, ...rest] = fullProfile().sections;
+    const { rows: _rows, ...withoutRules } = first;
+    void _rows;
     const profileId = saveProfile(
-      fullProfile({ sections: [...fullProfile().sections, ...summary] }),
+      fullProfile({ sections: [withoutRules, ...rest] }),
     );
     const row = await run(
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Profile,
         profileId: String(profileId),
-        importMode: ImportMode.Summary,
       }),
     );
     expect(row.state).toBe(ImportState.Failed);
@@ -732,15 +730,14 @@ describe("Auto-detect on a spreadsheet", () => {
     );
   });
 
-  it("reads a profile with Every transaction sections only from columns when Summary was chosen, with no provider (FR-002)", async () => {
-    // The default Import is Summary; the profile has nothing to read in it,
-    // so it is read in its one mode, and needs no AI at any step.
+  it("detects an Every transaction profile and reads it in its own mode from columns, with no provider (FR-002)", async () => {
+    // Auto-detect stores no mode until it finds a profile; the profile's own
+    // mode is then stored, and no AI is needed at any step.
     const profileId = saveProfile(withdrawalsProfile());
     const row = await run(
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Auto,
         readHow: ImportReadHow.Standard,
-        importMode: ImportMode.Summary,
       }),
     );
     expect(row).toMatchObject({
@@ -872,12 +869,14 @@ describe("the wallet report starters", () => {
     }
   });
 
-  it("read under the default Summary, in their one mode, with no provider (FR-002)", async () => {
+  it("read in their own mode, Every transaction, with no provider (FR-002)", async () => {
     const profileId = fromStarter("wallet_withdrawals");
     const row = await run(
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Profile,
         profileId: String(profileId),
+        // A row queued by a screen from before the mode moved to the
+        // profile may still say Summary; the profile's own mode decides.
         importMode: ImportMode.Summary,
       }),
     );
@@ -896,7 +895,6 @@ describe("the wallet report starters", () => {
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Auto,
         readHow: ImportReadHow.Standard,
-        importMode: ImportMode.Summary,
       }),
     );
     expect(row.state).toBe(ImportState.Failed);

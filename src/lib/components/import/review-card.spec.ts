@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { AccountType, DocumentType } from "$lib/enums.js";
 import {
   describeReading,
-  fixedModeOf,
   readingProgressLabel,
   hasProfileChoice,
   readAsOfJob,
@@ -148,8 +147,8 @@ describe("describeReading", () => {
     expect(
       describeReading({ readAs: "auto", readHow: "detected", profile: every }),
     ).toBe("Read with “Wallet report” (detected) · Every transaction");
-    // A profile with Summary sections only is read as Summary whatever
-    // "Import" said, so the screen says Summary as well.
+    // A Summary profile says Summary as well: every profile reads one mode,
+    // and the copy kept with the reading names it.
     expect(
       describeReading({
         readAs: "profile",
@@ -207,30 +206,6 @@ describe("describeReading", () => {
         extractionNotes: notes("ai"),
       }),
     ).toBe("Read with “Wallet report” (chosen) · Every transaction");
-  });
-});
-
-describe("fixedModeOf", () => {
-  const choices = [
-    { value: "auto", label: "Auto-detect" },
-    { value: "profile:1", label: "Wallet", modes: ["every_transaction"] },
-    { value: "profile:2", label: "Fees", modes: ["summary"] },
-    {
-      value: "profile:3",
-      label: "Statement",
-      modes: ["summary", "every_transaction"],
-    },
-  ];
-
-  it("gives the one mode of a profile with sections in one mode only (FR-002)", () => {
-    expect(fixedModeOf(choices, "profile:1")).toBe("every_transaction");
-    expect(fixedModeOf(choices, "profile:2")).toBe("summary");
-  });
-
-  it("leaves the choice to Import for a profile with both, and for anything else", () => {
-    expect(fixedModeOf(choices, "profile:3")).toBeNull();
-    expect(fixedModeOf(choices, "auto")).toBeNull();
-    expect(fixedModeOf(choices, "profile:9")).toBeNull();
   });
 });
 

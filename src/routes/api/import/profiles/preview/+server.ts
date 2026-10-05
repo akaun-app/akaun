@@ -23,8 +23,9 @@ import type { RequestHandler } from "./$types.js";
  * an amount written in another currency's code is checked against, as an
  * upload is.
  *
- * The body is a form: `file` (an `.xlsx` or `.csv`), `profile` (the editor's
- * payload, as JSON) and optionally `mode` (Summary or Every transaction).
+ * The body is a form: `file` (an `.xlsx` or `.csv`) and `profile` (the
+ * editor's payload, as JSON). The sample is read in the profile's own import
+ * mode; a `mode` field an older editor still sends is not read.
  */
 export const POST: RequestHandler = async ({ locals, request }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
@@ -71,7 +72,6 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     profile,
     { bytes: new Uint8Array(buffer), type: sniffed.type },
     {
-      mode: form.get("mode"),
       mainCurrency: mainCurrencyCode(db),
       today: new Date().toISOString().slice(0, 10),
     },

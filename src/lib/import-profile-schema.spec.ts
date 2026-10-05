@@ -10,6 +10,8 @@ import {
   extraFieldsOf,
   foldTableText,
   formatProfileErrors,
+  legacyProfileMode,
+  profileSections,
   readsFromColumns,
   validateExtrasFragment,
   validateProfile,
@@ -38,13 +40,13 @@ function profile(): ImportProfileDraft {
     description: "A monthly advertising invoice.",
     phrases: ["Ads e-Invoice"],
     instructions: "- Read each ad charge.",
+    mode: "summary",
     statedTotalLabels: { summary: "Total charges" },
     sections: [
       {
         key: "fees",
         name: "Fees",
         description: "Each ad charge line.",
-        mode: "summary",
         kind: "expense",
         fixedCategoryAccountId: null,
         feeTypes: [
@@ -119,11 +121,8 @@ describe("starters", () => {
       expect(draft.layout?.sheet).toBeNull();
       expect(draft.layout?.headers).toContain("Transaction Type");
       expect(draft.layout?.balanceColumn).toBe("Balance After Transactions");
-      for (const mode of ["summary", "every_transaction"] as const) {
-        expect(readsFromColumns(draft, mode)).toBe(
-          mode === "every_transaction",
-        );
-      }
+      expect(draft.mode).toBe("every_transaction");
+      expect(readsFromColumns(draft)).toBe(true);
     }
     // Withdrawals only has no control total: its rows are a few of the
     // report's, and the report totals all of them.
@@ -166,10 +165,22 @@ describe("starters", () => {
   });
 
   it("reads a document starter in Summary and a wallet report in Every transaction", () => {
+    const modes = Object.fromEntries(
+      IMPORT_PROFILE_STARTERS.map((starter) => [
+        starter.id,
+        starter.draft.mode,
+      ]),
+    );
+    expect(modes).toEqual({
+      fee_document: "summary",
+      marketplace_summary: "summary",
+      wallet_withdrawals: "every_transaction",
+      wallet_every_transaction: "every_transaction",
+    });
     for (const starter of IMPORT_PROFILE_STARTERS) {
-      const mode = starter.draft.layout ? "every_transaction" : "summary";
+      // The mode is the profile's: no section carries one of its own.
       for (const section of starter.draft.sections) {
-        expect(section.mode).toBe(mode);
+        expect(section).not.toHaveProperty("mode");
       }
       expect(Object.keys(starter.draft.statedTotalLabels)).toEqual(
         starter.draft.layout ? [] : ["summary"],
@@ -195,6 +206,7 @@ describe("checkProfile", () => {
     expect(result.ok && Object.keys(result.profile).sort()).toEqual([
       "description",
       "instructions",
+      "mode",
       "name",
       "phrases",
       "sections",
@@ -202,60 +214,114 @@ describe("checkProfile", () => {
     ]);
   });
 
-  it("reads a section with no mode as Summary", () => {
-    const input = profile() as unknown as {
-      sections: Record<string, unknown>[];
+  it("keeps the profile's one import mode (FR-032)", () => {
+    const input = {
+      ...profile(),
+      mode: "every_transaction" as const,
+      statedTotalLabels: { every_transaction: "  Total money in  " },
     };
-    delete input.sections[0].mode;
-    const result = checkProfile(input);
-    expect(result.ok && result.profile.sections[0].mode).toBe("summary");
-  });
-
-  it("keeps each section's own mode, Every transaction included", () => {
-    const input = profile();
-    input.sections.push({
-      ...input.sections[0],
-      key: "rows",
-      name: "Transactions",
-      mode: "every_transaction",
-    });
     const result = checkProfile(input);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.profile.sections.map((section) => section.mode)).toEqual([
-      "summary",
-      "every_transaction",
-    ]);
-  });
-
-  it("keeps a stated total per mode", () => {
-    const input = profile();
-    input.statedTotalLabels = {
-      summary: "Total charges",
-      every_transaction: "  Total money in  ",
-    };
-    const result = checkProfile(input);
-    expect(result.ok && result.profile.statedTotalLabels).toEqual({
-      summary: "Total charges",
+    expect(result.profile.mode).toBe("every_transaction");
+    expect(result.profile.statedTotalLabels).toEqual({
       every_transaction: "Total money in",
     });
   });
 
-  it("refuses a mode or a stated-total mode it does not know", () => {
+  it("refuses a mode it does not know", () => {
+    const errors = validateProfile({ ...profile(), mode: "everything" });
+    expect(paths(errors)).toEqual(["mode"]);
+    expect(errors[0].message).toBe(
+      "Choose what the profile imports: Summary lines or Every transaction.",
+    );
+  });
+
+  it("refuses a stated total under any key but the profile's mode", () => {
+    const input = profile();
+    input.statedTotalLabels = {
+      summary: "Total charges",
+      every_transaction: "Total money in",
+    };
+    const errors = validateProfile(input);
+    expect(paths(errors)).toEqual(["statedTotalLabels.every_transaction"]);
+    expect(errors[0].message).toBe(
+      "This profile imports Summary, so its stated total is given for that only.",
+    );
+    const unknown = validateProfile({
+      ...profile(),
+      statedTotalLabels: { everything: "Total" },
+    });
+    expect(paths(unknown)).toEqual(["statedTotalLabels.everything"]);
+  });
+
+  it("never keeps a section's own mode: the profile's decides", () => {
     const input = profile() as unknown as {
       sections: Record<string, unknown>[];
-      statedTotalLabels: Record<string, string>;
     };
+    input.sections[0].mode = "summary";
+    const result = checkProfile(input);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.profile.sections[0]).not.toHaveProperty("mode");
+    // A value that is no mode at all is dropped the same way.
     input.sections[0].mode = "everything";
-    input.statedTotalLabels.everything = "Total";
-    const errors = validateProfile(input);
-    expect(paths(errors)).toEqual([
-      "statedTotalLabels.everything",
-      "sections[0].mode",
-    ]);
-    expect(errors[1].message).toBe(
-      "Choose whether the section is read in Summary or Every transaction.",
-    );
+    const odd = checkProfile(input);
+    expect(odd.ok && odd.profile.sections[0]).not.toHaveProperty("mode");
+  });
+
+  describe("a profile sent with no mode, as an older editor sends it", () => {
+    /** The profile with no profile mode, its sections in these modes. */
+    function legacy(...modes: (string | undefined)[]) {
+      const base = profile() as unknown as Record<string, unknown> & {
+        sections: Record<string, unknown>[];
+      };
+      delete base.mode;
+      base.statedTotalLabels = {};
+      base.sections = modes.map((mode, index) => ({
+        ...profile().sections[0],
+        key: `part_${index + 1}`,
+        ...(mode ? { mode } : {}),
+      }));
+      return base;
+    }
+
+    it("gets Every transaction when every section was in it", () => {
+      const result = checkProfile(
+        legacy("every_transaction", "every_transaction"),
+      );
+      expect(result.ok && result.profile.mode).toBe("every_transaction");
+      expect(result.ok && result.profile.sections[0]).not.toHaveProperty(
+        "mode",
+      );
+    });
+
+    it("gets Summary when no section had a mode, or every one was Summary", () => {
+      expect(checkProfile(legacy(undefined)).ok).toBe(true);
+      const none = checkProfile(legacy(undefined, undefined));
+      expect(none.ok && none.profile.mode).toBe("summary");
+      const summary = checkProfile(legacy("summary", undefined));
+      expect(summary.ok && summary.profile.mode).toBe("summary");
+    });
+
+    it("gets Summary with a problem on each Every transaction section when they were mixed", () => {
+      const errors = validateProfile(
+        legacy("summary", "every_transaction", undefined),
+      );
+      expect(paths(errors)).toEqual(["sections[1].mode"]);
+      expect(errors[0].message).toBe(
+        "This profile now reads one way: Summary. This section was read as Every transaction: move it to a new profile, or change the profile to Every transaction.",
+      );
+    });
+
+    it("is refused the same way when the editor sends the profile's mode with an old section", () => {
+      const input = legacy("summary", "every_transaction");
+      expect(paths(validateProfile({ ...input, mode: "summary" }))).toEqual([
+        "sections[1].mode",
+      ]);
+      expect(
+        paths(validateProfile({ ...input, mode: "every_transaction" })),
+      ).toEqual(["sections[0].mode"]);
+    });
   });
 
   it("names each missing required field", () => {
@@ -686,6 +752,7 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
       description: "A marketplace wallet report.",
       phrases: [],
       instructions: "",
+      mode: "every_transaction",
       statedTotalLabels: {},
       accountId: 40,
       layout: walletLayout(),
@@ -916,23 +983,55 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
     ]);
   });
 
-  it("says which profiles read a mode from columns: a layout, and rules on every section of it", () => {
+  it("says which profiles read from columns: a layout, and rules on every section it reads", () => {
     const result = checkProfile(wallet());
     if (!result.ok) throw new Error("not ok");
     const profile = result.profile;
-    expect(readsFromColumns(profile, "every_transaction")).toBe(true);
-    expect(readsFromColumns(profile, "summary")).toBe(false);
-    const mixed = {
-      ...profile,
-      sections: [
-        ...profile.sections,
-        { ...profile.sections[0], key: "other", rows: undefined },
-      ],
-    };
-    expect(readsFromColumns(mixed, "every_transaction")).toBe(false);
+    expect(readsFromColumns(profile)).toBe(true);
+    const noRules = { ...profile.sections[0], key: "other", rows: undefined };
     expect(
-      readsFromColumns({ ...profile, layout: null }, "every_transaction"),
+      readsFromColumns({
+        ...profile,
+        sections: [...profile.sections, noRules],
+      }),
     ).toBe(false);
+    expect(readsFromColumns({ ...profile, layout: null })).toBe(false);
+    // A section saved in the other mode, on a profile from when each section
+    // had its own, is not read, so its missing rules do not count.
+    expect(
+      readsFromColumns({
+        ...profile,
+        sections: [...profile.sections, { ...noRules, mode: "summary" }],
+      }),
+    ).toBe(true);
+    // A profile whose only sections are in the other mode reads nothing.
+    expect(
+      readsFromColumns({
+        ...profile,
+        mode: "summary",
+        sections: profile.sections.map((section) => ({
+          ...section,
+          mode: "every_transaction" as const,
+        })),
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses layout stated total labels under any key but the profile's mode", () => {
+    const errors = errorsOf((value) => {
+      value.layout.statedTotalLabels = { summary: ["Total Money In"] };
+    });
+    expect(errors).toEqual([
+      {
+        path: "layout.statedTotalLabels.summary",
+        message:
+          "This profile imports Every transaction, so its stated total is given for that only.",
+      },
+    ]);
+    const kept = checkProfile(wallet());
+    expect(kept.ok && kept.profile.layout?.statedTotalLabels).toEqual({
+      every_transaction: ["Total Money In", "Total Money Out"],
+    });
   });
 
   it("folds case and spacing the one way the reader does", () => {
@@ -1016,6 +1115,7 @@ describe("checkTablePreview", () => {
       description: "",
       phrases: [],
       instructions: "",
+      mode: "every_transaction",
       statedTotalLabels: {},
       layout: walletLayout(),
       sections: [withdrawalSection(41)],
@@ -1077,5 +1177,50 @@ describe("checkTablePreview", () => {
       ok: false,
       errors: [{ path: "sections" }],
     });
+  });
+});
+
+describe("the profile's import mode (FR-032)", () => {
+  const section = (mode?: "summary" | "every_transaction") => ({
+    key: "k",
+    ...(mode ? { mode } : {}),
+  });
+
+  it("works out an older profile's mode from its sections", () => {
+    expect(
+      legacyProfileMode([
+        section("every_transaction"),
+        section("every_transaction"),
+      ]),
+    ).toBe("every_transaction");
+    expect(legacyProfileMode([section("summary"), section("summary")])).toBe(
+      "summary",
+    );
+    // A section with no mode was a Summary one.
+    expect(legacyProfileMode([section(), section()])).toBe("summary");
+    expect(legacyProfileMode([])).toBe("summary");
+    // Mixed: Summary, and the editor shows a problem on the others.
+    expect(
+      legacyProfileMode([section("summary"), section("every_transaction")]),
+    ).toBe("summary");
+    expect(legacyProfileMode([section(), section("every_transaction")])).toBe(
+      "summary",
+    );
+  });
+
+  it("reads every section with no mode, and those saved in the profile's mode", () => {
+    const sections = [
+      { ...section(), key: "a" },
+      { ...section("summary"), key: "b" },
+      { ...section("every_transaction"), key: "c" },
+    ];
+    expect(
+      profileSections({ mode: "summary", sections }).map((s) => s.key),
+    ).toEqual(["a", "b"]);
+    expect(
+      profileSections({ mode: "every_transaction", sections }).map(
+        (s) => s.key,
+      ),
+    ).toEqual(["a", "c"]);
   });
 });

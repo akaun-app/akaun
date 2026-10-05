@@ -236,6 +236,7 @@ function walletProfile(over: Partial<ProfileInput> = {}): ProfileInput {
     description: "A marketplace wallet's list of money in and out.",
     phrases: [],
     instructions: "",
+    mode: "summary",
     statedTotalLabels: { summary: "Net change" },
     accountId: ids.wallet,
     sections: [
@@ -243,7 +244,6 @@ function walletProfile(over: Partial<ProfileInput> = {}): ProfileInput {
         key: "orders",
         name: "Order income",
         description: "Each order paid into the wallet.",
-        mode: "summary",
         kind: "income",
         fixedCategoryAccountId: ids.sales,
         feeTypes: [],
@@ -253,7 +253,6 @@ function walletProfile(over: Partial<ProfileInput> = {}): ProfileInput {
         key: "withdrawals",
         name: "Withdrawals",
         description: "Each withdrawal to the bank, and any that came back.",
-        mode: "summary",
         kind: "transfer",
         fixedCategoryAccountId: null,
         feeTypes: [],
@@ -476,16 +475,20 @@ describe("a profile's transfer section", () => {
     ]);
   });
 
-  it("keeps the profile's account in its options, and reads it back", () => {
+  it("keeps the profile's account and mode in its options, and reads them back", () => {
     const id = saveProfile(walletProfile());
     const row = db
       .select({ optionsJson: importProfiles.optionsJson })
       .from(importProfiles)
       .where(eq(importProfiles.id, id))
       .get();
-    expect(JSON.parse(row!.optionsJson)).toEqual({ accountId: ids.wallet });
+    expect(JSON.parse(row!.optionsJson)).toEqual({
+      accountId: ids.wallet,
+      mode: "summary",
+    });
     const saved = getImportProfile(db, id)!;
     expect(saved.accountId).toBe(ids.wallet);
+    expect(saved.mode).toBe("summary");
     expect(saved.sections[1].counterAccountId).toBe(ids.bank);
   });
 

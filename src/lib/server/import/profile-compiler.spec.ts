@@ -1,10 +1,8 @@
 import type { JSONSchema7 } from "ai";
 import { describe, expect, it } from "vitest";
 import { checkProfile } from "$lib/import-profile-schema.js";
-import { ImportMode } from "$lib/import-reading.js";
 import { IMPORT_PROFILE_STARTERS } from "$lib/import-profile-starters.js";
 import {
-  ProfileModeError,
   SEVERAL_ITEMS_PROFILE,
   compileHeaderPart,
   compileLinesPart,
@@ -350,6 +348,7 @@ const shopLike = {
   description: "A marketplace's monthly statement.",
   phrases: [],
   instructions: "- Shop guidance from the profile.",
+  mode: "summary",
   statedTotalLabels: { summary: "Total Payout Released" },
   sections: [
     {
@@ -446,7 +445,7 @@ describe("the parts of a reading in pieces (FR-043)", () => {
 });
 
 describe("savedReadingProfile", () => {
-  const reading = savedReadingProfile(saved(shopLike), ImportMode.Summary);
+  const reading = savedReadingProfile(saved(shopLike));
   const compiled = compileProfile(reading);
 
   // A wallet report starter is read from its columns, by code: it sends no
@@ -612,25 +611,28 @@ describe("savedReadingProfile", () => {
     ).toContain("Always null");
   });
 
-  it("stops, naming the profile and the mode, when no section is in that mode", () => {
+  it("throws, naming the profile, when it has no section to read", () => {
+    // Every saved profile has a section; a row with none is damaged, and the
+    // worker names it before compiling (process-job.ts).
     const attempt = () =>
-      savedReadingProfile(saved(shopLike), ImportMode.EveryTransaction);
-    expect(attempt).toThrow(ProfileModeError);
-    // It names the other mode, the one to choose under Import.
+      savedReadingProfile({ ...saved(shopLike), sections: [] });
     expect(attempt).toThrow(
-      'The import profile "Shop statement" has no section for Every transaction, so nothing was read. Choose Summary under Import.',
+      'The import profile "Shop statement" has no section to read.',
     );
   });
 
-  it("reads only the chosen mode's sections, against that mode's stated total", () => {
-    const both = saved({
-      ...shopLike,
+  it("reads a legacy profile with sections in both modes in its own mode only (FR-032)", () => {
+    // As a profile saved when each section had its own mode comes back from
+    // the database: the profile mode worked out as Summary, one section still
+    // marked Every transaction, and a stated total kept under each mode.
+    const legacy: SavedProfile = {
+      ...saved(shopLike),
       statedTotalLabels: {
         summary: "Total Payout Released",
         every_transaction: "Total Money In",
       },
       sections: [
-        ...shopLike.sections,
+        ...saved(shopLike).sections,
         {
           key: "rows",
           name: "Transactions",
@@ -642,16 +644,9 @@ describe("savedReadingProfile", () => {
           extras: null,
         },
       ],
-    });
+    };
 
-    const every = savedReadingProfile(both, ImportMode.EveryTransaction);
-    expect(every.sections.map((section) => section.key)).toEqual(["rows"]);
-    expect(every.statedTotalDescription).toContain(
-      "The figure the document prints for: Total Money In.",
-    );
-    expect(every.statedTotalDescription).not.toContain("Payout");
-
-    const summary = savedReadingProfile(both, ImportMode.Summary);
+    const summary = savedReadingProfile(legacy);
     expect(summary.sections.map((section) => section.key)).toEqual([
       "sales",
       "fees",
@@ -660,22 +655,53 @@ describe("savedReadingProfile", () => {
     expect(summary.statedTotalDescription).toContain(
       "The figure the document prints for: Total Payout Released.",
     );
+    expect(summary.statedTotalDescription).not.toContain("Money In");
+    expect(summary.ownReferencesOnly).toBeUndefined();
+
+    // Changed to Every transaction, the same profile reads every section
+    // that has no other mode, and the other mode's total.
+    const every = savedReadingProfile({ ...legacy, mode: "every_transaction" });
+    expect(every.sections.map((section) => section.key)).toEqual([
+      "sales",
+      "fees",
+      "pinned",
+      "rows",
+    ]);
+    expect(every.statedTotalDescription).toContain(
+      "The figure the document prints for: Total Money In.",
+    );
     // The two readings send different schemas, so they are named apart.
     expect(every.schemaId).not.toBe(summary.schemaId);
   });
 
-  it("has no stated total in a mode the profile names no total for", () => {
+  it("reads every section of an Every transaction profile with only its own references (FR-062)", () => {
     const profile = savedReadingProfile(
       saved({
         ...shopLike,
-        sections: shopLike.sections.map((section) => ({
-          ...section,
-          mode: "every_transaction",
-        })),
+        mode: "every_transaction",
+        statedTotalLabels: { every_transaction: "Total Money In" },
       }),
-      ImportMode.EveryTransaction,
     );
-    // Only the Summary label is set: it is never borrowed for another mode.
+    expect(profile.sections.map((section) => section.key)).toEqual([
+      "sales",
+      "fees",
+      "pinned",
+    ]);
+    expect(profile.ownReferencesOnly).toBe(true);
+    expect(profile.statedTotalDescription).toContain("Total Money In");
+  });
+
+  it("has no stated total when the label is kept under the other mode", () => {
+    // A legacy row may keep a Summary label on an Every transaction profile:
+    // it is never borrowed for the profile's own mode.
+    const profile = savedReadingProfile({
+      ...saved({
+        ...shopLike,
+        mode: "every_transaction",
+        statedTotalLabels: {},
+      }),
+      statedTotalLabels: { summary: "Total Payout Released" },
+    });
     expect(profile.statedTotalDescription).toBeNull();
   });
 });

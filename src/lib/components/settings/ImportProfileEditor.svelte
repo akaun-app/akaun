@@ -22,10 +22,9 @@
 		checkProfile,
 		type ProfileError,
 		type ProfileSectionKind,
-		type ProfileSectionMode,
 		type RowConditionOp
 	} from '$lib/import-profile-schema.js';
-	import { ImportMode, importModeLabel } from '$lib/import-reading.js';
+	import { ImportMode, importModeLabel, type ImportModeValue } from '$lib/import-reading.js';
 	import { IMPORT_PROFILE_STARTERS, starterDraft, type ImportProfileStarterId } from '$lib/import-profile-starters.js';
 	import {
 		blankForm,
@@ -60,9 +59,12 @@
 	 * "Advanced: extra fields", checked as it is typed by the same check the
 	 * server runs (the sequence-template pattern), so the two never disagree.
 	 *
-	 * Each section says which import mode reads it, Summary or Every
-	 * transaction (FR-031), and each mode has its own stated total, since a
-	 * summary and a transaction table total different lines.
+	 * The profile says what it imports, once: Summary lines or Every
+	 * transaction (FR-002, FR-032). Every section is read that way, and there
+	 * is one stated total. To read one kind of document both ways, make two
+	 * profiles. A profile saved when each section had its own mode, with
+	 * sections in both, shows a problem on the sections in the other mode
+	 * until they are moved or kept on purpose.
 	 *
 	 * A section can be a Transfer between the profile's account and another
 	 * account that holds money (FR-058), and can name other profiles whose
@@ -199,17 +201,18 @@
 	}
 
 	// ── Editing ────────────────────────────────────────────────────────────────
-	const MODES: { value: ProfileSectionMode; label: string }[] = [
-		{ value: ImportMode.Summary, label: 'Summary' },
-		{ value: ImportMode.EveryTransaction, label: 'Every transaction' }
+	const MODES: { value: ImportModeValue; label: string; hint: string }[] = [
+		{
+			value: ImportMode.Summary,
+			label: 'Summary lines',
+			hint: 'One item for each line of the summary, such as total sales or each kind of fee.'
+		},
+		{
+			value: ImportMode.EveryTransaction,
+			label: 'Every transaction',
+			hint: 'One item for each row of the transaction table.'
+		}
 	];
-
-	// The Every transaction stated total is shown once a section is read in
-	// that mode, or while it still holds a label, so nothing saved is hidden.
-	const showEveryTransactionTotal = $derived(
-		form.sections.some((section) => section.mode === ImportMode.EveryTransaction) ||
-			form.statedTotals[ImportMode.EveryTransaction].trim() !== ''
-	);
 
 	const KINDS: { value: ProfileSectionKind; label: string }[] = [
 		{ value: 'income', label: 'Income' },
@@ -304,7 +307,6 @@
 	// name is shown.
 	let sampleFile: File | null = null;
 	let sampleName = $state('');
-	let previewMode = $state<ProfileSectionMode | ''>('');
 	// The form as it was previewed, to say when the preview no longer shows it.
 	let previewedFingerprint = $state('');
 	let previewing = $state(false);
@@ -321,7 +323,7 @@
 		note: string | null;
 	};
 	type Preview = {
-		mode: ProfileSectionMode;
+		mode: ImportModeValue;
 		sheet: string;
 		headerRow: number;
 		rows: number;
@@ -335,19 +337,6 @@
 		balance: { matches: boolean; message: string } | null;
 	};
 	let preview = $state<Preview | null>(null);
-
-	const sectionModes = $derived(
-		MODES.filter((mode) => form.sections.some((section) => section.mode === mode.value))
-	);
-	// The mode a preview reads: the one chosen while it still has sections,
-	// else Every transaction when a section is read in it, as the server picks.
-	const effectivePreviewMode = $derived<ProfileSectionMode>(
-		sectionModes.some((mode) => mode.value === previewMode)
-			? (previewMode as ProfileSectionMode)
-			: sectionModes.some((mode) => mode.value === ImportMode.EveryTransaction)
-				? ImportMode.EveryTransaction
-				: ImportMode.Summary
-	);
 
 	function chooseSample(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
@@ -364,7 +353,6 @@
 		const body = new FormData();
 		body.set('file', sampleFile);
 		body.set('profile', JSON.stringify(payloadFromForm(form)));
-		body.set('mode', effectivePreviewMode);
 		const sent = fingerprint;
 		try {
 			const res = await fetch('/api/import/profiles/preview', { method: 'POST', body, credentials: 'include' });
@@ -641,6 +629,32 @@
 			</div>
 
 			<div class="field">
+				<span class="field-label">What this profile imports *</span>
+				<div class="pf-modes" role="radiogroup" aria-label="What this profile imports">
+					{#each MODES as mode (mode.value)}
+						<label class="pf-mode" class:on={form.mode === mode.value}>
+							<input
+								type="radio"
+								name="pf-mode"
+								value={mode.value}
+								checked={form.mode === mode.value}
+								disabled={!canChange}
+								onchange={() => (form.mode = mode.value)}
+							/>
+							<span class="pf-mode-main">
+								<span class="pf-mode-label">{mode.label}</span>
+								<span class="pf-mode-hint">{mode.hint}</span>
+							</span>
+						</label>
+					{/each}
+				</div>
+				<p class="field-hint">
+					Every document read with this profile is read this way. To read one kind of document both ways, make two profiles.
+				</p>
+				{@render problemList(shown('mode'))}
+			</div>
+
+			<div class="field">
 				<label class="field-label" for="pf-description">How to recognise it *</label>
 				<Textarea id="pf-description" rows={3} bind:value={form.description} disabled={!canChange} class="leading-relaxed" />
 				<p class="field-hint">What this kind of document is, in plain words: who sends it and what it shows.</p>
@@ -698,40 +712,21 @@
 				{@render problemList(shown('instructions'))}
 			</div>
 
-			<div class="field" style={showEveryTransactionTotal ? '' : 'margin-bottom:0;'}>
-				<label class="field-label" for="pf-stated-total">Stated total{showEveryTransactionTotal ? ' · Summary' : ''}</label>
+			<div class="field" style="margin-bottom:0;">
+				<label class="field-label" for="pf-stated-total">Stated total</label>
 				<Input
 					id="pf-stated-total"
-					bind:value={form.statedTotals[ImportMode.Summary]}
+					bind:value={form.statedTotal}
 					disabled={!canChange}
 					class="w-full"
-					placeholder="e.g. Total payout released"
+					placeholder={form.mode === ImportMode.EveryTransaction ? 'e.g. Total money in' : 'e.g. Total payout released'}
 				/>
 				<p class="field-hint">
 					The printed total the items should add up to. The group shows whether they match. Leave empty if the document
 					prints none.
 				</p>
-				{@render problemList(shown('statedTotalLabels'))}
-				{@render problemList(shown('statedTotalLabels.summary'))}
+				{@render problemList(attempted ? errorsUnder(problems, 'statedTotalLabels') : [])}
 			</div>
-
-			{#if showEveryTransactionTotal}
-				<div class="field" style="margin-bottom:0;">
-					<label class="field-label" for="pf-stated-total-every">Stated total · Every transaction</label>
-					<Input
-						id="pf-stated-total-every"
-						bind:value={form.statedTotals[ImportMode.EveryTransaction]}
-						disabled={!canChange}
-						class="w-full"
-						placeholder="e.g. Total money in"
-					/>
-					<p class="field-hint">
-						The printed total the transaction rows should add up to, for a document imported as Every transaction.
-						Leave empty if the document prints none.
-					</p>
-					{@render problemList(shown('statedTotalLabels.every_transaction'))}
-				</div>
-			{/if}
 
 			<div class="field" style="margin:14px 0 0;">
 				<span class="field-label">Account</span>
@@ -807,30 +802,17 @@
 					{@render problemList(shown(`${at}.description`))}
 				</div>
 
-				<div class="field">
-					<span class="field-label">Import *</span>
-					<div class="chip-row" role="radiogroup" aria-label="Import">
-						{#each MODES as mode (mode.value)}
-							<label class="chip" class:on={section.mode === mode.value}>
-								<input
-									type="radio"
-									name="pf-mode-{section.uid}"
-									value={mode.value}
-									checked={section.mode === mode.value}
-									disabled={!canChange}
-									onchange={() => (section.mode = mode.value)}
-								/>
-								{mode.label}
-							</label>
-						{/each}
+				{#if section.legacyMode && section.legacyMode !== form.mode}
+					<!-- Saved when each section had its own mode (FR-032): shown at once, not only after Save. -->
+					<div class="pf-legacy-mode" role="alert">
+						{@render problemList(errorsAt(problems, `${at}.mode`))}
+						{#if canChange}
+							<button type="button" class="sheet-btn" onclick={() => (section.legacyMode = null)}>
+								Keep it and read it as {importModeLabel(form.mode)}
+							</button>
+						{/if}
 					</div>
-					<p class="field-hint">
-						{section.mode === ImportMode.EveryTransaction
-							? 'Read only when a document is uploaded with Import: Every transaction. One item per row of the transaction table.'
-							: 'Read only when a document is uploaded with Import: Summary, the default.'}
-					</p>
-					{@render problemList(shown(`${at}.mode`))}
-				</div>
+				{/if}
 
 				<div class="field">
 					<span class="field-label">Kind *</span>
@@ -1078,12 +1060,16 @@
 			<ul class="pf-notes">
 				<li>Choose it under “Read as” when uploading. Only the sections here are read; nothing else on the document becomes a record.</li>
 				<li>
-					Each section is read in one import mode. Summary reads one item per summary line; Every transaction reads one item
-					per row of the transaction table.
+					A profile imports one thing: Summary lines, one item per summary line, or Every transaction, one item per row of
+					the transaction table. To read one kind of document both ways, make two profiles and choose the one you want.
 				</li>
 				<li>
-					With a table layout, and row rules on every section of a mode, a spreadsheet is read from its columns with no AI.
-					Try it on a sample under Preview before saving.
+					Auto-detect cannot tell two profiles made for the same document apart. Turn one off, give each its own recognition
+					phrases, or choose one under “Read as”.
+				</li>
+				<li>
+					With a table layout, and row rules on every section, a spreadsheet is read from its columns with no AI. Try it on a
+					sample under Preview before saving.
 				</li>
 				<li>The AI copies what is printed. Totals and signs are worked out by the app, to the cent.</li>
 				<li>Editing, turning off or deleting a profile never changes documents already read with it.</li>
@@ -1282,27 +1268,22 @@
 				</div>
 			</div>
 
-			<div class="pf-grid" style="margin-bottom:0;">
-				{#each MODES as mode (mode.value)}
-					<div class="field" style="margin-bottom:0;">
-						<label class="field-label" for="pf-totals-{mode.value}">Stated total labels · {mode.label}</label>
-						<Textarea
-							id="pf-totals-{mode.value}"
-							rows={2}
-							bind:value={layout.totalsText[mode.value]}
-							disabled={!canChange}
-							placeholder="One per line, e.g. Total Money In"
-						/>
-						<p class="field-hint">
-							The labels the totals are printed beside, outside the table. The figures beside them are added up and compared
-							with the items. Empty: no control total.
-						</p>
-						{@render problemList(attempted ? errorsUnder(problems, `layout.statedTotalLabels.${mode.value}`) : [])}
-					</div>
-				{/each}
+			<div class="field" style="margin-bottom:0;">
+				<label class="field-label" for="pf-totals">Stated total labels</label>
+				<Textarea
+					id="pf-totals"
+					rows={2}
+					bind:value={layout.totalsText}
+					disabled={!canChange}
+					placeholder="One per line, e.g. Total Money In"
+				/>
+				<p class="field-hint">
+					The labels the totals are printed beside, outside the table. The figures beside them are added up and compared with
+					the items. Empty: no control total.
+				</p>
+				{@render problemList(attempted ? errorsUnder(problems, 'layout.statedTotalLabels') : [])}
 			</div>
 			{@render problemList(shown('layout.columns'))}
-			{@render problemList(shown('layout.statedTotalLabels'))}
 		{/if}
 	</section>
 
@@ -1319,16 +1300,6 @@
 		</p>
 		<div class="pf-inline pf-preview-pick">
 			<input type="file" accept=".xlsx,.csv" aria-label="Sample spreadsheet" onchange={chooseSample} />
-			{#if sectionModes.length > 1}
-				<div style="min-width:180px;">
-					<ProfileColumnSelect
-						options={sectionModes.map((mode) => ({ value: mode.value, label: mode.label }))}
-						value={effectivePreviewMode}
-						ariaLabel="Import mode to preview"
-						onchange={(value) => (previewMode = value as ProfileSectionMode | '')}
-					/>
-				</div>
-			{/if}
 			<button type="button" class="sheet-btn" disabled={!sampleName || previewing} onclick={runPreview}>
 				{previewing ? 'Reading…' : 'Preview'}
 			</button>
@@ -1696,6 +1667,57 @@
 		color: var(--red);
 		border-color: var(--red);
 		background: var(--red-soft);
+	}
+
+	/* What the profile imports: two choices, each with a one-line hint. */
+	.pf-modes {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+		gap: 8px;
+	}
+	.pf-mode {
+		display: flex;
+		align-items: flex-start;
+		gap: 9px;
+		padding: 8px 10px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		cursor: pointer;
+		background: var(--card);
+	}
+	.pf-mode.on {
+		border-color: var(--primary);
+		background: var(--primary-soft);
+	}
+	.pf-mode input {
+		margin-top: 3px;
+		accent-color: var(--primary);
+		flex-shrink: 0;
+	}
+	.pf-mode:has(input:disabled) {
+		cursor: not-allowed;
+		opacity: 0.7;
+	}
+	.pf-mode-main {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.pf-mode-label {
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.pf-mode-hint {
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+	}
+	.pf-legacy-mode {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 8px;
+		margin-bottom: 14px;
 	}
 
 	.chip-row {

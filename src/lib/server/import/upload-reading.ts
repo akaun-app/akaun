@@ -1,10 +1,5 @@
 import { z } from "zod";
 import {
-  readingModeFor,
-  type ImportProfileDraft,
-} from "$lib/import-profile-schema.js";
-import {
-  ImportMode,
   ImportReadAs,
   ImportReadHow,
   PROFILE_READ_AS_PREFIX,
@@ -32,21 +27,14 @@ const profileReadAs = z
 
 const uploadReadAs = z.union([builtInReadAs, profileReadAs]);
 
-/** The "Import" choices an upload may name (FR-002). */
-const uploadImportMode = z.enum([
-  ImportMode.Summary,
-  ImportMode.EveryTransaction,
-]);
-
 /**
- * What the upload needs to know of a saved profile to accept it, and its
- * sections, which say the mode it is read in (FR-002). Without them the mode
- * the uploader chose is kept, and the reading decides.
+ * What the upload needs to know of a saved profile: whether to accept it, and
+ * the import mode it is read in, which is its own (FR-002).
  */
 export type UploadProfile = {
   name: string;
   enabled: boolean;
-  sections?: ImportProfileDraft["sections"];
+  mode: ImportModeValue;
 };
 
 export type UploadReading =
@@ -57,15 +45,15 @@ export type UploadReading =
       /** The saved profile's id, as `profile_id` stores it; else null. */
       profileId: string | null;
       /**
-       * The import mode, for a profile or for Auto-detect, which may find
-       * one; else null, since a receipt or several items has no mode.
+       * The chosen profile's import mode; else null. Auto-detect stores the
+       * mode of the profile it finds once it finds one, and a receipt or
+       * several items has no mode.
        */
       importMode: ImportModeValue | null;
     }
   | { ok: false; error: string };
 
 const CHOICES = `${builtInReadAs.options.join(", ")}, or ${PROFILE_READ_AS_PREFIX}<id> for an enabled import profile`;
-const MODE_CHOICES = uploadImportMode.options.join(" or ");
 
 /**
  * Reads the upload's "Read as" field (FR-001). An upload that names no choice,
@@ -81,17 +69,10 @@ const MODE_CHOICES = uploadImportMode.options.join(" or ");
  * that fails later. The profile is checked again when the document is read,
  * since it can be turned off while the document waits.
  *
- * The "Import" field (FR-002) says which part of a statement is read:
- * Summary or Every transaction. One that is missing or empty is Summary, the
- * default; one the system does not know is refused like an unknown "Read
- * as", whatever "Read as" says, so a mistyped mode never goes unnoticed. The
- * mode is stored for a profile and for Auto-detect, which may find a profile.
- * A chosen profile with sections in one mode only is stored with that mode,
- * whatever the field says, since it has nothing to read in the other; only a
- * profile with sections in both is stored with the mode chosen. Auto-detect
- * keeps the mode chosen, and the reading applies the same rule to the profile
- * it finds. A receipt or several items has no mode, so the field is ignored
- * for them and none is stored.
+ * There is no "Import" choice (FR-002): a profile is read in its own import
+ * mode, Summary lines or Every transaction, and a chosen profile's mode is
+ * stored with the row. An upload from a screen opened before the choice was
+ * removed may still send an `importMode` field; the caller does not read it.
  *
  * An Auto-detect row says Standard from the start. The worker changes that to
  * Detected when it finds a profile that fits (006 US9); with no enabled
@@ -99,7 +80,6 @@ const MODE_CHOICES = uploadImportMode.options.join(" or ");
  */
 export function readingForUpload(
   raw: FormDataEntryValue | null,
-  rawMode: FormDataEntryValue | null | undefined,
   findProfile: (id: number) => UploadProfile | null,
   /** The name a deleted profile had, when it is known (spec edge case). */
   deletedName: (id: number) => string | null = () => null,
@@ -111,19 +91,6 @@ export function readingForUpload(
     return {
       ok: false,
       error: `Unknown way to read this document: ${shown}. Use one of: ${CHOICES}.`,
-    };
-  }
-
-  const modeValue =
-    rawMode === null || rawMode === undefined || rawMode === ""
-      ? ImportMode.Summary
-      : rawMode;
-  const mode = uploadImportMode.safeParse(modeValue);
-  if (!mode.success) {
-    const shown = typeof modeValue === "string" ? `"${modeValue}"` : "a file";
-    return {
-      ok: false,
-      error: `Unknown import mode: ${shown}. Use ${MODE_CHOICES}.`,
     };
   }
 
@@ -152,9 +119,7 @@ export function readingForUpload(
       readAs: ImportReadAs.Profile,
       readHow: ImportReadHow.Chosen,
       profileId: String(id),
-      importMode: profile.sections
-        ? readingModeFor({ sections: profile.sections }, mode.data)
-        : mode.data,
+      importMode: profile.mode,
     };
   }
 
@@ -167,6 +132,6 @@ export function readingForUpload(
         ? ImportReadHow.Standard
         : ImportReadHow.Chosen,
     profileId: null,
-    importMode: readAs === ImportReadAs.Auto ? mode.data : null,
+    importMode: null,
   };
 }

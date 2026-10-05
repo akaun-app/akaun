@@ -55,13 +55,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
 
-	// How to read it (FR-001), and which part of a statement to import
-	// (FR-002). Checked before anything is stored, so a refused upload leaves
-	// no file and no queue row behind. A saved profile needs only this upload
-	// permission, the same as every other way of reading (FR-045).
+	// How to read it (FR-001). Checked before anything is stored, so a refused
+	// upload leaves no file and no queue row behind. A saved profile needs only
+	// this upload permission, the same as every other way of reading (FR-045).
+	// A profile is read in its own import mode (FR-002); an `importMode` field
+	// sent by a screen opened before that choice was removed is not read.
 	const reading = readingForUpload(
 		formData.get('readAs'),
-		formData.get('importMode'),
 		(id) => getImportProfile(db, id),
 		(id) => deletedProfileName(db, id)
 	);
@@ -72,10 +72,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	// the profile is deleted first (FR-041). Reading replaces it with the
 	// profile as it is then (FR-038).
 	const chosenProfile = reading.profileId ? getImportProfile(db, Number(reading.profileId)) : null;
-	const profileSnapshot =
-		chosenProfile && reading.importMode
-			? serializeProfileSnapshot(profileSnapshotOf(chosenProfile, reading.importMode))
-			: null;
+	const profileSnapshot = chosenProfile ? serializeProfileSnapshot(profileSnapshotOf(chosenProfile)) : null;
 
 	// Optional: caller already ran its own OCR/extraction (e.g. Apple Vision Framework
 	// via a client-side Shortcut) and wants the server to skip its own OCR.

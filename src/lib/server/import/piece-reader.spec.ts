@@ -44,7 +44,6 @@ vi.mock("$lib/server/logger.js", () => {
 import { DocumentType } from "$lib/enums.js";
 import {
   DOCUMENT_TEXT_MAX_CHARS,
-  ImportMode,
   ignoredSummary,
 } from "$lib/import-reading.js";
 import { numberDocumentLines } from "../extraction/document-text.js";
@@ -67,29 +66,26 @@ import {
 import { savedReadingProfile } from "./profile-compiler.js";
 
 /** An Every transaction profile with one by-sign section of rows. */
-const profile = savedReadingProfile(
-  {
-    id: 7,
-    name: "Wallet report",
-    description: "A made-up wallet report.",
-    phrases: [],
-    instructions: "PROFILE NOTE: one record per row.",
-    statedTotalLabels: { every_transaction: "Net total" },
-    sections: [
-      {
-        key: "rows",
-        name: "Transactions",
-        description: "Each transaction row.",
-        mode: "every_transaction",
-        kind: "by_sign",
-        fixedCategoryAccountId: 31,
-        feeTypes: [],
-        extras: null,
-      },
-    ],
-  },
-  ImportMode.EveryTransaction,
-);
+const profile = savedReadingProfile({
+  id: 7,
+  name: "Wallet report",
+  description: "A made-up wallet report.",
+  phrases: [],
+  instructions: "PROFILE NOTE: one record per row.",
+  mode: "every_transaction",
+  statedTotalLabels: { every_transaction: "Net total" },
+  sections: [
+    {
+      key: "rows",
+      name: "Transactions",
+      description: "Each transaction row.",
+      kind: "by_sign",
+      fixedCategoryAccountId: 31,
+      feeTypes: [],
+      extras: null,
+    },
+  ],
+});
 
 /**
  * Small limits, so a document of a few dozen lines is read in several

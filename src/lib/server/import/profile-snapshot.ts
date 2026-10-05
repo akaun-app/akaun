@@ -29,7 +29,10 @@ export interface ProfileSnapshot {
   /** The saved profile's id. It may no longer exist. */
   id: number;
   name: string;
-  /** The import mode the document was read in. */
+  /**
+   * The import mode the document was read in: the profile's own (FR-032).
+   * On a copy from when each section had its own mode, the mode chosen then.
+   */
   mode: ImportModeValue;
   /**
    * The id of the schema that was sent (`profile:<id>:<hash>`). Empty while
@@ -38,8 +41,17 @@ export interface ProfileSnapshot {
    */
   schemaId: string;
   /** The profile's form, as it was. */
-  profile: ImportProfileDraft;
+  profile: SnapshotProfile;
 }
+
+/**
+ * A profile's form as a copy keeps it. A copy taken before the mode was set
+ * on the profile has none there, and its sections may each carry one; it
+ * still reads (FR-038).
+ */
+export type SnapshotProfile = Omit<ImportProfileDraft, "mode"> & {
+  mode?: ImportModeValue;
+};
 
 /** A saved profile, as much of it as a copy keeps. */
 type SnapshotSource = ImportProfileDraft & { id: number };
@@ -53,20 +65,20 @@ type SnapshotSource = ImportProfileDraft & { id: number };
  */
 export function profileSnapshotOf(
   saved: SnapshotSource,
-  mode: ImportModeValue,
   schemaId = "",
 ): ProfileSnapshot {
   return {
     version: 1,
     id: saved.id,
     name: saved.name,
-    mode,
+    mode: saved.mode,
     schemaId,
     profile: {
       name: saved.name,
       description: saved.description,
       phrases: saved.phrases,
       instructions: saved.instructions,
+      mode: saved.mode,
       statedTotalLabels: saved.statedTotalLabels,
       accountId: saved.accountId ?? null,
       ...(saved.layout ? { layout: saved.layout } : {}),
@@ -118,14 +130,17 @@ export interface SnapshotSection {
   kind: ProfileSectionKind;
 }
 
-/** The sections of the mode the document was read in, in profile order. */
+/**
+ * The sections the document was read with, in profile order: those of the
+ * mode it was read in. A section with no mode of its own follows the
+ * profile's, except on a copy from before the profile had a mode, where it
+ * was a Summary section (FR-038: an old reading names what it named then).
+ */
 export function snapshotSections(snapshot: ProfileSnapshot): SnapshotSection[] {
-  return (
-    snapshot.profile.sections
-      // A section saved with no mode is a Summary one, as the compiler reads it.
-      .filter(
-        (section) => (section.mode ?? ImportMode.Summary) === snapshot.mode,
-      )
-      .map(({ key, name, kind }) => ({ key, name, kind }))
-  );
+  const noModeMeans = isImportMode(snapshot.profile.mode)
+    ? snapshot.mode
+    : ImportMode.Summary;
+  return snapshot.profile.sections
+    .filter((section) => (section.mode ?? noModeMeans) === snapshot.mode)
+    .map(({ key, name, kind }) => ({ key, name, kind }));
 }

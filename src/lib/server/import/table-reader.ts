@@ -3,8 +3,8 @@
  * FR-053 to FR-056).
  *
  * A profile's table layout says where the table is (the headings that, all in
- * one row, start it) and which column holds what. Each section of the chosen
- * import mode says, with its row rules, which rows it takes. This file turns
+ * one row, start it) and which column holds what. Each section the profile
+ * reads in its import mode says, with its row rules, which rows it takes. This file turns
  * the workbook into the same `ReadEnvelope` the AI's answer becomes, and the
  * rest is the AI reading's own code (`readingFromEnvelope`): the kinds, the
  * signs, the categories and the control total are worked out once, in one
@@ -37,6 +37,7 @@ import { createHash } from "crypto";
 import {
   foldTableText,
   type ImportProfileDraft,
+  profileSections,
   type ProfileSection,
   type RowCondition,
   type TableDateFormat,
@@ -45,7 +46,6 @@ import {
 import {
   DOCUMENT_ITEMS_MAX,
   IGNORED_LINES_MAX,
-  ImportMode,
   type ImportModeValue,
 } from "$lib/import-reading.js";
 import { renderWorkbook } from "../extraction/spreadsheet/render.js";
@@ -363,8 +363,10 @@ export interface TableReading {
 /** What the table reader needs from a profile. */
 export interface TableProfile {
   name: string;
+  /** The profile's import mode (FR-032). */
+  mode: ImportModeValue;
   layout: TableLayout;
-  /** The profile's sections. Only those of `mode` are read. */
+  /** The profile's sections. Only those it reads are read (`profileSections`). */
   sections: readonly ProfileSection[];
 }
 
@@ -386,10 +388,9 @@ function rowSample(row: SheetRow): string {
 export function readTable(
   workbook: Workbook,
   profile: TableProfile,
-  mode: ImportModeValue,
   mainCurrency: string | null = null,
 ): TableReading {
-  const { layout } = profile;
+  const { layout, mode } = profile;
   const currency = layout.currency ?? mainCurrency;
   const table = findTable(workbook, layout);
   if (!table) {
@@ -485,9 +486,7 @@ export function readTable(
     };
   };
 
-  const sections = profile.sections.filter(
-    (section) => (section.mode ?? ImportMode.Summary) === mode && section.rows,
-  );
+  const sections = profileSections(profile).filter((section) => section.rows);
   const envelope: ReadEnvelope = {
     header: {
       counterparty: layout.counterparty,
@@ -770,17 +769,18 @@ export function checkRunningBalance(
 /**
  * Names what a reading from columns read, the way a saved profile's schema id
  * names what the AI was asked: the profile, then a hash of its layout and of
- * the sections of the mode, so a later edit to either is a different id.
+ * the sections it reads, so a later edit to either is a different id.
  */
 export function columnsReadingId(
-  saved: Pick<ImportProfileDraft, "layout" | "sections"> & { id: number },
-  mode: ImportModeValue,
+  saved: Pick<ImportProfileDraft, "layout" | "sections" | "mode"> & {
+    id: number;
+  },
 ): string {
-  const sections = saved.sections.filter(
-    (section) => (section.mode ?? ImportMode.Summary) === mode,
-  );
+  const sections = profileSections(saved);
   const hash = createHash("sha256")
-    .update(JSON.stringify({ layout: saved.layout, mode, sections }))
+    .update(
+      JSON.stringify({ layout: saved.layout, mode: saved.mode, sections }),
+    )
     .digest("hex");
   return `columns:${saved.id}:${hash}`;
 }
@@ -790,10 +790,10 @@ export function columnsReadingId(
  * reading above, then the AI reading's own `readingFromEnvelope`, so the
  * kinds, categories and control total are worked out as for any reading.
  *
- * `reading` is the profile compiled for the mode (`savedReadingProfile`): its
- * sections carry each kind, category and transfer account. The stated total
- * compared is the layout's labels for the mode, not the label the AI is
- * told, and none when the layout names none.
+ * `reading` is the profile compiled (`savedReadingProfile`): its sections
+ * carry each kind, category and transfer account. The stated total compared
+ * is the layout's labels, not the label the AI is told, and none when the
+ * layout names none.
  *
  * The item limit counts what is left once rows that fit no section, or have
  * no listed fee type, are left out (FR-010). The notes say the reading was
@@ -803,14 +803,12 @@ export function columnsReadingId(
 export function readFromColumns(
   workbook: Workbook,
   profile: TableProfile,
-  mode: ImportModeValue,
   reading: ReadingProfile,
   context: { today: string; mainCurrency: string; schemaId: string },
 ): DocumentReading {
   const { envelope, ignoredCount, balance } = readTable(
     workbook,
     profile,
-    mode,
     context.mainCurrency,
   );
   const lineCount = Object.values(envelope.sections).reduce(
@@ -823,7 +821,7 @@ export function readFromColumns(
       `This document has too many items to import: ${lineCount.toLocaleString("en-US")} rows fit its sections, and the limit is ${DOCUMENT_ITEMS_MAX.toLocaleString("en-US")}.`,
     );
   }
-  const labels = profile.layout.statedTotalLabels[mode] ?? [];
+  const labels = profile.layout.statedTotalLabels[profile.mode] ?? [];
   const result = readingFromEnvelope(
     envelope,
     {

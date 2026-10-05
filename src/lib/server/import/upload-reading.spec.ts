@@ -14,43 +14,44 @@ function profiles(
 const none = profiles();
 
 describe("readingForUpload", () => {
-  it("reads a missing choice as Auto-detect, the standard reading, in Summary", () => {
+  it("reads a missing choice as Auto-detect, the standard reading, with no mode yet", () => {
     const expected = {
       ok: true,
       readAs: "auto",
       readHow: "standard",
       profileId: null,
-      importMode: "summary",
+      importMode: null,
     };
-    expect(readingForUpload(null, null, none)).toEqual(expected);
-    expect(readingForUpload("", null, none)).toEqual(expected);
+    expect(readingForUpload(null, none)).toEqual(expected);
+    expect(readingForUpload("", none)).toEqual(expected);
   });
 
   it("keeps Auto-detect as the standard reading until a profile is detected", () => {
     expect(
       readingForUpload(
         "auto",
-        null,
-        profiles({ 1: { name: "A", enabled: true } }),
+        profiles({
+          1: { name: "A", enabled: true, mode: "every_transaction" },
+        }),
       ),
     ).toEqual({
       ok: true,
       readAs: "auto",
       readHow: "standard",
       profileId: null,
-      importMode: "summary",
+      importMode: null,
     });
   });
 
   it("records a named reading as chosen", () => {
-    expect(readingForUpload("receipt", null, none)).toEqual({
+    expect(readingForUpload("receipt", none)).toEqual({
       ok: true,
       readAs: "receipt",
       readHow: "chosen",
       profileId: null,
       importMode: null,
     });
-    expect(readingForUpload("items", null, none)).toEqual({
+    expect(readingForUpload("items", none)).toEqual({
       ok: true,
       readAs: "items",
       readHow: "chosen",
@@ -59,13 +60,17 @@ describe("readingForUpload", () => {
     });
   });
 
-  it("reads an enabled profile as chosen, in Summary, by its id", () => {
+  it("reads an enabled profile as chosen, in its own mode, by its id", () => {
     const asked: number[] = [];
     const find = (id: number) => {
       asked.push(id);
-      return { name: "Shopee statement", enabled: true };
+      return {
+        name: "Shopee statement",
+        enabled: true,
+        mode: "summary" as const,
+      };
     };
-    expect(readingForUpload("profile:12", null, find)).toEqual({
+    expect(readingForUpload("profile:12", find)).toEqual({
       ok: true,
       readAs: "profile",
       readHow: "chosen",
@@ -76,7 +81,7 @@ describe("readingForUpload", () => {
   });
 
   it("refuses a profile that does not exist, naming the id", () => {
-    expect(readingForUpload("profile:7", null, none)).toEqual({
+    expect(readingForUpload("profile:7", none)).toEqual({
       ok: false,
       error:
         "No import profile has the id 7; it may have been deleted. Choose another way to read this document.",
@@ -86,14 +91,14 @@ describe("readingForUpload", () => {
   it("refuses a deleted profile by the name it had, when that is known", () => {
     const names: Record<number, string> = { 7: "Old statement" };
     expect(
-      readingForUpload("profile:7", null, none, (id) => names[id] ?? null),
+      readingForUpload("profile:7", none, (id) => names[id] ?? null),
     ).toEqual({
       ok: false,
       error:
         'The import profile "Old statement" was deleted. Choose another way to read this document.',
     });
     expect(
-      readingForUpload("profile:8", null, none, (id) => names[id] ?? null),
+      readingForUpload("profile:8", none, (id) => names[id] ?? null),
     ).toEqual({
       ok: false,
       error:
@@ -105,8 +110,9 @@ describe("readingForUpload", () => {
     expect(
       readingForUpload(
         "profile:3",
-        null,
-        profiles({ 3: { name: "Fee notice", enabled: false } }),
+        profiles({
+          3: { name: "Fee notice", enabled: false, mode: "summary" },
+        }),
       ),
     ).toEqual({
       ok: false,
@@ -116,7 +122,11 @@ describe("readingForUpload", () => {
   });
 
   it("refuses a choice it does not know, naming the ones it does", () => {
-    const anyProfile = () => ({ name: "A", enabled: true });
+    const anyProfile = () => ({
+      name: "A",
+      enabled: true,
+      mode: "summary" as const,
+    });
     for (const value of [
       "Receipt",
       "profile",
@@ -131,7 +141,7 @@ describe("readingForUpload", () => {
       "several",
       " items",
     ]) {
-      const result = readingForUpload(value, null, anyProfile);
+      const result = readingForUpload(value, anyProfile);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toBe(
@@ -142,123 +152,49 @@ describe("readingForUpload", () => {
   });
 
   it("refuses a file sent in place of a choice", () => {
-    const result = readingForUpload(new File(["x"], "x.txt"), null, none);
+    const result = readingForUpload(new File(["x"], "x.txt"), none);
     expect(result).toEqual({
       ok: false,
       error: `Unknown way to read this document: a file. Use one of: ${CHOICES}.`,
     });
   });
 
-  describe("the Import choice (FR-002)", () => {
-    const enabled = profiles({ 4: { name: "Wallet report", enabled: true } });
+  describe("the profile's own mode (FR-002)", () => {
+    const find = profiles({
+      4: { name: "Wallet report", enabled: true, mode: "every_transaction" },
+      6: { name: "Fee notice", enabled: true, mode: "summary" },
+    });
 
-    it("stores Every transaction for a profile and for Auto-detect", () => {
-      expect(
-        readingForUpload("profile:4", "every_transaction", enabled),
-      ).toEqual({
+    it("stores the chosen profile's mode, whatever it is", () => {
+      expect(readingForUpload("profile:4", find)).toEqual({
         ok: true,
         readAs: "profile",
         readHow: "chosen",
         profileId: "4",
         importMode: "every_transaction",
       });
-      expect(readingForUpload("auto", "every_transaction", enabled)).toEqual({
-        ok: true,
-        readAs: "auto",
-        readHow: "standard",
-        profileId: null,
-        importMode: "every_transaction",
-      });
-      expect(readingForUpload("profile:4", "summary", enabled)).toMatchObject({
+      expect(readingForUpload("profile:6", find)).toMatchObject({
         ok: true,
         importMode: "summary",
       });
     });
 
-    it("reads a missing or empty choice as Summary", () => {
-      for (const missing of [null, undefined, ""]) {
-        expect(readingForUpload("profile:4", missing, enabled)).toMatchObject({
-          ok: true,
-          importMode: "summary",
-        });
-      }
+    it("stores no mode for Auto-detect until it finds a profile", () => {
+      expect(readingForUpload("auto", find)).toMatchObject({
+        ok: true,
+        readAs: "auto",
+        importMode: null,
+      });
     });
 
     it("stores no mode for a receipt or several items, which have none", () => {
       for (const readAs of ["receipt", "items"]) {
-        expect(
-          readingForUpload(readAs, "every_transaction", enabled),
-        ).toMatchObject({ ok: true, readAs, importMode: null });
-      }
-    });
-
-    it("refuses a mode it does not know, whatever Read as says", () => {
-      for (const readAs of ["profile:4", "auto", "receipt", "items"]) {
-        for (const mode of ["Summary", "every", "transactions", " summary"]) {
-          expect(readingForUpload(readAs, mode, enabled)).toEqual({
-            ok: false,
-            error: `Unknown import mode: "${mode}". Use summary or every_transaction.`,
-          });
-        }
-      }
-      expect(
-        readingForUpload("auto", new File(["x"], "x.txt"), enabled),
-      ).toEqual({
-        ok: false,
-        error: "Unknown import mode: a file. Use summary or every_transaction.",
-      });
-    });
-
-    it("stores the one mode of a profile with sections in one mode only", () => {
-      const section = (mode: "summary" | "every_transaction") =>
-        ({ mode }) as NonNullable<UploadProfile["sections"]>[number];
-      const find = profiles({
-        5: {
-          name: "Wallet withdrawals",
-          enabled: true,
-          sections: [section("every_transaction")],
-        },
-        6: {
-          name: "Fee notice",
-          enabled: true,
-          sections: [section("summary"), section("summary")],
-        },
-        7: {
-          name: "Statement",
-          enabled: true,
-          sections: [section("summary"), section("every_transaction")],
-        },
-      });
-      // Whatever Import says, a one-mode profile is read in its mode.
-      for (const asked of [null, "summary", "every_transaction"]) {
-        expect(readingForUpload("profile:5", asked, find)).toMatchObject({
+        expect(readingForUpload(readAs, find)).toMatchObject({
           ok: true,
-          importMode: "every_transaction",
-        });
-        expect(readingForUpload("profile:6", asked, find)).toMatchObject({
-          ok: true,
-          importMode: "summary",
+          readAs,
+          importMode: null,
         });
       }
-      // With both, Import decides.
-      expect(
-        readingForUpload("profile:7", "every_transaction", find),
-      ).toMatchObject({ ok: true, importMode: "every_transaction" });
-      expect(readingForUpload("profile:7", null, find)).toMatchObject({
-        ok: true,
-        importMode: "summary",
-      });
-      // Auto-detect keeps the choice: the profile is not known yet.
-      expect(readingForUpload("auto", null, find)).toMatchObject({
-        ok: true,
-        importMode: "summary",
-      });
-    });
-
-    it("names an unknown Read as before an unknown mode", () => {
-      const result = readingForUpload("several", "every", enabled);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toMatch(/^Unknown way to read/);
     });
   });
 });

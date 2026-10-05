@@ -44,6 +44,7 @@ export interface ImportProfileStarter {
  */
 const FEE_DOCUMENT: ImportProfileDraft = {
   name: "Fee document",
+  mode: "summary",
   description:
     "An invoice or notice from a platform or service provider that lists one or more fees charged to the business, such as advertising, commission or service fees.",
   phrases: [],
@@ -61,7 +62,6 @@ const FEE_DOCUMENT: ImportProfileDraft = {
       name: "Fees",
       description:
         "Each line that charges one fee, usually in the table of charges.",
-      mode: "summary",
       kind: "expense",
       fixedCategoryAccountId: null,
       feeTypes: [
@@ -105,6 +105,7 @@ const FEE_DOCUMENT: ImportProfileDraft = {
  */
 const MARKETPLACE_SUMMARY: ImportProfileDraft = {
   name: "Marketplace statement summary",
+  mode: "summary",
   description:
     "A marketplace's income statement for a period, with a summary of sales, fees, rebates and the net payout released to the seller, followed by a table of orders or daily payouts.",
   phrases: [],
@@ -122,7 +123,6 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
       name: "Sales",
       description:
         "The value of the goods sold in the period, at the top of the summary.",
-      mode: "summary",
       kind: "income",
       fixedCategoryAccountId: null,
       feeTypes: [
@@ -140,7 +140,6 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
       name: "Fees and adjustments",
       description:
         "Every other leaf line of the summary: refunds, discounts, shipping, vouchers, rebates and fees. A deduction is printed with a minus sign; a rebate or anything paid to the seller is printed without one.",
-      mode: "summary",
       kind: "by_sign",
       fixedCategoryAccountId: null,
       feeTypes: [
@@ -286,7 +285,6 @@ const WITHDRAWALS: ProfileSection = {
   name: "Withdrawals",
   description:
     "Each withdrawal of money from the wallet to the seller's bank account.",
-  mode: "every_transaction",
   kind: "transfer",
   fixedCategoryAccountId: null,
   feeTypes: [],
@@ -326,6 +324,7 @@ const WALLET_INSTRUCTIONS = `- Read only the table of transactions, one item per
  */
 const WALLET_WITHDRAWALS: ImportProfileDraft = {
   name: "Marketplace wallet report — withdrawals only",
+  mode: "every_transaction",
   description: `${WALLET_DESCRIPTION} ${ONLY_ONE}`,
   phrases: [],
   instructions: WALLET_INSTRUCTIONS,
@@ -342,6 +341,7 @@ const WALLET_WITHDRAWALS: ImportProfileDraft = {
  */
 const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
   name: "Marketplace wallet report — every transaction",
+  mode: "every_transaction",
   description: `${WALLET_DESCRIPTION} Its order income repeats the sales of the marketplace's income statement: import both and the sales are counted twice. ${ONLY_ONE}`,
   phrases: [],
   instructions: WALLET_INSTRUCTIONS,
@@ -358,7 +358,6 @@ const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
       name: "Order income",
       description:
         "Each order paid into the wallet, and each amount taken back for an order.",
-      mode: "every_transaction",
       kind: "by_sign",
       fixedCategoryAccountId: null,
       feeTypes: [],
@@ -377,7 +376,6 @@ const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
       name: "Adjustments",
       description:
         "Each adjustment the marketplace made to the wallet, such as a compensation or a fee corrected.",
-      mode: "every_transaction",
       kind: "by_sign",
       fixedCategoryAccountId: null,
       feeTypes: [],

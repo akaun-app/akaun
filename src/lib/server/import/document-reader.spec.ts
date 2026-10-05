@@ -1027,29 +1027,26 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
     );
     expect(every.items.map((item) => item.reference)).toEqual(["O-1", ""]);
     expect(
-      savedReadingProfile(
-        {
-          id: 3,
-          name: "Wallet",
-          description: "A wallet report.",
-          phrases: [],
-          instructions: "",
-          statedTotalLabels: {},
-          sections: [
-            {
-              key: "rows",
-              name: "Rows",
-              description: "Each row.",
-              mode: "every_transaction",
-              kind: "by_sign",
-              fixedCategoryAccountId: null,
-              feeTypes: [],
-              extras: null,
-            },
-          ],
-        },
-        "every_transaction",
-      ).ownReferencesOnly,
+      savedReadingProfile({
+        id: 3,
+        name: "Wallet",
+        description: "A wallet report.",
+        phrases: [],
+        instructions: "",
+        mode: "every_transaction",
+        statedTotalLabels: {},
+        sections: [
+          {
+            key: "rows",
+            name: "Rows",
+            description: "Each row.",
+            kind: "by_sign",
+            fixedCategoryAccountId: null,
+            feeTypes: [],
+            extras: null,
+          },
+        ],
+      }).ownReferencesOnly,
     ).toBe(true);
   });
 
@@ -1092,13 +1089,13 @@ describe("readDocumentItems — with a saved profile", () => {
     description: "A fee notice.",
     phrases: [],
     instructions: "Profile guidance: ads are marketing.",
+    mode: "summary",
     statedTotalLabels: { summary: "Total charges" },
     sections: [
       {
         key: "fees",
         name: "Fees",
         description: "Each fee line.",
-        mode: "summary",
         kind: "expense",
         fixedCategoryAccountId: null,
         feeTypes: [{ key: "ads", description: "Ads", categoryAccountId: null }],

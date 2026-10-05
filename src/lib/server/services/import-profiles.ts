@@ -26,13 +26,19 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import {
   checkProfile,
   formatProfileErrors,
+  legacyProfileMode,
   type ImportProfileDraft,
   type ProfileError,
   type ProfileSection,
   type ProfileSectionKind,
   type TableLayout,
 } from "$lib/import-profile-schema.js";
-import { ImportReadAs, ImportReadHow } from "$lib/import-reading.js";
+import {
+  ImportReadAs,
+  ImportReadHow,
+  isImportMode,
+  type ImportModeValue,
+} from "$lib/import-reading.js";
 import { diffRecords, getAuditTrail, recordAudit } from "../audit.js";
 import { importProfiles } from "../db/schema.js";
 import { isImportTransactionAsset } from "../import/account-policy.js";
@@ -96,10 +102,15 @@ function parseColumn<T>(
 const isPlainObject = (value: unknown) =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** What `options_json` holds. Each part is optional. */
+/**
+ * What `options_json` holds. Each part is optional: `mode` is absent on a
+ * profile saved before the mode was set on the profile, and is then worked
+ * out from its sections (`legacyProfileMode`).
+ */
 type ProfileOptions = {
   accountId?: number | null;
   layout?: TableLayout | null;
+  mode?: ImportModeValue;
 };
 
 /** The account the profile names, from its options, or null. */
@@ -116,12 +127,20 @@ function toView(row: ProfileRow): ImportProfileView {
     {},
     isPlainObject,
   );
+  const sections = parseColumn<ProfileSection[]>(
+    row.sectionsJson,
+    [],
+    Array.isArray,
+  );
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     phrases: parseColumn<string[]>(row.phrasesJson, [], Array.isArray),
     instructions: row.instructions,
+    mode: isImportMode(options.mode)
+      ? options.mode
+      : legacyProfileMode(sections),
     statedTotalLabels: parseColumn<ImportProfileDraft["statedTotalLabels"]>(
       row.statedTotalLabelsJson,
       {},
@@ -130,11 +149,7 @@ function toView(row: ProfileRow): ImportProfileView {
     accountId: optionAccountId(options),
     // Checked when it was saved, like the sections.
     ...(isPlainObject(options.layout) ? { layout: options.layout } : {}),
-    sections: parseColumn<ProfileSection[]>(
-      row.sectionsJson,
-      [],
-      Array.isArray,
-    ),
+    sections,
     enabled: row.enabled,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -148,6 +163,7 @@ function audited(profile: ImportProfileDraft) {
     description: profile.description,
     phrases: profile.phrases,
     instructions: profile.instructions,
+    mode: profile.mode,
     statedTotalLabels: profile.statedTotalLabels,
     accountId: profile.accountId ?? null,
     layout: profile.layout ?? null,
@@ -166,6 +182,7 @@ function columns(profile: ImportProfileDraft) {
     optionsJson: JSON.stringify({
       ...(profile.accountId == null ? {} : { accountId: profile.accountId }),
       ...(profile.layout ? { layout: profile.layout } : {}),
+      mode: profile.mode,
     }),
   };
 }

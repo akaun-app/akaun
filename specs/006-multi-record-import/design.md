@@ -118,7 +118,7 @@ If the table comes out scrambled, US8 is blocked, so this must run before any UI
   - `DELETE` on a parent removes pending items only
   - events `item-update` / `item-deleted` with **no snapshot**, plus one parent summary emit
 - **UI:**
-  - The upload form gets "Read as" and "Import" selects, remembered in localStorage and Zod-validated in `POST /api/import`.
+  - The upload form gets "Read as" and "Import" selects, remembered in localStorage and Zod-validated in `POST /api/import`. ("Import" was later removed: each profile has one mode, see S4.3.)
   - The review card moves out of `import/+page.svelte:763-975` into `ImportReviewCard.svelte`.
   - New `/import/[id]` page on `DetailPage`, with loaders split into `loaders/import.ts` `loadImportPage`/`loadImportDetail`. It loads every slim item row (â‰¤1,000) and pages and filters on the client, like `RecordsPage`. It reuses `BulkActionBar`, `FilterDropdown`, `StatusBadge`, `ImportSourceAccountSelect` and `ImportCategoryAccountSelect`. Row selection is copied from `RecordsPage.svelte:192,365-437`.
   - The queue card links with `row-link`. The rail shows the file, the control total and the ignored lines.
@@ -268,6 +268,8 @@ Each stage is built, reviewed by a second agent, fixed and committed, as in S0â€
 - *Exit:* an xlsx or csv uploaded as Several items is read by the AI; Reconciliation and record attachments still refuse xlsx; the receipt tests are unchanged.
 
 **S4.3 Import mode (FR-002, FR-023, FR-033).**
+
+> **Superseded 2026-10-02 by one mode per profile.** The upload-time "Import" select was redundant: a profile already says which part of a document it reads, and the fix pass had to override the select for every profile whose sections were all in one mode, which was every profile in use. The mode is now a field of the profile (`ImportProfileDraft.mode`, kept in `options_json` with no migration); sections have no mode of their own, and there is one stated total per profile and one label list per layout, still keyed by the profile's mode so older rows read. The Import select, its device memory, Retry's mode and Read again's mode radios are gone, and the server ignores an `importMode` an old tab still sends. `readingModeFor`, `profileModes`, `fixedModeOf`, `uploadImportMode` and `ProfileModeError` are removed. A profile saved before this gets the mode its sections share (`legacyProfileMode`), or Summary; one with sections in both reads Summary and the editor refuses to save it until the other-mode sections are moved or kept. `import_queue.import_mode` stays, written from the profile when it is read (chosen or detected) and cleared with the detected profile, so history, the repeat-file message and `describeReading` still name the mode. Reading one kind of document both ways takes two profiles, as the two wallet starters already do. The bullets below are what S4.3 first built.
 
 - Validator: allow Every transaction sections and keep each section's own mode. Today the parsed mode is discarded in `import-profile-schema.ts`, which is a bug. Accept a stated-total label per mode.
 - `import-profile-form.ts`: drop the Summary hard-coding.

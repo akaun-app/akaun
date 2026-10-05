@@ -2,7 +2,9 @@
 // layout and sections that read it from its columns (006 S4.5). The shape
 // follows the real report (a heading block, the summary totals, the table's
 // headings at row 18, one row per transaction); every value is invented.
-// Nothing in the app imports this file.
+// A profile made of these reads Every transaction: give it that mode, as the
+// layout's stated total labels are kept under it. Nothing in the app imports
+// this file.
 import type {
   ProfileSection,
   TableLayout,
@@ -221,7 +223,6 @@ export function withdrawalSection(bankId: number): ProfileSection {
     key: "withdrawals",
     name: "Withdrawals",
     description: "Each withdrawal to the bank.",
-    mode: "every_transaction",
     kind: "transfer",
     fixedCategoryAccountId: null,
     feeTypes: [],
@@ -253,7 +254,6 @@ export function orderSections(
       key: "orders",
       name: "Order income",
       description: "Each order paid into the wallet, and each refund.",
-      mode: "every_transaction",
       kind: "by_sign",
       fixedCategoryAccountId: categories.orders ?? null,
       feeTypes: [],
@@ -271,7 +271,6 @@ export function orderSections(
       key: "adjustments",
       name: "Adjustments",
       description: "Each adjustment the marketplace made.",
-      mode: "every_transaction",
       kind: "by_sign",
       fixedCategoryAccountId: categories.adjustments ?? null,
       feeTypes: [],

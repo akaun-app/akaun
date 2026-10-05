@@ -1356,7 +1356,6 @@
 		filename={job.originalFilename}
 		choices={data.readAsChoices}
 		current={readAsOfJob(job)}
-		currentMode={job.importMode}
 		replaces="Every item still waiting, and every skipped item, is replaced by the new reading."
 	/>
 {/if}

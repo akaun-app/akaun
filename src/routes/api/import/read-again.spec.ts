@@ -442,13 +442,13 @@ function feeProfile(over: Partial<ProfileInput> = {}): ProfileInput {
     description: "Shopee's monthly fee notice.",
     phrases: [],
     instructions: "",
+    mode: "summary",
     statedTotalLabels: { summary: "Total" },
     sections: [
       {
         key: "fees",
         name: "Fees",
         description: "Every fee line.",
-        mode: "summary",
         kind: "expense",
         fixedCategoryAccountId: ids.fees,
         feeTypes: [],
@@ -496,6 +496,10 @@ const locals = { user: { id: 1 } } as never;
 type Handler = (event: never) => Promise<Response> | Response;
 
 const routes = {
+  /**
+   * `importMode` is sent only to play an older screen, which still sent the
+   * removed "Import" choice; the route must not read it.
+   */
   async readAgain(readAs: unknown, id = jobId, importMode?: unknown) {
     const { POST } = await import("./[jobId]/reread/+server.js");
     return (POST as Handler)({
@@ -869,13 +873,13 @@ describe("reading it again with Auto-detect", () => {
     emitted = [];
     expect((await routes.readAgain(ImportReadAs.Auto)).status).toBe(202);
     expect(itemsOf()).toEqual([]);
-    // The mode is the Import choice, Summary when none is sent; it stays
-    // for Auto-detect, which may find a profile again.
+    // The mode went with the profile: it belongs to the profile that reads
+    // the document, and Auto-detect has found none yet.
     expect(jobRow()).toMatchObject({
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: ImportMode.Summary,
+      importMode: null,
     });
     const sent = emitted.at(-1)!.payload.job as Record<string, unknown>;
     expect(sent).not.toHaveProperty("profile");
@@ -970,34 +974,34 @@ describe("the repeat-file stop (FR-026)", () => {
 // ── The import mode ─────────────────────────────────────────────────────────
 
 /**
- * A statement profile with a section in each import mode: the fee lines of
- * its summary, and each row of its transaction table.
+ * A profile that reads every row of a statement's transaction table, the
+ * other way to read the document `feeProfile` reads as its summary. One kind
+ * of document read two ways is two profiles (FR-033).
  */
-function twoModeProfile(over: Partial<ProfileInput> = {}): ProfileInput {
-  const summary = feeProfile().sections[0];
+function everyProfile(over: Partial<ProfileInput> = {}): ProfileInput {
   return feeProfile({
-    statedTotalLabels: { summary: "Total", every_transaction: "Total in" },
+    name: "Shopee transactions",
+    mode: "every_transaction",
+    statedTotalLabels: { every_transaction: "Total in" },
     sections: [
-      summary,
       {
-        ...summary,
+        ...feeProfile().sections[0],
         key: "rows",
         name: "Transactions",
         description: "Each row of the transaction table.",
-        mode: "every_transaction",
       },
     ],
     ...over,
   });
 }
 
-/** What the model answers for the transaction table's rows. */
-function rowsAnswer(amounts: number[]) {
+/** What the model answers for one section's lines. */
+function sectionAnswer(key: string, amounts: number[]) {
   const answer = profileAnswer([]) as unknown as {
     sections: Record<string, unknown>;
   };
   answer.sections = {
-    rows: amounts.map((amount, index) => ({
+    [key]: amounts.map((amount, index) => ({
       description: `Row ${index + 1}`,
       amount,
       date: null,
@@ -1008,11 +1012,15 @@ function rowsAnswer(amounts: number[]) {
   return answer;
 }
 
-describe("reading it again in the other import mode (FR-023)", () => {
-  it("reads a summary group again as every transaction, from the same file", async () => {
-    const profileId = saveProfile(twoModeProfile());
+/** What the model answers for the transaction table's rows. */
+const rowsAnswer = (amounts: number[]) => sectionAnswer("rows", amounts);
+
+describe("reading it again with another profile (FR-023)", () => {
+  it("reads a summary group again with an Every transaction profile, in that profile's mode", async () => {
+    const summaryId = saveProfile(feeProfile());
+    const everyId = saveProfile(everyProfile());
     receiptCard();
-    expect((await routes.readAgain(profileReadAsValue(profileId))).status).toBe(
+    expect((await routes.readAgain(profileReadAsValue(summaryId))).status).toBe(
       202,
     );
     serve([json(profileAnswer([12.5, 30]))]);
@@ -1022,74 +1030,82 @@ describe("reading it again in the other import mode (FR-023)", () => {
     });
 
     emitted = [];
-    const res = await routes.readAgain(
-      profileReadAsValue(profileId),
-      jobId,
-      ImportMode.EveryTransaction,
-    );
+    const res = await routes.readAgain(profileReadAsValue(everyId));
     expect(res.status).toBe(202);
     expect(await res.json()).toEqual({ jobId, removedItems: 2 });
+    expect(itemsOf()).toEqual([]);
     expect(jobRow()).toMatchObject({
       state: ImportState.Queued,
       readAs: ImportReadAs.Profile,
-      profileId: String(profileId),
+      profileId: String(everyId),
       importMode: ImportMode.EveryTransaction,
     });
-    // The queue says the new mode while the document waits (FR-041).
+    // The copy kept while it waits is of the new profile, in its mode, and
+    // the queue says both (FR-041).
+    const waiting = JSON.parse(jobRow().profileSnapshot!) as {
+      id: number;
+      mode: string;
+    };
+    expect(waiting).toMatchObject({
+      id: everyId,
+      mode: ImportMode.EveryTransaction,
+    });
     expect(emitted.at(-1)!.payload.job).toMatchObject({
       profile: {
-        name: "Shopee fee notice",
+        name: "Shopee transactions",
         mode: ImportMode.EveryTransaction,
       },
     });
 
     const model = serve([json(rowsAnswer([1, 2, 3]))]);
     const read = await runWorker();
-    expect(read.state).toBe(ImportState.Grouped);
+    expect(read).toMatchObject({
+      state: ImportState.Grouped,
+      profileId: String(everyId),
+      importMode: ImportMode.EveryTransaction,
+    });
     expect(itemsOf().map((item) => [item.sectionKey, item.amount])).toEqual([
       ["rows", 1],
       ["rows", 2],
       ["rows", 3],
     ]);
-    // Only the Every transaction section is asked of the model.
+    // Only the new profile's section is asked of the model.
     const sent = JSON.stringify(model.doGenerateCalls[0].responseFormat);
     expect(sent).toContain("rows");
     expect(sent).not.toContain('"fees"');
   });
 
-  it("refuses an import mode it does not know, and changes nothing", async () => {
-    const profileId = saveProfile(twoModeProfile());
+  it("ignores an import mode an older screen still sends", async () => {
+    const profileId = saveProfile(feeProfile());
     receiptCard();
-    const res = await routes.readAgain(
-      profileReadAsValue(profileId),
-      jobId,
-      "transactions",
-    );
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe(
-      'Unknown import mode: "transactions". Use summary or every_transaction.',
-    );
-    expect(jobRow()).toMatchObject({
-      state: ImportState.PendingReview,
-      amount: 42.5,
-    });
-    expect(emitted).toEqual([]);
+    // Neither a known mode nor an unknown one changes anything: the field is
+    // not read, and the profile's own mode is stored.
+    for (const sentMode of [ImportMode.EveryTransaction, "transactions"]) {
+      // Back to a card waiting for review, so it may be read again.
+      db.update(importQueue)
+        .set({ state: ImportState.PendingReview })
+        .where(eq(importQueue.id, jobId))
+        .run();
+      const res = await routes.readAgain(
+        profileReadAsValue(profileId),
+        jobId,
+        sentMode,
+      );
+      expect(res.status).toBe(202);
+      expect(jobRow()).toMatchObject({
+        readAs: ImportReadAs.Profile,
+        importMode: ImportMode.Summary,
+      });
+    }
   });
 
-  it("reads a detected profile in the mode chosen for Auto-detect", async () => {
+  it("reads a detected profile in its own mode", async () => {
     const phrase = "Shopee Malaysia fee notice";
-    const profileId = saveProfile(twoModeProfile({ phrases: [phrase] }));
+    const profileId = saveProfile(everyProfile({ phrases: [phrase] }));
     receiptCard();
-    expect(
-      (
-        await routes.readAgain(
-          ImportReadAs.Auto,
-          jobId,
-          ImportMode.EveryTransaction,
-        )
-      ).status,
-    ).toBe(202);
-    expect(jobRow().importMode).toBe(ImportMode.EveryTransaction);
+    expect((await routes.readAgain(ImportReadAs.Auto)).status).toBe(202);
+    // No mode until a profile is found: it is the profile's.
+    expect(jobRow().importMode).toBeNull();
 
     serve([json(rowsAnswer([7, 8]))]);
     const read = await runWorker();
@@ -1102,7 +1118,7 @@ describe("reading it again in the other import mode (FR-023)", () => {
     expect(itemsOf().map((item) => item.sectionKey)).toEqual(["rows", "rows"]);
   });
 
-  it("reads a detected profile with sections in one mode only in that mode, whatever was chosen (FR-002)", async () => {
+  it("reads a detected Summary profile as Summary, whatever an older screen sent (FR-002)", async () => {
     const phrase = "Shopee Malaysia fee notice";
     const profileId = saveProfile(feeProfile({ phrases: [phrase] }));
     receiptCard();
@@ -1115,8 +1131,7 @@ describe("reading it again in the other import mode (FR-023)", () => {
         )
       ).status,
     ).toBe(202);
-    // Auto-detect keeps what was chosen until it finds a profile.
-    expect(jobRow().importMode).toBe(ImportMode.EveryTransaction);
+    expect(jobRow().importMode).toBeNull();
     const model = serve([json(profileAnswer([12.5, 30]))]);
     const read = await runWorker();
     expect(read).toMatchObject({
@@ -1128,24 +1143,6 @@ describe("reading it again in the other import mode (FR-023)", () => {
     expect(model.doGenerateCalls).toHaveLength(1);
     expect(itemsOf().map((item) => item.sectionKey)).toEqual(["fees", "fees"]);
   });
-
-  it("stores the one mode of a chosen profile with sections in one mode only (FR-002)", async () => {
-    const profileId = saveProfile(feeProfile());
-    receiptCard();
-    expect(
-      (
-        await routes.readAgain(
-          profileReadAsValue(profileId),
-          jobId,
-          ImportMode.EveryTransaction,
-        )
-      ).status,
-    ).toBe(202);
-    expect(jobRow()).toMatchObject({
-      readAs: ImportReadAs.Profile,
-      importMode: ImportMode.Summary,
-    });
-  });
 });
 
 // ── One file, one import (FR-064) ───────────────────────────────────────────
@@ -1153,19 +1150,35 @@ describe("reading it again in the other import mode (FR-023)", () => {
 describe("the repeat-file guard at confirm (FR-033, FR-064)", () => {
   const otherId = "7b2e1d63-0000-4000-8000-000000000002";
 
-  it("refuses the second copy once the first, read the other way, made records", async () => {
-    // The same statement uploaded twice before either was confirmed: once as
-    // its summary, once as every transaction. Both pass the upload stop.
-    const profileId = saveProfile(twoModeProfile());
-    const profile = {
+  it("refuses the copy read with one profile once the copy read with another made records", async () => {
+    // The same wallet report uploaded twice before either was confirmed:
+    // once with the withdrawals-only profile, once with the every-transaction
+    // one. Both pass the upload stop, since neither has made a record yet.
+    const withdrawalsId = saveProfile(
+      everyProfile({
+        name: "Wallet report — withdrawals only",
+        sections: [
+          {
+            ...everyProfile().sections[0],
+            key: "withdrawals",
+            name: "Withdrawals",
+            description: "Each withdrawal to the bank.",
+          },
+        ],
+      }),
+    );
+    const everyId = saveProfile(
+      everyProfile({ name: "Wallet report — every transaction" }),
+    );
+    const chosen = {
       state: ImportState.Queued,
       readAs: ImportReadAs.Profile,
       readHow: ImportReadHow.Chosen,
-      profileId: String(profileId),
+      importMode: ImportMode.EveryTransaction,
     };
-    queueRow({ ...profile, importMode: ImportMode.Summary }, otherId);
-    queueRow({ ...profile, importMode: ImportMode.EveryTransaction });
-    serve([json(profileAnswer([12.5, 30]))]);
+    queueRow({ ...chosen, profileId: String(withdrawalsId) }, otherId);
+    queueRow({ ...chosen, profileId: String(everyId) });
+    serve([json(sectionAnswer("withdrawals", [12.5, 30]))]);
     expect((await runWorker(otherId)).state).toBe(ImportState.Grouped);
     serve([json(rowsAnswer([1, 2, 3]))]);
     const read = await runWorker();
@@ -1192,7 +1205,7 @@ describe("the repeat-file guard at confirm (FR-033, FR-064)", () => {
     for (const result of results) {
       expect(result.ok).toBe(false);
       expect(result.reason).toBe(
-        'This file was already imported with the import profile "Shopee fee notice" (Summary), which made 2 records. One file is imported one way only, so nothing was imported from this copy.',
+        'This file was already imported with the import profile "Wallet report — withdrawals only" (Every transaction), which made 2 records. One file is imported one way only, so nothing was imported from this copy.',
       );
     }
     // Nothing was written, and every item is still waiting.
@@ -1238,7 +1251,8 @@ describe("the repeat-file guard at confirm (FR-033, FR-064)", () => {
 
   it("leaves the Auto-detect fallback to a receipt as it was (FR-004)", async () => {
     // No profile fitted, so it was read the standard way: a receipt, even
-    // though the uploader's "Import" choice is kept on the row.
+    // on a row from before the "Import" choice was removed, which still
+    // carries the mode it stored.
     receiptCard({
       readAs: ImportReadAs.Auto,
       readHow: ImportReadHow.Standard,

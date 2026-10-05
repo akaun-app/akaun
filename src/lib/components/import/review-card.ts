@@ -13,7 +13,6 @@ import {
   isImportMode,
   parseExtractionNotes,
   profileReadAsValue,
-  type ImportModeValue,
 } from "$lib/import-reading.js";
 import { formatCurrency } from "$lib/currency.js";
 import type { AccountView } from "$lib/server/ledger/types.js";
@@ -500,9 +499,8 @@ export function describeReading(job: ReadingOf): string {
   ) {
     const name = job.profile ? `“${job.profile.name}”` : "an import profile";
     const how = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
-    // The mode it is read in, always: a profile with sections in one mode
-    // only is read in that mode whatever "Import" said (FR-002), so the
-    // screen says which one it was.
+    // The mode it was read in, always, from the copy of the profile kept with
+    // the reading (FR-002, FR-038), so an older reading still says it.
     const readIn = job.profile?.mode;
     const mode = isImportMode(readIn) ? ` · ${importModeLabel(readIn)}` : "";
     const method = parseExtractionNotes(job.extractionNotes)?.method;
@@ -600,21 +598,6 @@ export function hasProfileChoice(choices: { value: string }[]): boolean {
   return choices.some((choice) =>
     choice.value.startsWith(PROFILE_READ_AS_PREFIX),
   );
-}
-
-/**
- * The one mode a "Read as" choice is read in, when it names a profile with
- * sections in one mode only (FR-002), or null when "Import" decides. The
- * server sends each profile's modes with the choices and applies the same
- * rule itself, so this only says it on the screen.
- */
-export function fixedModeOf(
-  choices: { value: string; modes?: readonly string[] }[],
-  value: string,
-): ImportModeValue | null {
-  const modes = choices.find((choice) => choice.value === value)?.modes;
-  if (!modes || modes.length !== 1) return null;
-  return isImportMode(modes[0]) ? modes[0] : null;
 }
 
 // ── A document read as several items ────────────────────────────────────────

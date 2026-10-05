@@ -70,6 +70,8 @@ const { auditLog, importProfiles, importQueue, users } = schema;
 const { createImportProfile, setImportProfileEnabled, getImportProfile } =
   await import("$lib/server/services/import-profiles.js");
 const { loadImportPage } = await import("$lib/server/loaders/import.js");
+const { formFromDraft, payloadFromForm } =
+  await import("$lib/import-profile-form.js");
 type LedgerDb = import("$lib/server/ledger/types.js").LedgerDb;
 type ProfileDraft = import("$lib/import-profile-schema.js").ImportProfileDraft;
 
@@ -109,9 +111,22 @@ function feeDocument(name = "Fee notice"): ProfileDraft {
   return { ...starterDraft("fee_document")!, name };
 }
 
+/** The fee document, read as Every transaction instead (FR-032). */
+function everyTransaction(name = "Fee rows"): ProfileDraft {
+  return {
+    ...feeDocument(name),
+    mode: "every_transaction",
+    statedTotalLabels: { every_transaction: "Total of the rows" },
+  };
+}
+
 /** A profile saved straight through the service, for a route to act on. */
-function saved(name = "Fee notice", enabled = true): number {
-  const created = createImportProfile(db, 1, feeDocument(name));
+function saved(
+  name = "Fee notice",
+  enabled = true,
+  make: (name: string) => ProfileDraft = feeDocument,
+): number {
+  const created = createImportProfile(db, 1, make(name));
   if (!created.ok) throw new Error(created.reason);
   if (!enabled) setImportProfileEnabled(db, 1, created.value.id, false);
   return created.value.id;
@@ -522,60 +537,45 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(tempFiles()).toHaveLength(0);
   });
 
-  it("stores the Import choice for a profile and for Auto-detect (FR-002)", async () => {
-    // A profile with sections in both modes, for which Import decides.
-    const draft = feeDocument("Both modes");
-    draft.sections.push({
-      ...structuredClone(draft.sections[0]),
-      key: "rows",
-      mode: "every_transaction",
-    });
-    const created = createImportProfile(db, 1, draft);
-    if (!created.ok) throw new Error(created.reason);
-    const id = created.value.id;
-    expect(
-      (await routes.upload(`profile:${id}`, "every_transaction")).status,
-    ).toBe(202);
-    expect((await routes.upload("auto", "every_transaction")).status).toBe(202);
-    expect((await routes.upload("receipt", "every_transaction")).status).toBe(
-      202,
-    );
-    const byReadAs = Object.fromEntries(
-      queueRows().map((row) => [row.readAs, row]),
-    );
-    expect(byReadAs.profile.importMode).toBe("every_transaction");
-    // The copy taken at upload names the mode, so the queue can say it.
-    expect(
-      JSON.parse(byReadAs.profile.profileSnapshot ?? "null"),
-    ).toMatchObject({ id, mode: "every_transaction" });
-    expect(byReadAs.auto.importMode).toBe("every_transaction");
-    // A receipt has no mode, so the choice is ignored for it.
-    expect(byReadAs.receipt.importMode).toBeNull();
-  });
-
-  it("stores the one mode of a profile with sections in one mode only, whatever Import says (FR-002)", async () => {
-    // A fee document has Summary sections only.
-    const id = saved();
-    expect(
-      (await routes.upload(`profile:${id}`, "every_transaction")).status,
-    ).toBe(202);
+  it("stores the chosen profile's own mode, and its copy names it (FR-002)", async () => {
+    const id = saved("Wallet rows", true, everyTransaction);
+    expect((await routes.upload(`profile:${id}`)).status).toBe(202);
     const [row] = queueRows();
-    expect(row.importMode).toBe("summary");
+    expect(row.importMode).toBe("every_transaction");
+    // The copy taken at upload names the mode, so the queue can say it.
     expect(JSON.parse(row.profileSnapshot ?? "null")).toMatchObject({
       id,
-      mode: "summary",
+      mode: "every_transaction",
+      profile: { mode: "every_transaction" },
     });
   });
 
-  it("refuses an unknown Import choice with a clear message, and stores nothing", async () => {
-    const id = saved();
-    const res = await routes.upload(`profile:${id}`, "everything");
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      'Unknown import mode: "everything". Use summary or every_transaction.',
+  it("accepts an Import choice an older screen still sends, and does not read it", async () => {
+    const summary = saved();
+    const rows = saved("Wallet rows", true, everyTransaction);
+    for (const sent of ["every_transaction", "summary", "everything", ""]) {
+      expect((await routes.upload(`profile:${summary}`, sent)).status).toBe(
+        202,
+      );
+      expect((await routes.upload(`profile:${rows}`, sent)).status).toBe(202);
+      expect((await routes.upload("auto", sent)).status).toBe(202);
+      expect((await routes.upload("receipt", sent)).status).toBe(202);
+    }
+    const modeOf = (readAs: string, profileId: string | null) =>
+      new Set(
+        queueRows()
+          .filter((row) => row.readAs === readAs && row.profileId === profileId)
+          .map((row) => row.importMode),
+      );
+    // Each profile is read in its own mode, whatever the field said.
+    expect(modeOf("profile", String(summary))).toEqual(new Set(["summary"]));
+    expect(modeOf("profile", String(rows))).toEqual(
+      new Set(["every_transaction"]),
     );
-    expect(queueRows()).toHaveLength(0);
-    expect(tempFiles()).toHaveLength(0);
+    // Auto-detect stores a mode only once it finds a profile; a receipt
+    // never has one.
+    expect(modeOf("auto", null)).toEqual(new Set([null]));
+    expect(modeOf("receipt", null)).toEqual(new Set([null]));
   });
 
   it("refuses the stored words as an upload choice", async () => {
@@ -586,7 +586,7 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
     expect(queueRows()).toHaveLength(0);
   });
 
-  it("still reads the built-in choices as before, with no profile, and Auto-detect in Summary", async () => {
+  it("still reads the built-in choices as before, with no profile and no mode", async () => {
     expect((await routes.upload("items")).status).toBe(202);
     expect((await routes.upload()).status).toBe(202);
     const rows = queueRows().sort((a, b) =>
@@ -597,7 +597,7 @@ describe("uploading with a profile (FR-001, FR-045)", () => {
         readAs: "auto",
         readHow: "standard",
         profileId: null,
-        importMode: "summary",
+        importMode: null,
       },
       { readAs: "items", readHow: "chosen", profileId: null, importMode: null },
     ]);
@@ -618,15 +618,9 @@ describe("the Read as choices on the upload screen", () => {
   it("offers each enabled profile by name, after the built-in ones (US6 AS5)", () => {
     const beta = saved("Beta statement");
     const alpha = saved("Alpha fees");
-    // Each with the modes it has sections in (FR-002): a fee document has
-    // Summary sections only.
     expect(choices().slice(3)).toEqual([
-      { value: `profile:${alpha}`, label: "Alpha fees", modes: ["summary"] },
-      {
-        value: `profile:${beta}`,
-        label: "Beta statement",
-        modes: ["summary"],
-      },
+      { value: `profile:${alpha}`, label: "Alpha fees" },
+      { value: `profile:${beta}`, label: "Beta statement" },
     ]);
   });
 
@@ -637,25 +631,14 @@ describe("the Read as choices on the upload screen", () => {
     expect((await routes.patch(off, { enabled: false })).status).toBe(200);
     expect((await routes.remove(gone)).status).toBe(204);
     expect(choices().slice(3)).toEqual([
-      { value: `profile:${kept}`, label: "Kept", modes: ["summary"] },
+      { value: `profile:${kept}`, label: "Kept" },
     ]);
   });
 
-  it("sends both modes for a profile with sections in both", () => {
-    const draft = feeDocument("Both modes");
-    draft.sections.push({
-      ...structuredClone(draft.sections[0]),
-      key: "rows",
-      mode: "every_transaction",
-    });
-    const created = createImportProfile(db, 1, draft);
-    if (!created.ok) throw new Error(created.reason);
+  it("carries no mode with a profile: choosing it chooses its mode (FR-002)", () => {
+    const id = saved("Wallet rows", true, everyTransaction);
     expect(choices().slice(3)).toEqual([
-      {
-        value: `profile:${created.value.id}`,
-        label: "Both modes",
-        modes: ["summary", "every_transaction"],
-      },
+      { value: `profile:${id}`, label: "Wallet rows" },
     ]);
   });
 
@@ -664,5 +647,124 @@ describe("the Read as choices on the upload screen", () => {
     for (const choice of choices()) {
       expect((await routes.upload(choice.value)).status).toBe(202);
     }
+  });
+});
+
+// ── The profile's import mode (FR-002, FR-032) ──────────────────────────────
+
+describe("the profile's import mode", () => {
+  /**
+   * A profile as it was saved when each section had its own mode: no mode in
+   * its options, and each section with the mode given (none for undefined).
+   */
+  function legacy(
+    name: string,
+    modes: ("summary" | "every_transaction" | undefined)[],
+  ): number {
+    const [fees] = feeDocument().sections;
+    const sections = modes.map((mode, index) => ({
+      ...structuredClone(fees),
+      key: `part_${index + 1}`,
+      name: `Part ${index + 1}`,
+      ...(mode ? { mode } : {}),
+    }));
+    return db
+      .insert(importProfiles)
+      .values({
+        name,
+        description: "A document saved before the mode was on the profile.",
+        sectionsJson: JSON.stringify(sections),
+        statedTotalLabelsJson: JSON.stringify({ summary: "Total" }),
+        optionsJson: "{}",
+        createdBy: 1,
+        updatedBy: 1,
+      })
+      .returning()
+      .get().id;
+  }
+
+  it("stores the mode in the profile's options, and no section carries one", async () => {
+    const id = saved("Wallet rows", true, everyTransaction);
+    const [row] = profileRows().filter((r) => r.id === id);
+    expect(JSON.parse(row.optionsJson)).toMatchObject({
+      mode: "every_transaction",
+    });
+    for (const section of JSON.parse(row.sectionsJson) as object[]) {
+      expect(section).not.toHaveProperty("mode");
+    }
+    expect(getImportProfile(db, id)?.mode).toBe("every_transaction");
+  });
+
+  it("drops a section mode sent with the profile's own mode", async () => {
+    const draft = everyTransaction("Wallet rows");
+    const res = await routes.create({
+      ...draft,
+      sections: draft.sections.map((section) => ({
+        ...section,
+        mode: "every_transaction",
+      })),
+    });
+    expect(res.status).toBe(201);
+    const [row] = profileRows();
+    for (const section of JSON.parse(row.sectionsJson) as object[]) {
+      expect(section).not.toHaveProperty("mode");
+    }
+  });
+
+  it("gives a profile saved before the mode existed the mode of its sections", () => {
+    const rows = legacy("Wallet rows", [
+      "every_transaction",
+      "every_transaction",
+    ]);
+    const summary = legacy("Fee notice", ["summary"]);
+    const unset = legacy("Older notice", [undefined, undefined]);
+    expect(getImportProfile(db, rows)?.mode).toBe("every_transaction");
+    expect(getImportProfile(db, summary)?.mode).toBe("summary");
+    // A section with no mode was a Summary section.
+    expect(getImportProfile(db, unset)?.mode).toBe("summary");
+  });
+
+  it("reads a profile with sections in both modes as Summary, and the editor cannot save it until it is fixed", async () => {
+    const id = legacy("Statement", ["summary", "every_transaction"]);
+    const view = getImportProfile(db, id)!;
+    expect(view.mode).toBe("summary");
+
+    // Saved back as the editor sends it: the Every transaction section is a
+    // problem, at its own path, and nothing changes.
+    const form = formFromDraft(view);
+    expect(form.sections.map((section) => section.legacyMode)).toEqual([
+      null,
+      "every_transaction",
+    ]);
+    const refused = await routes.patch(id, payloadFromForm(form));
+    expect(refused.status).toBe(400);
+    const body = (await refused.json()) as {
+      errors: { path: string; message: string }[];
+    };
+    expect(body.errors.map((error) => error.path)).toEqual([
+      "sections[1].mode",
+    ]);
+    expect(body.errors[0].message).toContain("This profile now reads one way");
+    expect(profileAudit()).toHaveLength(0);
+
+    // Kept on purpose: it is read as Summary too, and the save goes through
+    // with no section mode left.
+    form.sections[1].legacyMode = null;
+    const accepted = await routes.patch(id, payloadFromForm(form));
+    expect(accepted.status).toBe(200);
+    const [row] = profileRows().filter((r) => r.id === id);
+    expect(JSON.parse(row.optionsJson)).toMatchObject({ mode: "summary" });
+    for (const section of JSON.parse(row.sectionsJson) as object[]) {
+      expect(section).not.toHaveProperty("mode");
+    }
+  });
+
+  it("lets the mixed profile be changed to Every transaction instead", async () => {
+    const id = legacy("Statement", ["summary", "every_transaction"]);
+    const form = formFromDraft(getImportProfile(db, id)!);
+    form.mode = "every_transaction";
+    const res = await routes.patch(id, payloadFromForm(form));
+    expect(res.status).toBe(200);
+    expect(getImportProfile(db, id)?.mode).toBe("every_transaction");
   });
 });

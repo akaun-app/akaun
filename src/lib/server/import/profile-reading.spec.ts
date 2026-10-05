@@ -262,13 +262,13 @@ function statementProfile(over: Partial<ProfileInput> = {}): ProfileInput {
     description: "Shopee's monthly income statement.",
     phrases: [],
     instructions: "PROFILE NOTE: read the summary box only.",
+    mode: "summary",
     statedTotalLabels: { summary: "Total Payout Released" },
     sections: [
       {
         key: "sales",
         name: "Sales",
         description: "The product price at the top of the summary.",
-        mode: "summary",
         kind: "income",
         fixedCategoryAccountId: null,
         feeTypes: [
@@ -284,7 +284,6 @@ function statementProfile(over: Partial<ProfileInput> = {}): ProfileInput {
         key: "fees",
         name: "Fees and rebates",
         description: "Every other leaf line of the summary.",
-        mode: "summary",
         kind: "by_sign",
         fixedCategoryAccountId: null,
         feeTypes: [
@@ -584,6 +583,48 @@ describe("reading a marketplace summary with a profile", () => {
     expect(page.job).not.toHaveProperty("profileSnapshot");
   });
 
+  it("still names the sections of a copy kept before the mode was on the profile (FR-038)", async () => {
+    // A reading from when each section had its own mode: the copy's profile
+    // has no mode, a section with none was a Summary one, and the document
+    // was read in the mode the copy names.
+    const old = {
+      version: 1,
+      id: 41,
+      name: "Old statement",
+      mode: ImportMode.EveryTransaction,
+      schemaId: "profile:41:abc",
+      profile: {
+        ...statementProfile({ name: "Old statement" }),
+        mode: undefined,
+        sections: [
+          { ...statementProfile().sections[0] },
+          {
+            ...statementProfile().sections[1],
+            key: "rows",
+            name: "Transactions",
+            mode: ImportMode.EveryTransaction,
+          },
+        ],
+      },
+    };
+    const row = queueJob({
+      state: ImportState.Grouped,
+      readAs: ImportReadAs.Profile,
+      profileId: "41",
+      importMode: ImportMode.EveryTransaction,
+      profileSnapshot: JSON.stringify(old),
+    });
+
+    const page = loadImportDetail({} as App.Locals, row.id, db);
+    expect(page.job.profile).toEqual({
+      name: "Old statement",
+      mode: ImportMode.EveryTransaction,
+    });
+    expect(page.sections).toEqual([
+      { key: "rows", name: "Transactions", kind: "by_sign" },
+    ]);
+  });
+
   it("names the profile in every update, without sending the copy itself", async () => {
     const profileId = saveProfile(statementProfile());
     serve([json(statementAnswer())]);
@@ -635,13 +676,13 @@ describe("reading a marketplace summary with a profile", () => {
       description: "A platform's fee notice.",
       phrases: [],
       instructions: "",
+      mode: "summary",
       statedTotalLabels: { summary: "Total charges" },
       sections: [
         {
           key: "charges",
           name: "Charges",
           description: "Each charge line.",
-          mode: "summary",
           kind: "expense",
           fixedCategoryAccountId: ids.ads,
           feeTypes: [],
@@ -847,9 +888,9 @@ describe("reading a marketplace summary with a profile", () => {
 });
 
 describe("a profile that cannot be used", () => {
-  it("reads a profile with sections in one mode only in that mode, whatever Import says (FR-002)", async () => {
-    // Every section is a Summary one, so Every transaction has nothing to
-    // read: the profile is read as Summary, and the row says so.
+  it("reads a profile in its own mode, whatever mode the row was queued with (FR-002)", async () => {
+    // A row queued by a screen from before the mode moved to the profile may
+    // still carry another mode. The profile's own decides, and the row says so.
     const profileId = saveProfile(statementProfile());
     const model = serve([json(statementAnswer())]);
     const row = await run(
@@ -987,6 +1028,43 @@ describe("a file already imported with a profile", () => {
     const third = await run(profileJob(profileId, { fileHash: "same-file" }));
     expect(third.state).toBe(ImportState.Failed);
     expect(third.error).toContain("already imported with the import profile");
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it("stops a file imported with one profile when it is read with the profile made for the other mode (FR-026, FR-033)", async () => {
+    // Reading one kind of document both ways takes two profiles. The file
+    // imported with the Summary one is stopped when read with the Every
+    // transaction one, and told which profile and mode it was imported with.
+    const summaryId = saveProfile(statementProfile());
+    const everyId = saveProfile(
+      statementProfile({
+        name: "Shopee statement — every transaction",
+        mode: "every_transaction",
+        statedTotalLabels: {},
+        sections: [
+          {
+            ...statementProfile().sections[1],
+            key: "rows",
+            name: "Transactions",
+            feeTypes: [],
+          },
+        ],
+      }),
+    );
+    serve([json(statementAnswer())]);
+    const first = await run(profileJob(summaryId, { fileHash: "same-file" }));
+    const [sale] = itemsOf(first.id);
+    db.update(importItems)
+      .set({ state: ImportState.Imported })
+      .where(eq(importItems.id, sale.id))
+      .run();
+
+    const model = serve([json(statementAnswer())]);
+    const second = await run(profileJob(everyId, { fileHash: "same-file" }));
+    expect(second.state).toBe(ImportState.Failed);
+    expect(second.error).toBe(
+      'This file was already imported with the import profile "Shopee statement" (Summary), which made 1 record. It was not read again.',
+    );
     expect(model.doGenerateCalls).toHaveLength(0);
   });
 });
@@ -1187,9 +1265,9 @@ describe("Auto-detect", () => {
     expect(itemsOf(row.id)).toEqual([]);
   });
 
-  it("clears a profile an earlier attempt detected when it now reads the standard way, keeping the chosen mode", async () => {
+  it("clears a profile an earlier attempt detected, and its mode, when it now reads the standard way", async () => {
     // Detected, then stopped by a restart; read again, nothing fits now. The
-    // mode is the uploader's choice, not the profile's, so it stays.
+    // mode was the detected profile's, so it goes with it: a receipt has none.
     saveProfile(statementProfile({ phrases: ["Lazada"] }));
     serve([json({ profile: "none" }), receiptAnswer()]);
     const row = await run(
@@ -1205,7 +1283,7 @@ describe("Auto-detect", () => {
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: ImportMode.EveryTransaction,
+      importMode: null,
     });
   });
 
@@ -1231,7 +1309,7 @@ describe("Auto-detect", () => {
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
-      importMode: ImportMode.Summary,
+      importMode: null,
       itemName: "Paper",
     });
   });
@@ -1441,13 +1519,13 @@ describe("a long document read in pieces (FR-043)", () => {
       description: "A made-up wallet report.",
       phrases: [],
       instructions: "PROFILE NOTE: one record per row.",
+      mode: "every_transaction",
       statedTotalLabels: { every_transaction: "Net total" },
       sections: [
         {
           key: "rows",
           name: "Transactions",
           description: "Each transaction row.",
-          mode: "every_transaction",
           kind: "by_sign",
           fixedCategoryAccountId: null,
           feeTypes: [],

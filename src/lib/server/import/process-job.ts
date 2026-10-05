@@ -21,11 +21,11 @@
  *   document is read with the profile it found or as a receipt (FR-039,
  *   FR-040). The row keeps "auto" as what the uploader chose; `read_how`,
  *   `profile_id` and the copy of the profile say how it was read.
- * - **In one mode** (006 FR-002): a profile with sections in one mode only is
- *   read in that mode whatever "Import" said, and the row stores it. Only a
- *   profile with sections in both modes is read in the mode chosen.
+ * - **In the profile's mode** (006 FR-002, FR-032): a profile is read in its
+ *   own import mode, Summary lines or Every transaction, whether it was
+ *   chosen or detected, and the row stores that mode.
  * - **From its columns** (006 FR-055): a spreadsheet read with a profile whose
- *   sections in the mode it is read in all have row rules is read by code
+ *   sections all have row rules is read by code
  *   (`table-reader.ts`), with no AI call. It needs no AI provider, so the check
  *   for one is made only where the AI is asked.
  * - **In pieces** (006 FR-043): a profile reading in Every transaction mode
@@ -49,14 +49,13 @@ import {
   type ImportStateCode,
 } from "$lib/enums.js";
 import {
-  readingModeFor,
+  profileSections,
   readsFromColumns,
 } from "$lib/import-profile-schema.js";
 import {
   ImportMode,
   ImportReadAs,
   ImportReadHow,
-  isImportMode,
   serializeExtractionNotes,
   type ImportModeValue,
 } from "$lib/import-reading.js";
@@ -119,7 +118,6 @@ import {
   type PieceProgress,
 } from "./piece-reader.js";
 import {
-  ProfileModeError,
   SEVERAL_ITEMS_PROFILE,
   savedReadingProfile,
   type ReadingProfile,
@@ -185,9 +183,9 @@ interface ItemsReading {
   profileName?: string;
   /**
    * Set when the document is a spreadsheet to be read from its columns, with
-   * no AI (FR-055): the profile's layout and sections, and the mode.
+   * no AI (FR-055): the profile's mode, layout and sections.
    */
-  columns?: { table: TableProfile; mode: ImportModeValue };
+  columns?: { table: TableProfile };
   /**
    * The import mode a saved profile reads in; absent for the built-in
    * reading. An Every transaction reading by the AI is read in pieces
@@ -558,11 +556,8 @@ export async function processImportJob(
 /**
  * Whether this job may be read with no AI at all, so a missing provider is
  * not yet a reason to fail it: a spreadsheet read with a profile from its
- * columns, or a spreadsheet Auto-detect may find such a profile for. Each
- * profile is judged in the mode it is read in (`readingModeFor`), so a profile
- * with Every transaction sections only, uploaded under the default Summary,
- * still counts. Anything else asks the AI, and is stopped before its file is
- * read, as before.
+ * columns, or a spreadsheet Auto-detect may find such a profile for. Anything
+ * else asks the AI, and is stopped before its file is read, as before.
  */
 function mayReadWithoutAi(
   job: ImportJob,
@@ -572,24 +567,7 @@ function mayReadWithoutAi(
 ): boolean {
   if (path === "profile") return itemsReading?.columns !== undefined;
   if (path !== "auto" || !readsCells(job)) return false;
-  return candidates.some((profile) => columnsOnly(profile, modeOf(job)));
-}
-
-/** The import mode the uploader chose; Summary on a row from before it. */
-function modeOf(job: Pick<ImportJob, "importMode">): ImportModeValue {
-  return isImportMode(job.importMode) ? job.importMode : ImportMode.Summary;
-}
-
-/**
- * Whether a profile reads from columns in the mode it would be read in, given
- * the mode the uploader chose (FR-002, FR-055). Such a profile can read a
- * spreadsheet with its table's headings, and nothing else.
- */
-function columnsOnly(
-  profile: ImportProfileView,
-  asked: ImportModeValue,
-): boolean {
-  return readsFromColumns(profile, readingModeFor(profile, asked));
+  return candidates.some((profile) => readsFromColumns(profile));
 }
 
 /**
@@ -647,15 +625,12 @@ async function readAutoDetected(
     return;
   }
 
-  // The found profile is read in the mode the uploader chose under "Import"
-  // when it has sections in both modes, and in its one mode otherwise
-  // (FR-002); `profileForJob` decides and stores it. A row from before the
-  // choice existed has none and asks for Summary, as it always did.
+  // The found profile is read in its own mode (FR-002), which
+  // `profileForJob` stores on the row.
   const detected: ImportJob = {
     ...job,
     profileId: String(detection.route),
     readHow: ImportReadHow.Detected,
-    importMode: modeOf(job),
   };
   const found = profileForJob(db, detected);
   if (!found.ok) {
@@ -663,7 +638,7 @@ async function readAutoDetected(
     return;
   }
   // The mode it is read in, as the row now stores it.
-  detected.importMode = found.value.mode ?? detected.importMode;
+  detected.importMode = found.value.mode ?? null;
   // Every screen now says which profile reads the document, and that it was
   // detected (FR-041), while the reading runs.
   emitJobUpdate(db, job.id, userId);
@@ -720,9 +695,8 @@ function cellsForColumns(
 
 /**
  * Auto-detect for a PDF or a photo (FR-039): `detectProfile`, among the
- * profiles that could read it. A profile that reads from columns only, in the
- * mode it would be read in, is left out: it is made for a spreadsheet's
- * table, and a PDF has no cells. With no other profile, nothing is asked and
+ * profiles that could read it. A profile that reads from columns only is left
+ * out: it is made for a spreadsheet's table, and a PDF has no cells. With no other profile, nothing is asked and
  * the document is read the standard way.
  */
 async function detectDocument(
@@ -731,8 +705,7 @@ async function detectDocument(
   profiles: ImportProfileView[],
   calls: Omit<ReadingInput, "text">,
 ): Promise<{ route: number | "standard" }> {
-  const mode = modeOf(job);
-  const readable = profiles.filter((profile) => !columnsOnly(profile, mode));
+  const readable = profiles.filter((profile) => !readsFromColumns(profile));
   if (readable.length === 0) return { route: "standard" };
   return detectProfile({
     text,
@@ -754,8 +727,8 @@ async function detectDocument(
  *    provider the job fails, naming them: the table fits each of them, and
  *    the standard reading would be the wrong answer.
  * 3. **No profile's headings match.** Only the profiles that could read the
- *    document are looked at: a profile that reads from columns, in the mode
- *    it would be read in, could not, since its headings are not there, and
+ *    document are looked at: a profile that reads from columns could not,
+ *    since its headings are not there, and
  *    would only fail with its table not found. The phrases decide among the
  *    rest; otherwise the AI detect call chooses among them. When there are
  *    none, or no provider is set up, no AI is asked and the standard reading
@@ -782,11 +755,10 @@ async function detectSpreadsheet(
     return { route: byHeadings[0].id };
   }
 
-  const mode = modeOf(job);
   const among =
     byHeadings.length > 1
       ? byHeadings
-      : profiles.filter((profile) => !columnsOnly(profile, mode));
+      : profiles.filter((profile) => !readsFromColumns(profile));
   const words = detectionText(workbook);
   const byPhrases = phraseMatch(words, among);
   if (byPhrases.length === 1) {
@@ -833,30 +805,30 @@ export function severalLayoutsFit(
  * card, the group page and a later repeat-file stop must not name it (FR-003,
  * FR-041). A fresh row has nothing to clear, so it gets no extra write.
  *
- * The import mode stays, and Retry and "Read again" offer it again. It is
- * what the uploader chose under "Import", unless an earlier reading found a
- * profile with sections in one mode only: that reading stored the profile's
- * mode in its place (FR-002). Nothing reads it for a receipt.
+ * The import mode goes with them: it is the mode of the profile that read the
+ * document (FR-002), and a receipt has none.
  */
 function clearDetectedProfile(db: LedgerDb, job: ImportJob) {
   const leftOver =
     job.readHow !== ImportReadHow.Standard ||
     job.profileId !== null ||
-    job.profileSnapshot !== null;
+    job.profileSnapshot !== null ||
+    job.importMode !== null;
   if (!leftOver) return;
   db.update(importQueue)
     .set({
       readHow: ImportReadHow.Standard,
       profileId: null,
       profileSnapshot: null,
+      importMode: null,
     })
     .where(eq(importQueue.id, job.id))
     .run();
 }
 
 /**
- * The saved profile a job is to be read with, compiled for its import mode,
- * or why it cannot be read (spec edge cases). A profile disabled or deleted
+ * The saved profile a job is to be read with, compiled in its own import
+ * mode, or why it cannot be read (spec edge cases). A profile disabled or deleted
  * after the upload is not used, and the message names it.
  *
  * On success the profile is copied onto the row with the mode, before any
@@ -896,26 +868,23 @@ function profileForJob(
     };
   }
 
-  // Its one mode when it has sections in one mode only, else the mode the
-  // uploader chose (FR-002). The row stores the mode it is read in, so every
-  // screen says it.
-  const mode = readingModeFor(saved, modeOf(job));
-  let profile: ReadingProfile;
-  try {
-    profile = savedReadingProfile(saved, mode);
-  } catch (err) {
-    if (err instanceof ProfileModeError)
-      return { ok: false, reason: err.message };
-    throw err;
+  // The profile's own mode (FR-002, FR-032). The row stores it, so every
+  // screen says it. Every profile saved has a section in its own mode; one
+  // with none is a damaged row, and is named rather than read as nothing.
+  const { mode } = saved;
+  if (profileSections(saved).length === 0) {
+    return {
+      ok: false,
+      reason: `The import profile "${saved.name}" has no section to read, so nothing was read. Open it in Settings and add a section.`,
+    };
   }
+  const profile: ReadingProfile = savedReadingProfile(saved);
 
   // A spreadsheet the profile reads from its columns (FR-055). Its copy
   // names what was read, the layout and the sections, not a schema the AI
   // was never sent.
-  const fromColumns = readsCells(job) && readsFromColumns(saved, mode);
-  const schemaId = fromColumns
-    ? columnsReadingId(saved, mode)
-    : profile.schemaId;
+  const fromColumns = readsCells(job) && readsFromColumns(saved);
+  const schemaId = fromColumns ? columnsReadingId(saved) : profile.schemaId;
 
   db.update(importQueue)
     .set({
@@ -923,7 +892,7 @@ function profileForJob(
       importMode: mode,
       readHow: job.readHow ?? ImportReadHow.Chosen,
       profileSnapshot: serializeProfileSnapshot(
-        profileSnapshotOf(saved, mode, schemaId),
+        profileSnapshotOf(saved, schemaId),
       ),
     })
     .where(eq(importQueue.id, job.id))
@@ -941,10 +910,10 @@ function profileForJob(
             columns: {
               table: {
                 name: saved.name,
+                mode,
                 layout: saved.layout,
                 sections: saved.sections,
               },
-              mode,
             },
           }
         : {}),
@@ -1308,17 +1277,11 @@ async function readItems(
           "This spreadsheet's cells could not be read, so it was not read from its columns.",
         );
       }
-      reading = readFromColumns(
-        input.workbook,
-        chosen.columns.table,
-        chosen.columns.mode,
-        profile,
-        {
-          today: new Date().toISOString().slice(0, 10),
-          mainCurrency: input.accountLists.mainCurrency,
-          schemaId: profile.schemaId,
-        },
-      );
+      reading = readFromColumns(input.workbook, chosen.columns.table, profile, {
+        today: new Date().toISOString().slice(0, 10),
+        mainCurrency: input.accountLists.mainCurrency,
+        schemaId: profile.schemaId,
+      });
     } else if (chosen.mode === ImportMode.EveryTransaction) {
       // One record per row, of a document that may run to hundreds of
       // rows: read in pieces, each sized to finish in time (FR-043).

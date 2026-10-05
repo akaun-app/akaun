@@ -13,15 +13,11 @@
 import { DocumentTypeLabels, type DocumentTypeCode } from "$lib/enums.js";
 import {
   checkTablePreview,
+  profileSections,
   readsFromColumns,
   type ProfileError,
 } from "$lib/import-profile-schema.js";
-import {
-  ImportMode,
-  importModeLabel,
-  isImportMode,
-  type ImportModeValue,
-} from "$lib/import-reading.js";
+import { type ImportModeValue } from "$lib/import-reading.js";
 import { readCsv } from "../extraction/spreadsheet/csv.js";
 import { renderWorkbook } from "../extraction/spreadsheet/render.js";
 import {
@@ -54,13 +50,14 @@ export interface PreviewItem {
 }
 
 export interface TablePreview {
+  /** The profile's import mode, which the preview reads in (FR-032). */
   mode: ImportModeValue;
   sheet: string;
   /** The Excel row number of the headings. */
   headerRow: number;
   /** The table's rows, from below the headings to the first blank row. */
   rows: number;
-  /** How many items each section of the mode took, in the profile's order. */
+  /** How many items each section took, in the profile's order. */
   sections: { key: string; name: string; kind: string; count: number }[];
   items: PreviewItem[];
   /** All the items, not only those listed. */
@@ -93,31 +90,16 @@ function workbookOf(
 }
 
 /**
- * The mode to preview: the one asked for, or else Every transaction when a
- * section is read in it, and Summary otherwise.
- */
-function previewMode(
-  asked: unknown,
-  sections: readonly { mode?: ImportModeValue }[],
-): ImportModeValue | null {
-  if (asked !== undefined && asked !== null && asked !== "") {
-    return isImportMode(asked) ? asked : null;
-  }
-  return sections.some((s) => s.mode === ImportMode.EveryTransaction)
-    ? ImportMode.EveryTransaction
-    : ImportMode.Summary;
-}
-
-/**
  * Reads `bytes` with the profile being edited, as an upload with it would be
  * read, and says what it found. `profileInput` is the editor's payload, which
  * need not be ready to save: only the layout and the row rules must be
- * complete (`checkTablePreview`).
+ * complete (`checkTablePreview`). It is read in the profile's own import
+ * mode, as every document read with it is.
  */
 export function previewTable(
   profileInput: unknown,
   file: { bytes: Uint8Array; type: "xlsx" | "csv" },
-  options: { mode?: unknown; mainCurrency: string; today: string },
+  options: { mainCurrency: string; today: string },
 ): PreviewResult {
   const checked = checkTablePreview(profileInput);
   if (!checked.ok) {
@@ -129,27 +111,16 @@ export function previewTable(
     };
   }
   const { profile } = checked;
-  const mode = previewMode(options.mode, profile.sections);
-  if (mode === null) {
-    return { ok: false, error: "Choose Summary or Every transaction." };
-  }
-  const ofMode = profile.sections.filter(
-    (section) => (section.mode ?? ImportMode.Summary) === mode,
-  );
-  if (ofMode.length === 0) {
-    return {
-      ok: false,
-      error: `No section is read in ${importModeLabel(mode)}, so a document imported that way would give nothing.`,
-    };
-  }
-  if (!readsFromColumns(profile, mode)) {
-    const missing = ofMode
+  const { mode } = profile;
+  const read = profileSections(profile);
+  if (!readsFromColumns(profile)) {
+    const missing = read
       .filter((section) => !section.rows)
       .map((section) => `“${section.name || section.key}”`)
       .join(", ");
     return {
       ok: false,
-      error: `A spreadsheet is read from its columns only when every section of ${importModeLabel(mode)} has row rules; ${missing} has none, so the AI would read it instead.`,
+      error: `A spreadsheet is read from its columns only when every section has row rules; ${missing} has none, so the AI would read it instead.`,
     };
   }
 
@@ -162,22 +133,18 @@ export function previewTable(
 
   const table = {
     name: profile.name || "this profile",
+    mode,
     layout: profile.layout,
+    sections: profile.sections,
   };
   let found;
   let reading;
   try {
-    found = readTable(
-      workbook,
-      { ...table, sections: profile.sections },
-      mode,
-      options.mainCurrency,
-    );
+    found = readTable(workbook, table, options.mainCurrency);
     reading = readFromColumns(
       workbook,
-      { ...table, sections: profile.sections },
-      mode,
-      savedReadingProfile({ ...profile, id: 0 }, mode),
+      table,
+      savedReadingProfile({ ...profile, id: 0 }),
       {
         today: options.today,
         mainCurrency: options.mainCurrency,
@@ -195,7 +162,7 @@ export function previewTable(
   for (const rendered of renderWorkbook(workbook).rows) {
     rowOfLine.set(rendered.line, rendered.rowNumber);
   }
-  const names = new Map(ofMode.map((s) => [s.key, s.name || s.key]));
+  const names = new Map(read.map((s) => [s.key, s.name || s.key]));
   const counts = new Map<string, number>();
   for (const item of reading.items) {
     counts.set(item.sectionKey, (counts.get(item.sectionKey) ?? 0) + 1);
@@ -211,7 +178,7 @@ export function previewTable(
       sheet: found.found.sheet,
       headerRow: found.found.headerRow,
       rows: found.found.rows,
-      sections: ofMode.map((section) => ({
+      sections: read.map((section) => ({
         key: section.key,
         name: section.name || section.key,
         kind: section.kind,

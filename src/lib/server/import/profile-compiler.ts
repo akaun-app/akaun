@@ -31,14 +31,11 @@ import { jsonSchema, type JSONSchema7, type Schema } from "ai";
 import {
   NONE_VALUE,
   extraFieldsOf,
+  profileSections,
   type ImportProfileDraft,
   type ProfileSectionKind,
 } from "$lib/import-profile-schema.js";
-import {
-  ImportMode,
-  importModeLabel,
-  type ImportModeValue,
-} from "$lib/import-reading.js";
+import { ImportMode } from "$lib/import-reading.js";
 
 // ── The field model ─────────────────────────────────────────────────────────
 
@@ -653,32 +650,6 @@ export interface SavedProfile extends ImportProfileDraft {
 }
 
 /**
- * A profile has no section in the import mode the document is to be read in
- * (FR-032, US7 AS6). Nothing is read: no section means no line could become a
- * record, and reading another mode's sections would import the wrong figures.
- *
- * The reading never asks for such a mode: a profile with sections in one mode
- * only is read in that mode (`readingModeFor`, FR-002). This stays as the
- * safety net, and its message names the other mode, which is the one to
- * choose under "Import".
- */
-export class ProfileModeError extends Error {
-  constructor(
-    readonly profileName: string,
-    readonly mode: ImportModeValue,
-  ) {
-    const other =
-      mode === ImportMode.Summary
-        ? ImportMode.EveryTransaction
-        : ImportMode.Summary;
-    super(
-      `The import profile "${profileName}" has no section for ${importModeLabel(mode)}, so nothing was read. Choose ${importModeLabel(other)} under Import.`,
-    );
-    this.name = "ProfileModeError";
-  }
-}
-
-/**
  * The rules every saved profile is read by. They are the code's, not the
  * user's: the user's own instructions go under them as guidance (FR-036), and
  * the sections, fee types and stated total are described in the schema.
@@ -738,10 +709,12 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
 }
 
 /**
- * Turns a saved profile into the reading for one import mode, ready to
- * compile (006 S2). Only the sections of that mode are kept, so nothing from
- * another mode's sections can be read (FR-032); a profile with none throws
- * `ProfileModeError`.
+ * Turns a saved profile into its reading, in the profile's own import mode,
+ * ready to compile (006 S2, FR-032). Only the sections the profile reads are
+ * kept (`profileSections`): a section saved in the other mode, on a profile
+ * from when each section had its own, is never read. Every profile has at
+ * least one section in its own mode, so a profile with none is a damaged row
+ * and throws; the caller checks first.
  *
  * What code decides is never asked of the model. A section whose fee types
  * are all tied to a category, or that lists no fee types and has a fixed
@@ -752,58 +725,56 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
  * refusal of one profile's schema is then about that schema only, and never
  * changes how another schema is read (FR-037).
  *
- * The stated total is the profile's label for this mode, since a summary and
- * a transaction table total different lines. An Every transaction reading by
- * the AI is read in pieces (`piece-reader.ts`, FR-043) with the parts of this
+ * The stated total is the profile's label, kept under its mode. An Every
+ * transaction reading by the AI is read in pieces (`piece-reader.ts`, FR-043) with the parts of this
  * same schema (`compileHeaderPart`, `compileLinesPart`).
  */
-export function savedReadingProfile(
-  saved: SavedProfile,
-  mode: ImportModeValue = ImportMode.Summary,
-): ReadingProfile {
-  const sections: SectionSpec[] = saved.sections
-    .filter((section) => (section.mode ?? ImportMode.Summary) === mode)
-    .map((section) => {
-      const feeTypes = section.feeTypes.map((feeType) => ({
-        key: feeType.key,
-        description: feeType.description,
-        categoryAccountId: feeType.categoryAccountId,
-      }));
-      // A transfer has no category, so the model is never asked for one.
-      const categoryFromModel =
-        section.kind !== "transfer" &&
-        (feeTypes.length
-          ? feeTypes.some((feeType) => feeType.categoryAccountId == null)
-          : section.fixedCategoryAccountId == null);
-      const extras: Record<string, FieldSpec> = {};
-      for (const field of extraFieldsOf(section.extras)) {
-        extras[field.key] = extraSpec(field);
-      }
-      return {
-        key: section.key,
-        name: section.name,
-        description: sectionDescription(
-          section.name,
-          section.description,
-          section.kind,
-        ),
-        kind: section.kind,
-        ...(feeTypes.length ? { feeTypes } : {}),
-        fixedCategoryAccountId: section.fixedCategoryAccountId,
-        categoryFromModel,
-        ...(Object.keys(extras).length ? { extras } : {}),
-        ...(section.kind === "transfer"
-          ? { counterAccountId: section.counterAccountId ?? null }
-          : {}),
-        ...(section.sameMoneyAs?.length
-          ? { sameMoneyAs: [...section.sameMoneyAs] }
-          : {}),
-      };
-    });
-  if (sections.length === 0) throw new ProfileModeError(saved.name, mode);
+export function savedReadingProfile(saved: SavedProfile): ReadingProfile {
+  const mode = saved.mode;
+  const sections: SectionSpec[] = profileSections(saved).map((section) => {
+    const feeTypes = section.feeTypes.map((feeType) => ({
+      key: feeType.key,
+      description: feeType.description,
+      categoryAccountId: feeType.categoryAccountId,
+    }));
+    // A transfer has no category, so the model is never asked for one.
+    const categoryFromModel =
+      section.kind !== "transfer" &&
+      (feeTypes.length
+        ? feeTypes.some((feeType) => feeType.categoryAccountId == null)
+        : section.fixedCategoryAccountId == null);
+    const extras: Record<string, FieldSpec> = {};
+    for (const field of extraFieldsOf(section.extras)) {
+      extras[field.key] = extraSpec(field);
+    }
+    return {
+      key: section.key,
+      name: section.name,
+      description: sectionDescription(
+        section.name,
+        section.description,
+        section.kind,
+      ),
+      kind: section.kind,
+      ...(feeTypes.length ? { feeTypes } : {}),
+      fixedCategoryAccountId: section.fixedCategoryAccountId,
+      categoryFromModel,
+      ...(Object.keys(extras).length ? { extras } : {}),
+      ...(section.kind === "transfer"
+        ? { counterAccountId: section.counterAccountId ?? null }
+        : {}),
+      ...(section.sameMoneyAs?.length
+        ? { sameMoneyAs: [...section.sameMoneyAs] }
+        : {}),
+    };
+  });
+  if (sections.length === 0) {
+    throw new Error(
+      `The import profile "${saved.name}" has no section to read.`,
+    );
+  }
 
-  const labels: Partial<Record<string, string>> = saved.statedTotalLabels;
-  const label = labels[mode];
+  const label = saved.statedTotalLabels[mode];
   const profile: ReadingProfile = {
     schemaId: "",
     instructions: SAVED_PROFILE_RULES,
