@@ -140,7 +140,16 @@ export function registerRead<S extends z.ZodRawShape>(
           },
         };
         const text = JSON.stringify(structuredContent);
-        if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+        const result = {
+          structuredContent,
+          content: [{ type: "text" as const, text }],
+        };
+        // The protocol result carries the payload twice: once as structured
+        // content and once as JSON text for clients that only consume text.
+        // Bound the complete result rather than either representation alone.
+        if (
+          Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_RESPONSE_BYTES
+        ) {
           throw new ReadError(
             "OUTPUT_TOO_LARGE",
             "Result exceeds the output budget. Narrow dates, reduce the limit or omit evidence.",
@@ -155,10 +164,7 @@ export function registerRead<S extends z.ZodRawShape>(
           },
           "MCP read",
         );
-        return {
-          structuredContent,
-          content: [{ type: "text" as const, text }],
-        };
+        return result;
       } catch (error) {
         const known = error instanceof ReadError || error instanceof z.ZodError;
         const code =

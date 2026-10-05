@@ -31,7 +31,11 @@ import type { LedgerDb, RecordCreate, RecordView } from "../ledger/types.js";
 import { bearerLocals } from "../bearer-auth.js";
 import { handleMcpRequest } from "./http.js";
 import { createReadServer } from "./server.js";
-import { registerRead, type ReadContext } from "./common.js";
+import {
+  MAX_RESPONSE_BYTES,
+  registerRead,
+  type ReadContext,
+} from "./common.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -496,6 +500,15 @@ describe("MCP transport and authorization", () => {
     registerRead(
       server,
       context,
+      "duplicated",
+      ["records"],
+      "complete result budget",
+      {},
+      () => ({ text: "x".repeat(Math.floor(MAX_RESPONSE_BYTES * 0.6)) }),
+    );
+    registerRead(
+      server,
+      context,
       "broken",
       ["records"],
       "failure",
@@ -511,6 +524,9 @@ describe("MCP transport and authorization", () => {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     expect(JSON.stringify(await call(client, "large"))).toContain(
+      "OUTPUT_TOO_LARGE",
+    );
+    expect(JSON.stringify(await call(client, "duplicated"))).toContain(
       "OUTPUT_TOO_LARGE",
     );
     const result = JSON.stringify(await call(client, "broken", { id: 1 }));
