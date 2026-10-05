@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Upload, Receipt, Check, AlertTriangle, ExternalLink, RotateCcw } from '@lucide/svelte';
 	import DatePicker from '$lib/components/ui/date-picker/DatePicker.svelte';
-	import ContactSelect from '$lib/components/ui/ContactSelect.svelte';
+	import ImportContactSelect from '$lib/components/import/ImportContactSelect.svelte';
 	import ImportSourceAccountSelect from '$lib/components/import/ImportSourceAccountSelect.svelte';
 	import ImportCategoryAccountSelect from '$lib/components/import/ImportCategoryAccountSelect.svelte';
 	import ImportTransferAccountSelect from '$lib/components/import/ImportTransferAccountSelect.svelte';
@@ -254,11 +254,12 @@
 				<div class="rfield">
 					<span class="rfield-label">
 						Contact
-						{#if isEdited('contactId') || isEdited('newContactName')}<span class="edited-tag">edited</span>{/if}
+						{#if isEdited('supplier') || isEdited('contactId') || isEdited('newContactName')}<span class="edited-tag">edited</span>{/if}
 					</span>
-					<ContactSelect
+					<ImportContactSelect
 						role={isIncome ? Role.Customer : Role.Supplier}
 						initialLabel={row.supplier}
+						matchedContactId={(row.documentType === 'income') === isIncome ? row.matchedContactId : null}
 						suggestions={row.matchCandidates}
 						disabled={readonly}
 						onChange={oncontact}
