@@ -556,7 +556,7 @@
 		}
 	}
 
-	/** A fee type column's values in the sample, to pick from. */
+	/** A line type column's values in the sample, to pick from. */
 	function feeColumnValues(section: SectionForm): string[] | null {
 		const column = section.rows?.feeTypeColumn;
 		if (!sample || !column) return null;
@@ -589,7 +589,7 @@
 	}
 
 	/**
-	 * A fee type key as it is typed: "Commission fee" becomes
+	 * A line type key as it is typed: "Commission fee" becomes
 	 * "commission_fee". The input is set to the cleaned text too, so what is
 	 * shown is always the key that will be saved.
 	 */
@@ -1495,15 +1495,15 @@
 {#snippet feeTypesField(section: SectionForm, at: string, fromTable: boolean)}
 	{@const columnValues = fromTable ? feeColumnValues(section) : null}
 	<div class="field" id="pf-s-{section.uid}-fees">
-		<span class="field-label">Fee types</span>
+		<span class="field-label">Line types</span>
 		{#if fromTable && section.rows && (section.feeTypes.length > 0 || section.rows.feeTypeColumn)}
 			<div class="pf-fee-column">
-				<span class="field-hint" style="margin:0;">Fee type column</span>
+				<span class="field-hint" style="margin:0;">Line type column</span>
 				<ProfileColumnSelect
 					options={headingOptions}
 					value={section.rows.feeTypeColumn}
 					noneLabel="Select a column"
-					ariaLabel="Fee type column"
+					ariaLabel="Line type column"
 					disabled={!canChange}
 					onchange={(value) => (section.rows!.feeTypeColumn = value)}
 				/>
@@ -1513,7 +1513,7 @@
 		{#if section.feeTypes.length > 0}
 			<div class="pf-fees">
 				<div class="pf-fee pf-fee-head" aria-hidden="true">
-					<span>Fee type</span><span>{fromTable ? 'Values' : 'Description'}</span><span>Category</span><span></span>
+					<span>Line type</span><span>{fromTable ? 'Values' : 'Description'}</span><span>Category</span><span></span>
 				</div>
 				{#each section.feeTypes as fee, feeIndex (fee.uid)}
 					{@const feeAt = `${at}.feeTypes[${feeIndex}]`}
@@ -1521,7 +1521,7 @@
 						<div>
 							<Input
 								value={fee.key}
-								aria-label="Fee type key"
+								aria-label="Line type key"
 								placeholder="commission_fee"
 								disabled={!canChange}
 								class="w-full pf-mono"
@@ -1538,7 +1538,7 @@
 									class="w-full"
 								/>
 							{:else if columnValues}
-								<div class="pf-value-chips" role="group" aria-label="Values that mean {fee.key || 'this fee type'}">
+								<div class="pf-value-chips" role="group" aria-label="Values that mean {fee.key || 'this line type'}">
 									{#each columnValues as value (value)}
 										<button
 											type="button"
@@ -1555,12 +1555,12 @@
 									bind:value={fee.valuesText}
 									rows={2}
 									disabled={!canChange}
-									aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.key || 'this fee type'}"
+									aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.key || 'this line type'}"
 									placeholder="One per line"
 									class="leading-relaxed"
 								/>
 							{:else}
-								<p class="field-hint" style="margin:0;">Select the fee type column first.</p>
+								<p class="field-hint" style="margin:0;">Select the line type column first.</p>
 							{/if}
 						</div>
 						<div>
@@ -1568,14 +1568,14 @@
 								groups={categoryGroups(section.kind)}
 								value={fee.categoryAccountId}
 								noneLabel="Auto"
-								ariaLabel="Category for {fee.key || 'this fee type'}"
+								ariaLabel="Category for {fee.key || 'this line type'}"
 								disabled={!canChange}
 								onchange={(value) => (fee.categoryAccountId = value)}
 							/>
 						</div>
 						<div class="pf-fee-remove">
 							{#if canChange}
-								<button type="button" class="pf-icon-btn pf-icon-danger" aria-label="Remove fee type" onclick={() => removeFeeType(section, fee.uid)}>
+								<button type="button" class="pf-icon-btn pf-icon-danger" aria-label="Remove line type" onclick={() => removeFeeType(section, fee.uid)}>
 									<Trash2 size={13} />
 								</button>
 							{/if}
@@ -1593,7 +1593,7 @@
 		{/if}
 		{#if canChange && section.feeTypes.length < PROFILE_FEE_TYPES_MAX}
 			<button type="button" class="detail-card-action pf-add-fee" onclick={() => addFeeType(section)}>
-				<Plus size={13} /> Add fee type
+				<Plus size={13} /> Add line type
 			</button>
 		{/if}
 		<p class="field-hint">
@@ -2125,7 +2125,7 @@
 		opacity: 0.7;
 	}
 
-	/* Fee types: four columns on a wide screen, stacked on a phone. */
+	/* Line types: four columns on a wide screen, stacked on a phone. */
 	.pf-fees {
 		display: flex;
 		flex-direction: column;

@@ -936,14 +936,14 @@ async function readReceipt(
 }
 
 /**
- * The remark an item starts with: its fee type, then each extra field, each as
- * "name: value" (FR-034, FR-035), for example "Fee type: commission_fee;
+ * The remark an item starts with: its line type, then each extra field, each as
+ * "name: value" (FR-034, FR-035), for example "Line type: commission_fee;
  * order_no: 2408". Null when it has neither, as for every item of the built-in
  * several-items reading.
  */
 function itemRemark(item: DocumentItem): string | null {
   const parts: string[] = [];
-  if (item.feeType) parts.push(`Fee type: ${item.feeType}`);
+  if (item.feeType) parts.push(`Line type: ${item.feeType}`);
   for (const [name, value] of Object.entries(item.extras ?? {})) {
     if (value === null || value === undefined || value === "") continue;
     parts.push(`${name}: ${String(value)}`);
@@ -985,7 +985,7 @@ export function tiedCategoryNote(
   const instead = filedUnder.category
     ? `It is filed under “${filedUnder.category}” instead`
     : "It has no category instead";
-  return `The category “${otherKind.name}” tied to the fee type “${item.feeType}” is ${tiedKind}, but ${why}. ${instead}: choose its category.`;
+  return `The category “${otherKind.name}” tied to the line type “${item.feeType}” is ${tiedKind}, but ${why}. ${instead}: choose its category.`;
 }
 
 async function itemFields(

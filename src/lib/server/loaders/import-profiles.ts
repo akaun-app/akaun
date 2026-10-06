@@ -36,7 +36,7 @@ import {
 export const PROFILES_HOME = "/settings?tab=intelligence";
 
 /**
- * The categories a section or a fee type can be pinned to, by kind: the same
+ * The categories a section or a line type can be pinned to, by kind: the same
  * lists the server checks a saved profile against (`categoryChoices`).
  */
 function categoryOptions(database: LedgerDb) {

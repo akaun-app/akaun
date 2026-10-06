@@ -3,7 +3,7 @@
 
 	/**
 	 * A category for an import profile: a section's fixed category, or the one
-	 * a fee type is pinned to (006 FR-031, FR-034). Leaving it empty is a real
+	 * a line type is pinned to (006 FR-031, FR-034). Leaving it empty is a real
 	 * choice, named by `noneLabel` ("None" or "Auto"), so the list starts with
 	 * it. The profile's accounts use it too (FR-058), with their own
 	 * `missingLabel`.

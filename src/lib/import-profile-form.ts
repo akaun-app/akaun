@@ -5,7 +5,7 @@
  * The editor stages the whole profile in this shape and sends it once, as the
  * Settings page does. It differs from a saved profile in four ways:
  *
- * - Each section and fee type carries a `uid`, so a list that is reordered or
+ * - Each section and line type carries a `uid`, so a list that is reordered or
  *   shortened keeps each row's own inputs.
  * - A new section's key follows its name (`keyFromName`). A saved section
  *   keeps the key it was saved with, so renaming it changes only what the
@@ -53,7 +53,7 @@ export interface FeeTypeForm {
   /** The pinned category, or null for "Auto". */
   categoryAccountId: number | null;
   /**
-   * The cell values that mean this fee type in its section's fee type column
+   * The cell values that mean this line type in its section's line type column
    * (FR-054), one per line as typed. Empty for a section the AI reads.
    */
   valuesText: string;
@@ -76,7 +76,7 @@ export interface RowsForm {
   where: ConditionForm[];
   flagWhen: ConditionForm[];
   flagNote: string;
-  /** The heading of the fee type column, or "" for none. */
+  /** The heading of the line type column, or "" for none. */
   feeTypeColumn: string;
 }
 
@@ -207,7 +207,7 @@ export function slugifyKey(name: string): string {
 }
 
 /**
- * A fee type key as it is being typed: spaces and dashes become "_", capitals
+ * A line type key as it is being typed: spaces and dashes become "_", capitals
  * become small letters, and anything else a key cannot hold is dropped. A
  * trailing "_" is kept, because the next word may follow it. Whatever is left
  * that still breaks the rule (a leading digit, say) is reported by the shared
@@ -223,7 +223,7 @@ export function typingKey(text: string): string {
     .slice(0, 32);
 }
 
-/** An empty fee type row. */
+/** An empty line type row. */
 export function newFeeType(): FeeTypeForm {
   return {
     uid: newUid(),
@@ -583,7 +583,7 @@ export function sectionKeys(sections: readonly SectionForm[]): string[] {
  * reads. The stated total goes under the profile's mode, and only when one is
  * typed. The extra fields go as the text typed.
  *
- * Row rules and the fee types' cell values are sent only for a section read
+ * Row rules and the line types' cell values are sent only for a section read
  * from the table's rows (FR-057). What only the AI reads (descriptions,
  * extra fields, instructions) is sent as it is either way: the editor hides
  * it where the AI does not read, and it is there again when a section is
@@ -716,7 +716,7 @@ const TABLE_COLUMN_KEYS = new Set([
   "remarkColumns",
 ]);
 
-/** A fee type's fields, by key. Its key is the fee type itself. */
+/** A line type's fields, by key. Its key is the line type itself. */
 const FEE_TYPE_FIELDS: Record<string, string | undefined> = {
   description: "Description",
   values: "Values",
@@ -787,7 +787,7 @@ function sectionPlace(
     const feeIndex = Number(fee[1]);
     const feeUid = section.feeTypes[feeIndex]?.uid;
     const field = FEE_TYPE_FIELDS[fee[2] ?? "key"];
-    const label = `Fee type ${feeIndex + 1}${field ? ` › ${field}` : ""}`;
+    const label = `Line type ${feeIndex + 1}${field ? ` › ${field}` : ""}`;
     return place(label, [
       ...(feeUid ? [`${at}-fee-${feeUid}`] : []),
       `${at}-fees`,
@@ -811,14 +811,14 @@ function sectionPlace(
     case "counterAccountId":
       return place("Other account", [`${at}-counter`]);
     case "feeTypes":
-      return place("Fee types", [`${at}-fees`]);
+      return place("Line types", [`${at}-fees`]);
     case "sameMoneyAs":
       return place("More › Same money as", [`${at}-same`], "section");
     case "extras":
       return place("More › Extra fields", [`${at}-extras`], "section");
     case "rows":
       if (key[2] === "feeTypeColumn") {
-        return place("Fee type column", [`${at}-fees`]);
+        return place("Line type column", [`${at}-fees`]);
       }
       if (key[2] === "flagWhen" || key[2] === "flagNote") {
         return place("More › Rows for review", [`${at}-review`], "section");
@@ -836,7 +836,7 @@ function sectionPlace(
 /**
  * Where the problem at `path` is, in the words the editor shows. The path is
  * one `checkProfile` gives, against the form as `payloadFromForm` sends it,
- * so section and fee type indexes are the form's own.
+ * so section and line type indexes are the form's own.
  */
 export function problemPlace(path: string, form: ProfileForm): ProblemPlace {
   const section = path.match(/^sections\[(\d+)\](.*)$/);

@@ -36,10 +36,10 @@ import {
 
 /** Most sections in one profile. */
 export const PROFILE_SECTIONS_MAX = 20;
-/** Most fee types in one section. */
+/** Most line types in one section. */
 export const PROFILE_FEE_TYPES_MAX = 50;
 /**
- * Most listed values in a whole profile: every fee type, plus every choice of
+ * Most listed values in a whole profile: every line type, plus every choice of
  * every extra field. Each one is an `enum` entry in the schema sent, and
  * providers refuse very large enums.
  */
@@ -61,7 +61,7 @@ const SHORT_DESCRIPTION_MAX = 300;
 const ENUM_VALUE_MAX = 100;
 
 /**
- * A key the schema uses: a section, a fee type or an extra field. Lower-case
+ * A key the schema uses: a section, a line type or an extra field. Lower-case
  * letters, digits and "_", starting with a letter, at most 32 characters. The
  * key is what the model writes back, so it must be plain.
  */
@@ -105,12 +105,12 @@ export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * What the model writes for "none of these" in a list of choices that may be
- * empty: a fee type (a line that is none of the section's types) or an extra
+ * empty: a line type (a line that is none of the section's types) or an extra
  * field with an enum that a line does not print. It is sent as one more value
  * of the list, not as null: a strict provider (OpenAI, Groq) reads `enum` as
  * the only values allowed, null included, so a list without it would give the
  * model no way to say "none" and it would put a stray line under the closest
- * type (FR-034). The reading turns it back into null, so no fee type key and
+ * type (FR-034). The reading turns it back into null, so no line type key and
  * no choice of an extra field may be this word.
  */
 export const NONE_VALUE = "none";
@@ -118,7 +118,7 @@ export const NONE_VALUE = "none";
 /**
  * Names every plain JavaScript object already has, such as "constructor".
  * The reading code looks keys up in plain objects, where one of these names
- * finds the built-in value instead of a field, so a section, field or fee type
+ * finds the built-in value instead of a field, so a section, field or line type
  * keyed with one would save but could never be read. They are refused like a
  * reserved name.
  */
@@ -176,7 +176,11 @@ export interface ExtrasFragment {
   required?: string[];
 }
 
-/** One kind of line a section lists, such as "commission_fee" (FR-034). */
+/**
+ * One kind of line a section lists, such as "commission_fee" (FR-034). The
+ * screens call it a "line type"; it is stored as `feeTypes`, its name from
+ * before income sections used it too.
+ */
 export interface ProfileFeeType {
   key: string;
   /** Tells the model which lines are this type. May be empty. */
@@ -184,7 +188,7 @@ export interface ProfileFeeType {
   /** The category every line of this type gets. Wins over any other. */
   categoryAccountId: number | null;
   /**
-   * The cell values that mean this fee type, in the section's fee type column
+   * The cell values that mean this line type, in the section's line type column
    * (FR-054), for a section read from columns. Absent, or never set, for a
    * section the AI reads: the model picks the type from its description.
    */
@@ -231,7 +235,7 @@ export interface RowCondition {
  * empty `where` takes every row. A row that also meets every condition of a
  * non-empty `flagWhen` is still imported, with `flagNote` for the reviewer
  * (FR-061). `feeTypeColumn` names the column whose value says the row's fee
- * type, matched against each fee type's `values`.
+ * type, matched against each line type's `values`.
  */
 export interface SectionRows {
   where: RowCondition[];
@@ -327,7 +331,7 @@ export interface TableLayout {
 export const LAYOUT_HEADERS_MAX = 50;
 /** Most conditions in one rule. */
 export const ROW_CONDITIONS_MAX = 10;
-/** Most values one list (is one of, a fee type, a direction) holds. */
+/** Most values one list (is one of, a line type, a direction) holds. */
 export const ROW_VALUES_MAX = 50;
 /** Most remark columns, and most stated-total labels. */
 const LAYOUT_LIST_MAX = 10;
@@ -490,7 +494,7 @@ export interface ProfileSection {
    */
   mode?: ImportModeValue;
   kind: ProfileSectionKind;
-  /** The category of a line with no fee type. */
+  /** The category of a line with no line type. */
   fixedCategoryAccountId: number | null;
   /**
    * The closed list of line types. Empty means the section takes any line
@@ -1106,7 +1110,7 @@ function sectionRows(
     join(path, "feeTypeColumn"),
     headings,
     errors,
-    { required: false, label: "The fee type column" },
+    { required: false, label: "The line type column" },
   );
   return {
     where,
@@ -1117,8 +1121,8 @@ function sectionRows(
 }
 
 /**
- * What a section's fee types and its row rules must agree on: a section read
- * from columns with fee types reads each row's type from its fee type column,
+ * What a section's line types and its row rules must agree on: a section read
+ * from columns with line types reads each row's type from its line type column,
  * by the values each type lists, and no value may mean two types. A section
  * the AI reads has no values to list.
  */
@@ -1133,14 +1137,14 @@ function checkFeeTypeValues(
     errors.push({
       path: `${path}.rows.feeTypeColumn`,
       message:
-        "Name the column that holds each row's fee type, or remove the fee types.",
+        "Name the column that holds each row's line type, or remove the line types.",
     });
   }
   if (column !== null && fees.length === 0) {
     errors.push({
       path: `${path}.rows.feeTypeColumn`,
       message:
-        "A fee type column needs the fee types it holds. Add them, or remove the column.",
+        "A line type column needs the line types it holds. Add them, or remove the column.",
     });
   }
   const meaning = new Map<string, string>();
@@ -1152,7 +1156,7 @@ function checkFeeTypeValues(
         errors.push({
           path: at,
           message:
-            "Cell values are read only from the section's fee type column. Name that column under the row rules, or remove the values.",
+            "Cell values are read only from the section's line type column. Name that column under the row rules, or remove the values.",
         });
       }
       return;
@@ -1160,7 +1164,7 @@ function checkFeeTypeValues(
     if (values.length === 0) {
       errors.push({
         path: at,
-        message: `List the values of "${column}" that mean this fee type.`,
+        message: `List the values of "${column}" that mean this line type.`,
       });
     }
     values.forEach((value, valueIndex) => {
@@ -1169,7 +1173,7 @@ function checkFeeTypeValues(
       if (other !== undefined && other !== fee.key) {
         errors.push({
           path: `${at}[${valueIndex}]`,
-          message: `"${value}" already means the fee type "${other}".`,
+          message: `"${value}" already means the line type "${other}".`,
         });
       }
       meaning.set(folded, fee.key);
@@ -1489,13 +1493,13 @@ function feeTypes(
 ): ProfileFeeType[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
-    errors.push({ path, message: "Fee types must be a list." });
+    errors.push({ path, message: "Line types must be a list." });
     return [];
   }
   if (raw.length > PROFILE_FEE_TYPES_MAX) {
     errors.push({
       path,
-      message: `A section can list at most ${PROFILE_FEE_TYPES_MAX} fee types; this has ${raw.length}.`,
+      message: `A section can list at most ${PROFILE_FEE_TYPES_MAX} line types; this has ${raw.length}.`,
     });
   }
   const seen = new Set<string>();
@@ -1503,30 +1507,30 @@ function feeTypes(
     const at = `${path}[${index}]`;
     const value = isRecord(entry) ? entry : {};
     if (!isRecord(entry)) {
-      errors.push({ path: at, message: "Each fee type must be an object." });
+      errors.push({ path: at, message: "Each line type must be an object." });
     }
     const key = typeof value.key === "string" ? value.key.trim() : "";
     if (!PROFILE_KEY_PATTERN.test(key)) {
       errors.push({
         path: `${at}.key`,
         message: key
-          ? `The fee type key "${key}" ${KEY_RULE}.`
-          : "The fee type key is required.",
+          ? `The line type key "${key}" ${KEY_RULE}.`
+          : "The line type key is required.",
       });
     } else if (OBJECT_BUILTIN_NAMES.has(key)) {
       errors.push({
         path: `${at}.key`,
-        message: builtinNameMessage(key, "a fee type key"),
+        message: builtinNameMessage(key, "a line type key"),
       });
     } else if (key === NONE_VALUE) {
       errors.push({
         path: `${at}.key`,
-        message: `"${NONE_VALUE}" is how the reading marks a line that is none of the fee types. Choose another key.`,
+        message: `"${NONE_VALUE}" is how the reading marks a line that is none of the line types. Choose another key.`,
       });
     } else if (seen.has(key)) {
       errors.push({
         path: `${at}.key`,
-        message: `The fee type "${key}" is listed twice in this section.`,
+        message: `The line type "${key}" is listed twice in this section.`,
       });
     }
     seen.add(key);
@@ -1535,7 +1539,7 @@ function feeTypes(
       description: text(
         value.description,
         `${at}.description`,
-        "The fee type description",
+        "The line type description",
         errors,
         { max: SHORT_DESCRIPTION_MAX, required: false },
       ),
@@ -1545,12 +1549,12 @@ function feeTypes(
         errors,
       ),
     };
-    // The values that mean it in a fee type column. Whether the section has
+    // The values that mean it in a line type column. Whether the section has
     // one is checked with its row rules (`checkFeeTypeValues`).
     const values = valueList(
       value.values,
       `${at}.values`,
-      "The fee type's values",
+      "The line type's values",
       errors,
       { min: 0, max: ROW_VALUES_MAX },
     );
@@ -1714,7 +1718,7 @@ function section(
       errors.push({
         path: `${path}.feeTypes`,
         message:
-          "A transfer section has no fee types. Remove them, or make the section Income, Expense or By sign.",
+          "A transfer section has no line types. Remove them, or make the section Income, Expense or By sign.",
       });
     }
   }
@@ -1951,7 +1955,7 @@ function readProfile(input: unknown): {
         enumReported = true;
         errors.push({
           path,
-          message: `A profile can list at most ${PROFILE_ENUM_VALUES_MAX} values in all (fee types and the choices of extra fields); it reaches ${enumCount} at this section.`,
+          message: `A profile can list at most ${PROFILE_ENUM_VALUES_MAX} values in all (line types and the choices of extra fields); it reaches ${enumCount} at this section.`,
         });
       }
     });
@@ -2056,7 +2060,7 @@ function checkKind(
 
 /**
  * Whether a problem stops a table from being read: one about the profile's
- * mode or layout, or about a section's key, mode, row rules or fee types,
+ * mode or layout, or about a section's key, mode, row rules or line types,
  * which say which rows it takes. A missing name, description or account does
  * not.
  */

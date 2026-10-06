@@ -137,7 +137,7 @@ export function profileFile(
           categoryAccountId: toRef(
             fee.categoryAccountId,
             pool,
-            `${at}, fee type “${fee.key}”: category`,
+            `${at}, line type “${fee.key}”: category`,
           ),
         })),
         ...(section.counterAccountId !== undefined
@@ -334,7 +334,7 @@ export function draftFromFile(
                 categoryAccountId: resolve(
                   typed.categoryAccountId,
                   pool,
-                  `${at}, fee type “${key}”: category`,
+                  `${at}, line type “${key}”: category`,
                   null,
                 ),
               };

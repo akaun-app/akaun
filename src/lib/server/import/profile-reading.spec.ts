@@ -493,7 +493,7 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Income,
         amount: 15012.4,
         categoryAccountId: ids.sales,
-        remark: "Fee type: product_price",
+        remark: "Line type: product_price",
       },
       {
         sectionKey: "fees",
@@ -502,7 +502,7 @@ describe("reading a marketplace summary with a profile", () => {
         amount: 812.35,
         // Tied to Marketplace Fees: the model's Advertising is passed over.
         categoryAccountId: ids.fees,
-        remark: "Fee type: commission_fee",
+        remark: "Line type: commission_fee",
       },
       {
         sectionKey: "fees",
@@ -511,7 +511,7 @@ describe("reading a marketplace summary with a profile", () => {
         amount: 450.1,
         // Not tied: the model's valid suggestion is used.
         categoryAccountId: ids.ads,
-        remark: "Fee type: ads_fee",
+        remark: "Line type: ads_fee",
       },
       {
         sectionKey: "fees",
@@ -520,7 +520,7 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Income,
         amount: 32.61,
         categoryAccountId: ids.rebates,
-        remark: "Fee type: shipping_rebate",
+        remark: "Line type: shipping_rebate",
       },
     ]);
     // Each kind starts on its own side: what is owed, or what is due.
@@ -800,13 +800,13 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Expense,
         categoryAccountId: ids.ads,
         reviewNote:
-          "The category “Rebates” tied to the fee type “shipping_rebate” is an income category, but this line is printed negative, so it is an expense. It is filed under “Advertising” instead: choose its category.",
+          "The category “Rebates” tied to the line type “shipping_rebate” is an income category, but this line is printed negative, so it is an expense. It is filed under “Advertising” instead: choose its category.",
       },
       {
         documentType: DocumentType.Income,
         categoryAccountId: ids.uncategorisedIncome,
         reviewNote:
-          "The category “Marketplace Fees” tied to the fee type “commission_fee” is an expense category, but this line is printed positive, so it is an income. It is filed under “Uncategorised Income” instead: choose its category.",
+          "The category “Marketplace Fees” tied to the line type “commission_fee” is an expense category, but this line is printed positive, so it is an income. It is filed under “Uncategorised Income” instead: choose its category.",
       },
       {
         documentType: DocumentType.Expense,
@@ -848,7 +848,7 @@ describe("reading a marketplace summary with a profile", () => {
     expect(row).toMatchObject({
       documentType: DocumentType.Expense,
       categoryAccountId: ids.uncategorised,
-      remark: "Fee type: shipping_rebate",
+      remark: "Line type: shipping_rebate",
     });
     expect(row.reviewNote).toContain("“Rebates”");
     expect(row.reviewNote).toContain("printed negative");
@@ -877,7 +877,7 @@ describe("reading a marketplace summary with a profile", () => {
       documentType: DocumentType.Income,
       amount: 99,
       categoryAccountId: ids.sales,
-      remark: "Fee type: product_price",
+      remark: "Line type: product_price",
       profileId: String(profileId),
     });
     expect(parseProfileSnapshot(row.profileSnapshot)?.name).toBe(

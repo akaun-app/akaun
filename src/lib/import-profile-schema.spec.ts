@@ -349,7 +349,7 @@ describe("checkProfile", () => {
     ]);
   });
 
-  it("refuses a bad section key, fee type key and a key used twice", () => {
+  it("refuses a bad section key, line type key and a key used twice", () => {
     const input = profile();
     input.sections[0].key = "Fees";
     input.sections[0].feeTypes[1].key = "ads";
@@ -393,7 +393,7 @@ describe("checkProfile", () => {
     );
   });
 
-  it('refuses "none" as a fee type key or a choice, since the reading uses it for none', () => {
+  it('refuses "none" as a line type key or a choice, since the reading uses it for none', () => {
     const input = withExtras({
       type: "object",
       properties: { status: { type: "string", enum: ["paid", "none"] } },
@@ -404,7 +404,7 @@ describe("checkProfile", () => {
       "sections[0].feeTypes[1].key",
       "sections[0].extras.properties.status.enum[1]",
     ]);
-    expect(errors[0].message).toMatch(/none of the fee types/);
+    expect(errors[0].message).toMatch(/none of the line types/);
   });
 
   it("refuses an unknown kind", () => {
@@ -466,7 +466,7 @@ describe("checkProfile", () => {
     expect(paths(validateProfile(input))).toEqual(["sections"]);
   });
 
-  it(`allows ${PROFILE_FEE_TYPES_MAX} fee types in a section and no more`, () => {
+  it(`allows ${PROFILE_FEE_TYPES_MAX} line types in a section and no more`, () => {
     const input = profile();
     input.sections[0].feeTypes = Array.from(
       { length: PROFILE_FEE_TYPES_MAX + 1 },
@@ -475,7 +475,7 @@ describe("checkProfile", () => {
     expect(paths(validateProfile(input))).toEqual(["sections[0].feeTypes"]);
   });
 
-  it(`allows ${PROFILE_ENUM_VALUES_MAX} listed values in all, counting fee types and extra choices`, () => {
+  it(`allows ${PROFILE_ENUM_VALUES_MAX} listed values in all, counting line types and extra choices`, () => {
     const input = profile();
     const fees = (prefix: string, n: number) =>
       Array.from({ length: n }, (_, i) => ({
@@ -484,7 +484,7 @@ describe("checkProfile", () => {
         categoryAccountId: null,
       }));
     const base = input.sections[0];
-    // 4 sections of 50 fee types: exactly the limit.
+    // 4 sections of 50 line types: exactly the limit.
     input.sections = ["a", "b", "c", "d"].map((key) => ({
       ...structuredClone(base),
       key,
@@ -898,7 +898,7 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
     ).toEqual(["sections[0].rows.flagNote"]);
   });
 
-  it("ties fee types to their column and values, and no value to two types", () => {
+  it("ties line types to their column and values, and no value to two types", () => {
     const withFees = (edit: (section: Loose) => void) =>
       paths(
         errorsOf((value) => {
@@ -947,7 +947,7 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
     ).toEqual(["sections[0].rows.feeTypeColumn"]);
   });
 
-  it("refuses values on a fee type the AI reads, which has no column to read them from", () => {
+  it("refuses values on a line type the AI reads, which has no column to read them from", () => {
     const value = wallet();
     delete value.layout;
     value.sections = [

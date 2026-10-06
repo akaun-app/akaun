@@ -798,7 +798,7 @@ describe("editing items", () => {
   });
 
   it("confirms with the remark the reviewer edited, and the read one when left alone (FR-034, FR-035)", async () => {
-    const read = "Fee type: commission_fee; order_no: 2408";
+    const read = "Line type: commission_fee; order_no: 2408";
     const [edited, untouched] = group(2, [
       {
         feeType: "commission_fee",
@@ -832,7 +832,7 @@ describe("editing items", () => {
   });
 
   it("confirms with an emptied remark as empty, not the one read", async () => {
-    const [first] = group(1, [{ remark: "Fee type: ads_fee" }]);
+    const [first] = group(1, [{ remark: "Line type: ads_fee" }]);
     expect((await routes.patch(first, { remark: "" })).status).toBe(200);
     expect((await routes.confirm(first)).status).toBe(201);
     expect(records()[0].remark).toBe("");
@@ -993,7 +993,7 @@ describe("editing items", () => {
 
   it("holds an item back while the reading's note about its category stands, until a category is chosen (FR-034)", async () => {
     const note =
-      "The category “Sales” tied to the fee type “ads_fee” is an income category, but this line is printed negative, so it is an expense. It is filed under “Uncategorised Expense” instead: choose its category.";
+      "The category “Sales” tied to the line type “ads_fee” is an income category, but this line is printed negative, so it is an expense. It is filed under “Uncategorised Expense” instead: choose its category.";
     const itemIds = group(4, [
       { reviewNote: note, categoryAccountId: ids.uncategorised },
       { reviewNote: note, categoryAccountId: ids.uncategorised },

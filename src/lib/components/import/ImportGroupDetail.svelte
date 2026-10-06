@@ -1238,10 +1238,10 @@
 						</ul>
 						<p class="hint">
 							{#if notes.method === 'columns'}
-								Rows of the table that fit no section, or whose fee type is not listed. The count is exact; only the
+								Rows of the table that fit no section, or whose line type is not listed. The count is exact; only the
 								first rows are listed.
 							{:else if notes.method === 'columns_ai'}
-								Rows of the table that fit no section, or whose fee type is not listed, then lines the AI saw beside the
+								Rows of the table that fit no section, or whose line type is not listed, then lines the AI saw beside the
 								table and left out on purpose. Only the first are listed.
 							{:else}
 								Lines the reading saw and left out on purpose, such as subtotals. A guide only: it may not list every

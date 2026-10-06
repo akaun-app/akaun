@@ -58,7 +58,7 @@ describe("keys made from names", () => {
     expect(key.endsWith("_")).toBe(false);
   });
 
-  it("cleans a fee type key as it is typed, keeping a trailing _", () => {
+  it("cleans a line type key as it is typed, keeping a trailing _", () => {
     expect(typingKey("Commission Fee")).toBe("commission_fee");
     expect(typingKey("ads-")).toBe("ads_");
     expect(typingKey("tax (6%)")).toBe("tax_6");
@@ -292,7 +292,7 @@ describe("the form and the profile", () => {
     expect(payload.sections.at(-1)).not.toHaveProperty("counterAccountId");
   });
 
-  it("keeps a table layout, row rules and fee type values through the form", () => {
+  it("keeps a table layout, row rules and line type values through the form", () => {
     const sections = [...orderSections(), withdrawalSection(8)];
     sections[0] = {
       ...sections[0],
@@ -491,7 +491,7 @@ describe("unsaved changes", () => {
     );
   });
 
-  it("changes when a fee type is added or a category pinned", () => {
+  it("changes when a line type is added or a category pinned", () => {
     const form = formFromDraft(starterDraft("fee_document")!);
     const before = formFingerprint(form);
     form.sections[0].feeTypes.push(newFeeType());
@@ -632,13 +632,13 @@ describe("problemPlace", () => {
     );
   });
 
-  it("numbers fee types and goes to the row, then the list, then the section", () => {
+  it("numbers line types and goes to the row, then the list, then the section", () => {
     const { form, fees } = twoSections();
     const second = fees.feeTypes[1];
     expect(
       problemPlace("sections[0].feeTypes[1].categoryAccountId", form),
     ).toEqual({
-      label: "Section “Fees” › Fee type 2 › Category",
+      label: "Section “Fees” › Line type 2 › Category",
       targets: [
         `pf-s-${fees.uid}-fee-${second.uid}`,
         `pf-s-${fees.uid}-fees`,
@@ -647,10 +647,10 @@ describe("problemPlace", () => {
       sectionUid: fees.uid,
     });
     expect(problemPlace("sections[0].feeTypes[0].key", form).label).toBe(
-      "Section “Fees” › Fee type 1",
+      "Section “Fees” › Line type 1",
     );
     expect(problemPlace("sections[0].feeTypes", form).label).toBe(
-      "Section “Fees” › Fee types",
+      "Section “Fees” › Line types",
     );
   });
 

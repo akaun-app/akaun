@@ -400,7 +400,7 @@
 			</div>
 
 			<!-- Remark: the record's remark. An item read with a profile starts with
-			     its fee type and extra fields (FR-034, FR-035); a receipt with none. -->
+			     its line type and extra fields (FR-034, FR-035); a receipt with none. -->
 			<div class="rfield rfield-wide">
 				<span class="rfield-label">
 					Remark
