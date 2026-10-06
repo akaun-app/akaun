@@ -4,7 +4,7 @@ import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
 import { registerPdfFonts } from "../fonts.js";
 import { M, CW, C, cleanText, fmt, fmtDate } from "../layout.js";
 
-// Column layout for the tighter, single-line-per-row table below.
+// Column layout for the tighter table below.
 const QTY_W = 40;
 const PRICE_W = 75;
 const TOTAL_W = 75;
@@ -131,7 +131,15 @@ export function renderCompact(
   y += 12;
 
   docu.lines.forEach((line, i) => {
-    const rowH = 16;
+    doc.font(fonts.regular).fontSize(9);
+    const rowH = Math.max(
+      16,
+      doc.heightOfString(cleanText(line.description), { width: DESC_W - 4 }) +
+        4,
+      doc.heightOfString(String(line.quantity), { width: QTY_W }) + 4,
+      doc.heightOfString(fmt(line.unitPrice), { width: PRICE_W }) + 4,
+      doc.heightOfString(fmt(line.lineTotal), { width: TOTAL_W - 4 }) + 4,
+    );
     if (i % 2 === 1) doc.rect(M, y - 2, CW, rowH).fill("#f7f7f7");
     doc.font(fonts.regular).fontSize(9).fillColor(C.body);
     doc.text(cleanText(line.description), M + 4, y, { width: DESC_W - 4 });

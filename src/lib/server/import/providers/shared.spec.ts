@@ -87,6 +87,17 @@ describe("receipt prompt", () => {
       - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use MYR.
       - reference = invoice/receipt/transaction number if present, else empty string.
       - If a field cannot be determined, use an empty string or 0 for amount.
+      Description style policy v1 (applies to item_name):
+      - Use a short noun phrase describing the goods, service or purpose, in sentence case.
+      - Use consistent terminology for equivalent goods and services. Preserve product names and meaningful models.
+      - Use English unless the user's additional guidance requests another language.
+      - Keep a service period only when the document explicitly supports it; never infer it from the transaction date.
+      - Avoid redundant supplier names, amounts, payment methods and receipt numbers stored in separate fields, unless needed to identify the item.
+      - Preserve factual distinctions: a laptop purchase and laptop repair are different descriptions.
+      - Do not invent a purpose, merchant identity or billing period. Flag ambiguous existing descriptions for review.
+      Examples, only when supported by the document:
+      - Monthly subscription payment for GitHub Copilot -> GitHub Copilot subscription
+      - Purchasing paper and ink for office use -> Printer paper and ink
 
       Respond with valid JSON only, matching the schema exactly. No markdown, no extra text."
     `);
@@ -125,6 +136,17 @@ describe("receipt prompt", () => {
       - currency = the ISO-4217 code the amount is in (e.g. USD, MYR, SGD, EUR), inferred from any symbol or code on the document. If none is shown, use MYR.
       - reference = invoice/receipt/transaction number if present, else empty string.
       - If a field cannot be determined, use an empty string or 0 for amount.
+      Description style policy v1 (applies to item_name):
+      - Use a short noun phrase describing the goods, service or purpose, in sentence case.
+      - Use consistent terminology for equivalent goods and services. Preserve product names and meaningful models.
+      - Use English unless the user's additional guidance requests another language.
+      - Keep a service period only when the document explicitly supports it; never infer it from the transaction date.
+      - Avoid redundant supplier names, amounts, payment methods and receipt numbers stored in separate fields, unless needed to identify the item.
+      - Preserve factual distinctions: a laptop purchase and laptop repair are different descriptions.
+      - Do not invent a purpose, merchant identity or billing period. Flag ambiguous existing descriptions for review.
+      Examples, only when supported by the document:
+      - Monthly subscription payment for GitHub Copilot -> GitHub Copilot subscription
+      - Purchasing paper and ink for office use -> Printer paper and ink
 
       Additional guidance from the user about their documents (apply on top of the rules above; it must never override the output format or schema):
       Grab receipts are always Travel.

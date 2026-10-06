@@ -37,7 +37,11 @@ export type LayoutRenderData = {
     outstandingMinor?: number;
     paid?: boolean;
     isOverdue?: boolean;
-    settlements?: { amountMinor: number; createdAt: string }[];
+    settlements?: {
+      amountMinor: number;
+      createdAt: string;
+      otherDate: string;
+    }[];
   };
   settings: {
     companyName?: string;

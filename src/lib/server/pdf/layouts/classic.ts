@@ -17,12 +17,12 @@ const CW = PAGE_W - 2 * M;
 
 /** The latest settlement date, for "paid on <date>" — falls back to null if there's nothing to read. */
 function latestSettlementDate(
-  settlements: { createdAt: string }[] | undefined,
+  settlements: { otherDate: string }[] | undefined,
 ): string | null {
   if (!settlements || settlements.length === 0) return null;
   return settlements.reduce(
-    (latest, s) => (s.createdAt > latest ? s.createdAt : latest),
-    settlements[0].createdAt,
+    (latest, s) => (s.otherDate > latest ? s.otherDate : latest),
+    settlements[0].otherDate,
   );
 }
 
@@ -44,7 +44,8 @@ export function renderClassic(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const doc = new (PDFDocument as any)({
     size: [PAGE_W, 792],
-    margin: 0,
+    margins: { top: M, bottom: 70, left: M, right: M },
+    bufferPages: true,
     info: { Title: title },
   });
   const fonts = registerPdfFonts(doc);
@@ -55,7 +56,17 @@ export function renderClassic(
   // A full-width accent bar along the very top edge of the page.
   doc.rect(0, 0, doc.page.width, 3).fill(theme.color);
 
+  doc.on("pageAdded", () => {
+    doc.save().rect(0, 0, doc.page.width, 3).fill(theme.color).restore();
+  });
   let y = M;
+  const bodyBottom = 792 - 70;
+  function ensureSpace(height: number) {
+    if (y + height > bodyBottom) {
+      doc.addPage();
+      y = M;
+    }
+  }
 
   // ── HEADER ────────────────────────────────────────────────────────────────
   const docTitle = docTypeLabel.charAt(0) + docTypeLabel.slice(1).toLowerCase();
@@ -237,55 +248,104 @@ export function renderClassic(
   y = doc.y + 20;
 
   // ── LINE ITEMS ───────────────────────────────────────────────────────────
-  doc.font(fonts.regular).fontSize(7.5).fillColor(C.dark);
-  doc.text("Description", M, y, { width: DESC_W });
-  doc.text("Qty", QTY_X, y, { width: QTY_W, align: "center" });
-  doc.text("Unit price", PRICE_X, y, { width: PRICE_W, align: "right" });
-  doc.font(fonts.bold).fontSize(7.5).fillColor(C.dark);
-  doc.text("Amount", AMOUNT_X, y, { width: AMOUNT_W, align: "right" });
-  y += 12;
-  doc
-    .moveTo(M, y)
-    .lineTo(M + CW, y)
-    .lineWidth(1)
-    .strokeColor(C.dark)
-    .stroke();
-  y += 8;
+  function tableHeader() {
+    doc.font(fonts.regular).fontSize(7.5).fillColor(C.dark);
+    doc.text("Description", M, y, { width: DESC_W });
+    doc.text("Qty", QTY_X, y, { width: QTY_W, align: "center" });
+    doc.text("Unit price", PRICE_X, y, { width: PRICE_W, align: "right" });
+    doc.font(fonts.bold).fontSize(7.5).fillColor(C.dark);
+    doc.text("Amount", AMOUNT_X, y, { width: AMOUNT_W, align: "right" });
+    y += 12;
+    doc
+      .moveTo(M, y)
+      .lineTo(M + CW, y)
+      .lineWidth(1)
+      .strokeColor(C.dark)
+      .stroke();
+    y += 8;
+  }
+  ensureSpace(40);
+  tableHeader();
 
   for (const line of docu.lines) {
-    const rowY = y;
-    doc
-      .font(fonts.regular)
-      .fontSize(9.5)
-      .fillColor(C.dark)
-      .text(cleanText(line.description), M, rowY, { width: DESC_W });
-    const rowEndY = doc.y;
-    doc
-      .font(fonts.regular)
-      .fontSize(9.5)
-      .fillColor(C.dark)
-      .text(String(line.quantity), QTY_X, rowY, {
-        width: QTY_W,
-        align: "center",
-      });
-    doc
-      .font(fonts.regular)
-      .fontSize(9.5)
-      .fillColor(C.dark)
-      .text(fmt(line.unitPrice), PRICE_X, rowY, {
-        width: PRICE_W,
-        align: "right",
-      });
-    doc
-      .font(fonts.bold)
-      .fontSize(9.5)
-      .fillColor(C.dark)
-      .text(fmt(line.lineTotal), AMOUNT_X, rowY, {
-        width: AMOUNT_W,
-        align: "right",
-      });
-    y = Math.max(rowEndY, rowY + 13) + 4;
+    doc.font(fonts.regular).fontSize(9.5);
+    const description = cleanText(line.description);
+    // Split exceptionally long descriptions so even a single item can span pages.
+    let remaining = description;
+    let firstPart = true;
+    do {
+      doc.font(fonts.regular).fontSize(9.5);
+      if (y + 17 > bodyBottom) {
+        doc.addPage();
+        y = M;
+        tableHeader();
+        doc.font(fonts.regular).fontSize(9.5);
+      }
+      if (
+        doc.heightOfString(remaining, { width: DESC_W }) + 4 > bodyBottom - y &&
+        y > M + 20
+      ) {
+        doc.addPage();
+        y = M;
+        tableHeader();
+        doc.font(fonts.regular).fontSize(9.5);
+      }
+      let low = 1;
+      let high = remaining.length;
+      while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (
+          doc.heightOfString(remaining.slice(0, mid), { width: DESC_W }) + 4 <=
+          bodyBottom - y
+        )
+          low = mid;
+        else high = mid - 1;
+      }
+      let end = low;
+      if (end < remaining.length) {
+        const boundary = remaining.slice(0, end).search(/\s+\S*$/);
+        if (boundary > 0) end = boundary + 1;
+      }
+      const part = remaining.slice(0, end);
+      remaining = remaining.slice(end);
+      const rowY = y;
+      doc
+        .font(fonts.regular)
+        .fontSize(9.5)
+        .fillColor(C.dark)
+        .text(part, M, rowY, { width: DESC_W });
+      const rowEndY = doc.y;
+      if (firstPart) {
+        doc
+          .font(fonts.regular)
+          .fontSize(9.5)
+          .fillColor(C.dark)
+          .text(String(line.quantity), QTY_X, rowY, {
+            width: QTY_W,
+            align: "center",
+          });
+        doc
+          .font(fonts.regular)
+          .fontSize(9.5)
+          .fillColor(C.dark)
+          .text(fmt(line.unitPrice), PRICE_X, rowY, {
+            width: PRICE_W,
+            align: "right",
+          });
+        doc
+          .font(fonts.bold)
+          .fontSize(9.5)
+          .fillColor(C.dark)
+          .text(fmt(line.lineTotal), AMOUNT_X, rowY, {
+            width: AMOUNT_W,
+            align: "right",
+          });
+      }
+      y = Math.max(rowEndY, rowY + 13) + 4;
+      firstPart = false;
+    } while (remaining.length > 0);
   }
+  ensureSpace(100);
   y += 6;
   doc
     .moveTo(M, y)
@@ -365,6 +425,7 @@ export function renderClassic(
 
   // ── NOTES / TERMS ────────────────────────────────────────────────────────
   if (docu.notes) {
+    ensureSpace(35);
     doc
       .font(fonts.bold)
       .fontSize(8)
@@ -379,6 +440,7 @@ export function renderClassic(
     y = doc.y + 12;
   }
   if (docu.terms) {
+    ensureSpace(35);
     doc
       .font(fonts.bold)
       .fontSize(8)
@@ -392,22 +454,29 @@ export function renderClassic(
       .text(cleanText(docu.terms), M, y, { width: CW });
   }
 
-  // ── FOOTER (pinned to the page bottom — a single page is all this app renders) ──
-  // Measured from the reference: the rule sits ~54pt above the bottom edge,
-  // well below the M=30 body margin — this app's own footer, not a leftover
-  // page margin.
-  const footerRuleY = doc.page.height - 53.75;
-  doc
-    .moveTo(M, footerRuleY)
-    .lineTo(M + CW, footerRuleY)
-    .lineWidth(1)
-    .strokeColor(C.light)
-    .stroke();
-  doc
-    .font(fonts.regular)
-    .fontSize(8)
-    .fillColor(C.dark)
-    .text("Page 1 of 1", M, footerRuleY + 8, { width: CW, align: "right" });
+  // Stamp buffered pages only after all body text has been laid out.
+  const pages = doc.bufferedPageRange();
+  for (let page = pages.start; page < pages.start + pages.count; page++) {
+    doc.switchToPage(page);
+    const footerRuleY = doc.page.height - 53.75;
+    doc
+      .moveTo(M, footerRuleY)
+      .lineTo(M + CW, footerRuleY)
+      .lineWidth(1)
+      .strokeColor(C.light)
+      .stroke();
+    // The footer occupies the reserved bottom margin.
+    doc.page.margins.bottom = 0;
+    doc
+      .font(fonts.regular)
+      .fontSize(8)
+      .fillColor(C.dark)
+      .text(`Page ${page + 1} of ${pages.count}`, M, footerRuleY + 8, {
+        width: CW,
+        align: "right",
+      });
+    doc.page.margins.bottom = 70;
+  }
 
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
