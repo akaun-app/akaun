@@ -20,7 +20,9 @@ beforeEach(() => {
   sqlite.exec("PRAGMA foreign_keys = ON");
   db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: "drizzle" });
-  db.insert(users).values({ email: "owner@test", username: "owner", passwordHash: "x" }).run();
+  db.insert(users)
+    .values({ email: "owner@test", username: "owner", passwordHash: "x" })
+    .run();
 });
 afterEach(() => sqlite.close());
 
@@ -48,6 +50,75 @@ describe("account service", () => {
     });
     expect(first.ok && first.value.code).toBe(1000);
     expect(second.ok && second.value.code).toBe(1001);
+  });
+
+  it("Create_WhenCodeIsExplicit_ShouldSaveItAndPreserveAutomaticAllocation", () => {
+    const chosen = createAccount(db, 1, {
+      name: "Savings",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+      code: 1234,
+    });
+    expect(chosen.ok && chosen.value.code).toBe(1234);
+    const automatic = createAccount(db, 1, {
+      name: "Cash",
+      type: AccountType.Asset,
+      subType: AccountSubType.Cash,
+    });
+    expect(automatic.ok && automatic.value.code).toBe(1000);
+  });
+
+  it("Create_WhenCodeIsUsedEvenByArchivedAccount_ShouldRefuseWithoutWrites", () => {
+    const created = createAccount(db, 1, {
+      name: "Old bank",
+      type: AccountType.Asset,
+      subType: AccountSubType.Bank,
+      code: 1234,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    db.update(accounts)
+      .set({ archivedAt: "2026-01-01" })
+      .where(eq(accounts.id, created.value.id))
+      .run();
+    const auditsBefore = db.select().from(auditLog).all().length;
+    expect(
+      createAccount(db, 1, {
+        name: "New bank",
+        type: AccountType.Asset,
+        subType: AccountSubType.Bank,
+        code: 1234,
+      }),
+    ).toEqual({ ok: false, reason: "That code is already in use." });
+    expect(db.select().from(accounts).all()).toHaveLength(1);
+    expect(db.select().from(auditLog).all()).toHaveLength(auditsBefore);
+  });
+
+  it("Create_WhenCodeIsInvalidForSubmittedType_ShouldRefuseWithoutWrites", () => {
+    for (const code of [999, 2000, 1234.5, NaN, Infinity]) {
+      expect(
+        createAccount(db, 1, {
+          name: "Invalid",
+          type: AccountType.Asset,
+          subType: AccountSubType.Bank,
+          code,
+        }),
+      ).toEqual({
+        ok: false,
+        reason: "Code must be between 1000 and 1999 for this account type.",
+      });
+    }
+    // A code entered for Asset must be revalidated if the user submits Liability.
+    expect(
+      createAccount(db, 1, {
+        name: "Loan",
+        type: AccountType.Liability,
+        subType: AccountSubType.ShortTermLoan,
+        code: 1234,
+      }).ok,
+    ).toBe(false);
+    expect(db.select().from(accounts).all()).toHaveLength(0);
+    expect(db.select().from(auditLog).all()).toHaveLength(0);
   });
 
   it("Patch_WhenUnusedTypeChanges_ShouldAllocateInNewRange", () => {
@@ -111,7 +182,8 @@ describe("account service", () => {
       .run();
     expect(patchAccount(db, created.value.id, 1, { active: false })).toEqual({
       ok: false,
-      reason: "Choose a replacement saved default before deactivating this account.",
+      reason:
+        "Choose a replacement saved default before deactivating this account.",
     });
   });
 

@@ -139,7 +139,12 @@ export const accountsActions: Actions = {
       return fail(400, { error: "Choose one of the five account types." });
     if (!name) return fail(400, { error: "Give the account a name." });
 
+    const codeRaw = String(data.get("code") ?? "").trim();
+    if (codeRaw && !/^\d+$/.test(codeRaw))
+      return fail(400, { error: "Enter a whole number for the account code." });
+
     const result = createAccount(db, locals.user!.id, {
+      code: codeRaw ? Number(codeRaw) : undefined,
       type,
       name,
       subType: data.get("subType")

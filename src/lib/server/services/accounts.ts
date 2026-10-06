@@ -69,6 +69,16 @@ export function createAccount(db: LedgerDb, actingUserId: number, data: AccountC
     }
   }
 
+  if (data.code !== undefined) {
+    const range = accountCodeRangeFor(data.type);
+    if (!Number.isInteger(data.code) || data.code < range.start || data.code > range.end) {
+      return {
+        ok: false,
+        reason: `Code must be between ${range.start} and ${range.end} for this account type.`,
+      };
+    }
+  }
+
   let row: typeof accounts.$inferSelect;
   try {
     row = db.transaction((tx) => {
@@ -77,13 +87,16 @@ export function createAccount(db: LedgerDb, actingUserId: number, data: AccountC
         .from(accounts)
         .all()
         .flatMap((item) => (item.code == null ? [] : [item.code]));
+      if (data.code !== undefined && codes.includes(data.code)) {
+        throw new AccountRefusal("That code is already in use.");
+      }
       const inserted = tx
         .insert(accounts)
         .values({
           role: legacyRoleForAccountType(data.type),
           type: data.type,
           subType: AccountSubTypesByType[data.type] !== undefined ? (data.subType ?? null) : null,
-          code: lowestFreeAccountCode(data.type, codes),
+          code: data.code ?? lowestFreeAccountCode(data.type, codes),
           name,
           rank: rankAfter(null),
           createdBy: actingUserId,
