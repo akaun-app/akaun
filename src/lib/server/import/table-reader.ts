@@ -128,6 +128,24 @@ export function findTable(
 }
 
 /**
+ * A table's data rows: below its heading row (`headerAt`, its position in
+ * `sheet.rows`), up to the first blank row. A row the file does not list is
+ * blank, so a gap in the numbers ends the table too. The reading and the
+ * editor's look at a sample (`sample-inspect.ts`) both use this, so they
+ * agree on where a table ends.
+ */
+export function tableDataRows(sheet: Sheet, headerAt: number): SheetRow[] {
+  const dataRows: SheetRow[] = [];
+  let previous = sheet.rows[headerAt].number;
+  for (const row of sheet.rows.slice(headerAt + 1)) {
+    if (row.number !== previous + 1 || isBlankRow(row)) break;
+    dataRows.push(row);
+    previous = row.number;
+  }
+  return dataRows;
+}
+
+/**
  * Whether the workbook has the layout's table: Auto-detect's first and
  * cheapest test of a spreadsheet (US10 AS12).
  */
@@ -358,6 +376,12 @@ export interface TableReading {
   balance?: { matches: boolean; message: string };
   /** Where the table was found, for a preview. */
   found: { sheet: string; headerRow: number; rows: number };
+  /**
+   * The lines of the table's data rows in the rendered text (FR-051), every
+   * one of them, those no section takes too: what the AI is not sent when it
+   * reads the rest of the sheet (`withoutTableRows`).
+   */
+  dataLines: number[];
 }
 
 /** What the table reader needs from a profile. */
@@ -507,15 +531,7 @@ export function readTable(
     }
   };
 
-  // The data rows: below the headings, up to the first blank row. A row the
-  // file does not list is blank, so a gap in the numbers ends the table too.
-  const dataRows: SheetRow[] = [];
-  let previous = sheet.rows[table.headerAt].number;
-  for (const row of sheet.rows.slice(table.headerAt + 1)) {
-    if (row.number !== previous + 1 || isBlankRow(row)) break;
-    dataRows.push(row);
-    previous = row.number;
-  }
+  const dataRows = tableDataRows(sheet, table.headerAt);
 
   for (const row of dataRows) {
     const taking = sections.filter((section) =>
@@ -684,7 +700,42 @@ export function readTable(
       headerRow: sheet.rows[table.headerAt].number,
       rows: dataRows.length,
     },
+    dataLines: dataRows.flatMap((row) => {
+      const line = lines.get(row.number);
+      return line === undefined ? [] : [line];
+    }),
   };
+}
+
+const NUMBERED_LINE = /^L(\d+)│/;
+
+/**
+ * The numbered text without the table's data rows, for the AI to read the
+ * rest of a spreadsheet whose table code reads (FR-057). Every other line
+ * keeps its number, so an item the AI reads still names the line the reviewer
+ * finds, and one line in square brackets, unnumbered, stands where the rows
+ * were. The heading row stays: it tells the AI what the table was.
+ */
+export function withoutTableRows(
+  numbered: string,
+  dataLines: readonly number[],
+): string {
+  if (dataLines.length === 0) return numbered;
+  const cut = new Set(dataLines);
+  const count = dataLines.length.toLocaleString("en-US");
+  const mark = `[${count} row${dataLines.length === 1 ? "" : "s"} of the table, read by code, left out here]`;
+  const out: string[] = [];
+  let marked = false;
+  for (const line of numbered.split("\n")) {
+    const match = NUMBERED_LINE.exec(line);
+    if (match && cut.has(Number(match[1]))) {
+      if (!marked) out.push(mark);
+      marked = true;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 /** Whole cents as a figure with two decimals and its sign: "-1,234.50". */
@@ -806,13 +857,53 @@ export function readFromColumns(
   reading: ReadingProfile,
   context: { today: string; mainCurrency: string; schemaId: string },
 ): DocumentReading {
-  const { envelope, ignoredCount, balance } = readTable(
-    workbook,
+  return readingFromTable(
+    readTable(workbook, profile, context.mainCurrency),
     profile,
-    context.mainCurrency,
+    reading,
+    context,
   );
-  const lineCount = Object.values(envelope.sections).reduce(
-    (sum, lines) => sum + lines.length,
+}
+
+/**
+ * What the AI read of a spreadsheet beside its table (FR-057): its answer, as
+ * `readDocumentEnvelope` or `readEnvelopeInPieces` gives it, and the
+ * profile's `statedTotalDescription` it was read with.
+ */
+export interface AiPart {
+  envelope: ReadEnvelope;
+  method: "ai" | "ai_pieces";
+  statedTotalDescription: string | null;
+}
+
+/**
+ * The items of a table reading (`readTable`), and with `ai` those the AI read
+ * from the rest of the sheet, made into one reading (FR-055, FR-057).
+ *
+ * The two answers are joined before any item is made, so the signs, the
+ * categories and the control total are worked out once, over every section:
+ *
+ * - **Header:** what the layout gives (the other party, the currency, the
+ *   date beside its label) is used; the AI's answer gives the rest.
+ * - **Stated total:** the layout's labels, read by code, when it names any;
+ *   else the figure the AI read beside the profile's own label.
+ * - **Ignored lines:** the table's first, then the AI's.
+ *
+ * The item limit counts both parts together (FR-010).
+ */
+export function readingFromTable(
+  table: TableReading,
+  profile: TableProfile,
+  reading: ReadingProfile,
+  context: { today: string; mainCurrency: string; schemaId: string },
+  ai: AiPart | null = null,
+): DocumentReading {
+  const { envelope, ignoredCount, balance } = table;
+  const parts = ai ? [envelope, ai.envelope] : [envelope];
+  const lineCount = parts.reduce(
+    (sum, part) =>
+      sum +
+      Object.values(part.sections).reduce((n, lines) => n + lines.length, 0),
     0,
   );
   if (lineCount > DOCUMENT_ITEMS_MAX) {
@@ -822,21 +913,55 @@ export function readFromColumns(
     );
   }
   const labels = profile.layout.statedTotalLabels[profile.mode] ?? [];
+  const byLayout = labels.length > 0 || ai === null;
+  const joined: ReadEnvelope = ai
+    ? {
+        header: {
+          ...ai.envelope.header,
+          counterparty:
+            envelope.header.counterparty ?? ai.envelope.header.counterparty,
+          date: envelope.header.date ?? ai.envelope.header.date,
+          currency: envelope.header.currency ?? ai.envelope.header.currency,
+        },
+        stated_total: byLayout
+          ? envelope.stated_total
+          : ai.envelope.stated_total,
+        stated_total_minor: byLayout
+          ? envelope.stated_total_minor
+          : (ai.envelope.stated_total_minor ?? null),
+        sections: { ...ai.envelope.sections, ...envelope.sections },
+        ignored: [...envelope.ignored, ...ai.envelope.ignored],
+      }
+    : envelope;
   const result = readingFromEnvelope(
-    envelope,
+    joined,
     {
       ...reading,
-      statedTotalDescription: labels.length > 0 ? labels.join(" + ") : null,
+      statedTotalDescription: byLayout
+        ? labels.length > 0
+          ? labels.join(" + ")
+          : null
+        : ai!.statedTotalDescription,
     },
     context,
   );
-  // In the order of the table's rows, as the reviewer finds them in the
-  // file, rather than section by section. Every item has its row's line.
-  result.items.sort((a, b) => (a.sourceLine ?? 0) - (b.sourceLine ?? 0));
-  // Rows the reader left out, and lines of a kept section that the reading's
-  // own rules left out (an amount of zero, say).
-  result.notes.ignoredCount = ignoredCount + lineCount - result.items.length;
-  result.notes.method = "columns";
+  // In the order of the sheet's lines, as the reviewer finds them in the
+  // file, rather than section by section. Every row of the table has its
+  // line; an item the AI gave none goes last.
+  result.items.sort(
+    (a, b) =>
+      (a.sourceLine ?? Number.MAX_SAFE_INTEGER) -
+      (b.sourceLine ?? Number.MAX_SAFE_INTEGER),
+  );
+  // Rows the reader left out, the lines the AI listed as left out, and lines
+  // of a kept section that the reading's own rules left out (an amount of
+  // zero, say).
+  const aiIgnored = ai
+    ? ai.envelope.ignored.filter((line) => line.trim() !== "").length
+    : 0;
+  result.notes.ignoredCount =
+    ignoredCount + aiIgnored + lineCount - result.items.length;
+  result.notes.method = ai ? "columns_ai" : "columns";
   if (balance) result.notes.balance = balance;
   return result;
 }

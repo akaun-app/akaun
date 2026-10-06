@@ -1,4 +1,5 @@
 import { redirect } from "@sveltejs/kit";
+import { profileKind } from "$lib/import-profile-schema.js";
 import {
   isStarterId,
   type ImportProfileStarterId,
@@ -97,6 +98,8 @@ export function importProfileList(locals: App.Locals, database: LedgerDb = db) {
       name: profile.name,
       enabled: profile.enabled,
       sectionCount: profile.sections.length,
+      // What it imports, which says who reads it (FR-055, FR-057).
+      kind: profileKind(profile),
     })),
   };
 }

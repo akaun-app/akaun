@@ -24,13 +24,16 @@
  * - **In the profile's mode** (006 FR-002, FR-032): a profile is read in its
  *   own import mode, Summary lines or Every transaction, whether it was
  *   chosen or detected, and the row stores that mode.
- * - **From its columns** (006 FR-055): a spreadsheet read with a profile whose
- *   sections all have row rules is read by code
- *   (`table-reader.ts`), with no AI call. It needs no AI provider, so the check
- *   for one is made only where the AI is asked.
+ * - **From its columns** (006 FR-055, FR-057): a spreadsheet read with a
+ *   profile whose sections have row rules has its table read by code
+ *   (`table-reader.ts`). When every section has them there is no AI call and
+ *   no provider is needed, so the check for one is made only where the AI is
+ *   asked. Otherwise the AI reads the other sections from the rest of the
+ *   sheet, with the table's rows left out of its text. A PDF or a photo read
+ *   with such a profile fails: it has no cells.
  * - **In pieces** (006 FR-043): a profile reading in Every transaction mode
- *   that the AI reads, from a PDF or a spreadsheet with no row rules, is read
- *   a run of lines at a time (`piece-reader.ts`). The queue row counts the
+ *   that the AI reads, from a PDF or the part of a spreadsheet beside its
+ *   table, is read a run of lines at a time (`piece-reader.ts`). The queue row counts the
  *   pieces in `progress_done` / `progress_total` while it is read.
  *
  * The worker calls this with the app's database and storage folder; the tests
@@ -48,16 +51,12 @@ import {
   isTransferType,
   type ImportStateCode,
 } from "$lib/enums.js";
-import {
-  profileSections,
-  readsFromColumns,
-} from "$lib/import-profile-schema.js";
+import { readsFromColumns, readsTable } from "$lib/import-profile-schema.js";
 import {
   ImportMode,
   ImportReadAs,
   ImportReadHow,
   serializeExtractionNotes,
-  type ImportModeValue,
 } from "$lib/import-reading.js";
 import { importItems, importQueue, users } from "../db/schema.js";
 import {
@@ -82,8 +81,6 @@ import type { LedgerDb } from "../ledger/types.js";
 import { getEnabledProviders, insertProvider } from "../llmProviders.js";
 import { createLogger } from "../logger.js";
 import {
-  deletedProfileName,
-  getImportProfile,
   listImportProfiles,
   savedProfileIdOf,
   type ImportProfileView,
@@ -97,7 +94,7 @@ import {
 } from "./build-review-fields.js";
 import {
   DocumentLimitError,
-  readDocumentItems,
+  readDocumentEnvelope,
   type DocumentItem,
   type DocumentReading,
 } from "./document-reader.js";
@@ -114,26 +111,28 @@ import {
 import type { LLMCallParams } from "./providers/types.js";
 import {
   ReadingStoppedError,
-  readInPieces,
+  readEnvelopeInPieces,
   type PieceProgress,
 } from "./piece-reader.js";
+import { joinParts, type ReadParts } from "./join-reading.js";
 import {
-  SEVERAL_ITEMS_PROFILE,
-  savedReadingProfile,
-  type ReadingProfile,
-} from "./profile-compiler.js";
-import {
-  parseProfileSnapshot,
-  profileSnapshotOf,
-  serializeProfileSnapshot,
-} from "./profile-snapshot.js";
+  RECEIPT_PLAN,
+  builtinItemsPlan,
+  needsAi,
+  isSpreadsheetJob,
+  needsCells,
+  planForProfile,
+  readsCells,
+  type ItemsPlan,
+  type ReadingPlan,
+} from "./reading-plan.js";
 import type { ReviewFields } from "./review-fields.js";
 import {
   TableReadError,
-  columnsReadingId,
   layoutMatches,
-  readFromColumns,
-  type TableProfile,
+  readTable,
+  withoutTableRows,
+  type AiPart,
 } from "./table-reader.js";
 
 const log = createLogger("import:worker");
@@ -172,26 +171,6 @@ function readingPath(job: ImportJob): ReadingPath {
   if (job.readAs === ImportReadAs.Profile) return "profile";
   if (job.readAs === ImportReadAs.Auto) return "auto";
   return "receipt";
-}
-
-/** What a document read as items is read with. */
-interface ItemsReading {
-  profile: ReadingProfile;
-  /** What the row's `profile_id` holds once it is read. */
-  profileId: string;
-  /** The saved profile's name; absent for the built-in reading. */
-  profileName?: string;
-  /**
-   * Set when the document is a spreadsheet to be read from its columns, with
-   * no AI (FR-055): the profile's mode, layout and sections.
-   */
-  columns?: { table: TableProfile };
-  /**
-   * The import mode a saved profile reads in; absent for the built-in
-   * reading. An Every transaction reading by the AI is read in pieces
-   * (FR-043).
-   */
-  mode?: ImportModeValue;
 }
 
 /**
@@ -304,11 +283,6 @@ const SOURCE_TEXTS: TextForm<DocumentSource> = {
 /** The message a spreadsheet with nothing in its cells fails with. */
 export const EMPTY_SPREADSHEET =
   "This spreadsheet is empty: none of its sheets has anything in its cells.";
-
-/** Whether the job's file is an Excel workbook or a CSV file (FR-050). */
-function isSpreadsheetJob(job: Pick<ImportJob, "originalFilename">): boolean {
-  return isSpreadsheetMimeType(inferMimeType(job.originalFilename));
-}
 
 /**
  * The document's text, in the form the reading needs. Null when the job has
@@ -437,40 +411,35 @@ export async function processImportJob(
     }
   }
 
-  // A file already imported is stopped before it is read with items or a
-  // profile (FR-026). Auto-detect checks this once it has found a profile:
-  // read the standard way, it is a receipt, and a receipt is never stopped.
-  if (path === "items" || path === "profile") {
-    const stop = alreadyImported(db, job);
+  // How the document is read, when the upload said (FR-001). Auto-detect
+  // works it out once the text is read.
+  let plan: ReadingPlan | null = null;
+  if (path === "receipt") plan = RECEIPT_PLAN;
+  else if (path === "items") plan = builtinItemsPlan();
+  else if (path === "profile") {
+    const planned = planForProfile(db, job, savedProfileIdOf(job), "chosen");
+    if (!planned.ok) {
+      markFailed(db, job.id, userId, planned.reason);
+      return;
+    }
+    plan = planned.plan;
+  }
+
+  const providers = loadProviders(db);
+  if (plan) {
+    // Stopped here, before the file is read, as it always has been.
+    const stop = stopReason(db, reloaded(db, job), plan, providers, null);
     if (stop) {
       markFailed(db, job.id, userId, stop);
       return;
     }
-  }
-
-  let itemsReading: ItemsReading | null = null;
-  if (path === "items") {
-    itemsReading = {
-      profile: SEVERAL_ITEMS_PROFILE,
-      profileId: SEVERAL_ITEMS_PROFILE.schemaId,
-    };
-  } else if (path === "profile") {
-    const chosen = profileForJob(db, job);
-    if (!chosen.ok) {
-      markFailed(db, job.id, userId, chosen.reason);
-      return;
-    }
-    itemsReading = chosen.value;
-  }
-
-  // A reading that will certainly ask the AI stops here, before the file is
-  // read, as it always has. One that may be read from columns goes on: it
-  // needs no provider, and the check is made where the AI is asked.
-  const providers = loadProviders(db);
-  if (
+  } else if (
     !providers.length &&
-    !mayReadWithoutAi(job, path, itemsReading, candidates)
+    !(
+      readsCells(job) && candidates.some((profile) => readsFromColumns(profile))
+    )
   ) {
+    // Auto-detect with nothing it could read without the AI.
     markFailed(db, job.id, userId, NO_PROVIDERS);
     return;
   }
@@ -509,75 +478,102 @@ export async function processImportJob(
   };
   const calls = { providers, rateLimitMs, accountLists };
 
-  if (path === "auto") {
+  if (plan === null) {
     await readAutoDetected(db, job, userId, ctx, candidates, calls, options);
     return;
   }
 
-  if (itemsReading?.columns) {
-    // The cells themselves, and the numbered text for each item's line.
-    const source = await documentText(
+  if (plan.kind === "receipt") {
+    const text = await documentText(
+      db,
+      job,
+      userId,
+      PLAIN_TEXT,
+      options.storageRoot,
+    );
+    if (text === null) return;
+    setState(db, job.id, userId, ImportState.Processing);
+    await readReceipt(db, job, userId, ctx, { text, ...calls });
+    return;
+  }
+
+  // The cells and the numbered text for a table, the numbered text alone
+  // for the AI.
+  let source: DocumentSource | null;
+  if (needsCells(plan)) {
+    source = await documentText(
       db,
       job,
       userId,
       SOURCE_TEXTS,
       options.storageRoot,
     );
-    if (source === null) return;
-    setState(db, job.id, userId, ImportState.Processing);
-    const cells = cellsForColumns(job, source, itemsReading, options);
-    if (typeof cells === "string") {
-      markFailed(db, job.id, userId, cells);
-      return;
-    }
-    await readItems(db, job, userId, ctx, { ...cells, ...calls }, itemsReading);
+  } else {
+    const numbered = await documentText(
+      db,
+      job,
+      userId,
+      NUMBERED_TEXT,
+      options.storageRoot,
+    );
+    source = numbered === null ? null : { plain: "", numbered };
+  }
+  if (source === null) return;
+  setState(db, job.id, userId, ImportState.Processing);
+  await readPlanned(db, job, userId, ctx, plan, source, calls, options);
+}
+
+/**
+ * Why a planned reading stops before it is read, or null: a file already
+ * imported (FR-026), which a receipt never is; a spreadsheet too long for the
+ * receipt reading (FR-052), once its text is known; or a reading that asks
+ * the AI with no provider set up. The one place each is decided.
+ */
+function stopReason(
+  db: LedgerDb,
+  job: ImportJob,
+  plan: ReadingPlan,
+  providers: readonly unknown[],
+  text: string | null,
+): string | null {
+  if (plan.kind !== "receipt") {
+    const stop = alreadyImported(db, job);
+    if (stop) return stop;
+  } else if (text !== null) {
+    const tooLong = receiptTextRefusal(job, text);
+    if (tooLong) return tooLong;
+  }
+  if (needsAi(plan) && providers.length === 0) return NO_PROVIDERS;
+  return null;
+}
+
+/** The row as it is now: a plan writes the profile it reads with onto it. */
+function reloaded(db: LedgerDb, job: ImportJob): ImportJob {
+  return (
+    db.select().from(importQueue).where(eq(importQueue.id, job.id)).get() ?? job
+  );
+}
+
+/**
+ * Reads a planned reading of items from its source: the cells, read again
+ * for a CSV whose layout names its separator, and the numbered text.
+ */
+async function readPlanned(
+  db: LedgerDb,
+  job: ImportJob,
+  userId: number,
+  ctx: ReviewContext,
+  plan: ItemsPlan,
+  source: DocumentSource,
+  calls: Omit<ReadingInput, "text">,
+  options: ProcessJobOptions,
+) {
+  const cells = cellsForColumns(job, source, plan, options);
+  if (typeof cells === "string") {
+    markFailed(db, job.id, userId, cells);
     return;
   }
-
-  const text = await documentText(
-    db,
-    job,
-    userId,
-    path === "receipt" ? PLAIN_TEXT : NUMBERED_TEXT,
-    options.storageRoot,
-  );
-  if (text === null) return;
-
-  // Processing — LLM call
-  setState(db, job.id, userId, ImportState.Processing);
-
-  if (itemsReading === null) {
-    await readReceipt(db, job, userId, ctx, { text, ...calls });
-  } else {
-    await readItems(db, job, userId, ctx, { text, ...calls }, itemsReading);
-  }
-}
-
-/**
- * Whether this job may be read with no AI at all, so a missing provider is
- * not yet a reason to fail it: a spreadsheet read with a profile from its
- * columns, or a spreadsheet Auto-detect may find such a profile for. Anything
- * else asks the AI, and is stopped before its file is read, as before.
- */
-function mayReadWithoutAi(
-  job: ImportJob,
-  path: ReadingPath,
-  itemsReading: ItemsReading | null,
-  candidates: readonly ImportProfileView[],
-): boolean {
-  if (path === "profile") return itemsReading?.columns !== undefined;
-  if (path !== "auto" || !readsCells(job)) return false;
-  return candidates.some((profile) => readsFromColumns(profile));
-}
-
-/**
- * Whether the job's cells can be read: a spreadsheet whose text was not
- * given with the upload. Text given in its place has no cells to go by.
- */
-function readsCells(
-  job: Pick<ImportJob, "originalFilename" | "preExtractedText">,
-): boolean {
-  return isSpreadsheetJob(job) && !job.preExtractedText?.trim();
+  await readItems(db, job, userId, ctx, { ...cells, ...calls }, plan);
 }
 
 /**
@@ -621,46 +617,46 @@ async function readAutoDetected(
 
   if (detection.route === "standard") {
     clearDetectedProfile(db, job);
+    const stop = stopReason(
+      db,
+      job,
+      RECEIPT_PLAN,
+      calls.providers,
+      texts.plain,
+    );
+    if (stop) {
+      markFailed(db, job.id, userId, stop);
+      return;
+    }
     await readReceipt(db, job, userId, ctx, { text: texts.plain, ...calls });
     return;
   }
 
-  // The found profile is read in its own mode (FR-002), which
-  // `profileForJob` stores on the row.
-  const detected: ImportJob = {
-    ...job,
-    profileId: String(detection.route),
-    readHow: ImportReadHow.Detected,
-  };
-  const found = profileForJob(db, detected);
-  if (!found.ok) {
-    markFailed(db, job.id, userId, found.reason);
+  // The found profile is read in its own mode (FR-002), as if it had been
+  // chosen; the plan stores it on the row as detected.
+  const planned = planForProfile(db, job, detection.route, "detected");
+  if (!planned.ok) {
+    markFailed(db, job.id, userId, planned.reason);
     return;
   }
-  // The mode it is read in, as the row now stores it.
-  detected.importMode = found.value.mode ?? null;
   // Every screen now says which profile reads the document, and that it was
   // detected (FR-041), while the reading runs.
   emitJobUpdate(db, job.id, userId);
-
-  const stop = alreadyImported(db, detected);
+  const detected = reloaded(db, job);
+  const stop = stopReason(db, detected, planned.plan, calls.providers, null);
   if (stop) {
     markFailed(db, job.id, userId, stop);
     return;
   }
-
-  const cells = cellsForColumns(detected, texts, found.value, options);
-  if (typeof cells === "string") {
-    markFailed(db, job.id, userId, cells);
-    return;
-  }
-  await readItems(
+  await readPlanned(
     db,
     detected,
     userId,
     ctx,
-    { ...cells, ...calls },
-    found.value,
+    planned.plan,
+    texts,
+    calls,
+    options,
   );
 }
 
@@ -675,12 +671,12 @@ async function readAutoDetected(
 function cellsForColumns(
   job: ImportJob,
   source: DocumentSource,
-  chosen: ItemsReading,
+  plan: ItemsPlan,
   options: ProcessJobOptions,
 ): { text: string; workbook?: Workbook } | string {
-  const delimiter = chosen.columns?.table.layout.csvDelimiter ?? null;
+  const delimiter = plan.table?.layout.csvDelimiter ?? null;
   const isCsv = inferMimeType(job.originalFilename) === CSV_MIME_TYPE;
-  if (!chosen.columns || delimiter === null || !isCsv) {
+  if (!plan.table || delimiter === null || !isCsv) {
     return { text: source.numbered, workbook: source.workbook };
   }
   try {
@@ -695,9 +691,9 @@ function cellsForColumns(
 
 /**
  * Auto-detect for a PDF or a photo (FR-039): `detectProfile`, among the
- * profiles that could read it. A profile that reads from columns only is left
- * out: it is made for a spreadsheet's table, and a PDF has no cells. With no other profile, nothing is asked and
- * the document is read the standard way.
+ * profiles that could read it. A profile that reads a table by code is left
+ * out: it is made for a spreadsheet's table, and a PDF has no cells. With no
+ * other profile, nothing is asked and the document is read the standard way.
  */
 async function detectDocument(
   job: ImportJob,
@@ -705,7 +701,7 @@ async function detectDocument(
   profiles: ImportProfileView[],
   calls: Omit<ReadingInput, "text">,
 ): Promise<{ route: number | "standard" }> {
-  const readable = profiles.filter((profile) => !readsFromColumns(profile));
+  const readable = profiles.filter((profile) => !readsTable(profile));
   if (readable.length === 0) return { route: "standard" };
   return detectProfile({
     text,
@@ -727,9 +723,9 @@ async function detectDocument(
  *    provider the job fails, naming them: the table fits each of them, and
  *    the standard reading would be the wrong answer.
  * 3. **No profile's headings match.** Only the profiles that could read the
- *    document are looked at: a profile that reads from columns could not,
- *    since its headings are not there, and
- *    would only fail with its table not found. The phrases decide among the
+ *    document are looked at: a profile that reads a table by code could not,
+ *    since its headings are not there, and would only fail with its table
+ *    not found. The phrases decide among the
  *    rest; otherwise the AI detect call chooses among them. When there are
  *    none, or no provider is set up, no AI is asked and the standard reading
  *    follows, whose own checks name a spreadsheet too long for it (FR-052) or
@@ -758,7 +754,7 @@ async function detectSpreadsheet(
   const among =
     byHeadings.length > 1
       ? byHeadings
-      : profiles.filter((profile) => !readsFromColumns(profile));
+      : profiles.filter((profile) => !readsTable(profile));
   const words = detectionText(workbook);
   const byPhrases = phraseMatch(words, among);
   if (byPhrases.length === 1) {
@@ -826,101 +822,6 @@ function clearDetectedProfile(db: LedgerDb, job: ImportJob) {
     .run();
 }
 
-/**
- * The saved profile a job is to be read with, compiled in its own import
- * mode, or why it cannot be read (spec edge cases). A profile disabled or deleted
- * after the upload is not used, and the message names it.
- *
- * On success the profile is copied onto the row with the mode, before any
- * reading starts, so every screen can say which profile reads the document
- * from the first update on (FR-041), and an edit made while it is read, or
- * later, never changes the group (FR-038). Auto-detect passes the job with
- * the profile it found and `read_how` already set to detected.
- */
-function profileForJob(
-  db: LedgerDb,
-  job: ImportJob,
-): { ok: true; value: ItemsReading } | { ok: false; reason: string } {
-  const picked = job.readHow === ImportReadHow.Detected ? "detected" : "chosen";
-  const id = savedProfileIdOf(job);
-  if (id === null) {
-    return {
-      ok: false,
-      reason:
-        "This document was to be read with an import profile, but no profile is named. Upload it again and choose how to read it.",
-    };
-  }
-  const saved = getImportProfile(db, id);
-  if (!saved) {
-    const name =
-      parseProfileSnapshot(job.profileSnapshot)?.name ??
-      deletedProfileName(db, id);
-    const named = name ? `"${name}"` : `#${id}`;
-    return {
-      ok: false,
-      reason: `The import profile ${named} ${picked} for this document was deleted before it was read. Upload it again and choose another way to read it.`,
-    };
-  }
-  if (!saved.enabled) {
-    return {
-      ok: false,
-      reason: `The import profile "${saved.name}" ${picked} for this document was disabled before it was read. Turn it on again, or upload the document again and choose another way to read it.`,
-    };
-  }
-
-  // The profile's own mode (FR-002, FR-032). The row stores it, so every
-  // screen says it. Every profile saved has a section in its own mode; one
-  // with none is a damaged row, and is named rather than read as nothing.
-  const { mode } = saved;
-  if (profileSections(saved).length === 0) {
-    return {
-      ok: false,
-      reason: `The import profile "${saved.name}" has no section to read, so nothing was read. Open it in Settings and add a section.`,
-    };
-  }
-  const profile: ReadingProfile = savedReadingProfile(saved);
-
-  // A spreadsheet the profile reads from its columns (FR-055). Its copy
-  // names what was read, the layout and the sections, not a schema the AI
-  // was never sent.
-  const fromColumns = readsCells(job) && readsFromColumns(saved);
-  const schemaId = fromColumns ? columnsReadingId(saved) : profile.schemaId;
-
-  db.update(importQueue)
-    .set({
-      profileId: String(saved.id),
-      importMode: mode,
-      readHow: job.readHow ?? ImportReadHow.Chosen,
-      profileSnapshot: serializeProfileSnapshot(
-        profileSnapshotOf(saved, schemaId),
-      ),
-    })
-    .where(eq(importQueue.id, job.id))
-    .run();
-
-  return {
-    ok: true,
-    value: {
-      profile: fromColumns ? { ...profile, schemaId } : profile,
-      profileId: String(saved.id),
-      profileName: saved.name,
-      mode,
-      ...(fromColumns && saved.layout
-        ? {
-            columns: {
-              table: {
-                name: saved.name,
-                mode,
-                layout: saved.layout,
-                sections: saved.sections,
-              },
-            },
-          }
-        : {}),
-    },
-  };
-}
-
 type ReadingInput = {
   text: string;
   /** A spreadsheet's cells, for a reading from its columns. */
@@ -980,11 +881,6 @@ async function readReceipt(
     markFailed(db, job.id, userId, tooLong);
     return;
   }
-  if (input.providers.length === 0) {
-    markFailed(db, job.id, userId, NO_PROVIDERS);
-    return;
-  }
-
   let result;
   try {
     result = await callLLMWithProviders(
@@ -1097,8 +993,9 @@ async function itemFields(
   jobId: string,
   reading: DocumentReading,
   ctx: ReviewContext,
-  profile: ReadingProfile,
+  plan: ItemsPlan,
 ): Promise<ReviewFields[]> {
+  const profile = plan.reading;
   const sectionKinds = new Map(
     profile.sections.map((section) => [section.key, section.kind]),
   );
@@ -1113,15 +1010,17 @@ async function itemFields(
     profile.sections,
     jobId,
   );
-  // A row read from a table, or in Every transaction mode by the AI, in one
-  // call or in pieces, carries its own reference, and a record with a
-  // different one is a different transaction (FR-063). A reading with no
-  // method is a one-call reading of a summary, or older than the methods,
-  // and keeps the check of FR-024 unchanged.
-  const referenceVeto =
-    reading.notes.method === "columns" ||
-    reading.notes.method === "ai_pieces" ||
-    reading.notes.method === "ai";
+  // A row read from a table, or any item read in Every transaction mode,
+  // carries its own reference, and a record with a different one is a
+  // different transaction (FR-063). A summary line, and an item of the
+  // built-in reading, keeps the check of FR-024 unchanged.
+  const fromTable = new Set(
+    profile.sections
+      .filter((section) => section.fromTable)
+      .map((section) => section.key),
+  );
+  const ownReferenceOf = (item: DocumentItem) =>
+    fromTable.has(item.sectionKey) || plan.mode === ImportMode.EveryTransaction;
   const out: ReviewFields[] = [];
   for (const [index, item] of reading.items.entries()) {
     // The first category the item could take that is still one of its kind
@@ -1156,7 +1055,7 @@ async function itemFields(
           originalFilename: null,
           fileHash: null,
           extractedText: null,
-          referenceVeto,
+          referenceVeto: ownReferenceOf(item),
         },
         // The profile's own account, and a transfer's other one (FR-058).
         documentAccountId: profile.documentAccountId ?? null,
@@ -1255,52 +1154,79 @@ function isStillReading(db: LedgerDb, jobId: string): boolean {
   return current?.state === ImportState.Processing;
 }
 
+/**
+ * Reads each part of the plan and joins them (`joinParts`). The table is read
+ * by code first, so a row it cannot read fails the document before the AI is
+ * asked. The AI then reads its sections: beside a table, from the text with
+ * the table's rows left out (FR-057); in Every transaction mode, in pieces,
+ * each sized to finish in time (FR-043).
+ */
+async function readParts(
+  db: LedgerDb,
+  job: ImportJob,
+  userId: number,
+  input: ReadingInput,
+  plan: ItemsPlan,
+): Promise<DocumentReading> {
+  const context = {
+    today: new Date().toISOString().slice(0, 10),
+    mainCurrency: input.accountLists.mainCurrency,
+    schemaId: plan.reading.schemaId,
+  };
+  let table: ReadParts["table"] = null;
+  if (plan.table) {
+    if (!input.workbook) {
+      throw new TableReadError(
+        "This spreadsheet's cells could not be read, so it was not read from its columns.",
+      );
+    }
+    table = {
+      reading: readTable(input.workbook, plan.table, context.mainCurrency),
+      profile: plan.table,
+    };
+  }
+  let ai: AiPart | null = null;
+  if (plan.ai) {
+    const params = {
+      text: table
+        ? withoutTableRows(input.text, table.reading.dataLines)
+        : input.text,
+      profile: plan.ai.reading,
+      ...input.accountLists,
+    };
+    const statedTotalDescription = plan.ai.reading.statedTotalDescription;
+    if (plan.ai.pieces) {
+      const read = await readEnvelopeInPieces(params, input.providers, {
+        intervalMs: input.rateLimitMs,
+        onProgress: (progress: PieceProgress) =>
+          showProgress(db, job.id, userId, progress),
+        stillWanted: () => isStillReading(db, job.id),
+      });
+      ai = { ...read, statedTotalDescription };
+    } else {
+      const read = await readDocumentEnvelope(
+        params,
+        input.providers,
+        input.rateLimitMs,
+      );
+      ai = { envelope: read.envelope, method: "ai", statedTotalDescription };
+    }
+  }
+  return joinParts({ table, ai }, plan.reading, plan.mode, context);
+}
+
 async function readItems(
   db: LedgerDb,
   job: ImportJob,
   userId: number,
   ctx: ReviewContext,
   input: ReadingInput,
-  chosen: ItemsReading,
+  plan: ItemsPlan,
 ) {
-  const { profile, profileId } = chosen;
-  if (!chosen.columns && input.providers.length === 0) {
-    markFailed(db, job.id, userId, NO_PROVIDERS);
-    return;
-  }
+  const { profileId } = plan;
   let reading: DocumentReading;
   try {
-    if (chosen.columns) {
-      // Read by code from the cells (FR-055): no AI call, no provider.
-      if (!input.workbook) {
-        throw new TableReadError(
-          "This spreadsheet's cells could not be read, so it was not read from its columns.",
-        );
-      }
-      reading = readFromColumns(input.workbook, chosen.columns.table, profile, {
-        today: new Date().toISOString().slice(0, 10),
-        mainCurrency: input.accountLists.mainCurrency,
-        schemaId: profile.schemaId,
-      });
-    } else if (chosen.mode === ImportMode.EveryTransaction) {
-      // One record per row, of a document that may run to hundreds of
-      // rows: read in pieces, each sized to finish in time (FR-043).
-      reading = await readInPieces(
-        { text: input.text, profile, ...input.accountLists },
-        input.providers,
-        {
-          intervalMs: input.rateLimitMs,
-          onProgress: (progress) => showProgress(db, job.id, userId, progress),
-          stillWanted: () => isStillReading(db, job.id),
-        },
-      );
-    } else {
-      reading = await readDocumentItems(
-        { text: input.text, profile, ...input.accountLists },
-        input.providers,
-        input.rateLimitMs,
-      );
-    }
+    reading = await readParts(db, job, userId, input, plan);
   } catch (err) {
     if (err instanceof ReadingStoppedError) {
       // Deleted, or moved on by something else, between two pieces. A job
@@ -1328,8 +1254,8 @@ async function readItems(
       // Only this document fails, and with no reading without the schema
       // (FR-037). Nothing is remembered about the refusal, so no other
       // document is read differently.
-      const whose = chosen.profileName
-        ? `the import profile "${chosen.profileName}"`
+      const whose = plan.profileName
+        ? `the import profile "${plan.profileName}"`
         : "the chosen reading";
       markFailed(
         db,
@@ -1362,7 +1288,7 @@ async function readItems(
 
   // Every look-up that waits (exchange rates) is done here, before the write,
   // so the write below can be one transaction that never waits.
-  const fields = await itemFields(db, job.id, reading, ctx, profile);
+  const fields = await itemFields(db, job.id, reading, ctx, plan);
   const extractionNotes = serializeExtractionNotes(reading.notes);
 
   if (fields.length === 1) {

@@ -490,7 +490,7 @@ function pickedBy(readHow: string | null | undefined): string {
  */
 export function describeReading(job: ReadingOf): string {
   if (job.readAs === ImportReadAs.SeveralItems) {
-    return `Read as several items${pickedBy(job.readHow)}`;
+    return `Multiple records${pickedBy(job.readHow)}`;
   }
   // A profile chosen at upload, or one Auto-detect found for it.
   if (
@@ -507,14 +507,16 @@ export function describeReading(job: ReadingOf): string {
     const read =
       method === "columns"
         ? " · read from columns"
-        : method === "ai_pieces"
-          ? " · read in parts"
-          : "";
+        : method === "columns_ai"
+          ? " · table read from columns, the rest by AI"
+          : method === "ai_pieces"
+            ? " · read in parts"
+            : "";
     return `Read with ${name} (${how})${mode}${read}`;
   }
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).
-  return `Standard reading${pickedBy(job.readHow)}`;
+  return `Single record${pickedBy(job.readHow)}`;
 }
 
 /**

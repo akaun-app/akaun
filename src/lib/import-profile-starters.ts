@@ -44,6 +44,7 @@ export interface ImportProfileStarter {
  */
 const FEE_DOCUMENT: ImportProfileDraft = {
   name: "Fee document",
+  kind: "summary",
   mode: "summary",
   description:
     "An invoice or notice from a platform or service provider that lists one or more fees charged to the business, such as advertising, commission or service fees.",
@@ -105,6 +106,7 @@ const FEE_DOCUMENT: ImportProfileDraft = {
  */
 const MARKETPLACE_SUMMARY: ImportProfileDraft = {
   name: "Marketplace statement summary",
+  kind: "summary",
   mode: "summary",
   description:
     "A marketplace's income statement for a period, with a summary of sales, fees, rebates and the net payout released to the seller, followed by a table of orders or daily payouts.",
@@ -324,6 +326,7 @@ const WALLET_INSTRUCTIONS = `- Read only the table of transactions, one item per
  */
 const WALLET_WITHDRAWALS: ImportProfileDraft = {
   name: "Marketplace wallet report — withdrawals only",
+  kind: "table",
   mode: "every_transaction",
   description: `${WALLET_DESCRIPTION} ${ONLY_ONE}`,
   phrases: [],
@@ -341,6 +344,7 @@ const WALLET_WITHDRAWALS: ImportProfileDraft = {
  */
 const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
   name: "Marketplace wallet report — every transaction",
+  kind: "table",
   mode: "every_transaction",
   description: `${WALLET_DESCRIPTION} Its order income repeats the sales of the marketplace's income statement: import both and the sales are counted twice. ${ONLY_ONE}`,
   phrases: [],
@@ -395,25 +399,25 @@ export const IMPORT_PROFILE_STARTERS: readonly ImportProfileStarter[] = [
   {
     id: "fee_document",
     label: "Fee document",
-    hint: "A notice that lists fees, each one an expense.",
+    hint: "A notice with a list of fees. Each fee is an expense.",
     draft: FEE_DOCUMENT,
   },
   {
     id: "marketplace_summary",
     label: "Marketplace statement summary",
-    hint: "The summary of a marketplace statement: sales as income, and each fee or rebate by its sign.",
+    hint: "The summary of a marketplace statement. Sales are income. Fees and rebates use their sign.",
     draft: MARKETPLACE_SUMMARY,
   },
   {
     id: "wallet_withdrawals",
     label: "Marketplace wallet report — withdrawals only",
-    hint: "A wallet report spreadsheet, read from its columns: each withdrawal to the bank as a transfer. Recommended beside the statement summary. Turn on only one of the two wallet report profiles.",
+    hint: "A wallet report spreadsheet. Each withdrawal to the bank is a transfer. Use it with the statement summary. Turn on only one of the two wallet report profiles.",
     draft: WALLET_WITHDRAWALS,
   },
   {
     id: "wallet_every_transaction",
     label: "Marketplace wallet report — every transaction",
-    hint: "Every row of a wallet report spreadsheet. Its order income repeats the statement summary's sales: import only one of the two, or they are counted twice. Turn on only one of the two wallet report profiles.",
+    hint: "All rows of a wallet report spreadsheet. The statement summary also has the order income. Import only one of the two, or the app counts the sales two times. Turn on only one of the two wallet report profiles.",
     draft: WALLET_EVERY_TRANSACTION,
   },
 ];

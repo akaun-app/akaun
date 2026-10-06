@@ -39,6 +39,7 @@ import {
   parseTableDate,
   readFromColumns,
   readTable,
+  withoutTableRows,
 } from "./table-reader.js";
 
 /**
@@ -797,5 +798,45 @@ describe("the running-balance check", () => {
       headerRow: report.headerRow,
       rows: report.rows,
     });
+  });
+});
+
+describe("withoutTableRows (FR-057)", () => {
+  it("cuts the table's rows from the text, keeping every other line's number", () => {
+    const workbook = readXlsx(walletReportFixture().xlsx);
+    const profile = {
+      name: "Wallet report",
+      mode: EVERY,
+      layout: walletLayout(),
+      sections: orderSections(),
+    };
+    const table = readTable(workbook, profile);
+    const { pages } = renderWorkbook(workbook);
+    const numbered = numberDocumentLines(pages);
+    const cut = withoutTableRows(numbered, table.dataLines);
+
+    expect(table.dataLines).toHaveLength(table.found.rows);
+    expect(cut).not.toContain("Income from Order #A1");
+    expect(cut).toContain("Transaction Type");
+    const kept = numbered
+      .split("\n")
+      .filter(
+        (line) =>
+          !table.dataLines.some((n) =>
+            line.startsWith(`L${String(n).padStart(4, "0")}│`),
+          ),
+      );
+    // Every line outside the table is there, with its own number, and one
+    // mark stands where the rows were.
+    expect(cut.split("\n").filter((line) => !line.startsWith("["))).toEqual(
+      kept,
+    );
+    expect(cut.match(/^\[.*left out here\]$/gm)).toEqual([
+      `[${table.dataLines.length} rows of the table, read by code, left out here]`,
+    ]);
+  });
+
+  it("leaves the text as it is when the table has no rows", () => {
+    expect(withoutTableRows("L0001│a\nL0002│b", [])).toBe("L0001│a\nL0002│b");
   });
 });

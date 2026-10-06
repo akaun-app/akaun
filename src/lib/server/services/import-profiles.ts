@@ -26,7 +26,10 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import {
   checkProfile,
   formatProfileErrors,
+  isProfileKind,
+  legacyKind,
   legacyProfileMode,
+  type ProfileKind,
   type ImportProfileDraft,
   type ProfileError,
   type ProfileSection,
@@ -111,6 +114,8 @@ type ProfileOptions = {
   accountId?: number | null;
   layout?: TableLayout | null;
   mode?: ImportModeValue;
+  /** Absent on a profile saved before it was stored (`legacyKind`). */
+  kind?: ProfileKind;
 };
 
 /** The account the profile names, from its options, or null. */
@@ -132,15 +137,22 @@ function toView(row: ProfileRow): ImportProfileView {
     [],
     Array.isArray,
   );
+  const mode = isImportMode(options.mode)
+    ? options.mode
+    : legacyProfileMode(sections);
+  const layout = isPlainObject(options.layout)
+    ? (options.layout as TableLayout)
+    : null;
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     phrases: parseColumn<string[]>(row.phrasesJson, [], Array.isArray),
     instructions: row.instructions,
-    mode: isImportMode(options.mode)
-      ? options.mode
-      : legacyProfileMode(sections),
+    kind: isProfileKind(options.kind)
+      ? options.kind
+      : legacyKind({ layout, sections, mode }),
+    mode,
     statedTotalLabels: parseColumn<ImportProfileDraft["statedTotalLabels"]>(
       row.statedTotalLabelsJson,
       {},
@@ -148,7 +160,7 @@ function toView(row: ProfileRow): ImportProfileView {
     ),
     accountId: optionAccountId(options),
     // Checked when it was saved, like the sections.
-    ...(isPlainObject(options.layout) ? { layout: options.layout } : {}),
+    ...(layout ? { layout } : {}),
     sections,
     enabled: row.enabled,
     createdAt: row.createdAt,
@@ -163,6 +175,7 @@ function audited(profile: ImportProfileDraft) {
     description: profile.description,
     phrases: profile.phrases,
     instructions: profile.instructions,
+    kind: profile.kind ?? null,
     mode: profile.mode,
     statedTotalLabels: profile.statedTotalLabels,
     accountId: profile.accountId ?? null,
@@ -183,6 +196,7 @@ function columns(profile: ImportProfileDraft) {
       ...(profile.accountId == null ? {} : { accountId: profile.accountId }),
       ...(profile.layout ? { layout: profile.layout } : {}),
       mode: profile.mode,
+      ...(profile.kind ? { kind: profile.kind } : {}),
     }),
   };
 }

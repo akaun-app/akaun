@@ -12,9 +12,9 @@
 export const ImportReadAs = {
   /** Let the system decide; with no enabled profile this is the receipt. */
   Auto: "auto",
-  /** "Receipt or invoice (one record)": the standard reading. */
+  /** "Single record": the standard reading of a receipt or invoice. */
   Receipt: "receipt",
-  /** "Document with several items (one record each)". */
+  /** "Multiple records": one record per item on the document. */
   SeveralItems: "items",
   /** A saved profile, named by the row's profile id. */
   Profile: "profile",
@@ -81,10 +81,16 @@ export const IGNORED_LINE_MAX_CHARS = 120;
 
 /**
  * How a document's items were read (FR-041): by the AI in one call, by the AI
- * in pieces (FR-043), or from a spreadsheet's columns by code (FR-055).
+ * in pieces (FR-043), from a spreadsheet's columns by code (FR-055), or its
+ * table by code and the rest of the sheet by the AI (FR-057).
  */
-export type ReadMethod = "ai" | "ai_pieces" | "columns";
-const READ_METHODS: readonly ReadMethod[] = ["ai", "ai_pieces", "columns"];
+export type ReadMethod = "ai" | "ai_pieces" | "columns" | "columns_ai";
+const READ_METHODS: readonly ReadMethod[] = [
+  "ai",
+  "ai_pieces",
+  "columns",
+  "columns_ai",
+];
 
 /**
  * What reading a document found besides its items. All money is whole cents in

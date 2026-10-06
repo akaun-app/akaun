@@ -379,16 +379,98 @@ export function legacyProfileMode(
 }
 
 /**
- * Whether a profile reads documents from their columns, with no AI (FR-055,
- * FR-057): it has a table layout, and every section it reads has row rules.
- * Only a spreadsheet can be read this way.
+ * What a profile imports, and so how it reads a document (FR-002, FR-032,
+ * FR-055, FR-057). The one choice the editor asks for; the import mode, the
+ * table layout and which sections read the table all follow from it.
+ *
+ * - "table": every row of a spreadsheet's table, read by code. No AI.
+ * - "summary": the summary lines of a document, read by the AI in one call.
+ * - "transactions": every transaction line of a document, read by the AI in
+ *   pieces (FR-043).
+ * - "mixed": a spreadsheet's table rows by code, and the summary lines
+ *   beside the table by the AI.
+ */
+export type ProfileKind = "table" | "summary" | "transactions" | "mixed";
+export const PROFILE_KINDS: readonly ProfileKind[] = [
+  "table",
+  "summary",
+  "transactions",
+  "mixed",
+];
+
+export function isProfileKind(value: unknown): value is ProfileKind {
+  return (PROFILE_KINDS as readonly unknown[]).includes(value);
+}
+
+/** The import mode a kind reads in. */
+export function modeOf(kind: ProfileKind): ImportModeValue {
+  return kind === "table" || kind === "transactions"
+    ? ImportMode.EveryTransaction
+    : ImportMode.Summary;
+}
+
+/** Whether a kind reads a spreadsheet's table by code, and so only a spreadsheet. */
+export function kindReadsTable(kind: ProfileKind): boolean {
+  return kind === "table" || kind === "mixed";
+}
+
+/** Whether the AI reads any part of a document of this kind. */
+export function kindUsesAi(kind: ProfileKind): boolean {
+  return kind !== "table";
+}
+
+/**
+ * The kind of a profile saved before the kind was stored, worked out from
+ * its shape: no table layout is read by the AI, in its mode; a layout with
+ * row rules on every section it reads is a table; any other layout is mixed.
+ */
+export function legacyKind(
+  profile: Pick<ImportProfileDraft, "layout" | "sections" | "mode">,
+): ProfileKind {
+  if (!profile.layout) {
+    return profile.mode === ImportMode.EveryTransaction
+      ? "transactions"
+      : "summary";
+  }
+  const sections = profileSections(profile);
+  return sections.length > 0 && sections.every((section) => section.rows)
+    ? "table"
+    : "mixed";
+}
+
+/** A profile's kind: the one it was saved with, else its shape's. */
+export function profileKind(
+  profile: Pick<ImportProfileDraft, "kind" | "layout" | "sections" | "mode">,
+): ProfileKind {
+  return profile.kind ?? legacyKind(profile);
+}
+
+/**
+ * Whether a profile reads documents from their columns, with no AI (FR-055):
+ * a "table" profile. Only a spreadsheet can be read this way.
  */
 export function readsFromColumns(
-  profile: Pick<ImportProfileDraft, "layout" | "sections" | "mode">,
+  profile: Pick<ImportProfileDraft, "kind" | "layout" | "sections" | "mode">,
 ): boolean {
-  if (!profile.layout) return false;
-  const sections = profileSections(profile);
-  return sections.length > 0 && sections.every((section) => section.rows);
+  return profileKind(profile) === "table";
+}
+
+/**
+ * Whether a profile reads a spreadsheet's table by code (FR-055, FR-057).
+ * Such a profile reads only a spreadsheet; a PDF or a photo has no cells,
+ * and is refused rather than read without those sections.
+ */
+export function readsTable(
+  profile: Pick<ImportProfileDraft, "kind" | "layout" | "sections" | "mode">,
+): boolean {
+  return kindReadsTable(profileKind(profile));
+}
+
+/** Whether the AI reads any part of a document read with this profile. */
+export function readsWithAi(
+  profile: Pick<ImportProfileDraft, "kind" | "layout" | "sections" | "mode">,
+): boolean {
+  return kindUsesAi(profileKind(profile));
 }
 
 /** One part of the document to read (FR-031). */
@@ -452,8 +534,13 @@ export interface ImportProfileDraft {
    */
   instructions: string;
   /**
+   * What the profile imports, which sets how it reads (`ProfileKind`). Absent
+   * on a profile saved before it was stored: `profileKind` then works it out.
+   */
+  kind?: ProfileKind;
+  /**
    * What the profile imports (FR-002, FR-032): the summary lines of a
-   * statement, or every row of its transaction table. Every document read
+   * statement, or every row of its transaction table. Follows the kind. Every document read
    * with the profile is read this way, and there is no other choice at
    * upload. To read one kind of document both ways, make two profiles.
    */
@@ -1550,12 +1637,18 @@ function section(
     max: SECTION_NAME_MAX,
     required: true,
   });
+  // The AI finds a section's lines by its description. A section read from
+  // the table's rows by code needs none: its row rules say which rows it
+  // takes, and it is never sent to the AI (FR-057).
   const description = text(
     value.description,
     `${path}.description`,
     "The section description",
     errors,
-    { max: SECTION_DESCRIPTION_MAX, required: true },
+    {
+      max: SECTION_DESCRIPTION_MAX,
+      required: value.rows === undefined || value.rows === null,
+    },
   );
 
   // A section no longer has a mode of its own: the profile's decides. One
@@ -1697,12 +1790,14 @@ function readProfile(input: unknown): {
     max: NAME_MAX,
     required: true,
   });
+  // Required only of a profile the AI picks by it; one that reads a table is
+  // found by the table's headings (FR-039). Checked once the kind is known.
   const description = text(
     input.description,
     "description",
     "The recognition description",
     errors,
-    { max: RECOGNITION_MAX, required: true },
+    { max: RECOGNITION_MAX, required: false },
   );
   const instructions = text(
     input.instructions,
@@ -1742,11 +1837,27 @@ function readProfile(input: unknown): {
     });
   }
 
+  // What the profile imports (`ProfileKind`). Sent, it sets the mode. A
+  // profile sent without one, as an older editor sends it, keeps the mode it
+  // sends, and its kind is worked out from its shape below.
+  let sentKind: ProfileKind | null = null;
+  if (isProfileKind(input.kind)) {
+    sentKind = input.kind;
+  } else if (input.kind !== undefined && input.kind !== null) {
+    errors.push({
+      path: "kind",
+      message:
+        "Choose what the profile imports: Table rows, Summary lines, Transaction lines, or Table rows and summary lines.",
+    });
+  }
+
   // What the profile imports (FR-002, FR-032). A profile sent without one,
   // as an editor opened before the mode was on the profile sends it, gets the
   // mode its sections were saved in.
   let mode: ImportModeValue;
-  if (input.mode === undefined || input.mode === null) {
+  if (sentKind) {
+    mode = modeOf(sentKind);
+  } else if (input.mode === undefined || input.mode === null) {
     mode = legacyProfileMode(
       Array.isArray(input.sections)
         ? input.sections.map((raw) => ({
@@ -1803,7 +1914,11 @@ function readProfile(input: unknown): {
 
   // The table layout, read before the sections: their row rules name its
   // columns (FR-053, FR-054).
-  const layout = tableLayout(input.layout, "layout", mode, errors);
+  // A kind the AI reads has no table: what an editor kept of one is not read.
+  const readsCells = sentKind === null || kindReadsTable(sentKind);
+  const layout = readsCells
+    ? tableLayout(input.layout, "layout", mode, errors)
+    : null;
   const headings = layout ? new Set(layout.headers.map(foldTableText)) : null;
 
   // The sections, and the listed values they add up to.
@@ -1826,7 +1941,10 @@ function readProfile(input: unknown): {
     const seenKeys = new Set<string>();
     rawSections.forEach((raw, index) => {
       const path = `sections[${index}]`;
-      const read = section(raw, path, seenKeys, headings, mode, errors);
+      // Likewise its sections' row rules.
+      const sent =
+        !readsCells && isRecord(raw) ? { ...raw, rows: undefined } : raw;
+      const read = section(sent, path, seenKeys, headings, mode, errors);
       sections.push(read.section);
       enumCount += read.enumCount;
       if (enumCount > PROFILE_ENUM_VALUES_MAX && !enumReported) {
@@ -1859,6 +1977,15 @@ function readProfile(input: unknown): {
     }
   });
 
+  const kind = sentKind ?? legacyKind({ layout, sections, mode });
+  if (sentKind) checkKind(sentKind, layout, sections, mode, errors);
+  if (!kindReadsTable(kind) && !description) {
+    errors.push({
+      path: "description",
+      message: "Fill in the recognition description.",
+    });
+  }
+
   return {
     errors,
     profile: {
@@ -1866,6 +1993,7 @@ function readProfile(input: unknown): {
       description,
       phrases,
       instructions,
+      kind,
       mode,
       statedTotalLabels,
       // A profile that names no account carries no key for it, as one saved
@@ -1876,6 +2004,54 @@ function readProfile(input: unknown): {
       sections,
     },
   };
+}
+
+/**
+ * What a kind needs of the layout and the sections (FR-055, FR-057): a table
+ * kind needs a table, a "table" profile reads every section from it, and a
+ * mixed one has sections of both ways.
+ */
+function checkKind(
+  kind: ProfileKind,
+  layout: TableLayout | null,
+  sections: readonly ProfileSection[],
+  mode: ImportModeValue,
+  errors: ProfileError[],
+): void {
+  if (!kindReadsTable(kind)) return;
+  if (!layout && !errors.some((error) => error.path.startsWith("layout"))) {
+    errors.push({
+      path: "layout",
+      message:
+        "Set the table: load a sample, or type the headings and choose the columns.",
+    });
+  }
+  const read = profileSections({ mode, sections });
+  if (kind === "table") {
+    sections.forEach((section, index) => {
+      if (read.includes(section) && !section.rows) {
+        errors.push({
+          path: `sections[${index}].rows`,
+          message: "Set the rows that this section gets from the table.",
+        });
+      }
+    });
+    return;
+  }
+  if (!read.some((section) => section.rows)) {
+    errors.push({
+      path: "sections",
+      message:
+        "Add a section that gets rows from the table, or choose Summary lines.",
+    });
+  }
+  if (!read.some((section) => !section.rows)) {
+    errors.push({
+      path: "sections",
+      message:
+        "Add a section for the lines outside the table, or choose Table rows.",
+    });
+  }
 }
 
 /**

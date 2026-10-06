@@ -25,6 +25,7 @@
 	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
 	import AccountDefaults from '$lib/components/settings/AccountDefaults.svelte';
+	import { parseProfileFile, stashImportedFile } from '$lib/import-profile-portable.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -694,12 +695,52 @@
 	// switch and saved with this tab's Save; the server checks import.change
 	// for it, since this page checks no permission of its own.
 	type ProfileRow = (typeof data.importProfiles.profiles)[0];
+	/** What each kind of import profile imports, as the list says it. */
+	const KIND_LABEL: Record<ProfileRow['kind'], string> = {
+		table: 'Table rows',
+		summary: 'Summary lines',
+		transactions: 'Transaction lines',
+		mixed: 'Table rows and summary lines'
+	};
 	// svelte-ignore state_referenced_locally
 	let importProfiles = $state<ProfileRow[]>([...data.importProfiles.profiles]);
 	const canChangeProfiles = $derived(data.importProfiles.canChange);
 
 	function profileHref(id: number) {
 		return resolve('/(app)/settings/import-profiles/[id]', { id: String(id) });
+	}
+
+	// A profile file exported from another installation opens in the editor,
+	// filled in and not yet saved: a new profile, or the saved one with the
+	// same name, which Save then replaces. The file is read here and only its
+	// text is passed on; the File itself is never kept.
+	let profileFileInput = $state<HTMLInputElement | null>(null);
+
+	async function importProfileFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const chosen = input.files?.[0];
+		input.value = '';
+		if (!chosen) return;
+		if (isDirty) {
+			toast.error('Save or discard the changes in Settings, then import the profile.');
+			return;
+		}
+		let text: string;
+		try {
+			text = await chosen.text();
+		} catch {
+			toast.error('The app cannot read this file. Choose it again.');
+			return;
+		}
+		const parsed = parseProfileFile(text);
+		if (!parsed.ok) {
+			toast.error('Cannot import the profile', { description: parsed.error });
+			return;
+		}
+		const name = typeof parsed.file.profile.name === 'string' ? parsed.file.profile.name.trim().toLowerCase() : '';
+		const same = name ? importProfiles.find((p) => p.name.trim().toLowerCase() === name) : undefined;
+		stashImportedFile(parsed.file, chosen.name);
+		void goto(same ? profileHref(same.id) : resolve('/(app)/settings/import-profiles/new'));
 	}
 
 	// --- Provider Sheet state ---
@@ -1634,13 +1675,31 @@
 							<div class="prov-header">
 								<span class="set-row-label" style="margin:0;">Saved profiles</span>
 								{#if canChangeProfiles}
-									<a
-										class="sheet-btn sheet-btn-primary"
-										style="padding:6px 12px; font-size:13px; text-decoration:none;"
-										href={resolve('/(app)/settings/import-profiles/new')}
-									>
-										<Plus size={14} /> New profile
-									</a>
+									<div class="prof-header-actions">
+										<input
+											bind:this={profileFileInput}
+											type="file"
+											accept="application/json,.json"
+											style="display:none"
+											onchange={importProfileFile}
+										/>
+										<button
+											type="button"
+											class="sheet-btn"
+											style="padding:6px 12px; font-size:13px;"
+											title="Open a profile file exported from another installation"
+											onclick={() => profileFileInput?.click()}
+										>
+											<Upload size={14} /> Import
+										</button>
+										<a
+											class="sheet-btn sheet-btn-primary"
+											style="padding:6px 12px; font-size:13px; text-decoration:none;"
+											href={resolve('/(app)/settings/import-profiles/new')}
+										>
+											<Plus size={14} /> New profile
+										</a>
+									</div>
 								{/if}
 							</div>
 							{#if importProfiles.length === 0}
@@ -1648,7 +1707,7 @@
 									<FileText size={20} style="opacity:0.3;" />
 									<span>
 										No import profiles yet.{canChangeProfiles
-											? ' Start one from a fee document or a marketplace statement, or from blank.'
+											? ' Select New profile to start from an example, or from blank.'
 											: ''}
 									</span>
 								</div>
@@ -1660,7 +1719,7 @@
 												<span class="prov-info">
 													<span class="prov-name">{profile.name}</span>
 													<span class="prov-model">
-														{profile.sectionCount} section{profile.sectionCount === 1 ? '' : 's'}
+														{KIND_LABEL[profile.kind]}, {profile.sectionCount} section{profile.sectionCount === 1 ? '' : 's'}
 													</span>
 												</span>
 												<ChevronRight size={14} color="var(--muted-foreground)" />
@@ -2317,6 +2376,10 @@
 		align-items: center;
 		justify-content: space-between;
 		margin-bottom: 12px;
+	}
+	.prof-header-actions {
+		display: flex;
+		gap: 8px;
 	}
 
 	.prov-empty {

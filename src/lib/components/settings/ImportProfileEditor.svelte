@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { toast } from 'svelte-sonner';
-	import { Plus, Trash2, X } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Check, ChevronRight, Download, Plus, Trash2, X } from '@lucide/svelte';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
+	import Disclosure from '$lib/components/ui/Disclosure.svelte';
+	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
@@ -12,6 +14,8 @@
 	import { Textarea } from '$lib/components/ui/textarea/index.js';
 	import ProfileCategorySelect from './ProfileCategorySelect.svelte';
 	import ProfileColumnSelect from './ProfileColumnSelect.svelte';
+	import ProfileRowSorting from './ProfileRowSorting.svelte';
+	import ProfileSampleTable from './ProfileSampleTable.svelte';
 	import {
 		PROFILE_FEE_TYPES_MAX,
 		PROFILE_PHRASES_MAX,
@@ -20,7 +24,10 @@
 		ROW_CONDITIONS_MAX,
 		TABLE_DATE_FORMATS,
 		checkProfile,
+		kindReadsTable,
+		kindUsesAi,
 		type ProfileError,
+		type ProfileKind,
 		type ProfileSectionKind,
 		type RowConditionOp
 	} from '$lib/import-profile-schema.js';
@@ -33,19 +40,32 @@
 		formFingerprint,
 		formFromDraft,
 		layoutHeadings,
+		linesOf,
 		newCondition,
 		newFeeType,
-		newLayout,
-		newRows,
-		newSection,
+		newSectionFor,
 		payloadFromForm,
+		problemPlace,
+		readsFromTable,
 		sectionKeys,
+		setKind as setProfileKind,
 		typingKey,
 		type ConditionForm,
+		type FeeTypeForm,
+		type LayoutForm,
+		type ProblemPlace,
 		type ProfileForm,
 		type RowsForm,
 		type SectionForm
 	} from '$lib/import-profile-form.js';
+	import { layoutFromSample, sortingOf, type SampleInspection } from '$lib/import-profile-sample.js';
+	import {
+		downloadJson,
+		draftFromFile,
+		profileFile,
+		profileFileName,
+		takeImportedFile
+	} from '$lib/import-profile-portable.js';
 	import type { ImportProfileView } from '$lib/server/services/import-profiles.js';
 
 	/**
@@ -68,10 +88,17 @@
 	 *
 	 * A section can be a Transfer between the profile's account and another
 	 * account that holds money (FR-058), and can name other profiles whose
-	 * records describe the same money (FR-066). A profile can carry a table
-	 * layout and each section row rules, for reading a spreadsheet from its
-	 * columns with no AI (FR-053 to FR-055); Preview reads a sample with the
-	 * profile as it is on the page, saved or not, and stores nothing.
+	 * records describe the same money (FR-066).
+	 *
+	 * The page follows how a profile is built: what it is, how it reads, the
+	 * spreadsheet's table, the sections, then how Auto-detect recognises it and
+	 * what the AI is told. How it reads is one of three (FR-055, FR-057): by the
+	 * AI; its table by code; or its table by code and the rest by the AI. A
+	 * table is built from a sample spreadsheet: the sample's columns are shown
+	 * with what each holds chosen above it, and the rows are sorted into
+	 * sections by one column's values (`ProfileSampleTable`,
+	 * `ProfileRowSorting`). The same sample is what "Try it" reads with the
+	 * profile as it is on the page. Nothing about the sample is stored.
 	 *
 	 * Whether the profile is on or off is set from the list in Settings ›
 	 * Intelligence, beside the AI providers, and not here.
@@ -176,41 +203,29 @@
 
 	const keys = $derived(sectionKeys(form.sections));
 
-	// ── Starting a new profile from a starter ─────────────────────────────────
-	let replaceAsk = $state<Start | null>(null);
-	let replaceOpen = $state(false);
-
-	function chooseStart(from: Start) {
-		if (from === startedFrom) return;
-		// Something typed since the last start would be lost: ask first.
-		if (fingerprint !== formFingerprint(startingForm(startedFrom))) {
-			replaceAsk = from;
-			replaceOpen = true;
-			return;
-		}
-		applyStart(from);
-	}
-
-	function applyStart(from: Start) {
-		startedFrom = from;
-		form = startingForm(from);
-		baseline = baselineFor(null, from);
-		attempted = false;
-		saveError = null;
-		serverProblems = null;
-	}
-
 	// ── Editing ────────────────────────────────────────────────────────────────
-	const MODES: { value: ImportModeValue; label: string; hint: string }[] = [
+	// What the profile imports (FR-055, FR-057): the one choice that sets the
+	// mode, the table and how each section is read.
+	const KIND_CHOICES: { value: ProfileKind; label: string; hint: string }[] = [
 		{
-			value: ImportMode.Summary,
-			label: 'Summary lines',
-			hint: 'One item for each line of the summary, such as total sales or each kind of fee.'
+			value: 'table',
+			label: 'Table rows',
+			hint: 'Each row of a spreadsheet table becomes a record. The app reads it. No AI.'
 		},
 		{
-			value: ImportMode.EveryTransaction,
-			label: 'Every transaction',
-			hint: 'One item for each row of the transaction table.'
+			value: 'summary',
+			label: 'Summary lines',
+			hint: 'Totals and fees from the summary of a statement. The AI reads it.'
+		},
+		{
+			value: 'transactions',
+			label: 'Transaction lines',
+			hint: 'Each transaction line of a PDF file or photo. The AI reads it.'
+		},
+		{
+			value: 'mixed',
+			label: 'Table rows and summary lines',
+			hint: 'The table rows, and lines outside the table, for example a fee. Spreadsheets only.'
 		}
 	];
 
@@ -270,21 +285,26 @@
 		{ value: 'not_empty', label: 'is not empty' }
 	];
 
-	function addLayout() {
-		form.layout = newLayout();
-	}
+	// What only the AI uses is shown only when it reads some part.
+	const usesAi = $derived(kindUsesAi(form.kind));
+	const sorting = $derived(kindReadsTable(form.kind) ? sortingOf(form) : null);
 
-	function removeLayout() {
-		form.layout = null;
-		for (const section of form.sections) section.rows = null;
-	}
+	// "Rows become": one section for every row, until the user splits the rows
+	// by a column's values. A profile already split shows the split.
+	let splitting = $state(false);
+	const tableSections = $derived(form.sections.filter((section) => readsFromTable(form, section)));
+	const oneSection = $derived(
+		!splitting && tableSections.length === 1 && sorting !== null && sorting.assignments.size === 0
+	);
 
-	function toggleRemark(heading: string) {
-		if (!form.layout) return;
-		const columns = form.layout.remarkColumns;
-		form.layout.remarkColumns = columns.includes(heading)
-			? columns.filter((column) => column !== heading)
-			: [...columns, heading];
+	// The table set aside while the profile is switched to the AI, so that
+	// switching back finds it as it was. It is not saved: an AI profile has none.
+	let setAside: LayoutForm | null = null;
+
+	function chooseKind(kind: ProfileKind) {
+		if (!kindReadsTable(kind)) setAside = form.layout ?? setAside;
+		else if (!form.layout && setAside) form.layout = setAside;
+		setProfileKind(form, kind);
 	}
 
 	function addCondition(rows: RowsForm, which: 'where' | 'flagWhen') {
@@ -302,11 +322,59 @@
 		return 'value';
 	}
 
-	// ── Preview (FR-053 to FR-055) ─────────────────────────────────────────────
+	// ── The sample, and trying the profile on it (FR-053 to FR-055) ──────────
 	// The sample is kept out of reactive state, as a File must be; only its
-	// name is shown.
+	// name and what the server found in it are. One sample serves both.
 	let sampleFile: File | null = null;
 	let sampleName = $state('');
+	let sample = $state<SampleInspection | null>(null);
+	let sampleLoading = $state(false);
+	// "More options" under the table, open while the user keeps it open.
+	let moreOpen = $state(false);
+	let sampleError = $state<string | null>(null);
+
+	/**
+	 * Sends the sample to be looked at. A new file's table is taken as the
+	 * layout when the layout has no headings yet, and offered otherwise
+	 * (`ProfileSampleTable`); a table the user located is always taken.
+	 */
+	async function loadSample(file: File, where: { sheet: string; headerRow: number } | null = null) {
+		if (sampleLoading) return;
+		sampleLoading = true;
+		sampleError = null;
+		const body = new FormData();
+		body.set('file', file);
+		if (where) {
+			body.set('sheet', where.sheet);
+			body.set('headerRow', String(where.headerRow));
+		}
+		try {
+			const res = await fetch('/api/import/profiles/sample', { method: 'POST', body, credentials: 'include' });
+			const reply = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				sampleError =
+					res.status === 403
+						? 'You do not have permission to change import profiles.'
+						: (reply.error ?? 'The app cannot read the sample. Try again.');
+				return;
+			}
+			sampleFile = file;
+			sampleName = file.name;
+			sample = reply as SampleInspection;
+			preview = null;
+			previewError = null;
+			if (where || !form.layout || linesOf(form.layout.headersText).length === 0) adoptSample();
+		} catch {
+			sampleError = 'The server did not get the request. Make sure that you are connected, then try again.';
+		} finally {
+			sampleLoading = false;
+		}
+	}
+
+	function adoptSample() {
+		if (!sample) return;
+		form.layout = layoutFromSample(sample, form.layout);
+	}
 	// The form as it was previewed, to say when the preview no longer shows it.
 	let previewedFingerprint = $state('');
 	let previewing = $state(false);
@@ -328,6 +396,7 @@
 		headerRow: number;
 		rows: number;
 		sections: { key: string; name: string; kind: string; count: number }[];
+		aiSections: string[];
 		items: PreviewItem[];
 		itemCount: number;
 		ignoredCount: number;
@@ -337,14 +406,6 @@
 		balance: { matches: boolean; message: string } | null;
 	};
 	let preview = $state<Preview | null>(null);
-
-	function chooseSample(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		sampleFile = input.files?.[0] ?? null;
-		sampleName = sampleFile?.name ?? '';
-		preview = null;
-		previewError = null;
-	}
 
 	async function runPreview() {
 		if (!sampleFile || previewing) return;
@@ -363,7 +424,7 @@
 					message:
 						res.status === 403
 							? 'You do not have permission to change import profiles.'
-							: (reply.error ?? 'The sample could not be read. Try again.'),
+							: (reply.error ?? 'The app cannot read the sample. Try again.'),
 					errors: Array.isArray(reply.errors) ? reply.errors : []
 				};
 				return;
@@ -371,7 +432,7 @@
 			preview = reply as Preview;
 			previewedFingerprint = sent;
 		} catch {
-			previewError = { message: 'That did not reach the server. Check the connection and try again.', errors: [] };
+			previewError = { message: 'The server did not get the request. Make sure that you are connected, then try again.', errors: [] };
 		} finally {
 			previewing = false;
 		}
@@ -408,10 +469,6 @@
 		}
 	}
 
-	// Which sections show "Advanced: extra fields". Open to begin with when the
-	// section has some; after that, as the user leaves it.
-	let advancedOpen = $state<Record<string, boolean>>({});
-
 	let phraseDraft = $state('');
 
 	function addPhrase() {
@@ -428,7 +485,87 @@
 	}
 
 	function addSection() {
-		form.sections = [...form.sections, newSection()];
+		form.sections = [...form.sections, newSectionFor(form)];
+	}
+
+	// Which sections are folded to their summary line. A saved profile with
+	// many sections opens folded; a section with a problem opens after a save
+	// is tried, whatever was chosen.
+	// svelte-ignore state_referenced_locally
+	let folded = $state<Record<string, boolean>>(
+		profile && profile.sections.length >= 3 ? Object.fromEntries(form.sections.map((s) => [s.uid, true])) : {}
+	);
+	function sectionOpen(section: SectionForm, index: number): boolean {
+		if (attempted && errorsUnder(problems, `sections[${index}]`).length > 0) return true;
+		return !folded[section.uid];
+	}
+
+	// ── Before you save ────────────────────────────────────────────────────────
+	// Every problem, named by where it is on the page rather than by its path,
+	// and a way to go to it. Shown as a to-do list from the start, so a new
+	// profile says what it still needs; red once Save has been tried.
+	const placedProblems = $derived(
+		problems.map((problem) => ({ message: problem.message, place: problemPlace(problem.path, form) }))
+	);
+
+	// The expanders a jump to a problem opened: a section's "More" by its uid,
+	// and the table's "More options". Kept open until the page is left, like
+	// one the user opened.
+	let revealed = $state<Record<string, boolean>>({});
+
+	/** Whether a section's "More" must stay open: a problem inside it after Save, or a jump to one. */
+	function sectionMoreForced(section: SectionForm, index: number): boolean {
+		if (revealed[section.uid]) return true;
+		if (!attempted) return false;
+		const at = `sections[${index}]`;
+		return ['rows.where', 'rows.flagWhen', 'rows.flagNote', 'sameMoneyAs', 'extras'].some(
+			(part) => errorsUnder(problems, `${at}.${part}`).length > 0
+		);
+	}
+
+	const FOCUSABLE = 'input:not([type="hidden"]), textarea, select, button, [tabindex]:not([tabindex="-1"])';
+
+	/** Opens whatever folds the problem's field, then scrolls to it and puts the cursor in it. */
+	async function goToProblem(place: ProblemPlace) {
+		if (place.sectionUid) folded[place.sectionUid] = false;
+		if (place.inMore === 'section' && place.sectionUid) revealed[place.sectionUid] = true;
+		if (place.inMore === 'table') revealed.table = true;
+		await tick();
+		const target = place.targets.map((id) => document.getElementById(id)).find((el) => el !== null);
+		if (!target) return;
+		const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		target.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+		const field = target.matches(FOCUSABLE) ? target : target.querySelector<HTMLElement>(FOCUSABLE);
+		field?.focus({ preventScroll: true });
+	}
+
+	/** The rows of the sample a table section takes, when the sample says. */
+	function sampleCount(section: SectionForm): number | null {
+		if (!sample || !sorting || !sorting.column) return null;
+		const values = sample.columns.find((c) => c.heading === sorting!.column)?.distinct;
+		if (!values) return null;
+		return values
+			.filter((v) => sorting!.assignments.get(v.value) === section.uid)
+			.reduce((sum, v) => sum + v.count, 0);
+	}
+
+	/** Every table section's rules, cleared, to sort by one column instead. */
+	function clearCustomRules() {
+		for (const section of form.sections) {
+			if (readsFromTable(form, section) && section.rows) section.rows.where = [];
+		}
+	}
+
+	/** A fee type column's values in the sample, to pick from. */
+	function feeColumnValues(section: SectionForm): string[] | null {
+		const column = section.rows?.feeTypeColumn;
+		if (!sample || !column) return null;
+		return sample.columns.find((c) => c.heading === column)?.distinct?.map((v) => v.value) ?? null;
+	}
+
+	function toggleFeeValue(fee: FeeTypeForm, value: string) {
+		const values = linesOf(fee.valuesText);
+		fee.valuesText = (values.includes(value) ? values.filter((v) => v !== value) : [...values, value]).join('\n');
 	}
 
 	function removeSection(uid: string) {
@@ -474,7 +611,7 @@
 		attempted = true;
 		saveError = null;
 		if (localProblems.length > 0) {
-			saveError = `${localProblems.length} ${localProblems.length === 1 ? 'thing needs' : 'things need'} fixing before this can be saved. Each one is shown beside its field.`;
+			saveError = `Correct ${localProblems.length} problem${localProblems.length === 1 ? '' : 's'} before you save. They are listed under Before you save.`;
 			return;
 		}
 		saving = true;
@@ -489,9 +626,9 @@
 			const reply = await res.json().catch(() => ({}));
 			if (!res.ok) {
 				if (res.status === 403) saveError = 'You do not have permission to change import profiles.';
-				else if (res.status === 404) saveError = 'This profile was deleted, so it cannot be saved. Go back to Settings to start a new one.';
+				else if (res.status === 404) saveError = 'This profile is deleted. You cannot save it. Go to Settings to make a new profile.';
 				else {
-					saveError = reply.error ?? 'The profile could not be saved. Try again.';
+					saveError = reply.error ?? 'The app cannot save the profile. Try again.';
 					if (Array.isArray(reply.errors)) serverProblems = { fingerprint: sentFingerprint, errors: reply.errors };
 				}
 				return;
@@ -513,16 +650,19 @@
 			baseline = formFingerprint(form);
 			attempted = false;
 			serverProblems = null;
+			imported = null;
 			void auditRef?.refresh();
 			toast.success('Import profile saved');
 		} catch {
-			saveError = 'That did not reach the server. Check the connection and try again.';
+			saveError = 'The server did not get the request. Make sure that you are connected, then try again.';
 		} finally {
 			saving = false;
 		}
 	}
 
 	function revert() {
+		setAside = null;
+		imported = null;
 		form = saved ? formFromDraft(saved) : startingForm(startedFrom);
 		attempted = false;
 		saveError = null;
@@ -539,7 +679,7 @@
 			saveError =
 				res.status === 403
 					? 'You do not have permission to delete import profiles.'
-					: 'The profile could not be deleted. Try again.';
+					: 'The app cannot delete the profile. Try again.';
 			return;
 		}
 		// Gone: what was staged here has nowhere to be saved, so leave without
@@ -551,6 +691,76 @@
 		// address that now only redirects.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a fixed in-app path with the tab to open.
 		void goto(HOME, { replaceState: true });
+	}
+
+	// ── Moving a profile between installations ────────────────────────────────
+	// One profile per file, with its accounts and categories named by code and
+	// name rather than by id (`import-profile-portable.ts`).
+	const portableChoices = $derived({ moneyAccounts, expenseCategories, incomeCategories, otherProfiles });
+
+	/** Saves the profile as it was last saved, not the edits on the page. */
+	function exportProfile() {
+		if (!saved) return;
+		// The file copies only a draft's own fields, so the id and dates stay behind.
+		const { file, lost } = profileFile(saved, portableChoices);
+		downloadJson(profileFileName(saved.name), file);
+		if (lost.length > 0) {
+			toast.warning('Exported without some references', {
+				description: `These are no longer available here, so the file leaves them empty: ${lost.join('; ')}.`
+			});
+		}
+	}
+
+	/** The file the Settings list opened this page with: what it was, and what it named that is not here. */
+	let imported = $state<{ fileName: string; unmatched: string[] } | null>(null);
+
+	// A file chosen on the Settings list fills the form, and saves nothing. The
+	// page is then unsaved like any other edit: Save adds the profile, or, on a
+	// saved profile with the file's name, replaces it.
+	onMount(() => {
+		const waiting = takeImportedFile();
+		if (!waiting || !canChange) return;
+		const read = draftFromFile(waiting.file, portableChoices, saved?.id ?? null);
+		if (!read.ok) {
+			toast.error('Cannot import the profile', { description: read.error });
+			return;
+		}
+		form = formFromDraft(read.draft);
+		attempted = false;
+		saveError = null;
+		serverProblems = null;
+		imported = { fileName: waiting.fileName, unmatched: read.unmatched };
+		if (saved && formFingerprint(form) === baseline && read.unmatched.length === 0) {
+			imported = null;
+			toast.info('The file is the same as the saved profile');
+		}
+	});
+
+	// ── Starting from an example ───────────────────────────────────────────────
+	// A new profile can begin from a built-in starter. One chosen after the
+	// form was changed replaces those changes, so it asks first. Discard goes
+	// back to the starter chosen.
+	let starterAsked = $state<ImportProfileStarterId | null>(null);
+	let starterOpen = $state(false);
+
+	function askStarter(id: ImportProfileStarterId) {
+		// Changed since it started, blank or from an example: not the save
+		// bar's question, which counts an untouched example as unsaved.
+		const edited = formFingerprint(form) !== formFingerprint(startingForm(startedFrom));
+		if (startedFrom === id && !edited) return;
+		if (!edited) return useStarter(id);
+		starterAsked = id;
+		starterOpen = true;
+	}
+
+	function useStarter(id: ImportProfileStarterId) {
+		setAside = null;
+		startedFrom = id;
+		form = startingForm(id);
+		attempted = false;
+		saveError = null;
+		serverProblems = null;
+		revealed = {};
 	}
 
 	const title = $derived(saved ? saved.name : 'New import profile');
@@ -569,6 +779,17 @@
 	onrevert={revert}
 >
 	{#snippet actions()}
+		{#if saved}
+			<button
+				type="button"
+				class="sheet-btn"
+				disabled={dirty}
+				title={dirty ? 'Save your changes to export them' : 'Save this profile as a file, to import it into another installation'}
+				onclick={exportProfile}
+			>
+				<Download size={14} /> Export
+			</button>
+		{/if}
 		{#if saved && canChange}
 			<button type="button" class="sheet-btn sheet-btn-delete" onclick={() => (deleteOpen = true)}>
 				<Trash2 size={14} /> Delete
@@ -589,146 +810,91 @@
 			<div class="pf-hero-status">
 				<StatusBadge status={saved.enabled ? 'profile-enabled' : 'profile-disabled'} />
 				<span class="detail-hero-note">
-					{saved.enabled ? 'Offered under “Read as” when uploading.' : 'Not offered under “Read as”.'} Turn it on or off in Settings › Intelligence.
+					{saved.enabled ? 'Shown in “Read as” on the upload page.' : 'Not shown in “Read as”.'} To turn it on or off, go to Settings › Intelligence.
 				</span>
 			</div>
 		{/if}
 		{#if !canChange}
-			<p class="detail-hero-note">You can read this profile. Changing it needs permission to change imports.</p>
+			<p class="detail-hero-note">You can only view this profile. To change it, you must have the permission to change imports.</p>
 		{/if}
 		{#if saveError}<p class="hero-error" role="alert">{saveError}</p>{/if}
 	{/snippet}
 
 	{#snippet main()}
-		{#if !saved && canChange}
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Start from</span></div>
-				<div class="pf-starts">
-					<button type="button" class="pf-start" class:on={startedFrom === 'blank'} aria-pressed={startedFrom === 'blank'} onclick={() => chooseStart('blank')}>
-						<span class="pf-start-name">Blank</span>
-						<span class="pf-start-hint">One empty section to fill in.</span>
+		{#if imported}
+			<section class="detail-card pf-imported" role="status">
+				<div class="detail-card-head">
+					<span class="detail-card-title">Imported from {imported.fileName}</span>
+					<button type="button" class="sheet-close" aria-label="Dismiss" onclick={() => (imported = null)}>
+						<X size={14} />
 					</button>
-					{#each IMPORT_PROFILE_STARTERS as option (option.id)}
-						<button type="button" class="pf-start" class:on={startedFrom === option.id} aria-pressed={startedFrom === option.id} onclick={() => chooseStart(option.id)}>
-							<span class="pf-start-name">{option.label}</span>
-							<span class="pf-start-hint">{option.hint}</span>
-						</button>
-					{/each}
 				</div>
-				<p class="field-hint">A starter fills in sections and instructions for you to change. It pins no categories: choose your own below.</p>
+				<p class="pf-imported-text">
+					{saved
+						? 'Nothing is saved yet. When you save, this replaces the saved profile. Its history keeps what changed.'
+						: 'Nothing is saved yet. Check the profile, then add it.'}
+				</p>
+				{#if imported.unmatched.length > 0}
+					<p class="pf-imported-text">These are not in this installation, so they are empty. Choose them below before you save.</p>
+					<ul class="pf-imported-missing">
+						{#each imported.unmatched as missing, missingIndex (missingIndex)}
+							<li>{missing}</li>
+						{/each}
+					</ul>
+				{/if}
 			</section>
 		{/if}
 
 		<section class="detail-card">
-			<div class="detail-card-head"><span class="detail-card-title">The profile</span></div>
+			<div class="detail-card-head"><span class="detail-card-title">Basics</span></div>
 
-			<div class="field">
-				<label class="field-label" for="pf-name">Name *</label>
-				<Input id="pf-name" bind:value={form.name} disabled={!canChange} class="w-full" placeholder="e.g. Marketplace monthly statement" />
-				{@render problemList(shown('name'))}
-			</div>
-
-			<div class="field">
-				<span class="field-label">What this profile imports *</span>
-				<div class="pf-modes" role="radiogroup" aria-label="What this profile imports">
-					{#each MODES as mode (mode.value)}
-						<label class="pf-mode" class:on={form.mode === mode.value}>
+			<div class="field" id="pf-kind">
+				<span class="field-label">What to import *</span>
+				<div class="pf-modes pf-kinds" role="radiogroup" aria-label="What to import">
+					{#each KIND_CHOICES as choice (choice.value)}
+						<label class="pf-mode pf-kind" class:on={form.kind === choice.value}>
 							<input
 								type="radio"
-								name="pf-mode"
-								value={mode.value}
-								checked={form.mode === mode.value}
+								name="pf-kind"
+								value={choice.value}
+								checked={form.kind === choice.value}
 								disabled={!canChange}
-								onchange={() => (form.mode = mode.value)}
+								onchange={() => chooseKind(choice.value)}
 							/>
+							<span class="pf-kind-glyph" aria-hidden="true">{@render kindGlyph(choice.value)}</span>
 							<span class="pf-mode-main">
-								<span class="pf-mode-label">{mode.label}</span>
-								<span class="pf-mode-hint">{mode.hint}</span>
+								<span class="pf-mode-label">{choice.label}</span>
+								<span class="pf-mode-hint">{choice.hint}</span>
 							</span>
 						</label>
 					{/each}
 				</div>
-				<p class="field-hint">
-					Every document read with this profile is read this way. To read one kind of document both ways, make two profiles.
-				</p>
-				{@render problemList(shown('mode'))}
-			</div>
-
-			<div class="field">
-				<label class="field-label" for="pf-description">How to recognise it *</label>
-				<Textarea id="pf-description" rows={3} bind:value={form.description} disabled={!canChange} class="leading-relaxed" />
-				<p class="field-hint">What this kind of document is, in plain words: who sends it and what it shows.</p>
-				{@render problemList(shown('description'))}
-			</div>
-
-			<div class="field" style="margin-bottom:0;">
-				<label class="field-label" for="pf-phrase">Recognition phrases</label>
-				{#if form.phrases.length > 0}
-					<div class="pf-phrases">
-						{#each form.phrases as phrase, index (phrase)}
-							<span class="pf-phrase">
-								<span class="pf-phrase-text">{phrase}</span>
-								{#if canChange}
-									<button type="button" class="pf-phrase-remove" aria-label="Remove {phrase}" onclick={() => removePhrase(index)}>
-										<X size={12} />
-									</button>
-								{/if}
-							</span>
+				{@render problemList([...shown('kind'), ...shown('mode')])}
+				{#if !saved && canChange}
+					<div class="pf-starters">
+						<span class="pf-starters-label">Or begin with an example:</span>
+						{#each IMPORT_PROFILE_STARTERS as starterChoice (starterChoice.id)}
+							<button
+								type="button"
+								class="sheet-btn pf-starter"
+								class:on={startedFrom === starterChoice.id}
+								title={starterChoice.hint}
+								onclick={() => askStarter(starterChoice.id)}
+							>
+								{starterChoice.label}
+							</button>
 						{/each}
 					</div>
 				{/if}
-				{#if canChange && form.phrases.length < PROFILE_PHRASES_MAX}
-					<div class="pf-inline">
-						<Input
-							id="pf-phrase"
-							bind:value={phraseDraft}
-							class="w-full"
-							placeholder="Text the document always prints"
-							onkeydown={(event: KeyboardEvent) => {
-								if (event.key === 'Enter') {
-									event.preventDefault();
-									addPhrase();
-								}
-							}}
-						/>
-						<button type="button" class="sheet-btn" disabled={!phraseDraft.trim()} onclick={addPhrase}>Add</button>
-					</div>
-				{/if}
-				<p class="field-hint">Optional. Exact text this kind of document always prints, such as its title.</p>
-				{@render problemList(attempted ? errorsUnder(problems, 'phrases') : [])}
 			</div>
-		</section>
-
-		<section class="detail-card">
-			<div class="detail-card-head"><span class="detail-card-title">How to read it</span></div>
 
 			<div class="field">
-				<label class="field-label" for="pf-instructions">Instructions</label>
-				<Textarea id="pf-instructions" rows={6} bind:value={form.instructions} disabled={!canChange} class="leading-relaxed" />
-				<p class="field-hint">
-					Used in place of the custom instructions in Settings › Intelligence, for documents read with this profile only. The
-					built-in rules and your category list are always sent as well.
-				</p>
-				{@render problemList(shown('instructions'))}
+				<label class="field-label" for="pf-name">Name *</label>
+				<Input id="pf-name" bind:value={form.name} disabled={!canChange} class="w-full" placeholder="Example: Marketplace monthly statement" />
+				{@render problemList(shown('name'))}
 			</div>
 
-			<div class="field" style="margin-bottom:0;">
-				<label class="field-label" for="pf-stated-total">Stated total</label>
-				<Input
-					id="pf-stated-total"
-					bind:value={form.statedTotal}
-					disabled={!canChange}
-					class="w-full"
-					placeholder={form.mode === ImportMode.EveryTransaction ? 'e.g. Total money in' : 'e.g. Total payout released'}
-				/>
-				<p class="field-hint">
-					The printed total the items should add up to. The group shows whether they match. Leave empty if the document
-					prints none.
-				</p>
-				{@render problemList(attempted ? errorsUnder(problems, 'statedTotalLabels') : [])}
-			</div>
-
-			<div class="field" style="margin:14px 0 0;">
+			<div class="field" id="pf-account" style="margin-bottom:0;">
 				<span class="field-label">Account</span>
 				<ProfileCategorySelect
 					groups={accountGroups}
@@ -740,239 +906,383 @@
 					onchange={(value) => (form.accountId = value)}
 				/>
 				<p class="field-hint">
-					Optional. The account this document lists, such as a marketplace wallet. Its income and expense items start on it
-					instead of Accounts receivable or Accounts payable, and every transfer moves money out of it or into it. A
-					Transfer section needs one.
+					Optional. The account of the document, for example a marketplace wallet. Items use this account, not Accounts receivable or Accounts payable. Transfers move money into or out of this account. A Transfer section must have an account.
 				</p>
 				{@render problemList(shown('accountId'))}
 			</div>
 		</section>
 
-		{@render layoutCard()}
+		{#if form.layout}
+			{@render spreadsheetCard(form.layout)}
+		{/if}
 
-		<div class="pf-sections-head">
-			<span class="detail-card-title">Sections</span>
-			{#if canChange && form.sections.length < PROFILE_SECTIONS_MAX}
-				<button type="button" class="sheet-btn" onclick={addSection}><Plus size={14} /> Add section</button>
-			{/if}
-		</div>
+		{#if kindReadsTable(form.kind) && form.layout}
+			<div class="pf-sections-head" id="pf-sections">
+				<h2 class="pf-group-title">Rows become</h2>
+			</div>
+			<div id="pf-sorting">
+				<ProfileRowSorting bind:form bind:splitting {sample} {headings} {canChange} oncustomclear={clearCustomRules} />
+			</div>
+			{#each form.sections as section, index (section.uid)}
+				{#if readsFromTable(form, section)}
+					{@render sectionCard(section, index, oneSection)}
+				{/if}
+			{/each}
+		{/if}
+
+		{#if kindUsesAi(form.kind)}
+			<div class="pf-sections-head" id={kindReadsTable(form.kind) && form.layout ? undefined : 'pf-sections'}>
+				<h2 class="pf-group-title">{form.kind === 'mixed' ? 'Lines outside the table' : 'Lines to import'}</h2>
+				{#if canChange && form.sections.length < PROFILE_SECTIONS_MAX}
+					<button type="button" class="sheet-btn" onclick={addSection}><Plus size={14} /> Add section</button>
+				{/if}
+			</div>
+			<p class="field-hint pf-sections-hint">
+				Each section is one type of line, for example fees or sales. The AI finds the lines by the description.
+			</p>
+			{#each form.sections as section, index (section.uid)}
+				{#if !readsFromTable(form, section)}
+					{@render sectionCard(section, index, false)}
+				{/if}
+			{/each}
+		{/if}
 		{@render problemList(shown('sections'))}
 
-		{#each form.sections as section, index (section.uid)}
-			{@const at = `sections[${index}]`}
-			<section class="detail-card pf-section">
+		{#if form.layout && canChange}
+			{@render previewCard()}
+		{/if}
+
+		<section class="detail-card">
+			<div class="detail-card-head"><span class="detail-card-title">Auto-detect</span></div>
+			<p class="field-hint" style="margin-top:0;">
+				{kindReadsTable(form.kind)
+					? 'Optional. Auto-detect finds this profile by the table headings. Add a description or phrases only if two profiles read the same table.'
+					: 'Auto-detect uses these fields to select this profile for an upload.'}
+			</p>
+			{@render detectFields()}
+		</section>
+
+		{#if usesAi}
+			<section class="detail-card">
+				<div class="detail-card-head"><span class="detail-card-title">AI instructions</span></div>
+				<div class="field">
+					<label class="field-label" for="pf-instructions">Instructions</label>
+					<Textarea id="pf-instructions" rows={5} bind:value={form.instructions} disabled={!canChange} class="leading-relaxed" />
+					<p class="field-hint">
+						Optional. These instructions replace the custom instructions in Settings › Intelligence for this profile. The app always sends its rules and your category list.
+					</p>
+					{@render problemList(shown('instructions'))}
+				</div>
+				<div class="field" style="margin-bottom:0;">
+					<label class="field-label" for="pf-stated-total">Stated total</label>
+					<Input
+						id="pf-stated-total"
+						bind:value={form.statedTotal}
+						disabled={!canChange}
+						class="w-full"
+						placeholder={form.mode === ImportMode.EveryTransaction ? 'Example: Total money in' : 'Example: Total payout released'}
+					/>
+					<p class="field-hint">
+						Optional. The label of the printed total. The import shows if the items agree with this total.{#if form.layout} The AI reads this total only if the table has no stated total labels.{/if}
+					</p>
+					{@render problemList(attempted ? errorsUnder(problems, 'statedTotalLabels') : [])}
+				</div>
+			</section>
+		{/if}
+
+	{/snippet}
+
+	{#snippet rail()}
+		{#if canChange && (!saved || dirty || problems.length > 0)}
+			<section class="detail-card pf-check" class:attempted aria-labelledby="pf-check-title">
 				<div class="detail-card-head">
-					<span class="detail-card-title">Section {index + 1}{section.name.trim() ? ` · ${section.name.trim()}` : ''}</span>
-					{#if canChange}
-						<span class="pf-section-tools">
-							<button type="button" class="pf-icon-btn" aria-label="Move section up" disabled={index === 0} onclick={() => moveSection(index, -1)}>↑</button>
-							<button
-								type="button"
-								class="pf-icon-btn"
-								aria-label="Move section down"
-								disabled={index === form.sections.length - 1}
-								onclick={() => moveSection(index, 1)}>↓</button
-							>
-							<button
-								type="button"
-								class="pf-icon-btn pf-icon-danger"
-								aria-label="Remove section"
-								title={form.sections.length === 1 ? 'A profile needs at least one section.' : 'Remove section'}
-								disabled={form.sections.length === 1}
-								onclick={() => removeSection(section.uid)}
-							>
-								<Trash2 size={13} />
-							</button>
-						</span>
+					<span class="detail-card-title" id="pf-check-title">Before you save</span>
+					{#if problems.length > 0}
+						<span class="pf-check-count">{problems.length} to do</span>
 					{/if}
 				</div>
-				{@render problemList(shown(at))}
+				{#if problems.length === 0}
+					<p class="pf-check-ready"><Check size={14} aria-hidden="true" /> Ready to save</p>
+				{:else}
+					<ul class="pf-check-list">
+						{#each placedProblems as item, itemIndex (itemIndex)}
+							<li>
+								<button type="button" class="pf-check-item" onclick={() => goToProblem(item.place)}>
+									<span class="pf-check-place">{item.place.label}</span>
+									<span class="pf-check-message">{item.message}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</section>
+		{/if}
+		<section class="detail-card">
+			<div class="detail-card-head"><span class="detail-card-title">About profiles</span></div>
+			<ul class="pf-notes">
+				<li>Select the profile in “Read as” on the upload page. The app imports only the sections of the profile.</li>
+				<li>
+					A profile imports one thing: table rows, summary lines or transaction lines. To import a document in two ways, make two profiles.
+				</li>
+				<li>
+					Auto-detect cannot find the difference between two profiles for the same document. Turn one off, or give each profile different fixed phrases.
+				</li>
+				<li>
+					A profile with a table reads only spreadsheets. The app reads the table rows exactly. The table rows do not go to the AI.
+				</li>
+				<li>Make the table from a sample file. Test the profile on the sample before you save. The app does not keep the sample.</li>
+				<li>The AI copies the printed values. The app calculates the totals and signs to the cent.</li>
+				<li>Changes to a profile do not change the documents that you imported before.</li>
+			</ul>
+		</section>
+		{#if saved}
+			<section class="detail-card">
+				<div class="detail-card-head"><span class="detail-card-title">History</span></div>
+				<AuditTrail bind:this={auditRef} recordType="import_profile" recordId={saved.id} />
+			</section>
+		{/if}
+	{/snippet}
+</DetailPage>
 
-				<div class="field">
-					<label class="field-label" for="pf-s-name-{section.uid}">Name *</label>
-					<Input id="pf-s-name-{section.uid}" bind:value={section.name} disabled={!canChange} class="w-full" placeholder="e.g. Fees" />
-					{#if keys[index]}<p class="field-hint">Saved as <code>{keys[index]}</code>.</p>{/if}
-					{@render problemList(shown(`${at}.name`))}
-					{@render problemList(shown(`${at}.key`))}
+{#snippet problemList(messages: string[])}
+	{#each messages as message, messageIndex (messageIndex)}
+		<p class="pf-problem">{message}</p>
+	{/each}
+{/snippet}
+
+{#snippet detectFields()}
+		<div class="field">
+			<label class="field-label" for="pf-description">Document description{kindReadsTable(form.kind) ? '' : ' *'}</label>
+			<Textarea id="pf-description" rows={3} bind:value={form.description} disabled={!canChange} class="leading-relaxed" />
+			<p class="field-hint">Write who sends the document and what it shows.</p>
+			{@render problemList(shown('description'))}
+		</div>
+
+		<div class="field" id="pf-phrases" style="margin-bottom:0;">
+			<label class="field-label" for="pf-phrase">Fixed phrases</label>
+			{#if form.phrases.length > 0}
+				<div class="pf-phrases">
+					{#each form.phrases as phrase, index (phrase)}
+						<span class="pf-phrase">
+							<span class="pf-phrase-text">{phrase}</span>
+							{#if canChange}
+								<button type="button" class="pf-phrase-remove" aria-label="Remove {phrase}" onclick={() => removePhrase(index)}>
+									<X size={12} />
+								</button>
+							{/if}
+						</span>
+					{/each}
 				</div>
+			{/if}
+			{#if canChange && form.phrases.length < PROFILE_PHRASES_MAX}
+				<div class="pf-inline">
+					<Input
+						id="pf-phrase"
+						bind:value={phraseDraft}
+						class="w-full"
+						placeholder="Example: the document title"
+						onkeydown={(event: KeyboardEvent) => {
+							if (event.key === 'Enter') {
+								event.preventDefault();
+								addPhrase();
+							}
+						}}
+					/>
+					<button type="button" class="sheet-btn" disabled={!phraseDraft.trim()} onclick={addPhrase}>Add</button>
+				</div>
+			{/if}
+			<p class="field-hint">Optional. Text that is always on the document. If a document has all these phrases, Auto-detect selects this profile without the AI.</p>
+			{@render problemList(attempted ? errorsUnder(problems, 'phrases') : [])}
+		</div>
+{/snippet}
 
+{#snippet kindGlyph(kind: ProfileKind)}
+	<!-- What part of a document the kind takes: tinted, the part it imports. -->
+	<svg viewBox="0 0 44 32" width="44" height="32" fill="none" stroke="currentColor" stroke-width="1.2">
+		{#if kind === 'table' || kind === 'mixed'}
+			{#if kind === 'mixed'}
+				<rect x="4" y="2.5" width="22" height="3" rx="1" class="pf-glyph-on" />
+			{/if}
+			<rect x="4" y={kind === 'mixed' ? 9 : 4} width="36" height={kind === 'mixed' ? 20 : 24} rx="2" />
+			{#each [0, 1, 2, 3] as row (row)}
+				<rect
+					x="4.6"
+					y={(kind === 'mixed' ? 9 : 4) + 4.6 + row * (kind === 'mixed' ? 3.8 : 4.6)}
+					width="34.8"
+					height={kind === 'mixed' ? 2.6 : 3.2}
+					class="pf-glyph-on"
+					stroke="none"
+				/>
+			{/each}
+			<line x1="16" y1={kind === 'mixed' ? 9 : 4} x2="16" y2="28" />
+			<line x1="28" y1={kind === 'mixed' ? 9 : 4} x2="28" y2="28" />
+		{:else if kind === 'summary'}
+			<rect x="8" y="2" width="28" height="28" rx="2" />
+			<line x1="12" y1="8" x2="32" y2="8" opacity="0.5" />
+			<line x1="12" y1="12" x2="28" y2="12" opacity="0.5" />
+			<rect x="12" y="17" width="20" height="3" rx="1" class="pf-glyph-on" />
+			<rect x="12" y="23" width="20" height="3" rx="1" class="pf-glyph-on" />
+		{:else}
+			<rect x="8" y="2" width="28" height="28" rx="2" />
+			{#each [0, 1, 2, 3, 4] as row (row)}
+				<rect x="12" y={6 + row * 4.6} width="20" height="2.4" rx="1" class="pf-glyph-on" stroke="none" />
+			{/each}
+		{/if}
+	</svg>
+{/snippet}
+
+{#snippet sectionCard(section: SectionForm, index: number, compact: boolean)}
+	{@const at = `sections[${index}]`}
+	{@const fromTable = readsFromTable(form, section)}
+	{@const open = compact || sectionOpen(section, index)}
+	{@const count = fromTable ? sampleCount(section) : null}
+	<Collapsible.Root
+		open={open}
+		onOpenChange={(next) => {
+			if (!compact) folded[section.uid] = !next;
+		}}
+	>
+	<section class="detail-card pf-section" id="pf-s-{section.uid}" class:pf-folded={!open}>
+		{#if compact}
+			<div class="detail-card-head"><h3 class="pf-section-title">Every row</h3></div>
+		{:else}
+		<div class="detail-card-head">
+			<Collapsible.Trigger class="pf-fold">
+				<ChevronRight size={14} class={open ? 'pf-fold-open' : ''} aria-hidden="true" />
+				<h3 class="pf-section-title">{section.name.trim() || `Section ${index + 1}`}</h3>
+				<span class="pf-fold-meta">
+					{KIND_LABELS[section.kind] ?? section.kind}{count !== null
+						? `, ${count.toLocaleString('en-US')} row${count === 1 ? '' : 's'} in the sample`
+						: ''}
+				</span>
+			</Collapsible.Trigger>
+			{#if canChange}
+				<span class="pf-section-tools">
+					<button type="button" class="pf-icon-btn" aria-label="Move section up" disabled={index === 0} onclick={() => moveSection(index, -1)}><ArrowUp size={13} /></button>
+					<button
+						type="button"
+						class="pf-icon-btn"
+						aria-label="Move section down"
+						disabled={index === form.sections.length - 1}
+						onclick={() => moveSection(index, 1)}><ArrowDown size={13} /></button
+					>
+					<button
+						type="button"
+						class="pf-icon-btn pf-icon-danger"
+						aria-label="Remove section"
+						title={form.sections.length === 1 ? 'A profile must have one section or more.' : 'Remove section'}
+						disabled={form.sections.length === 1}
+						onclick={() => removeSection(section.uid)}
+					>
+						<Trash2 size={13} />
+					</button>
+				</span>
+			{/if}
+		</div>
+		{/if}
+
+		<Collapsible.Content>
+			{@render problemList(shown(at))}
+
+			{#if !compact}
+			<div class="field">
+				<label class="field-label" for="pf-s-{section.uid}-name">Name *</label>
+				<Input id="pf-s-{section.uid}-name" bind:value={section.name} disabled={!canChange} class="w-full" placeholder="Example: Fees" />
+				{@render problemList(shown(`${at}.name`))}
+				{@render problemList(shown(`${at}.key`))}
+			</div>
+			{/if}
+
+
+			{#if section.legacyMode && section.legacyMode !== form.mode}
+				<!-- Saved when each section had its own mode (FR-032): shown at once, not only after Save. -->
+				<div class="pf-legacy-mode" role="alert">
+					{@render problemList(errorsAt(problems, `${at}.mode`))}
+					{#if canChange}
+						<button type="button" class="sheet-btn" onclick={() => (section.legacyMode = null)}>
+							Keep it and import it as {importModeLabel(form.mode)}
+						</button>
+					{/if}
+				</div>
+			{/if}
+
+			<div class="field" id="pf-s-{section.uid}-kind">
+				<span class="field-label">Kind *</span>
+				<div class="chip-row" role="radiogroup" aria-label="Kind">
+					{#each KINDS as kind (kind.value)}
+						<label class="chip" class:on={section.kind === kind.value}>
+							<input
+								type="radio"
+								name="pf-kind-{section.uid}"
+								value={kind.value}
+								checked={section.kind === kind.value}
+								disabled={!canChange}
+								onchange={() => setKind(section, kind.value)}
+							/>
+							{kind.label}
+						</label>
+					{/each}
+				</div>
+				<p class="field-hint">
+					{#if section.kind === 'by_sign'}
+						A positive amount is income. A negative amount is an expense.
+					{:else if section.kind === 'transfer'}
+						Money that moves between two of your accounts, for example a withdrawal to the bank. A transfer has no category and no contact.
+					{:else}
+						A line with the opposite sign is ignored. It does not become {section.kind === 'income'
+							? 'income'
+							: 'an expense'}.
+					{/if}
+				</p>
+				{@render problemList(shown(`${at}.kind`))}
+			</div>
+
+			{#if section.kind === 'transfer'}
+				<div class="field" id="pf-s-{section.uid}-counter">
+					<span class="field-label">Other account *</span>
+					<ProfileCategorySelect
+						groups={counterGroups}
+						value={section.counterAccountId}
+						noneLabel="Select account"
+						ariaLabel="Other account of {section.name || `section ${index + 1}`}"
+						missingLabel="Account no longer available"
+						disabled={!canChange}
+						onchange={(value) => (section.counterAccountId = value)}
+					/>
+					<p class="field-hint">The account that the money goes to or comes from. Example: the bank account for withdrawals.</p>
+					{@render problemList(shown(`${at}.counterAccountId`))}
+				</div>
+			{:else if section.feeTypes.length === 0}
+				<div class="field" id="pf-s-{section.uid}-category">
+					<span class="field-label">Category</span>
+					<ProfileCategorySelect
+						groups={categoryGroups(section.kind)}
+						value={section.fixedCategoryAccountId}
+						noneLabel={fromTable ? 'Reviewer selects' : 'AI suggests'}
+						ariaLabel="Category for {section.name || `section ${index + 1}`}"
+						disabled={!canChange}
+						onchange={(value) => (section.fixedCategoryAccountId = value)}
+					/>
+					{@render problemList(shown(`${at}.fixedCategoryAccountId`))}
+				</div>
+			{/if}
+
+			{#if !fromTable}
 				<div class="field">
-					<label class="field-label" for="pf-s-desc-{section.uid}">What it is and where to find it *</label>
-					<Textarea id="pf-s-desc-{section.uid}" rows={2} bind:value={section.description} disabled={!canChange} class="leading-relaxed" />
+					<label class="field-label" for="pf-s-{section.uid}-description">Description *</label>
+					<Textarea id="pf-s-{section.uid}-description" rows={2} bind:value={section.description} disabled={!canChange} class="leading-relaxed" />
+					<p class="field-hint">Tell the AI what the lines are and where they are.</p>
 					{@render problemList(shown(`${at}.description`))}
 				</div>
+			{/if}
 
-				{#if section.legacyMode && section.legacyMode !== form.mode}
-					<!-- Saved when each section had its own mode (FR-032): shown at once, not only after Save. -->
-					<div class="pf-legacy-mode" role="alert">
-						{@render problemList(errorsAt(problems, `${at}.mode`))}
-						{#if canChange}
-							<button type="button" class="sheet-btn" onclick={() => (section.legacyMode = null)}>
-								Keep it and read it as {importModeLabel(form.mode)}
-							</button>
-						{/if}
-					</div>
-				{/if}
+			{#if section.kind !== 'transfer' || section.feeTypes.length > 0}
+				{@render feeTypesField(section, at, fromTable)}
+			{/if}
 
-				<div class="field">
-					<span class="field-label">Kind *</span>
-					<div class="chip-row" role="radiogroup" aria-label="Kind">
-						{#each KINDS as kind (kind.value)}
-							<label class="chip" class:on={section.kind === kind.value}>
-								<input
-									type="radio"
-									name="pf-kind-{section.uid}"
-									value={kind.value}
-									checked={section.kind === kind.value}
-									disabled={!canChange}
-									onchange={() => setKind(section, kind.value)}
-								/>
-								{kind.label}
-							</label>
-						{/each}
-					</div>
-					{#if section.kind === 'by_sign'}
-						<p class="field-hint">A positive amount becomes income and a negative one an expense. Both are saved without the sign.</p>
-					{:else if section.kind === 'transfer'}
-						<p class="field-hint">
-							Money moved between two of your own accounts, such as a withdrawal from a wallet to the bank. A negative amount
-							leaves the profile's account for the other account; a positive one comes back. Saved without the sign, with no
-							category and no contact.
-						</p>
-					{:else}
-						<p class="field-hint">
-							A line of the other sign is left out and listed with the ignored lines, never turned into a {section.kind}.
-						</p>
-					{/if}
-					{@render problemList(shown(`${at}.kind`))}
-				</div>
-
-				{#if section.kind === 'transfer'}
-					<div class="field">
-						<span class="field-label">Other account *</span>
-						<ProfileCategorySelect
-							groups={counterGroups}
-							value={section.counterAccountId}
-							noneLabel="Select account"
-							ariaLabel="Other account of {section.name || `section ${index + 1}`}"
-							missingLabel="Account no longer available"
-							disabled={!canChange}
-							onchange={(value) => (section.counterAccountId = value)}
-						/>
-						<p class="field-hint">Where the money goes to, or comes from, such as the bank account a withdrawal is paid into.</p>
-						{@render problemList(shown(`${at}.counterAccountId`))}
-					</div>
-				{:else}
-					<div class="field">
-						<span class="field-label">Fixed category</span>
-						<ProfileCategorySelect
-							groups={categoryGroups(section.kind)}
-							value={section.fixedCategoryAccountId}
-							noneLabel="None"
-							ariaLabel="Fixed category for {section.name || `section ${index + 1}`}"
-							disabled={!canChange}
-							onchange={(value) => (section.fixedCategoryAccountId = value)}
-						/>
-						<p class="field-hint">
-							Used only when the section lists no fee types. With fee types, each line takes its fee type's category;
-							an Auto fee type takes the category the reader suggests.
-						</p>
-						{@render problemList(shown(`${at}.fixedCategoryAccountId`))}
-					</div>
-				{/if}
-
-				{#if section.kind !== 'transfer' || section.feeTypes.length > 0}
-					<div class="field">
-						<span class="field-label">Fee types</span>
-						{#if section.feeTypes.length > 0}
-							<div class="pf-fees">
-								<div class="pf-fee pf-fee-head" aria-hidden="true">
-									<span>Fee type</span><span>Which lines are this type</span><span>Category</span><span></span>
-								</div>
-								{#each section.feeTypes as fee, feeIndex (fee.uid)}
-									{@const feeAt = `${at}.feeTypes[${feeIndex}]`}
-									<div class="pf-fee">
-										<div>
-											<Input
-												value={fee.key}
-												aria-label="Fee type key"
-												placeholder="commission_fee"
-												disabled={!canChange}
-												class="w-full pf-mono"
-												oninput={(event: Event) => typeKey(fee, event.currentTarget as HTMLInputElement)}
-											/>
-										</div>
-										<div>
-											<Input
-												bind:value={fee.description}
-												aria-label="Which lines are this type"
-												placeholder="e.g. Commission charged on sales"
-												disabled={!canChange}
-												class="w-full"
-											/>
-										</div>
-										<div>
-											<ProfileCategorySelect
-												groups={categoryGroups(section.kind)}
-												value={fee.categoryAccountId}
-												noneLabel="Auto"
-												ariaLabel="Category for {fee.key || 'this fee type'}"
-												disabled={!canChange}
-												onchange={(value) => (fee.categoryAccountId = value)}
-											/>
-										</div>
-										<div class="pf-fee-remove">
-											{#if canChange}
-												<button type="button" class="pf-icon-btn pf-icon-danger" aria-label="Remove fee type" onclick={() => removeFeeType(section, fee.uid)}>
-													<Trash2 size={13} />
-												</button>
-											{/if}
-										</div>
-									</div>
-									{#if section.rows?.feeTypeColumn}
-										<div class="pf-fee-values">
-											<Textarea
-												bind:value={fee.valuesText}
-												rows={2}
-												disabled={!canChange}
-												aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.key || 'this fee type'}"
-												placeholder="Values of “{section.rows.feeTypeColumn}”, one per line"
-												class="leading-relaxed"
-											/>
-										</div>
-									{/if}
-									{@render problemList([
-										...shown(feeAt),
-										...shown(`${feeAt}.key`),
-										...shown(`${feeAt}.description`),
-										...shown(`${feeAt}.categoryAccountId`),
-										...(attempted ? errorsUnder(problems, `${feeAt}.values`) : [])
-									])}
-								{/each}
-							</div>
-						{/if}
-						{#if canChange && section.feeTypes.length < PROFILE_FEE_TYPES_MAX}
-							<button type="button" class="detail-card-action pf-add-fee" onclick={() => addFeeType(section)}>
-								<Plus size={13} /> Add fee type
-							</button>
-						{/if}
-						<p class="field-hint">
-							With fee types listed, only lines of a listed type are read; any other line is left out and listed as ignored. Each
-							item's remark names its type. "Auto" takes the AI's suggested category, or Uncategorised. With none listed, every
-							line the description fits is read.
-						</p>
-						{#if section.kind === 'by_sign' && section.feeTypes.length > 0}
-							<p class="field-hint">
-								By sign: an income category applies only to lines printed positive, and an expense category only to lines
-								printed negative. A line of the other sign keeps the AI's suggestion or Uncategorised, and is marked to check.
-							</p>
-						{/if}
-						{@render problemList(shown(`${at}.feeTypes`))}
-					</div>
-				{/if}
-
+			<Disclosure label="More" forceOpen={sectionMoreForced(section, index)}>
 				{#if section.kind !== 'transfer' && (otherProfiles.length > 0 || section.sameMoneyAs.length > 0)}
-					<div class="field">
+					<div class="field" id="pf-s-{section.uid}-same">
 						<span class="field-label">Same money as</span>
 						<div class="chip-row" role="group" aria-label="Same money as">
 							{#each otherProfiles as other (other.id)}
@@ -995,27 +1305,19 @@
 							{/each}
 						</div>
 						<p class="field-hint">
-							Optional. Profiles whose records already hold this money, such as the income statement whose summary has the
-							same sales. When records made with one of them cover an item's month, the item is marked to check, so the money
-							is not counted twice.
+							Select the profiles that record the same money. Example: an income statement that shows the same sales. If their records include the month, the item is marked for review. This prevents a double count.
 						</p>
 						{@render problemList(attempted ? errorsUnder(problems, `${at}.sameMoneyAs`) : [])}
 					</div>
 				{/if}
-
-				{#if form.layout}
-					{@render rowRules(section, at)}
-				{/if}
-
-				<details
-					class="pf-advanced"
-					bind:open={
-						() => advancedOpen[section.uid] ?? section.extrasText.trim() !== '',
-						(value) => (advancedOpen[section.uid] = value)
-					}
-				>
-					<summary>Advanced: extra fields</summary>
-					<div class="field" style="margin:10px 0 0;">
+				{#if fromTable && section.rows}
+					{@render flagRule(section.rows, at, section.uid)}
+					{#if !sorting}
+						{@render customRules(section.rows, at, section.uid)}
+					{/if}
+				{:else if !fromTable}
+					<div class="field" id="pf-s-{section.uid}-extras" style="margin-bottom:0;">
+						<span class="field-label">Extra fields</span>
 						<Textarea
 							bind:value={section.extrasText}
 							rows={6}
@@ -1026,284 +1328,338 @@
 							placeholder={'{\n  "type": "object",\n  "properties": {\n    "order_no": { "type": ["string", "null"], "description": "The order number" }\n  }\n}'}
 						/>
 						<p class="field-hint">
-							Plain values to read from each line, such as an order number, written as a JSON Schema object. Each field may
-							use only <code>type</code> (string, number, integer or boolean, or one of them with "null"),
-							<code>description</code> and <code>enum</code> (text only). Values are added to the item's remark
-							as "name: value".
+							Values to read from each line, for example an order number. Write them as a JSON Schema object. Each field can use only <code>type</code> (string, number, integer, boolean, or one of these with "null"), <code>description</code> and <code>enum</code> (text only). The app adds each value to the remark as "name: value".
 						</p>
 						{#each extrasProblems(index) as message, messageIndex (messageIndex)}
 							<p class="pf-problem">{message}</p>
 						{/each}
 						{#if section.extrasText.trim() && extrasProblems(index).length === 0}
-							<p class="pf-ok">These extra fields can be saved.</p>
+							<p class="pf-ok">The extra fields are correct.</p>
 						{/if}
 					</div>
-				</details>
-			</section>
-		{/each}
-
-		{#if attempted && problems.length > 0}
-			<section class="detail-card pf-summary" role="alert">
-				<div class="detail-card-head"><span class="detail-card-title">To fix before saving</span></div>
-				<ul>
-					{#each problems as problem, problemIndex (problemIndex)}
-						<li>{problem.path ? `${problem.path}: ` : ''}{problem.message}</li>
-					{/each}
-				</ul>
-			</section>
-		{/if}
-	{/snippet}
-
-	{#snippet rail()}
-		<section class="detail-card">
-			<div class="detail-card-head"><span class="detail-card-title">How a profile is used</span></div>
-			<ul class="pf-notes">
-				<li>Choose it under “Read as” when uploading. Only the sections here are read; nothing else on the document becomes a record.</li>
-				<li>
-					A profile imports one thing: Summary lines, one item per summary line, or Every transaction, one item per row of
-					the transaction table. To read one kind of document both ways, make two profiles and choose the one you want.
-				</li>
-				<li>
-					Auto-detect cannot tell two profiles made for the same document apart. Turn one off, give each its own recognition
-					phrases, or choose one under “Read as”.
-				</li>
-				<li>
-					With a table layout, and row rules on every section, a spreadsheet is read from its columns with no AI. Try it on a
-					sample under Preview before saving.
-				</li>
-				<li>The AI copies what is printed. Totals and signs are worked out by the app, to the cent.</li>
-				<li>Editing, turning off or deleting a profile never changes documents already read with it.</li>
-			</ul>
-		</section>
-		{#if saved}
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">History</span></div>
-				<AuditTrail bind:this={auditRef} recordType="import_profile" recordId={saved.id} />
-			</section>
-		{/if}
-	{/snippet}
-</DetailPage>
-
-{#snippet problemList(messages: string[])}
-	{#each messages as message, messageIndex (messageIndex)}
-		<p class="pf-problem">{message}</p>
-	{/each}
+				{/if}
+				{#if keys[index]}<p class="field-hint">Key: <code>{keys[index]}</code></p>{/if}
+			</Disclosure>
+		</Collapsible.Content>
+	</section>
+	</Collapsible.Root>
 {/snippet}
 
-{#snippet columnField(label: string, path: string, value: string, set: (value: string) => void, noneLabel: string | null, hint: string)}
-	<div class="field">
-		<span class="field-label">{label}</span>
-		<ProfileColumnSelect
-			options={headingOptions}
-			{value}
-			{noneLabel}
-			placeholder={headings.length ? 'Choose a heading' : 'List the headings first'}
-			ariaLabel={label}
-			disabled={!canChange}
-			onchange={set}
+{#snippet spreadsheetCard(layout: LayoutForm)}
+	{@const layoutProblems = attempted ? errorsUnder(problems, 'layout') : []}
+	<section class="detail-card" id="pf-table">
+		<div class="detail-card-head"><span class="detail-card-title">Table</span></div>
+		<ProfileSampleTable
+			bind:layout={form.layout!}
+			{sample}
+			{sampleName}
+			loading={sampleLoading}
+			error={sampleError}
+			{canChange}
+			roleProblems={[
+				...shown('layout.headers'),
+				...shown('layout.columns'),
+				...shown('layout.columns.date'),
+				...shown('layout.columns.description'),
+				...shown('layout.columns.amount'),
+				...shown('layout.columns.reference'),
+				...shown('layout.direction'),
+				...shown('layout.direction.column'),
+				...(attempted ? errorsUnder(problems, 'layout.direction.in') : []),
+				...(attempted ? errorsUnder(problems, 'layout.direction.out') : []),
+				...shown('layout.balanceColumn'),
+				...(attempted ? errorsUnder(problems, 'layout.remarkColumns') : [])
+			]}
+			onfile={(file) => loadSample(file)}
+			onlocate={(where) => sampleFile && loadSample(sampleFile, where)}
+			onadopt={adoptSample}
 		/>
-		{#if hint}<p class="field-hint">{hint}</p>{/if}
-		{@render problemList(shown(path))}
+
+		<Disclosure label="More options" bind:open={moreOpen} forceOpen={layoutProblems.length > 0 || revealed.table === true} class="mt-4">
+			<div class="pf-more">
+				<div class="pf-grid">
+					<div class="field" id="pf-l-counterparty">
+						<label class="field-label" for="pf-counterparty">Contact</label>
+						<Input id="pf-counterparty" bind:value={layout.counterparty} disabled={!canChange} class="w-full" placeholder="None" />
+						<p class="field-hint">The supplier or customer for all items. Example: the marketplace.</p>
+						{@render problemList(shown('layout.counterparty'))}
+					</div>
+					<div class="field" id="pf-l-currency">
+						<label class="field-label" for="pf-currency">Currency</label>
+						<Input id="pf-currency" bind:value={layout.currency} disabled={!canChange} class="w-full" placeholder="Main currency" />
+						<p class="field-hint">A three-letter code. Example: MYR.</p>
+						{@render problemList(shown('layout.currency'))}
+					</div>
+				</div>
+
+				<div class="field" id="pf-l-documentDateLabel">
+					<label class="field-label" for="pf-doc-date">Label of the document date</label>
+					<Input id="pf-doc-date" bind:value={layout.documentDateLabel} disabled={!canChange} class="w-full" placeholder="Example: To" />
+					{@render labelChips(
+						(sample?.labels ?? []).filter((label) => /\d{4}|\d{1,2}[/.-]\d{1,2}/.test(label.value)),
+						(label) => (layout.documentDateLabel = label)
+					)}
+					{@render problemList(shown('layout.documentDateLabel'))}
+				</div>
+
+				<div class="field" id="pf-l-statedTotalLabels">
+					<label class="field-label" for="pf-totals">Labels of the stated totals</label>
+					<Textarea id="pf-totals" rows={2} bind:value={layout.totalsText} disabled={!canChange} placeholder="One label on each line. Example: Total Money In" />
+					{@render labelChips(sample?.labels ?? [], (label) => {
+						const labels = linesOf(layout.totalsText);
+						if (!labels.includes(label)) layout.totalsText = [...labels, label].join('\n');
+					})}
+					<p class="field-hint">The app adds the values next to these labels. It compares the sum with the items. If this is empty, there is no control total.</p>
+					{@render problemList(attempted ? errorsUnder(problems, 'layout.statedTotalLabels') : [])}
+				</div>
+
+				<div class="pf-grid">
+					<div class="field" id="pf-l-dateFormat">
+						<span class="field-label">Date format</span>
+						<ProfileColumnSelect
+							options={DATE_FORMATS}
+							value={layout.dateFormat}
+							ariaLabel="Date format"
+							disabled={!canChange}
+							onchange={(value) => (layout.dateFormat = value as typeof layout.dateFormat)}
+						/>
+						{@render problemList(shown('layout.dateFormat'))}
+					</div>
+					<div class="field" id="pf-l-decimalSeparator">
+						<span class="field-label">Decimal separator</span>
+						<ProfileColumnSelect
+							options={DECIMALS}
+							value={layout.decimalSeparator}
+							ariaLabel="Decimal separator"
+							disabled={!canChange}
+							onchange={(value) => (layout.decimalSeparator = value === ',' ? ',' : '.')}
+						/>
+						{@render problemList(shown('layout.decimalSeparator'))}
+					</div>
+					<div class="field" id="pf-l-csvDelimiter">
+						<span class="field-label">CSV separator</span>
+						<ProfileColumnSelect
+							options={CSV_SEPARATORS}
+							value={layout.csvDelimiter}
+							noneLabel="Automatic"
+							ariaLabel="CSV separator"
+							disabled={!canChange}
+							onchange={(value) => (layout.csvDelimiter = value as typeof layout.csvDelimiter)}
+						/>
+						{@render problemList(shown('layout.csvDelimiter'))}
+					</div>
+					<div class="field" id="pf-l-sheet">
+						<label class="field-label" for="pf-sheet">Sheet</label>
+						<Input id="pf-sheet" bind:value={layout.sheet} disabled={!canChange} class="w-full" placeholder="Any sheet" />
+						{@render problemList(shown('layout.sheet'))}
+					</div>
+				</div>
+
+				<div class="field" id="pf-l-headers">
+					<label class="field-label" for="pf-headers">Headings</label>
+					<Textarea id="pf-headers" rows={3} bind:value={layout.headersText} disabled={!canChange} class="leading-relaxed" placeholder="One heading on each line" />
+					<p class="field-hint">The app finds the table at the first row with all these headings. A sample adds them automatically.</p>
+				</div>
+
+				{#if layout.directionColumn}
+					<div class="pf-grid" id="pf-l-direction">
+						<div class="field">
+							<label class="field-label" for="pf-dir-in">Money in values</label>
+							<Textarea id="pf-dir-in" rows={2} bind:value={layout.directionInText} disabled={!canChange} placeholder="One per line" />
+						</div>
+						<div class="field">
+							<label class="field-label" for="pf-dir-out">Money out values</label>
+							<Textarea id="pf-dir-out" rows={2} bind:value={layout.directionOutText} disabled={!canChange} placeholder="One per line" />
+						</div>
+					</div>
+				{/if}
+				{@render problemList(attempted ? errorsUnder(problems, 'layout.sheet') : [])}
+			</div>
+		</Disclosure>
+	</section>
+{/snippet}
+
+{#snippet labelChips(labels: { label: string; value: string }[], use: (label: string) => void)}
+	{#if labels.length && canChange}
+		<div class="pf-suggest">
+			<span class="pf-suggest-lead">In the sample:</span>
+			{#each labels as entry, index (index)}
+				<button type="button" class="pf-suggest-chip" onclick={() => use(entry.label)}>
+					{entry.label} <span class="pf-suggest-value">{entry.value}</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet feeTypesField(section: SectionForm, at: string, fromTable: boolean)}
+	{@const columnValues = fromTable ? feeColumnValues(section) : null}
+	<div class="field" id="pf-s-{section.uid}-fees">
+		<span class="field-label">Fee types</span>
+		{#if fromTable && section.rows && (section.feeTypes.length > 0 || section.rows.feeTypeColumn)}
+			<div class="pf-fee-column">
+				<span class="field-hint" style="margin:0;">Fee type column</span>
+				<ProfileColumnSelect
+					options={headingOptions}
+					value={section.rows.feeTypeColumn}
+					noneLabel="Select a column"
+					ariaLabel="Fee type column"
+					disabled={!canChange}
+					onchange={(value) => (section.rows!.feeTypeColumn = value)}
+				/>
+			</div>
+			{@render problemList(shown(`${at}.rows.feeTypeColumn`))}
+		{/if}
+		{#if section.feeTypes.length > 0}
+			<div class="pf-fees">
+				<div class="pf-fee pf-fee-head" aria-hidden="true">
+					<span>Fee type</span><span>{fromTable ? 'Values' : 'Description'}</span><span>Category</span><span></span>
+				</div>
+				{#each section.feeTypes as fee, feeIndex (fee.uid)}
+					{@const feeAt = `${at}.feeTypes[${feeIndex}]`}
+					<div class="pf-fee" id="pf-s-{section.uid}-fee-{fee.uid}">
+						<div>
+							<Input
+								value={fee.key}
+								aria-label="Fee type key"
+								placeholder="commission_fee"
+								disabled={!canChange}
+								class="w-full pf-mono"
+								oninput={(event: Event) => typeKey(fee, event.currentTarget as HTMLInputElement)}
+							/>
+						</div>
+						<div>
+							{#if !fromTable}
+								<Input
+									bind:value={fee.description}
+									aria-label="Which lines are this type"
+									placeholder="Example: Commission on sales"
+									disabled={!canChange}
+									class="w-full"
+								/>
+							{:else if columnValues}
+								<div class="pf-value-chips" role="group" aria-label="Values that mean {fee.key || 'this fee type'}">
+									{#each columnValues as value (value)}
+										<button
+											type="button"
+											class="pf-value-chip"
+											class:on={linesOf(fee.valuesText).includes(value)}
+											aria-pressed={linesOf(fee.valuesText).includes(value)}
+											disabled={!canChange}
+											onclick={() => toggleFeeValue(fee, value)}>{value}</button
+										>
+									{/each}
+								</div>
+							{:else if section.rows?.feeTypeColumn}
+								<Textarea
+									bind:value={fee.valuesText}
+									rows={2}
+									disabled={!canChange}
+									aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.key || 'this fee type'}"
+									placeholder="One per line"
+									class="leading-relaxed"
+								/>
+							{:else}
+								<p class="field-hint" style="margin:0;">Select the fee type column first.</p>
+							{/if}
+						</div>
+						<div>
+							<ProfileCategorySelect
+								groups={categoryGroups(section.kind)}
+								value={fee.categoryAccountId}
+								noneLabel="Auto"
+								ariaLabel="Category for {fee.key || 'this fee type'}"
+								disabled={!canChange}
+								onchange={(value) => (fee.categoryAccountId = value)}
+							/>
+						</div>
+						<div class="pf-fee-remove">
+							{#if canChange}
+								<button type="button" class="pf-icon-btn pf-icon-danger" aria-label="Remove fee type" onclick={() => removeFeeType(section, fee.uid)}>
+									<Trash2 size={13} />
+								</button>
+							{/if}
+						</div>
+					</div>
+					{@render problemList([
+						...shown(feeAt),
+						...shown(`${feeAt}.key`),
+						...shown(`${feeAt}.description`),
+						...shown(`${feeAt}.categoryAccountId`),
+						...(attempted ? errorsUnder(problems, `${feeAt}.values`) : [])
+					])}
+				{/each}
+			</div>
+		{/if}
+		{#if canChange && section.feeTypes.length < PROFILE_FEE_TYPES_MAX}
+			<button type="button" class="detail-card-action pf-add-fee" onclick={() => addFeeType(section)}>
+				<Plus size={13} /> Add fee type
+			</button>
+		{/if}
+		<p class="field-hint">
+			{#if section.feeTypes.length === 0}
+				Optional. Divide the section into types, for example commission and shipping. Each type can have its own category.
+			{:else if fromTable}
+				The app reads only the rows with a listed type. It ignores all other rows. With "Auto", the reviewer selects the category.
+			{:else}
+				The app reads only the lines with a listed type. It ignores all other lines. With "Auto", the AI suggests the category.
+			{/if}
+		</p>
+		{#if section.kind === 'by_sign' && section.feeTypes.length > 0}
+			<p class="field-hint">
+				By sign: an income category is for positive amounts only. An expense category is for negative amounts only.
+			</p>
+		{/if}
+		{@render problemList(shown(`${at}.feeTypes`))}
 	</div>
 {/snippet}
 
-{#snippet layoutCard()}
-	<section class="detail-card">
-		<div class="detail-card-head">
-			<span class="detail-card-title">Table layout</span>
-			{#if canChange && form.layout}
-				<button type="button" class="detail-card-action" onclick={removeLayout}>Remove</button>
+{#snippet flagRule(rows: RowsForm, at: string, uid: string)}
+	<div class="field" id="pf-s-{uid}-review" style="margin-top:10px;">
+		<span class="field-label">Rows for review</span>
+		<div class="pf-rules">
+			{#if rows.flagWhen.length === 0}
+				<p class="field-hint" style="margin:0;">Optional. If a row agrees with all the conditions, the app marks it for review with the note.</p>
+			{/if}
+			{@render conditionList(rows, 'flagWhen', `${at}.rows`, 'Add condition')}
+			{#if rows.flagWhen.length > 0 || rows.flagNote}
+				<Input
+					bind:value={rows.flagNote}
+					aria-label="Note for a marked row"
+					placeholder="Note. Example: Make sure that the withdrawal is complete."
+					disabled={!canChange}
+					class="w-full"
+				/>
+				{@render problemList(shown(`${at}.rows.flagNote`))}
 			{/if}
 		</div>
-		{#if !form.layout}
-			<p class="field-hint" style="margin-top:0;">
-				For a spreadsheet (.xlsx or .csv) with one row per transaction under a row of headings. Describe its columns once,
-				give each section row rules, and the app reads every row from its cells, with no AI and no AI provider needed.
-			</p>
-			{#if canChange}
-				<button type="button" class="sheet-btn" onclick={addLayout}><Plus size={14} /> Add a table layout</button>
-			{/if}
-			{@render problemList(attempted ? errorsUnder(problems, 'layout') : [])}
-		{:else}
-			{@const layout = form.layout}
-			<div class="field">
-				<label class="field-label" for="pf-headers">Headings *</label>
-				<Textarea
-					id="pf-headers"
-					rows={4}
-					bind:value={layout.headersText}
-					disabled={!canChange}
-					class="leading-relaxed"
-					placeholder="One per line, e.g. Date"
-				/>
-				<p class="field-hint">
-					One per line, as the spreadsheet prints them. The table is found by the first row that has all of them, wherever
-					it is on the sheet. The columns below are chosen from these.
-				</p>
-				{@render problemList(attempted ? errorsUnder(problems, 'layout.headers') : [])}
-			</div>
+	</div>
+{/snippet}
 
-			<div class="pf-grid">
-				{@render columnField('Date column *', 'layout.columns.date', layout.date, (v) => (layout.date = v), null, '')}
-				{@render columnField('Description column *', 'layout.columns.description', layout.description, (v) => (layout.description = v), null, '')}
-				{@render columnField('Amount column *', 'layout.columns.amount', layout.amount, (v) => (layout.amount = v), null, '')}
-				{@render columnField('Reference column', 'layout.columns.reference', layout.reference, (v) => (layout.reference = v), 'None', '')}
-			</div>
-
-			<div class="pf-grid">
-				<div class="field">
-					<span class="field-label">Date format</span>
-					<ProfileColumnSelect
-						options={DATE_FORMATS}
-						value={layout.dateFormat}
-						ariaLabel="Date format"
-						disabled={!canChange}
-						onchange={(value) => (layout.dateFormat = value as typeof layout.dateFormat)}
-					/>
-					<p class="field-hint">For dates written as text. A real date cell needs none.</p>
-					{@render problemList(shown('layout.dateFormat'))}
-				</div>
-				<div class="field">
-					<span class="field-label">Decimal separator</span>
-					<ProfileColumnSelect
-						options={DECIMALS}
-						value={layout.decimalSeparator}
-						ariaLabel="Decimal separator"
-						disabled={!canChange}
-						onchange={(value) => (layout.decimalSeparator = value === ',' ? ',' : '.')}
-					/>
-					{@render problemList(shown('layout.decimalSeparator'))}
-				</div>
-				<div class="field">
-					<span class="field-label">CSV separator</span>
-					<ProfileColumnSelect
-						options={CSV_SEPARATORS}
-						value={layout.csvDelimiter}
-						noneLabel="Work it out from the file"
-						ariaLabel="CSV separator"
-						disabled={!canChange}
-						onchange={(value) => (layout.csvDelimiter = value as typeof layout.csvDelimiter)}
-					/>
-					{@render problemList(shown('layout.csvDelimiter'))}
-				</div>
-				<div class="field">
-					<label class="field-label" for="pf-sheet">Sheet</label>
-					<Input id="pf-sheet" bind:value={layout.sheet} disabled={!canChange} class="w-full" placeholder="Any sheet" />
-					{@render problemList(shown('layout.sheet'))}
-				</div>
-			</div>
-
-			{@render columnField(
-				'Direction column',
-				'layout.direction.column',
-				layout.directionColumn,
-				(v) => (layout.directionColumn = v),
-				'None',
-				'Optional. A column that says which way the money went. When set, it gives each amount its sign, even one printed without a sign.'
-			)}
-			{#if layout.directionColumn || layout.directionInText.trim() || layout.directionOutText.trim()}
-				<div class="pf-grid">
-					<div class="field">
-						<label class="field-label" for="pf-dir-in">Inflow values *</label>
-						<Textarea id="pf-dir-in" rows={2} bind:value={layout.directionInText} disabled={!canChange} placeholder="One per line" />
-						{@render problemList(attempted ? errorsUnder(problems, 'layout.direction.in') : [])}
-					</div>
-					<div class="field">
-						<label class="field-label" for="pf-dir-out">Outflow values *</label>
-						<Textarea id="pf-dir-out" rows={2} bind:value={layout.directionOutText} disabled={!canChange} placeholder="One per line" />
-						{@render problemList(attempted ? errorsUnder(problems, 'layout.direction.out') : [])}
-					</div>
-				</div>
-				{@render problemList(shown('layout.direction'))}
-			{/if}
-
-			{@render columnField(
-				'Running balance column',
-				'layout.balanceColumn',
-				layout.balanceColumn,
-				(v) => (layout.balanceColumn = v),
-				'None',
-				'Optional. The balance after each row. The reading checks that it follows from row to row and says so in a note; a row missing from the export breaks it.'
-			)}
-
-			<div class="field">
-				<span class="field-label">Add to the remark</span>
-				{#if headings.length}
-					<div class="chip-row" role="group" aria-label="Columns added to the remark">
-						{#each headings as heading (heading)}
-							<label class="chip" class:on={layout.remarkColumns.includes(heading)}>
-								<input
-									type="checkbox"
-									checked={layout.remarkColumns.includes(heading)}
-									disabled={!canChange}
-									onchange={() => toggleRemark(heading)}
-								/>
-								{heading}
-							</label>
-						{/each}
-					</div>
-				{/if}
-				<p class="field-hint">Optional. Each chosen column's value is added to the item's remark as "heading: value".</p>
-				{@render problemList(attempted ? errorsUnder(problems, 'layout.remarkColumns') : [])}
-			</div>
-
-			<div class="pf-grid">
-				<div class="field">
-					<label class="field-label" for="pf-counterparty">Other party</label>
-					<Input id="pf-counterparty" bind:value={layout.counterparty} disabled={!canChange} class="w-full" placeholder="None" />
-					<p class="field-hint">The supplier or customer every income and expense item shares. Never a transfer.</p>
-					{@render problemList(shown('layout.counterparty'))}
-				</div>
-				<div class="field">
-					<label class="field-label" for="pf-currency">Currency</label>
-					<Input id="pf-currency" bind:value={layout.currency} disabled={!canChange} class="w-full" placeholder="Main currency" />
-					<p class="field-hint">A three-letter code, such as MYR. Empty: the main currency.</p>
-					{@render problemList(shown('layout.currency'))}
-				</div>
-				<div class="field">
-					<label class="field-label" for="pf-doc-date">Document date label</label>
-					<Input id="pf-doc-date" bind:value={layout.documentDateLabel} disabled={!canChange} class="w-full" placeholder="None" />
-					<p class="field-hint">The label the document's date is printed beside, such as "To".</p>
-					{@render problemList(shown('layout.documentDateLabel'))}
-				</div>
-			</div>
-
-			<div class="field" style="margin-bottom:0;">
-				<label class="field-label" for="pf-totals">Stated total labels</label>
-				<Textarea
-					id="pf-totals"
-					rows={2}
-					bind:value={layout.totalsText}
-					disabled={!canChange}
-					placeholder="One per line, e.g. Total Money In"
-				/>
-				<p class="field-hint">
-					The labels the totals are printed beside, outside the table. The figures beside them are added up and compared with
-					the items. Empty: no control total.
-				</p>
-				{@render problemList(attempted ? errorsUnder(problems, 'layout.statedTotalLabels') : [])}
-			</div>
-			{@render problemList(shown('layout.columns'))}
-		{/if}
-	</section>
-
-	{#if form.layout && canChange}
-		{@render previewCard()}
-	{/if}
+{#snippet customRules(rows: RowsForm, at: string, uid: string)}
+	<div class="field" id="pf-s-{uid}-where">
+		<span class="field-label">Rows for this section</span>
+		<div class="pf-rules">
+			{#if rows.where.length === 0}<p class="field-hint" style="margin:0;">No condition. The section gets all rows of the table.</p>{/if}
+			{@render conditionList(rows, 'where', `${at}.rows`, 'Add condition')}
+		</div>
+		{@render problemList(shown(`${at}.rows`))}
+	</div>
 {/snippet}
 
 {#snippet previewCard()}
 	<section class="detail-card">
-		<div class="detail-card-head"><span class="detail-card-title">Preview</span></div>
-		<p class="field-hint" style="margin-top:0;">
-			Read a sample spreadsheet with this profile as it is now, saved or not. Nothing is stored and no records are made.
-		</p>
-		<div class="pf-inline pf-preview-pick">
-			<input type="file" accept=".xlsx,.csv" aria-label="Sample spreadsheet" onchange={chooseSample} />
+		<div class="detail-card-head">
+			<span class="detail-card-title">Test on the sample</span>
 			<button type="button" class="sheet-btn" disabled={!sampleName || previewing} onclick={runPreview}>
-				{previewing ? 'Reading…' : 'Preview'}
+				{previewing ? 'Wait…' : preview ? 'Test again' : 'Test'}
 			</button>
 		</div>
+		<p class="field-hint" style="margin-top:0;">
+			{sampleName
+				? `Tests the profile on ${sampleName}. You do not have to save the profile first. The app keeps no data and makes no records.`
+				: 'Load a sample in Table. Then you can test the profile before you save.'}
+		</p>
 
 		{#if previewError}
 			<div class="pf-preview-error" role="alert">
@@ -1311,7 +1667,7 @@
 				{#if previewError.errors.length}
 					<ul>
 						{#each previewError.errors as problem, problemIndex (problemIndex)}
-							<li>{problem.path ? `${problem.path}: ` : ''}{problem.message}</li>
+							<li>{problem.path ? `${problemPlace(problem.path, form).label}: ` : ''}{problem.message}</li>
 						{/each}
 					</ul>
 				{/if}
@@ -1319,22 +1675,25 @@
 		{:else if preview}
 			<div class="pf-preview">
 				{#if previewedFingerprint !== fingerprint}
-					<p class="field-hint" style="margin:0;">The profile has changed since this preview. Preview again to see the change.</p>
+					<p class="field-hint" style="margin:0;">The profile changed after this test. Test again to see the result.</p>
 				{/if}
 				<p class="pf-preview-line">
-					{importModeLabel(preview.mode)} · headings found on “{preview.sheet}”, row {preview.headerRow} ·
-					{preview.rows.toLocaleString('en-US')} row{preview.rows === 1 ? '' : 's'} in the table
+					{importModeLabel(preview.mode)}. Headings on row {preview.headerRow} of “{preview.sheet}”. {preview.rows.toLocaleString('en-US')} row{preview.rows === 1 ? '' : 's'} in the table.
 				</p>
+				{#if preview.aiSections.length}
+					<p class="field-hint" style="margin:0;">
+						This test reads only the table. The AI reads {preview.aiSections.map((name) => `“${name}”`).join(', ')} when you upload a document. The items and totals below do not include {preview.aiSections.length === 1 ? 'this section' : 'these sections'}.
+					</p>
+				{/if}
 				<ul class="pf-preview-counts">
 					{#each preview.sections as counted (counted.key)}
 						<li>{counted.name} ({KIND_LABELS[counted.kind] ?? counted.kind}): {counted.count.toLocaleString('en-US')}</li>
 					{/each}
-					<li>Left out: {preview.ignoredCount.toLocaleString('en-US')}</li>
+					<li>Ignored: {preview.ignoredCount.toLocaleString('en-US')}</li>
 				</ul>
 				{#if preview.statedTotalMinor !== null}
 					<p class="pf-preview-line" class:pf-ok={preview.statedTotalMinor === preview.itemsTotalMinor} class:pf-problem={preview.statedTotalMinor !== preview.itemsTotalMinor}>
-						Items {money(preview.itemsTotalMinor)} against the stated total {money(preview.statedTotalMinor)}:
-						{preview.statedTotalMinor === preview.itemsTotalMinor ? 'they match' : `a difference of ${money(preview.itemsTotalMinor - preview.statedTotalMinor)}`}.
+						Items: {money(preview.itemsTotalMinor)}. Stated total: {money(preview.statedTotalMinor)}. {preview.statedTotalMinor === preview.itemsTotalMinor ? 'They agree.' : `Difference: ${money(preview.itemsTotalMinor - preview.statedTotalMinor)}.`}
 					</p>
 				{/if}
 				{#if preview.balance}
@@ -1367,18 +1726,17 @@
 						</table>
 					</div>
 					{#if preview.itemCount > preview.items.length}
-						<p class="field-hint">The first {preview.items.length} of {preview.itemCount.toLocaleString('en-US')} items.</p>
+						<p class="field-hint">This shows {preview.items.length} of {preview.itemCount.toLocaleString('en-US')} items.</p>
 					{/if}
 				{:else}
-					<p class="pf-problem">No row fits a section, so nothing would be imported.</p>
+					<p class="pf-problem">No row agrees with a section. The app imports nothing.</p>
 				{/if}
 				{#if preview.ignored.length}
-					<details class="pf-advanced">
-						<summary>Some rows left out</summary>
-						<ul class="pf-notes" style="margin-top:6px;">
+					<Disclosure label="Ignored rows">
+						<ul class="pf-notes">
 							{#each preview.ignored as line, lineIndex (lineIndex)}<li>{line}</li>{/each}
 						</ul>
-					</details>
+					</Disclosure>
 				{/if}
 			</div>
 		{/if}
@@ -1433,83 +1791,23 @@
 	{@render problemList(attempted ? errorsUnder(problems, conditionAt) : [])}
 {/snippet}
 
-{#snippet rowRules(section: SectionForm, at: string)}
-	<div class="field">
-		<span class="field-label">Row rules</span>
-		{#if !section.rows}
-			<p class="field-hint" style="margin-top:0;">
-				None: the AI reads this section. Add row rules to read its rows from the table's columns instead.
-			</p>
-			{#if canChange}
-				<button type="button" class="detail-card-action pf-add-fee" onclick={() => (section.rows = newRows())}>
-					<Plus size={13} /> Add row rules
-				</button>
-			{/if}
-			{@render problemList(shown(`${at}.rows`))}
-		{:else}
-			{@const rows = section.rows}
-			<div class="pf-rules">
-				<p class="pf-rules-head">Take a row when every condition holds</p>
-				{#if rows.where.length === 0}<p class="field-hint" style="margin-top:0;">No condition: every row of the table.</p>{/if}
-				{@render conditionList(rows, 'where', `${at}.rows`, 'Add condition')}
-
-				<p class="pf-rules-head">Mark a row to check when every condition holds</p>
-				{@render conditionList(rows, 'flagWhen', `${at}.rows`, 'Add check condition')}
-				{#if rows.flagWhen.length > 0 || rows.flagNote}
-					<Input
-						bind:value={rows.flagNote}
-						aria-label="Note for a marked row"
-						placeholder="What to check, e.g. Check that this withdrawal completed."
-						disabled={!canChange}
-						class="w-full"
-					/>
-					{@render problemList(shown(`${at}.rows.flagNote`))}
-				{/if}
-
-				{#if section.kind !== 'transfer'}
-					<p class="pf-rules-head">Fee type column</p>
-					<ProfileColumnSelect
-						options={headingOptions}
-						value={rows.feeTypeColumn}
-						noneLabel="None"
-						ariaLabel="Fee type column"
-						disabled={!canChange}
-						onchange={(value) => (rows.feeTypeColumn = value)}
-					/>
-					<p class="field-hint">
-						Optional. With a column named, each fee type lists the values of it that mean that type, and a row of no listed type
-						is left out.
-					</p>
-					{@render problemList(shown(`${at}.rows.feeTypeColumn`))}
-				{/if}
-
-				{#if canChange}
-					<button type="button" class="detail-card-action pf-add-fee" onclick={() => (section.rows = null)}>Remove row rules</button>
-				{/if}
-			</div>
-		{/if}
-	</div>
-{/snippet}
+<ConfirmDialog
+	bind:open={starterOpen}
+	title="Replace what you entered with the example?"
+	description="The form changes to the example. What you entered here is not kept."
+	confirmLabel="Use the example"
+	onConfirm={() => {
+		if (starterAsked) useStarter(starterAsked);
+	}}
+/>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
 	title="Delete this import profile?"
-	description={`“${saved?.name ?? ''}” will no longer be offered under “Read as”. Documents already read with it keep what they were read as: nothing in their groups changes, and records made from them stay as they are.`}
+	description={`“${saved?.name ?? ''}” will not show in “Read as”. Documents that you imported with it do not change. Their records do not change.`}
 	confirmLabel="Delete"
 	danger
 	onConfirm={deleteProfile}
-/>
-
-<ConfirmDialog
-	bind:open={replaceOpen}
-	title="Start again from this?"
-	description="What you have filled in on this page will be replaced."
-	confirmLabel="Replace"
-	danger
-	onConfirm={() => {
-		if (replaceAsk) applyStart(replaceAsk);
-		replaceAsk = null;
-	}}
 />
 
 <style>
@@ -1550,39 +1848,31 @@
 		font-size: 12.5px;
 	}
 
-	/* Starters */
-	.pf-starts {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-		gap: 8px;
-	}
-	.pf-start {
+	/* Starting from an example */
+	.pf-starters {
 		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		padding: 10px 12px;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		background: var(--card);
-		font-family: inherit;
-		text-align: left;
-		cursor: pointer;
-		color: var(--foreground);
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin-top: 10px;
 	}
-	.pf-start:hover {
-		border-color: var(--primary);
-	}
-	.pf-start.on {
-		border-color: var(--primary);
-		background: var(--primary-soft);
-	}
-	.pf-start-name {
-		font-size: 13px;
-		font-weight: 500;
-	}
-	.pf-start-hint {
-		font-size: 12px;
+	.pf-starters-label {
+		font-size: 12.5px;
 		color: var(--muted-foreground);
+		margin-right: 2px;
+	}
+	.pf-starter {
+		height: 28px;
+		padding: 0 10px;
+		font-size: 12.5px;
+	}
+	.pf-starter.on {
+		border-color: var(--primary);
+		background: var(--accent);
+	}
+	.pf-starter:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
 	}
 
 	/* Phrases */
@@ -1636,9 +1926,96 @@
 		gap: 12px;
 		margin-top: 4px;
 	}
+	/* What to import: a glyph of the part of a document each kind takes. */
+	.pf-kinds {
+		grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+	}
+	.pf-kind {
+		align-items: center;
+	}
+	.pf-kind-glyph {
+		display: inline-flex;
+		flex-shrink: 0;
+		color: var(--muted-foreground);
+	}
+	.pf-kind.on .pf-kind-glyph {
+		color: var(--primary);
+	}
+	.pf-kind-glyph :global(.pf-glyph-on) {
+		fill: var(--primary-soft);
+	}
+	.pf-kind.on .pf-kind-glyph :global(.pf-glyph-on) {
+		fill: color-mix(in oklch, var(--primary) 35%, transparent);
+	}
+	.pf-sections-hint {
+		margin: -4px 0 0;
+	}
+	/* The page's own headings: the groups of sections, then each section by
+	   the name the user gave it. Not the small card labels. */
+	.pf-group-title {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		color: var(--foreground);
+	}
+	.pf-section-title {
+		margin: 0;
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--foreground);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
 	.pf-section-tools {
 		display: inline-flex;
 		gap: 4px;
+	}
+	/* A section's head folds it to one line: its name, kind and rows. */
+	.pf-section :global(.pf-fold) {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		min-width: 0;
+		flex: 1;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--foreground);
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+	.pf-section :global(.pf-fold svg) {
+		align-self: center;
+		flex-shrink: 0;
+		color: var(--muted-foreground);
+		transition: transform 150ms;
+	}
+	.pf-section :global(.pf-fold svg.pf-fold-open) {
+		transform: rotate(90deg);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.pf-section :global(.pf-fold svg) {
+			transition: none;
+		}
+	}
+	.pf-section :global(.pf-fold:focus-visible) {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+	.pf-fold-meta {
+		font-size: 12px;
+		color: var(--muted-foreground);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.pf-folded .detail-card-head {
+		margin-bottom: 0;
 	}
 	.pf-icon-btn {
 		display: inline-flex;
@@ -1782,13 +2159,83 @@
 		}
 	}
 
-	.pf-advanced summary {
-		cursor: pointer;
+	.pf-imported-text {
 		font-size: 12.5px;
-		font-weight: 500;
+		color: var(--muted-foreground);
+		margin: 0 0 8px;
+	}
+	.pf-imported-missing {
+		margin: 0;
+		padding-left: 18px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 12.5px;
+		color: var(--amber);
+		overflow-wrap: anywhere;
 	}
 
-	.pf-summary ul,
+	/* Before you save */
+	.pf-check-count {
+		font-size: 12px;
+		color: var(--muted-foreground);
+	}
+	.pf-check.attempted .pf-check-count {
+		color: var(--red);
+	}
+	.pf-check-ready {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin: 0;
+		font-size: 13px;
+		color: var(--green);
+	}
+	.pf-check-list {
+		list-style: none;
+		margin: 0 -8px;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		max-height: 60vh;
+		overflow-y: auto;
+	}
+	.pf-check-item {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		width: 100%;
+		padding: 6px 8px;
+		border: 0;
+		border-radius: 6px;
+		background: none;
+		text-align: left;
+		font: inherit;
+		cursor: pointer;
+	}
+	.pf-check-item:hover {
+		background: var(--accent);
+	}
+	.pf-check-item:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: -2px;
+	}
+	.pf-check-place {
+		font-size: 12.5px;
+		font-weight: 500;
+		color: var(--foreground);
+		overflow-wrap: anywhere;
+	}
+	.pf-check-message {
+		font-size: 12px;
+		color: var(--muted-foreground);
+		overflow-wrap: anywhere;
+	}
+	.pf-check.attempted .pf-check-message {
+		color: var(--red);
+	}
+
 	.pf-notes {
 		margin: 0;
 		padding-left: 18px;
@@ -1796,10 +2243,6 @@
 		flex-direction: column;
 		gap: 6px;
 		font-size: 12.5px;
-	}
-	.pf-summary li {
-		color: var(--red);
-		overflow-wrap: anywhere;
 	}
 	.pf-notes {
 		color: var(--muted-foreground);
@@ -1811,8 +2254,76 @@
 		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 		gap: 0 12px;
 	}
-	.pf-fee-values {
-		margin: -2px 0 2px;
+	.pf-more {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	/* Labels the sample prints outside its table, offered as answers. */
+	.pf-suggest {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin-top: 6px;
+	}
+	.pf-suggest-lead {
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+	}
+	.pf-suggest-chip {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 6px;
+		padding: 2px 8px;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--card);
+		font-size: 12px;
+		color: var(--foreground);
+		cursor: pointer;
+	}
+	.pf-suggest-chip:hover,
+	.pf-suggest-chip:focus-visible {
+		border-color: var(--primary);
+	}
+	.pf-suggest-value {
+		color: var(--muted-foreground);
+		font-variant-numeric: tabular-nums;
+	}
+	.pf-fee-column {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 8px;
+		max-width: 420px;
+	}
+	.pf-fee-column > :last-child {
+		flex: 1;
+		min-width: 180px;
+	}
+	.pf-value-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.pf-value-chip {
+		padding: 2px 8px;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--card);
+		font-size: 12px;
+		color: var(--muted-foreground);
+		cursor: pointer;
+	}
+	.pf-value-chip.on {
+		border-color: var(--primary);
+		background: var(--primary-soft);
+		color: var(--foreground);
+	}
+	.pf-value-chip:disabled {
+		cursor: not-allowed;
 	}
 	.pf-rules {
 		display: flex;
@@ -1821,12 +2332,6 @@
 		padding: 10px 12px;
 		border: 1px dashed var(--border);
 		border-radius: 8px;
-	}
-	.pf-rules-head {
-		margin: 4px 0 0;
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--muted-foreground);
 	}
 	.pf-condition {
 		display: grid;
@@ -1843,13 +2348,6 @@
 		.pf-condition > :last-child {
 			justify-self: end;
 		}
-	}
-	.pf-preview-pick {
-		flex-wrap: wrap;
-	}
-	.pf-preview-pick input[type='file'] {
-		font-size: 13px;
-		max-width: 100%;
 	}
 	.pf-preview {
 		margin-top: 12px;

@@ -8,11 +8,14 @@ import {
   layoutHeadings,
   newCondition,
   newFeeType,
-  newLayout,
   newRows,
   newSection,
+  newSectionFor,
   payloadFromForm,
+  problemPlace,
   sectionKeys,
+  setKind,
+  transactionsSection,
   slugifyKey,
   typingKey,
 } from "./import-profile-form.js";
@@ -175,7 +178,8 @@ describe("the form and the profile", () => {
     form.description = "A bank's CSV export.";
     form.sections[0].name = "Charges";
     form.sections[0].description = "Each charge.";
-    form.layout = newLayout();
+    setKind(form, "table");
+    if (!form.layout) throw new Error("no table");
     form.layout.headersText = "Date\nDetails\nAmount\nType";
     form.layout.date = "Date";
     form.layout.description = "Details";
@@ -195,14 +199,47 @@ describe("the form and the profile", () => {
       flagNote: "",
       feeTypeColumn: null,
     });
-    expect(result.profile.mode).toBe("summary");
+    expect(result.profile.mode).toBe("every_transaction");
     expect(readsFromColumns(result.profile)).toBe(true);
 
-    form.layout = null;
+    // Read by the AI instead, the section's rules are not sent.
+    setKind(form, "summary");
+    const read = checkProfile(payloadFromForm(form));
+    expect(read.ok && read.profile.sections[0].rows).toBeUndefined();
+  });
+
+  it("keeps a section's row rules while the AI reads it, and sends them only from the table (FR-057)", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_every_transaction")!),
+    );
+    expect(form.kind).toBe("table");
+    setKind(form, "mixed");
+    const section = form.sections[0];
+    const rules = section.rows;
+    section.readBy = "ai";
+    section.description = "";
     const refused = checkProfile(payloadFromForm(form));
-    expect(refused.ok === false && refused.errors.map((e) => e.path)).toEqual([
-      "sections[0].rows",
-    ]);
+    // The AI needs a description to find the section's lines.
+    expect(
+      refused.ok === false &&
+        errorsAt(refused.errors, "sections[0].description"),
+    ).toHaveLength(1);
+    section.description = "Each withdrawal.";
+    const read = checkProfile(payloadFromForm(form));
+    expect(read.ok && read.profile.sections[0].rows).toBeUndefined();
+    expect(section.rows).toBe(rules);
+
+    setKind(form, "table");
+    const back = checkProfile(payloadFromForm(form));
+    expect(back.ok && back.profile.sections[0].rows).toBeTruthy();
+  });
+
+  it("asks no description of a section read from the table (FR-057)", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_withdrawals")!),
+    );
+    for (const section of form.sections) section.description = "";
+    expect(checkProfile(payloadFromForm(form)).ok).toBe(true);
   });
 
   it("sends the profiles a section names as the same money, never for a transfer (FR-066)", () => {
@@ -278,6 +315,7 @@ describe("the form and the profile", () => {
       description: "A marketplace wallet report.",
       phrases: [],
       instructions: "",
+      kind: "table" as const,
       mode: "every_transaction" as const,
       statedTotalLabels: {},
       accountId: 7,
@@ -386,12 +424,12 @@ describe("the form and the profile", () => {
 
     // Changing the profile to that mode settles it: every section then reads
     // Every transaction, as the user chose.
-    form.mode = "every_transaction";
+    setKind(form, "transactions");
     const changed = checkProfile(payloadFromForm(form));
     expect(changed.ok).toBe(true);
 
     // So does keeping the section, which reads it in the profile's mode.
-    form.mode = "summary";
+    setKind(form, "summary");
     form.sections[1].legacyMode = null;
     const kept = checkProfile(payloadFromForm(form));
     expect(kept.ok).toBe(true);
@@ -486,5 +524,185 @@ describe("where a problem is shown", () => {
       "Not JSON.",
     ]);
     expect(errorsUnder(errors, "sections[1]")).toEqual([]);
+  });
+});
+
+describe("what a profile imports (FR-055, FR-057)", () => {
+  it("is the kind saved, or worked out from an older profile's shape", () => {
+    expect(blankForm().kind).toBe("summary");
+    expect(
+      formFromDraft(withAccounts(starterDraft("wallet_withdrawals")!)).kind,
+    ).toBe("table");
+    const { kind: _kind, ...older } = withAccounts(
+      starterDraft("wallet_withdrawals")!,
+    );
+    void _kind;
+    expect(formFromDraft(older).kind).toBe("table");
+  });
+
+  it("sets the mode, the table and the sections when it changes", () => {
+    const form = formFromDraft(
+      withAccounts(starterDraft("wallet_every_transaction")!),
+    );
+    const rules = form.sections.map((section) => section.rows);
+
+    setKind(form, "summary");
+    expect(form.mode).toBe("summary");
+    expect(form.layout).toBeNull();
+    expect(form.sections.every((section) => section.readBy === "ai")).toBe(
+      true,
+    );
+    // The rules stay in the form, unsent, for a switch back.
+    expect(form.sections.map((section) => section.rows)).toEqual(rules);
+
+    setKind(form, "transactions");
+    expect(form.mode).toBe("every_transaction");
+
+    setKind(form, "table");
+    expect(form.mode).toBe("every_transaction");
+    expect(form.layout).not.toBeNull();
+    expect(form.sections.every((section) => section.readBy === "table")).toBe(
+      true,
+    );
+    expect(newSectionFor(form).readBy).toBe("table");
+  });
+
+  it("starts a table with one section that takes every row, in place of a blank one", () => {
+    const form = blankForm();
+    setKind(form, "table");
+    expect(form.sections).toHaveLength(1);
+    expect(form.sections[0]).toMatchObject({
+      name: "Transactions",
+      kind: "by_sign",
+      readBy: "table",
+    });
+    expect(form.sections[0].rows?.where).toEqual([]);
+
+    // A mixed profile keeps its AI sections beside the table's.
+    const mixed = blankForm();
+    mixed.sections[0].name = "Fees";
+    setKind(mixed, "mixed");
+    expect(mixed.sections.map((s) => [s.name, s.readBy])).toEqual([
+      ["Transactions", "table"],
+      ["Fees", "ai"],
+    ]);
+    expect(mixed.mode).toBe("summary");
+    expect(transactionsSection().kind).toBe("by_sign");
+  });
+});
+
+describe("problemPlace", () => {
+  function twoSections() {
+    const form = blankForm();
+    const fees = { ...newSection(), name: "Fees" };
+    fees.feeTypes = [newFeeType(), newFeeType()];
+    form.sections = [fees, { ...newSection(), name: "  " }];
+    return { form, fees, other: form.sections[1] };
+  }
+
+  it("names a profile field and goes to it", () => {
+    const { form } = twoSections();
+    expect(problemPlace("name", form)).toEqual({
+      label: "Name",
+      targets: ["pf-name"],
+    });
+    expect(problemPlace("mode", form).label).toBe("What to import");
+    expect(problemPlace("phrases[2]", form)).toEqual({
+      label: "Fixed phrases",
+      targets: ["pf-phrases"],
+    });
+    expect(problemPlace("sections", form).targets).toEqual(["pf-sections"]);
+  });
+
+  it("names a section by its name, or by its place when it has none", () => {
+    const { form, fees, other } = twoSections();
+    expect(problemPlace("sections[0].name", form)).toEqual({
+      label: "Section “Fees” › Name",
+      targets: [`pf-s-${fees.uid}-name`, `pf-s-${fees.uid}`],
+      sectionUid: fees.uid,
+    });
+    expect(problemPlace("sections[1]", form)).toEqual({
+      label: "Section 2",
+      targets: [`pf-s-${other.uid}`],
+      sectionUid: other.uid,
+    });
+    // A section's key is made from its name.
+    expect(problemPlace("sections[0].key", form).label).toBe(
+      "Section “Fees” › Name",
+    );
+  });
+
+  it("numbers fee types and goes to the row, then the list, then the section", () => {
+    const { form, fees } = twoSections();
+    const second = fees.feeTypes[1];
+    expect(
+      problemPlace("sections[0].feeTypes[1].categoryAccountId", form),
+    ).toEqual({
+      label: "Section “Fees” › Fee type 2 › Category",
+      targets: [
+        `pf-s-${fees.uid}-fee-${second.uid}`,
+        `pf-s-${fees.uid}-fees`,
+        `pf-s-${fees.uid}`,
+      ],
+      sectionUid: fees.uid,
+    });
+    expect(problemPlace("sections[0].feeTypes[0].key", form).label).toBe(
+      "Section “Fees” › Fee type 1",
+    );
+    expect(problemPlace("sections[0].feeTypes", form).label).toBe(
+      "Section “Fees” › Fee types",
+    );
+  });
+
+  it("says when the field is folded inside a section's More", () => {
+    const { form, fees } = twoSections();
+    const more = (path: string) => problemPlace(path, form);
+    expect(more("sections[0].sameMoneyAs").inMore).toBe("section");
+    expect(more("sections[0].extras.properties.order").label).toBe(
+      "Section “Fees” › More › Extra fields",
+    );
+    expect(more("sections[0].rows.flagWhen[0].value")).toMatchObject({
+      label: "Section “Fees” › More › Rows for review",
+      inMore: "section",
+    });
+    expect(more("sections[0].rows.where[1].column").targets).toEqual([
+      `pf-s-${fees.uid}-where`,
+      "pf-sorting",
+      `pf-s-${fees.uid}`,
+    ]);
+    expect(more("sections[0].rows.feeTypeColumn")).not.toHaveProperty("inMore");
+    expect(more("sections[0].fixedCategoryAccountId")).not.toHaveProperty(
+      "inMore",
+    );
+  });
+
+  it("places the table's fields above the sample or under More options", () => {
+    const { form } = twoSections();
+    expect(problemPlace("layout", form)).toEqual({
+      label: "Table",
+      targets: ["pf-table"],
+    });
+    expect(problemPlace("layout.columns.date", form)).toEqual({
+      label: "Table › Columns",
+      targets: ["pf-table"],
+    });
+    expect(problemPlace("layout.dateFormat", form)).toEqual({
+      label: "Table › More options › Date format",
+      targets: ["pf-l-dateFormat", "pf-table"],
+      inMore: "table",
+    });
+    expect(problemPlace("layout.direction.column", form).label).toBe(
+      "Table › Columns",
+    );
+    expect(problemPlace("layout.direction.in[0]", form).inMore).toBe("table");
+  });
+
+  it("falls back to the profile for a path it does not know", () => {
+    const { form } = twoSections();
+    expect(problemPlace("", form)).toEqual({ label: "Profile", targets: [] });
+    expect(problemPlace("sections[9].name", form)).toEqual({
+      label: "Section 10",
+      targets: ["pf-sections"],
+    });
   });
 });

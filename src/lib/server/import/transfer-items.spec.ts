@@ -485,6 +485,7 @@ describe("a profile's transfer section", () => {
     expect(JSON.parse(row!.optionsJson)).toEqual({
       accountId: ids.wallet,
       mode: "summary",
+      kind: "summary",
     });
     const saved = getImportProfile(db, id)!;
     expect(saved.accountId).toBe(ids.wallet);

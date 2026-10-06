@@ -70,7 +70,7 @@ const { auditLog, importProfiles, importQueue, users } = schema;
 const { createImportProfile, setImportProfileEnabled, getImportProfile } =
   await import("$lib/server/services/import-profiles.js");
 const { loadImportPage } = await import("$lib/server/loaders/import.js");
-const { formFromDraft, payloadFromForm } =
+const { formFromDraft, payloadFromForm, setKind } =
   await import("$lib/import-profile-form.js");
 type LedgerDb = import("$lib/server/ledger/types.js").LedgerDb;
 type ProfileDraft = import("$lib/import-profile-schema.js").ImportProfileDraft;
@@ -115,6 +115,7 @@ function feeDocument(name = "Fee notice"): ProfileDraft {
 function everyTransaction(name = "Fee rows"): ProfileDraft {
   return {
     ...feeDocument(name),
+    kind: "transactions",
     mode: "every_transaction",
     statedTotalLabels: { every_transaction: "Total of the rows" },
   };
@@ -762,7 +763,7 @@ describe("the profile's import mode", () => {
   it("lets the mixed profile be changed to Every transaction instead", async () => {
     const id = legacy("Statement", ["summary", "every_transaction"]);
     const form = formFromDraft(getImportProfile(db, id)!);
-    form.mode = "every_transaction";
+    setKind(form, "transactions");
     const res = await routes.patch(id, payloadFromForm(form));
     expect(res.status).toBe(200);
     expect(getImportProfile(db, id)?.mode).toBe("every_transaction");

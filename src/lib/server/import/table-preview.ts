@@ -2,7 +2,9 @@
  * A preview of how a profile reads a sample spreadsheet from its columns (006
  * FR-053 to FR-055), for the profile editor: where the table was found, the
  * first rows as items, how many rows each section took and how many were left
- * out, and any reason the reading would fail.
+ * out, and any reason the reading would fail. In a profile where the AI
+ * reads some sections beside the table (FR-057), only the table is read: the
+ * preview never calls the AI, and names the sections it leaves to it.
  *
  * It is the reading itself (`readFromColumns`) run on a file that is never
  * stored, with a profile that is never saved, so what the preview shows is
@@ -14,7 +16,6 @@ import { DocumentTypeLabels, type DocumentTypeCode } from "$lib/enums.js";
 import {
   checkTablePreview,
   profileSections,
-  readsFromColumns,
   type ProfileError,
 } from "$lib/import-profile-schema.js";
 import { type ImportModeValue } from "$lib/import-reading.js";
@@ -57,8 +58,16 @@ export interface TablePreview {
   headerRow: number;
   /** The table's rows, from below the headings to the first blank row. */
   rows: number;
-  /** How many items each section took, in the profile's order. */
+  /**
+   * How many items each section read from the table took, in the profile's
+   * order.
+   */
   sections: { key: string; name: string; kind: string; count: number }[];
+  /**
+   * The sections the AI reads from the rest of the sheet (FR-057), which the
+   * preview does not read. Their items are not in `items` or the totals.
+   */
+  aiSections: string[];
   items: PreviewItem[];
   /** All the items, not only those listed. */
   itemCount: number;
@@ -112,17 +121,10 @@ export function previewTable(
   }
   const { profile } = checked;
   const { mode } = profile;
-  const read = profileSections(profile);
-  if (!readsFromColumns(profile)) {
-    const missing = read
-      .filter((section) => !section.rows)
-      .map((section) => `“${section.name || section.key}”`)
-      .join(", ");
-    return {
-      ok: false,
-      error: `A spreadsheet is read from its columns only when every section has row rules; ${missing} has none, so the AI would read it instead.`,
-    };
-  }
+  const read = profileSections(profile).filter((section) => section.rows);
+  const aiSections = profileSections(profile)
+    .filter((section) => !section.rows)
+    .map((section) => section.name || section.key);
 
   const workbook = workbookOf(
     file.bytes,
@@ -184,6 +186,7 @@ export function previewTable(
         kind: section.kind,
         count: counts.get(section.key) ?? 0,
       })),
+      aiSections,
       items: reading.items.slice(0, PREVIEW_ROWS).map((item) => ({
         row:
           item.sourceLine === null

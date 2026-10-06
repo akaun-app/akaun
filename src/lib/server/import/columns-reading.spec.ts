@@ -131,6 +131,8 @@ const { setSetting, SETTING_KEYS } = await import("../settings.js");
 const { NO_PROVIDERS, processImportJob, severalLayoutsFit } =
   await import("./process-job.js");
 const { itemAttention } = await import("./group-state.js");
+const { needsAi, needsCells, planForProfile } =
+  await import("./reading-plan.js");
 const { parseProfileSnapshot } = await import("./profile-snapshot.js");
 const { describeReading } =
   await import("$lib/components/import/review-card.js");
@@ -552,7 +554,7 @@ describe("reading a spreadsheet from its columns", () => {
     expect(row.error).toBe(NO_PROVIDERS);
   });
 
-  it("stops a PDF before it is read when no provider is set up, as before", async () => {
+  it("refuses a PDF read with a profile that reads a table, naming why (FR-057)", async () => {
     const profileId = saveProfile(fullProfile());
     const row = await run(
       queueFile("wallet.pdf", "%PDF-1.4 not really", {
@@ -561,7 +563,8 @@ describe("reading a spreadsheet from its columns", () => {
       }),
     );
     expect(row.state).toBe(ImportState.Failed);
-    expect(row.error).toBe(NO_PROVIDERS);
+    expect(row.error).toContain("reads a spreadsheet's table");
+    expect(row.error).toContain("not a spreadsheet");
   });
 
   it("does not take an item as a duplicate of a record with another reference (FR-063)", async () => {
@@ -1199,5 +1202,193 @@ describe("the wallet report starters", () => {
         self.ok === false && self.errors.map((error) => error.path),
       ).toEqual(["sections[0].sameMoneyAs[0]"]);
     });
+  });
+});
+
+// ── The table by code, the rest by the AI (006 FR-057) ──────────────────────
+
+describe("reading the table by code and the rest by the AI", () => {
+  /** Order rows from the table; a fee printed beside it, by the AI. */
+  function hybridProfile(): ProfileInput {
+    return fullProfile({
+      name: "Wallet report, with its fee",
+      sections: [
+        ...orderSections({ orders: ids.sales }),
+        {
+          key: "fees",
+          name: "Service fee",
+          description: "The monthly service fee printed above the table.",
+          kind: "expense",
+          fixedCategoryAccountId: null,
+          feeTypes: [],
+          extras: null,
+        },
+      ],
+    });
+  }
+
+  const feeAnswer = {
+    header: {
+      counterparty: "Someone else",
+      date: "2026-03-31",
+      reference: "WR-03",
+      currency: "MYR",
+    },
+    stated_total: null,
+    sections: {
+      fees: [
+        {
+          description: "Monthly service fee",
+          amount: 5,
+          date: null,
+          reference: null,
+          source_line: 2,
+        },
+      ],
+    },
+    ignored: [],
+  };
+
+  it("never sends the table's rows to the AI, and joins both readings", async () => {
+    const profileId = saveProfile(hybridProfile());
+    addProvider();
+    const model = serve([{ text: JSON.stringify(feeAnswer) }]);
+    const row = await run(withProfile(profileId));
+
+    expect(row.error).toBeNull();
+    expect(row.state).toBe(ImportState.Grouped);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const prompt = JSON.stringify(model.doGenerateCalls[0].prompt);
+    expect(prompt).not.toContain("Income from Order #A1");
+    expect(prompt).not.toContain("Withdrawal to bank");
+    expect(prompt).toContain("Transaction Type");
+    expect(prompt).toContain("of the table, read by code, left out here");
+
+    const items = itemsOf(row.id);
+    const fee = items.find((item) => item.sectionKey === "fees")!;
+    expect(fee).toMatchObject({
+      documentType: DocumentType.Expense,
+      itemName: "Monthly service fee",
+      amount: 5,
+    });
+    expect(items.filter((item) => item.sectionKey !== "fees")).toHaveLength(6);
+    // The layout's other party wins over the AI's.
+    expect(fee.supplier).toBe("Example Marketplace");
+
+    const notes = parseExtractionNotes(row.extractionNotes)!;
+    expect(notes.method).toBe("columns_ai");
+    const snapshot = parseProfileSnapshot(row.profileSnapshot)!;
+    expect(describeReading({ ...row, profile: snapshot })).toBe(
+      "Read with “Wallet report, with its fee” (chosen) · Every transaction · table read from columns, the rest by AI",
+    );
+  });
+
+  it("needs an AI provider, since the AI reads part of it", async () => {
+    const profileId = saveProfile(hybridProfile());
+    const row = await run(withProfile(profileId));
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toBe(NO_PROVIDERS);
+  });
+
+  it("refuses a PDF, which has no table to read", async () => {
+    const profileId = saveProfile(hybridProfile());
+    addProvider();
+    const model = serve([{ text: JSON.stringify(feeAnswer) }]);
+    const row = await run(
+      queueFile("wallet.pdf", "%PDF-1.4 not really", {
+        readAs: ImportReadAs.Profile,
+        profileId: String(profileId),
+        preExtractedText: "Wallet report\nMonthly service fee 5.00",
+      }),
+    );
+    expect(row.state).toBe(ImportState.Failed);
+    expect(row.error).toContain("not a spreadsheet");
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+});
+
+// ── The reading plan of each kind of profile ────────────────────────────────
+
+describe("the reading plan of each kind", () => {
+  /** The order rows from the table, and a fee beside it by the AI. */
+  const feeSection = {
+    key: "fees",
+    name: "Service fee",
+    description: "The monthly service fee printed above the table.",
+    kind: "expense" as const,
+    fixedCategoryAccountId: null,
+    feeTypes: [],
+    extras: null,
+  };
+
+  function planOf(input: ProfileInput, filename = "wallet.xlsx") {
+    const id = saveProfile(input);
+    const row = queueFile(filename, walletReportFixture().xlsx, {
+      readAs: ImportReadAs.Profile,
+      profileId: String(id),
+    });
+    return planForProfile(db, row, id, "chosen");
+  }
+
+  it("reads a table by code only, with no AI", () => {
+    const planned = planOf(fullProfile({ kind: "table" }));
+    if (!planned.ok) throw new Error(planned.reason);
+    expect(planned.plan.table).not.toBeNull();
+    expect(planned.plan.ai).toBeNull();
+    expect(needsAi(planned.plan)).toBe(false);
+    expect(needsCells(planned.plan)).toBe(true);
+  });
+
+  it("reads summary lines by the AI in one call, and transaction lines in pieces", () => {
+    const summary = planOf({
+      ...aiProfile(),
+      name: "Summary",
+      kind: "summary",
+    });
+    const lines = planOf({
+      ...aiProfile(),
+      name: "Lines",
+      kind: "transactions",
+    });
+    if (!summary.ok || !lines.ok) throw new Error("not planned");
+    expect(summary.plan).toMatchObject({ table: null, mode: "summary" });
+    expect(summary.plan.ai?.pieces).toBe(false);
+    expect(lines.plan.ai?.pieces).toBe(true);
+    expect(needsCells(lines.plan)).toBe(false);
+  });
+
+  it("reads a mixed profile's table by code and only its other sections by the AI", () => {
+    const planned = planOf(
+      fullProfile({
+        name: "Wallet with fee",
+        kind: "mixed",
+        // A mixed profile reads in Summary, so its totals are kept there.
+        layout: walletLayout({
+          statedTotalLabels: { summary: ["Total Money In", "Total Money Out"] },
+        }),
+        sections: [...orderSections({ orders: ids.sales }), feeSection],
+      }),
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    expect(planned.plan.mode).toBe("summary");
+    expect(planned.plan.table).not.toBeNull();
+    expect(planned.plan.ai?.pieces).toBe(false);
+    expect(planned.plan.ai?.reading.sections.map((s) => s.key)).toEqual([
+      "fees",
+    ]);
+    // Every section is made into items, those from the table marked so.
+    expect(
+      planned.plan.reading.sections.map((s) => [s.key, s.fromTable ?? false]),
+    ).toEqual([
+      ["orders", true],
+      ["adjustments", true],
+      ["fees", false],
+    ]);
+  });
+
+  it("refuses a PDF for a kind that reads a table", () => {
+    const planned = planOf(fullProfile({ kind: "table" }), "wallet.pdf");
+    expect(planned.ok).toBe(false);
+    expect(!planned.ok && planned.reason).toContain("not a spreadsheet");
   });
 });

@@ -138,7 +138,7 @@ describe("starters", () => {
     const starter = IMPORT_PROFILE_STARTERS.find(
       (entry) => entry.id === "wallet_every_transaction",
     )!;
-    expect(starter.hint).toMatch(/counted twice/);
+    expect(starter.hint).toMatch(/counts the sales two times/);
     expect(starter.draft.description).toMatch(/counted twice/);
   });
 
@@ -206,6 +206,7 @@ describe("checkProfile", () => {
     expect(result.ok && Object.keys(result.profile).sort()).toEqual([
       "description",
       "instructions",
+      "kind",
       "mode",
       "name",
       "phrases",
@@ -330,11 +331,13 @@ describe("checkProfile", () => {
     input.description = "";
     input.sections[0].name = "";
     input.sections[0].description = "";
+    // The recognition description is checked last: whether it is needed
+    // depends on the kind, known once the sections are read.
     expect(paths(validateProfile(input))).toEqual([
       "name",
-      "description",
       "sections[0].name",
       "sections[0].description",
+      "description",
     ]);
   });
 
@@ -983,10 +986,13 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
     ]);
   });
 
-  it("says which profiles read from columns: a layout, and rules on every section it reads", () => {
+  it("works out the kind of a profile saved without one: a layout, and rules on every section it reads", () => {
     const result = checkProfile(wallet());
     if (!result.ok) throw new Error("not ok");
-    const profile = result.profile;
+    expect(result.profile.kind).toBe("table");
+    // Saved before the kind was stored: its shape says.
+    const { kind: _kind, ...profile } = result.profile;
+    void _kind;
     expect(readsFromColumns(profile)).toBe(true);
     const noRules = { ...profile.sections[0], key: "other", rows: undefined };
     expect(
@@ -1130,12 +1136,9 @@ describe("checkTablePreview", () => {
     if (!result.ok) return;
     expect(result.profile.layout).toEqual(walletLayout());
     expect(paths(result.unsaved).sort()).toEqual(
-      [
-        "accountId",
-        "description",
-        "name",
-        "sections[0].counterAccountId",
-      ].sort(),
+      // No description: a profile that reads a table is found by its
+      // headings, so it needs none.
+      ["accountId", "name", "sections[0].counterAccountId"].sort(),
     );
   });
 

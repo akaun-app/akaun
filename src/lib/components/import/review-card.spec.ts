@@ -118,20 +118,20 @@ describe("describeReading", () => {
       describeReading({ readAs: "auto", readHow: "detected", profile }),
     ).toBe("Read with “Shopee statement” (detected)");
     expect(describeReading({ readAs: "auto", readHow: "standard" })).toBe(
-      "Standard reading (auto-detect)",
+      "Single record (auto-detect)",
     );
   });
 
   it("says the standard reading and several items, and how each was picked", () => {
     expect(describeReading({ readAs: "receipt", readHow: "chosen" })).toBe(
-      "Standard reading (chosen)",
+      "Single record (chosen)",
     );
     expect(describeReading({ readAs: "items", readHow: "chosen" })).toBe(
-      "Read as several items (chosen)",
+      "Multiple records (chosen)",
     );
     // A row from before 006 has neither column, and was read as a receipt.
     expect(describeReading({ readAs: null, readHow: null })).toBe(
-      "Standard reading",
+      "Single record",
     );
     // A profile reading whose copy is missing still says it was a profile.
     expect(describeReading({ readAs: "profile", readHow: "chosen" })).toBe(
@@ -264,12 +264,12 @@ describe("readingLabel", () => {
         { readAs: "items", readHow: "chosen" },
         { profilesEnabled: false, waiting: true },
       ),
-    ).toBe("Read as several items (chosen)");
+    ).toBe("Multiple records (chosen)");
   });
 
   it("names the standard reading once profiles exist, and Auto-detect while it waits", () => {
     expect(readingLabel(autoStandard, { profilesEnabled: true })).toBe(
-      "Standard reading (auto-detect)",
+      "Single record (auto-detect)",
     );
     expect(
       readingLabel(autoStandard, { profilesEnabled: true, waiting: true }),
@@ -282,7 +282,7 @@ describe("readingLabel", () => {
         { readAs: "receipt", readHow: "chosen" },
         { profilesEnabled: true, waiting: true },
       ),
-    ).toBe("Standard reading (chosen)");
+    ).toBe("Single record (chosen)");
   });
 });
 

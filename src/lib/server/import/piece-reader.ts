@@ -670,17 +670,73 @@ export async function readInPieces(
   providers: LLMProviderConfig[],
   options: PieceReadOptions = {},
 ): Promise<DocumentReading> {
+  const { profile } = params;
+  const read = await readEnvelopeInPieces(params, providers, options);
+  const reading = readingFromEnvelope(read.envelope, profile, {
+    today: params.today ?? new Date().toISOString().slice(0, 10),
+    mainCurrency: params.mainCurrency,
+    schemaId: profile.schemaId,
+  });
+  // Marked as read by the AI in one call, so the reference check of FR-063
+  // applies to it as it does to a reading in pieces: in Every transaction
+  // mode each item carries only its own reference.
+  if (read.method === "ai") {
+    return { ...reading, notes: { ...reading.notes, method: "ai" } };
+  }
+  const ignoredCount = piecesIgnoredCount(read.envelope, reading.items.length);
+  log.debug(
+    {
+      schemaId: reading.schemaId,
+      items: reading.items.length,
+      ignoredCount,
+      controlTotal: reading.controlTotal,
+    },
+    "Document read in pieces",
+  );
+  return {
+    ...reading,
+    notes: { ...reading.notes, ignoredCount, method: "ai_pieces" },
+  };
+}
+
+/**
+ * Every line a reading in pieces left out, not only the sample `ignored`
+ * keeps: those the pieces listed as ignored, and those of a section that the
+ * reading's own rules left out (an amount of zero, say). A line a model
+ * listed as ignored from its context, against its rules, counts twice; the
+ * count is a guide for the reviewer, as the list is (FR-012).
+ */
+export function piecesIgnoredCount(
+  envelope: Pick<ReadEnvelope, "sections" | "ignored">,
+  itemCount: number,
+): number {
+  const listed = Object.values(envelope.sections).reduce(
+    (sum, items) => sum + items.length,
+    0,
+  );
+  return (
+    envelope.ignored.filter((line) => line.trim() !== "").length +
+    listed -
+    itemCount
+  );
+}
+
+/**
+ * Reads the document as `readInPieces` does, and returns the model's answer
+ * with the pieces joined, before any item is made: `method` says whether it
+ * took one call or pieces. The part of a spreadsheet the AI reads beside its
+ * table is read this way, and joined with the table's rows (FR-057).
+ */
+export async function readEnvelopeInPieces(
+  params: DocumentReadingParams,
+  providers: LLMProviderConfig[],
+  options: PieceReadOptions = {},
+): Promise<{ envelope: ReadEnvelope; method: "ai" | "ai_pieces" }> {
   const limits: PieceReadLimits = { ...DEFAULT_LIMITS, ...options.limits };
   if (providers.length === 0) throw new Error("No LLM provider is configured");
   checkDocumentLength(params.text);
 
   const { profile } = params;
-  const today = params.today ?? new Date().toISOString().slice(0, 10);
-  const context = {
-    today,
-    mainCurrency: params.mainCurrency,
-    schemaId: profile.schemaId,
-  };
   const doc = documentLines(params.text);
   const lineCount = doc.lineRows.length;
   const callers: Callers = {
@@ -723,11 +779,7 @@ export async function readInPieces(
         true,
       );
       checkItemCount(envelope, profile);
-      // Marked as read by the AI in one call, so the reference check of
-      // FR-063 applies to it as it does to a reading in pieces: in Every
-      // transaction mode each item carries only its own reference.
-      const reading = readingFromEnvelope(envelope, profile, context);
-      return { ...reading, notes: { ...reading.notes, method: "ai" } };
+      return { envelope, method: "ai" };
     } catch (error) {
       if (!isSizeError(error)) throw error;
       if (lineCount <= 1 || limits.maxSplits < 1) {
@@ -869,42 +921,15 @@ export async function readInPieces(
     profile.sections.map((section) => section.key),
   );
   checkItemCount(merged, profile);
-  const reading = readingFromEnvelope(
-    {
+  log.debug({ pieces: pieces.length }, "Pieces read");
+  return {
+    envelope: {
       header: header.header,
       stated_total: header.stated_total,
       sections: merged.sections,
       ignored: merged.ignored,
     },
-    profile,
-    context,
-  );
-  // Every line the pieces left out, not only the sample `ignored` keeps:
-  // those the pieces listed as ignored, and those of a section that the
-  // reading's own rules left out (an amount of zero, say). A line a model
-  // listed as ignored from its context, against its rules, counts twice; the
-  // count is a guide for the reviewer, as the list is (FR-012).
-  const listed = Object.values(merged.sections).reduce(
-    (sum, items) => sum + items.length,
-    0,
-  );
-  const ignoredCount =
-    merged.ignored.filter((line) => line.trim() !== "").length +
-    listed -
-    reading.items.length;
-  log.debug(
-    {
-      schemaId: reading.schemaId,
-      pieces: pieces.length,
-      items: reading.items.length,
-      ignoredCount,
-      controlTotal: reading.controlTotal,
-    },
-    "Document read in pieces",
-  );
-  return {
-    ...reading,
-    notes: { ...reading.notes, ignoredCount, method: "ai_pieces" },
+    method: "ai_pieces",
   };
 }
 

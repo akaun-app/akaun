@@ -6,6 +6,7 @@
 	import { page } from '$app/state';
 	import { AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, FileText, RotateCcw, Trash2 } from '@lucide/svelte';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
+	import Disclosure from '$lib/components/ui/Disclosure.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import BulkActionBar from '$lib/components/ui/BulkActionBar.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -1227,10 +1228,9 @@
 
 			{#if notes && ignoredText}
 				<section class="detail-card">
-					<details class="ignored">
+					<Disclosure label={ignoredText}>
 						<!-- A reading from columns counts every row it left out and keeps a
 						     sample, such as "Ignored 726 lines (20 shown)" (FR-056). -->
-						<summary>{ignoredText}</summary>
 						<ul class="ignored-list">
 							{#each notes.ignored as line, i (i)}
 								<li>{line}</li>
@@ -1240,12 +1240,15 @@
 							{#if notes.method === 'columns'}
 								Rows of the table that fit no section, or whose fee type is not listed. The count is exact; only the
 								first rows are listed.
+							{:else if notes.method === 'columns_ai'}
+								Rows of the table that fit no section, or whose fee type is not listed, then lines the AI saw beside the
+								table and left out on purpose. Only the first are listed.
 							{:else}
 								Lines the reading saw and left out on purpose, such as subtotals. A guide only: it may not list every
 								line that was left out.
 							{/if}
 						</p>
-					</details>
+					</Disclosure>
 				</section>
 			{/if}
 
@@ -1664,13 +1667,8 @@
 	.control-result.ok {
 		color: var(--green);
 	}
-	.ignored summary {
-		cursor: pointer;
-		font-size: 13px;
-		font-weight: 500;
-	}
 	.ignored-list {
-		margin: 10px 0 0;
+		margin: 0;
 		padding-left: 18px;
 		display: flex;
 		flex-direction: column;

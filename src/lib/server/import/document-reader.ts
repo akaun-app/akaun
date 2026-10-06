@@ -295,10 +295,45 @@ export async function readDocumentItems(
   intervalMs = 0,
   limits: Partial<DocumentReadLimits> = {},
 ): Promise<DocumentReading> {
+  const today = params.today ?? new Date().toISOString().slice(0, 10);
+  const { envelope, schemaId } = await readDocumentEnvelope(
+    params,
+    providers,
+    intervalMs,
+    limits,
+  );
+  const reading = readingFromEnvelope(envelope, params.profile, {
+    today,
+    mainCurrency: params.mainCurrency,
+    schemaId,
+  });
+  log.debug(
+    {
+      schemaId: reading.schemaId,
+      items: reading.items.length,
+      ignored: reading.notes.ignored.length,
+      controlTotal: reading.controlTotal,
+    },
+    "Document read",
+  );
+  return reading;
+}
+
+/**
+ * Reads the document with the profile in one call and returns the model's
+ * answer as it is, or throws as `readDocumentItems` does. The part of a
+ * spreadsheet the AI reads beside its table is read this way, and joined with
+ * the table's rows before the items are made (FR-057).
+ */
+export async function readDocumentEnvelope(
+  params: DocumentReadingParams,
+  providers: LLMProviderConfig[],
+  intervalMs = 0,
+  limits: Partial<DocumentReadLimits> = {},
+): Promise<{ envelope: ReadEnvelope; schemaId: string }> {
   const { timeoutMs, maxOutputTokens } = { ...DEFAULT_READ_LIMITS, ...limits };
   checkDocumentLength(params.text);
 
-  const today = params.today ?? new Date().toISOString().slice(0, 10);
   const compiled = compileProfile(params.profile);
   const spec: StructuredSpec<ReadEnvelope> = {
     schemaId: compiled.schemaId,
@@ -358,22 +393,7 @@ export async function readDocumentItems(
   }
 
   checkItemCount(envelope, params.profile);
-
-  const reading = readingFromEnvelope(envelope, params.profile, {
-    today,
-    mainCurrency: params.mainCurrency,
-    schemaId: compiled.schemaId,
-  });
-  log.debug(
-    {
-      schemaId: reading.schemaId,
-      items: reading.items.length,
-      ignored: reading.notes.ignored.length,
-      controlTotal: reading.controlTotal,
-    },
-    "Document read",
-  );
-  return reading;
+  return { envelope, schemaId: compiled.schemaId };
 }
 
 /**
@@ -607,7 +627,7 @@ export function readingFromEnvelope(
         date: ownDate || date,
         reference:
           line.reference?.trim() ||
-          (profile.ownReferencesOnly ? "" : reference),
+          (profile.ownReferencesOnly || section.fromTable ? "" : reference),
         sourceLine,
         feeType: line.fee_type ?? null,
         categoryAccountId: categoryCandidates[0] ?? null,

@@ -19,6 +19,9 @@
  *   field binds to an input as it is. `payloadFromForm` turns them into the
  *   layout the shared check reads, and a saved layout comes back through the
  *   form unchanged.
+ * - Each section says how it is read, from the table's rows or by the AI
+ *   (`readBy`, FR-057), and keeps its row rules while it is read by the AI,
+ *   so switching back loses nothing. Only what the chosen way uses is sent.
  *
  * Pure TypeScript with no server imports, so the editor and the server specs
  * read the same rules.
@@ -26,8 +29,12 @@
 
 import {
   PROFILE_KEY_PATTERN,
+  kindReadsTable,
+  modeOf,
+  profileKind,
   type ImportProfileDraft,
   type ProfileError,
+  type ProfileKind,
   type ProfileSectionKind,
   type RowCondition,
   type RowConditionOp,
@@ -106,6 +113,9 @@ export interface LayoutForm {
   balanceColumn: string;
 }
 
+/** How a section is read: from the table's rows by code, or by the AI. */
+export type SectionReadBy = "table" | "ai";
+
 export interface SectionForm {
   uid: string;
   /** The key a saved section has. Ignored while `keyFromName` is true. */
@@ -128,7 +138,16 @@ export interface SectionForm {
   extrasText: string;
   /** A transfer section's other account (FR-058); null for any other kind. */
   counterAccountId: number | null;
-  /** The section's row rules for reading from columns (FR-054), or null. */
+  /**
+   * How the section is read when the profile has a table layout (FR-057):
+   * from the table's rows by code, with `rows`, or by the AI, with its
+   * description. Without a layout every section is read by the AI.
+   */
+  readBy: SectionReadBy;
+  /**
+   * The section's row rules for reading from columns (FR-054), or null.
+   * Kept while the section is read by the AI, but not sent.
+   */
   rows: RowsForm | null;
   /**
    * Other profiles whose records describe the same money (FR-066). Sent only
@@ -154,6 +173,12 @@ export interface ProfileForm {
    */
   layout: LayoutForm | null;
   sections: SectionForm[];
+  /**
+   * What the profile imports (`ProfileKind`), as the user chose it. The mode,
+   * the layout and each section's way of reading are kept in line with it
+   * (`setKind`).
+   */
+  kind: ProfileKind;
 }
 
 let uidCounter = 0;
@@ -373,9 +398,94 @@ export function newSection(): SectionForm {
     feeTypes: [],
     extrasText: "",
     counterAccountId: null,
+    readBy: "ai",
     rows: null,
     sameMoneyAs: [],
   };
+}
+
+/**
+ * Whether the section is read from the table's rows by code: the profile has
+ * a table layout and the section is set to it (FR-057).
+ */
+export function readsFromTable(
+  form: Pick<ProfileForm, "layout">,
+  section: Pick<SectionForm, "readBy">,
+): boolean {
+  return form.layout !== null && section.readBy === "table";
+}
+
+/**
+ * The section a table profile starts with: every row, its kind by the sign of
+ * its amount. A profile that only imports a table's transactions needs no
+ * other.
+ */
+export function transactionsSection(): SectionForm {
+  const section = newSection();
+  section.name = "Transactions";
+  section.kind = "by_sign";
+  section.readBy = "table";
+  section.rows = newRows();
+  return section;
+}
+
+/** Whether a section has nothing filled in yet. */
+function isBlankSection(section: SectionForm): boolean {
+  return (
+    section.keyFromName &&
+    !section.name.trim() &&
+    !section.description.trim() &&
+    section.feeTypes.length === 0 &&
+    !section.extrasText.trim()
+  );
+}
+
+/**
+ * Chooses what the profile imports (FR-055, FR-057), and brings the mode,
+ * the layout and every section into line with it:
+ *
+ * - "summary", "transactions": no table layout; every section is read by the
+ *   AI. Each section's row rules stay in the form, unsent, for a switch back.
+ * - "table": a layout, and every section read from the table's rows.
+ * - "mixed": a layout, the table's sections and the AI's.
+ *
+ * A kind with a table and no table section yet starts with "Transactions"
+ * (`transactionsSection`), in place of a blank section.
+ */
+export function setKind(form: ProfileForm, kind: ProfileKind): void {
+  form.kind = kind;
+  form.mode = modeOf(kind);
+  if (!kindReadsTable(kind)) {
+    form.layout = null;
+    for (const section of form.sections) section.readBy = "ai";
+    return;
+  }
+  form.layout ??= newLayout();
+  if (kind === "table") {
+    // A blank section, read from the table, would take every row beside
+    // "Transactions": it is dropped rather than kept empty.
+    form.sections = form.sections.filter((s) => !isBlankSection(s));
+    for (const section of form.sections) {
+      section.readBy = "table";
+      section.rows ??= newRows();
+    }
+  }
+  if (!form.sections.some((s) => s.readBy === "table")) {
+    form.sections = [transactionsSection(), ...form.sections];
+  }
+}
+
+/**
+ * A new section added under "Lines to import": read by the AI, except in a
+ * "table" profile, which has no AI sections.
+ */
+export function newSectionFor(form: Pick<ProfileForm, "kind">): SectionForm {
+  const section = newSection();
+  if (form.kind === "table") {
+    section.readBy = "table";
+    section.rows = newRows();
+  }
+  return section;
 }
 
 /** A blank profile with one empty section, since a profile needs one. */
@@ -390,6 +500,7 @@ export function blankForm(): ProfileForm {
     accountId: null,
     layout: null,
     sections: [newSection()],
+    kind: "summary",
   };
 }
 
@@ -431,9 +542,11 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
       })),
       extrasText: section.extras ? JSON.stringify(section.extras, null, 2) : "",
       counterAccountId: section.counterAccountId ?? null,
+      readBy: draft.layout && section.rows ? "table" : "ai",
       rows: section.rows ? rowsForm(section.rows) : null,
       sameMoneyAs: [...(section.sameMoneyAs ?? [])],
     })),
+    kind: profileKind(draft),
   };
 }
 
@@ -469,6 +582,12 @@ export function sectionKeys(sections: readonly SectionForm[]): string[] {
  * What the editor sends: the profile's form in the shape the shared check
  * reads. The stated total goes under the profile's mode, and only when one is
  * typed. The extra fields go as the text typed.
+ *
+ * Row rules and the fee types' cell values are sent only for a section read
+ * from the table's rows (FR-057). What only the AI reads (descriptions,
+ * extra fields, instructions) is sent as it is either way: the editor hides
+ * it where the AI does not read, and it is there again when a section is
+ * switched back to the AI.
  */
 export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
   const keys = sectionKeys(form.sections);
@@ -478,39 +597,45 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
     description: form.description,
     phrases: form.phrases,
     instructions: form.instructions,
+    kind: form.kind,
     mode: form.mode,
     statedTotalLabels: label ? { [form.mode]: label } : {},
     accountId: form.accountId,
     // Sent only when there is one, as a profile without one is saved.
     ...(form.layout ? { layout: layoutPayload(form.layout, form.mode) } : {}),
-    sections: form.sections.map((section, index) => ({
-      key: keys[index],
-      name: section.name,
-      description: section.description,
-      // Only a section saved in the other mode sends one, for the check to
-      // refuse (see `legacyMode`).
-      ...(section.legacyMode ? { mode: section.legacyMode } : {}),
-      kind: section.kind,
-      fixedCategoryAccountId: section.fixedCategoryAccountId,
-      feeTypes: section.feeTypes.map((feeType) => ({
-        key: feeType.key,
-        description: feeType.description,
-        categoryAccountId: feeType.categoryAccountId,
-        ...(linesOf(feeType.valuesText).length
-          ? { values: linesOf(feeType.valuesText) }
+    sections: form.sections.map((section, index) => {
+      const table = readsFromTable(form, section);
+      // Set to the table with no rules yet: rules that take every row.
+      const rows = table ? (section.rows ?? newRows()) : null;
+      return {
+        key: keys[index],
+        name: section.name,
+        description: section.description,
+        // Only a section saved in the other mode sends one, for the check to
+        // refuse (see `legacyMode`).
+        ...(section.legacyMode ? { mode: section.legacyMode } : {}),
+        kind: section.kind,
+        fixedCategoryAccountId: section.fixedCategoryAccountId,
+        feeTypes: section.feeTypes.map((feeType) => ({
+          key: feeType.key,
+          description: feeType.description,
+          categoryAccountId: feeType.categoryAccountId,
+          ...(table && linesOf(feeType.valuesText).length
+            ? { values: linesOf(feeType.valuesText) }
+            : {}),
+        })),
+        extras: section.extrasText,
+        // Sent only for a transfer, the one kind that names it.
+        ...(section.kind === "transfer"
+          ? { counterAccountId: section.counterAccountId }
           : {}),
-      })),
-      extras: section.extrasText,
-      // Sent only for a transfer, the one kind that names it.
-      ...(section.kind === "transfer"
-        ? { counterAccountId: section.counterAccountId }
-        : {}),
-      ...(section.rows ? { rows: rowsPayload(section.rows) } : {}),
-      // Never for a transfer, which the editor gives no such field (FR-066).
-      ...(section.kind !== "transfer" && section.sameMoneyAs.length
-        ? { sameMoneyAs: section.sameMoneyAs }
-        : {}),
-    })),
+        ...(rows ? { rows: rowsPayload(rows) } : {}),
+        // Never for a transfer, which the editor gives no such field (FR-066).
+        ...(section.kind !== "transfer" && section.sameMoneyAs.length
+          ? { sameMoneyAs: section.sameMoneyAs }
+          : {}),
+      };
+    }),
   };
 }
 
@@ -551,4 +676,175 @@ export function errorsUnder(
       const rest = error.path.slice(prefix.length).replace(/^\./, "");
       return rest ? `${rest}: ${error.message}` : error.message;
     });
+}
+
+// ── Where a problem is ───────────────────────────────────────────────────────
+
+/**
+ * Where a problem is on the page, for the "Before you save" list: the place
+ * in the editor's own words, and the elements to go to.
+ *
+ * `targets` are element ids, the field itself first and its card last; the
+ * editor goes to the first one on the page, so a field with no id still lands
+ * on its card. `sectionUid` is the section to unfold, and `inMore` the
+ * expander the field is folded inside.
+ */
+export interface ProblemPlace {
+  label: string;
+  targets: string[];
+  sectionUid?: string;
+  inMore?: "section" | "table";
+}
+
+/** The fields under the table's "More options", by their key in the layout. */
+const TABLE_MORE_LABELS: Record<string, string> = {
+  sheet: "Sheet",
+  headers: "Headings",
+  dateFormat: "Date format",
+  decimalSeparator: "Decimal separator",
+  csvDelimiter: "CSV separator",
+  counterparty: "Contact",
+  currency: "Currency",
+  documentDateLabel: "Label of the document date",
+  statedTotalLabels: "Labels of the stated totals",
+};
+
+/** The fields of the table that are chosen above the sample's columns. */
+const TABLE_COLUMN_KEYS = new Set([
+  "columns",
+  "balanceColumn",
+  "remarkColumns",
+]);
+
+/** A fee type's fields, by key. Its key is the fee type itself. */
+const FEE_TYPE_FIELDS: Record<string, string | undefined> = {
+  description: "Description",
+  values: "Values",
+  categoryAccountId: "Category",
+};
+
+const PROFILE_PLACES: Record<string, { label: string; target: string }> = {
+  name: { label: "Name", target: "pf-name" },
+  kind: { label: "What to import", target: "pf-kind" },
+  mode: { label: "What to import", target: "pf-kind" },
+  accountId: { label: "Account", target: "pf-account" },
+  description: { label: "Document description", target: "pf-description" },
+  phrases: { label: "Fixed phrases", target: "pf-phrases" },
+  instructions: { label: "Instructions", target: "pf-instructions" },
+  statedTotalLabels: { label: "Stated total", target: "pf-stated-total" },
+  sections: { label: "Sections", target: "pf-sections" },
+};
+
+function tablePlace(rest: string): ProblemPlace {
+  const key = rest.match(/^[a-zA-Z]+/)?.[0] ?? "";
+  if (key === "direction") {
+    const values = /^direction\.(in|out)/.test(rest);
+    return values
+      ? {
+          label: "Table › Money in and out values",
+          targets: ["pf-l-direction", "pf-table"],
+          inMore: "table",
+        }
+      : { label: "Table › Columns", targets: ["pf-table"] };
+  }
+  if (TABLE_COLUMN_KEYS.has(key)) {
+    return { label: "Table › Columns", targets: ["pf-table"] };
+  }
+  const field = TABLE_MORE_LABELS[key];
+  if (field) {
+    return {
+      label: `Table › More options › ${field}`,
+      targets: [`pf-l-${key}`, "pf-table"],
+      inMore: "table",
+    };
+  }
+  return { label: "Table", targets: ["pf-table"] };
+}
+
+function sectionPlace(
+  form: ProfileForm,
+  index: number,
+  rest: string,
+): ProblemPlace {
+  const section = form.sections[index];
+  const name = section?.name.trim();
+  const title = name ? `Section “${name}”` : `Section ${index + 1}`;
+  if (!section) return { label: title, targets: ["pf-sections"] };
+  const at = `pf-s-${section.uid}`;
+  const place = (
+    label: string | null,
+    ids: string[],
+    inMore?: "section",
+  ): ProblemPlace => ({
+    label: label ? `${title} › ${label}` : title,
+    targets: [...ids, at],
+    sectionUid: section.uid,
+    ...(inMore ? { inMore } : {}),
+  });
+
+  const fee = rest.match(/^\.feeTypes\[(\d+)\](?:\.([a-zA-Z]+))?/);
+  if (fee) {
+    const feeIndex = Number(fee[1]);
+    const feeUid = section.feeTypes[feeIndex]?.uid;
+    const field = FEE_TYPE_FIELDS[fee[2] ?? "key"];
+    const label = `Fee type ${feeIndex + 1}${field ? ` › ${field}` : ""}`;
+    return place(label, [
+      ...(feeUid ? [`${at}-fee-${feeUid}`] : []),
+      `${at}-fees`,
+    ]);
+  }
+  const key = rest.match(/^\.([a-zA-Z]+)(?:\.([a-zA-Z]+))?/);
+  switch (key?.[1]) {
+    case undefined:
+      return place(null, []);
+    case "name":
+    case "key":
+      return place("Name", [`${at}-name`]);
+    case "kind":
+      return place("Kind", [`${at}-kind`]);
+    case "mode":
+      return place("What to import", []);
+    case "description":
+      return place("Description", [`${at}-description`]);
+    case "fixedCategoryAccountId":
+      return place("Category", [`${at}-category`]);
+    case "counterAccountId":
+      return place("Other account", [`${at}-counter`]);
+    case "feeTypes":
+      return place("Fee types", [`${at}-fees`]);
+    case "sameMoneyAs":
+      return place("More › Same money as", [`${at}-same`], "section");
+    case "extras":
+      return place("More › Extra fields", [`${at}-extras`], "section");
+    case "rows":
+      if (key[2] === "feeTypeColumn") {
+        return place("Fee type column", [`${at}-fees`]);
+      }
+      if (key[2] === "flagWhen" || key[2] === "flagNote") {
+        return place("More › Rows for review", [`${at}-review`], "section");
+      }
+      return place(
+        "More › Rows for this section",
+        [`${at}-where`, "pf-sorting"],
+        "section",
+      );
+    default:
+      return place(null, []);
+  }
+}
+
+/**
+ * Where the problem at `path` is, in the words the editor shows. The path is
+ * one `checkProfile` gives, against the form as `payloadFromForm` sends it,
+ * so section and fee type indexes are the form's own.
+ */
+export function problemPlace(path: string, form: ProfileForm): ProblemPlace {
+  const section = path.match(/^sections\[(\d+)\](.*)$/);
+  if (section) return sectionPlace(form, Number(section[1]), section[2]);
+  if (path === "layout" || path.startsWith("layout.")) {
+    return tablePlace(path.slice("layout.".length));
+  }
+  const top = PROFILE_PLACES[path.match(/^[a-zA-Z]+/)?.[0] ?? ""];
+  if (top) return { label: top.label, targets: [top.target] };
+  return { label: "Profile", targets: [] };
 }

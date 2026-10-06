@@ -31,6 +31,8 @@ import { jsonSchema, type JSONSchema7, type Schema } from "ai";
 import {
   NONE_VALUE,
   extraFieldsOf,
+  kindReadsTable,
+  profileKind,
   profileSections,
   type ImportProfileDraft,
   type ProfileSectionKind,
@@ -252,6 +254,12 @@ export interface SectionSpec {
    * one of them already cover; the model is never told of it.
    */
   sameMoneyAs?: readonly number[];
+  /**
+   * True for a section of a saved profile read from a spreadsheet's table by
+   * code (FR-055, FR-057). Its items take their reference only from their own
+   * row, never the document's, and the AI is never asked for its lines.
+   */
+  fromTable?: boolean;
 }
 
 /** Everything a reading needs to know about what to read. */
@@ -613,7 +621,7 @@ export function compileLinesPart(
 // ── The built-in profile ────────────────────────────────────────────────────
 
 /**
- * "Document with several items (one record each)": every charge line on the
+ * "Multiple records": every charge line on the
  * document becomes its own record, and the whole document is one kind, expense
  * or income, as a receipt is (006 US1-3, FR-005, FR-008, FR-015).
  */
@@ -709,6 +717,14 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
 }
 
 /**
+ * The rows of a spreadsheet's table, read by code, are cut from the text the
+ * AI reads (FR-057); one line says where they were. `withoutTableRows` in
+ * `table-reader.ts` writes it.
+ */
+const TABLE_ROWS_RULE = `- The rows of this spreadsheet's table were read already, by code, and are left out of the text. A
+  line in square brackets marks where they were. Never list a line for them.`;
+
+/**
  * Turns a saved profile into its reading, in the profile's own import mode,
  * ready to compile (006 S2, FR-032). Only the sections the profile reads are
  * kept (`profileSections`): a section saved in the other mode, on a profile
@@ -728,10 +744,24 @@ function extraSpec(field: ReturnType<typeof extraFieldsOf>[number]): FieldSpec {
  * The stated total is the profile's label, kept under its mode. An Every
  * transaction reading by the AI is read in pieces (`piece-reader.ts`, FR-043) with the parts of this
  * same schema (`compileHeaderPart`, `compileLinesPart`).
+ *
+ * `part` is "ai" for the part of a spreadsheet the AI reads when the profile
+ * reads its table by code (FR-057): only the sections with no row rules, and
+ * the rule that the table's rows are not in the text. With "all", a section
+ * read from the table is marked `fromTable`.
  */
-export function savedReadingProfile(saved: SavedProfile): ReadingProfile {
+export function savedReadingProfile(
+  saved: SavedProfile,
+  part: "all" | "ai" = "all",
+): ReadingProfile {
   const mode = saved.mode;
-  const sections: SectionSpec[] = profileSections(saved).map((section) => {
+  const hasTable = Boolean(saved.layout) && kindReadsTable(profileKind(saved));
+  const fromTable = (section: { rows?: unknown }) =>
+    hasTable && Boolean(section.rows);
+  const read = profileSections(saved).filter(
+    (section) => part === "all" || !fromTable(section),
+  );
+  const sections: SectionSpec[] = read.map((section) => {
     const feeTypes = section.feeTypes.map((feeType) => ({
       key: feeType.key,
       description: feeType.description,
@@ -766,6 +796,7 @@ export function savedReadingProfile(saved: SavedProfile): ReadingProfile {
       ...(section.sameMoneyAs?.length
         ? { sameMoneyAs: [...section.sameMoneyAs] }
         : {}),
+      ...(fromTable(section) ? { fromTable: true } : {}),
     };
   });
   if (sections.length === 0) {
@@ -775,12 +806,21 @@ export function savedReadingProfile(saved: SavedProfile): ReadingProfile {
   }
 
   const label = saved.statedTotalLabels[mode];
+  // The AI's part of a spreadsheet whose table code reads: the total covers
+  // the table's rows too, which the AI is not shown.
+  const withTable =
+    part === "ai" && read.length < profileSections(saved).length;
+  const totals = withTable
+    ? "It is the total of the lines read under sections and of the table's rows left out of the text."
+    : "It is the total of exactly the lines read under sections.";
   const profile: ReadingProfile = {
     schemaId: "",
-    instructions: SAVED_PROFILE_RULES,
+    instructions: withTable
+      ? `${SAVED_PROFILE_RULES}\n${TABLE_ROWS_RULE}`
+      : SAVED_PROFILE_RULES,
     guidance: saved.instructions,
     statedTotalDescription: label
-      ? `The figure the document prints for: ${label}. It is the total of exactly the lines read under sections. Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.`
+      ? `The figure the document prints for: ${label}. ${totals} Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.`
       : null,
     schemaRequired: true,
     documentAccountId: saved.accountId ?? null,

@@ -114,8 +114,20 @@ describe("the list on Settings › Intelligence", () => {
       canView: true,
       canChange: true,
       profiles: [
-        { id: off, name: "Ads invoice", enabled: false, sectionCount: 1 },
-        { id: fees, name: "Fee notice", enabled: true, sectionCount: 1 },
+        {
+          id: off,
+          name: "Ads invoice",
+          enabled: false,
+          sectionCount: 1,
+          kind: "summary",
+        },
+        {
+          id: fees,
+          name: "Fee notice",
+          enabled: true,
+          sectionCount: 1,
+          kind: "summary",
+        },
       ],
     });
   });
