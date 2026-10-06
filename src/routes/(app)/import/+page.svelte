@@ -361,6 +361,8 @@
 			const edits = { ...(j._edits ?? {}) };
 			delete edits.contactId;
 			delete edits.newContactName;
+			// An explicit empty supplier suppresses the extracted name and stale match.
+			edits.supplier = v.newName ?? '';
 			if (v.value != null) edits.contactId = v.value;
 			else if (v.newName) edits.newContactName = v.newName;
 			return { ...j, _edits: edits };
