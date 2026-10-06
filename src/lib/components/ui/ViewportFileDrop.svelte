@@ -26,6 +26,21 @@
 			marker !== null &&
 			marker.getClientRects().length > 0 &&
 			getComputedStyle(marker).visibility !== 'hidden';
+		const canReceive = () => {
+			if (disabled || !visible() || marker?.closest('[inert]')) return false;
+			// Portalled dialogs leave the underlying screen laid out and visible.
+			// A destination inside a modal remains usable, unless another modal covers it.
+			return !Array.from(
+				document.querySelectorAll<HTMLElement>(
+					'[aria-modal="true"], dialog[open]',
+				),
+			).some(
+				(modal) =>
+					!modal.contains(marker) &&
+					modal.getClientRects().length > 0 &&
+					getComputedStyle(modal).visibility !== 'hidden',
+			);
+		};
 		const isFileDrag = (event: DragEvent) =>
 			Array.from(event.dataTransfer?.types ?? []).includes('Files');
 		const reset = () => {
@@ -35,15 +50,24 @@
 		const enter = (event: DragEvent) => {
 			if (!visible() || !isFileDrag(event)) return;
 			event.preventDefault();
+			if (!canReceive()) {
+				reset();
+				return;
+			}
 			depth += 1;
-			dragging = !disabled;
+			dragging = true;
 		};
 		const over = (event: DragEvent) => {
 			if (!visible() || !isFileDrag(event)) return;
 			event.preventDefault();
+			const allowed = canReceive();
 			if (event.dataTransfer)
-				event.dataTransfer.dropEffect = disabled ? 'none' : 'copy';
-			dragging = !disabled;
+				event.dataTransfer.dropEffect = allowed ? 'copy' : 'none';
+			if (!allowed) {
+				reset();
+				return;
+			}
+			dragging = true;
 		};
 		const leave = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
@@ -53,15 +77,35 @@
 		const drop = (event: DragEvent) => {
 			reset();
 			if (!visible() || !isFileDrag(event)) return;
-			// Capture before the local drop target to deliver each file only once.
+			// Block browser file navigation even when a modal suspends uploads.
 			event.preventDefault();
+			if (!canReceive()) return;
+			// Capture before the local drop target to deliver each file only once.
 			event.stopImmediatePropagation();
 			const files = Array.from(event.dataTransfer?.files ?? []);
-			if (!disabled && files.length > 0) void onfiles(files);
+			if (files.length > 0) void onfiles(files);
 		};
 		const keydown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') reset();
 		};
+		// Dismiss an existing drop affordance as soon as a modal opens, even
+		// without another drag event. No observer is retained after unmount.
+		const observer = new MutationObserver(() => {
+			if (dragging && !canReceive()) reset();
+		});
+		observer.observe(document.body, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: [
+				'inert',
+				'aria-modal',
+				'open',
+				'hidden',
+				'style',
+				'class',
+			],
+		});
 		window.addEventListener('dragenter', enter, true);
 		window.addEventListener('dragover', over, true);
 		window.addEventListener('dragleave', leave, true);
@@ -70,6 +114,7 @@
 		window.addEventListener('blur', reset);
 		window.addEventListener('keydown', keydown);
 		return () => {
+			observer.disconnect();
 			window.removeEventListener('dragenter', enter, true);
 			window.removeEventListener('dragover', over, true);
 			window.removeEventListener('dragleave', leave, true);
