@@ -153,8 +153,11 @@
 		border: 3px dashed var(--primary);
 		border-radius: 16px;
 		background: color-mix(in srgb, var(--background) 90%, transparent);
-		color: var(--foreground);
+		color: color-mix(in srgb, var(--foreground) 75%, var(--muted-foreground));
 		padding: 24px;
+	}
+	.drop-message strong {
+		font-weight: 500;
 	}
 	.drop-message {
 		display: grid;
