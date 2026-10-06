@@ -83,6 +83,8 @@ export type AccountView = AccountRow & {
 export type AccountRef = { id: number; type: AccountTypeCode };
 
 export type AccountCreate = {
+  /** Omit to allocate the lowest free code in the selected type range. */
+  code?: number;
   name: string;
   type: AccountTypeCode;
   /**

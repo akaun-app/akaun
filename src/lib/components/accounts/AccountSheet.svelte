@@ -6,6 +6,7 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import { useIsMobile } from '$lib/hooks/useIsMobile.svelte.js';
 	import {
+		AccountCodeRanges,
 		AccountSubTypeDisplayLabels,
 		AccountSubTypesByType,
 		AccountType,
@@ -119,8 +120,28 @@
 					</Select.Root>
 					<input type="hidden" name="type" value={selectedType} />
 					<p class="field-hint">
-						The type decides which report the account appears on, and it cannot be changed
-						once the account has movements.
+						The type decides which report the account appears on, and it cannot be changed once the
+						account has movements.
+					</p>
+				</div>
+
+				<div class="field">
+					<label class="field-label" for="account-code">Code</label>
+					<Input
+						id="account-code"
+						name="code"
+						type="number"
+						step={1}
+						min={AccountCodeRanges[selectedType].start}
+						max={AccountCodeRanges[selectedType].end}
+						aria-describedby="account-code-hint"
+						placeholder="Automatic"
+						class="w-full"
+					/>
+					<p id="account-code-hint" class="field-hint">
+						{AccountCodeRanges[selectedType].start}–{AccountCodeRanges[selectedType].end} for
+						{AccountTypeDisplayLabels[selectedType].toLowerCase()}. Leave blank to assign the lowest
+						available code.
 					</p>
 				</div>
 
@@ -147,7 +168,10 @@
 									<Select.Item value={NONE_SUB_TYPE} label="Not yet classified" />
 								{/if}
 								{#each subTypes as subType (subType)}
-									<Select.Item value={String(subType)} label={AccountSubTypeDisplayLabels[subType]} />
+									<Select.Item
+										value={String(subType)}
+										label={AccountSubTypeDisplayLabels[subType]}
+									/>
 								{/each}
 							</Select.Content>
 						</Select.Root>
