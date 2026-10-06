@@ -257,7 +257,7 @@
 		{/if}
 
 		<section class="detail-card">
-			<AttachmentManager apiBase="/api/records/{record.id}" bind:attachments />
+			<AttachmentManager apiBase="/api/records/{record.id}" bind:attachments disabled={saving || !data.perms.change} />
 		</section>
 
 		<!--

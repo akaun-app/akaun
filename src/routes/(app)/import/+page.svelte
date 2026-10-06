@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { Upload, Clock, Receipt, Check, X, AlertTriangle, RotateCcw, Camera, ChevronRight } from '@lucide/svelte';
+	import ViewportFileDrop from '$lib/components/ui/ViewportFileDrop.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import ImportReviewCard from '$lib/components/import/ImportReviewCard.svelte';
 	import ImportGroupCard from '$lib/components/import/ImportGroupCard.svelte';
@@ -171,7 +172,6 @@
 	// Why a job's import was refused, keyed by job id. Cleared when it goes through.
 	let confirmErrors = $state<Record<string, string>>({});
 
-	let drag = $state(false);
 	let fileInput: HTMLInputElement | null = $state(null);
 	let clearHistoryDialogOpen = $state(false);
 
@@ -402,12 +402,6 @@
 
 	async function uploadFiles(files: FileList | File[], readAsOverride?: string) {
 		for (const file of Array.from(files)) await uploadFile(file, readAsOverride);
-	}
-
-	function handleDrop(e: DragEvent) {
-		e.preventDefault();
-		drag = false;
-		if (e.dataTransfer?.files) uploadFiles(e.dataTransfer.files);
 	}
 
 	function handleFileInput(e: Event) {
@@ -654,6 +648,8 @@
 	<title>Auto Import - Akaun</title>
 </svelte:head>
 
+<ViewportFileDrop destination="import documents" disabled={showScanner} onfiles={uploadFiles} />
+
 <div class="screen">
 	<header class="topbar">
 		<div class="topbar-left">
@@ -677,15 +673,8 @@
 		<!-- Drop zone -->
 		<div
 			class="dropzone"
-			class:drag
 			role="button"
 			tabindex="0"
-			ondragover={(e) => {
-				e.preventDefault();
-				drag = true;
-			}}
-			ondragleave={() => (drag = false)}
-			ondrop={handleDrop}
 			onclick={() => fileInput?.click()}
 			onkeydown={(e) => e.key === 'Enter' && fileInput?.click()}
 		>

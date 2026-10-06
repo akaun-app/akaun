@@ -98,7 +98,7 @@
 
 	{#snippet rail()}
 		<section class="detail-card">
-			<AttachmentStaging bind:this={attachRef} bind:count={stagedCount} disabled={formSaving} />
+			<AttachmentStaging bind:this={attachRef} bind:count={stagedCount} disabled={saving} />
 		</section>
 	{/snippet}
 </DetailPage>

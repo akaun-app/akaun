@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Paperclip, Plus, X } from '@lucide/svelte';
+	import ViewportFileDrop from './ViewportFileDrop.svelte';
 
 	/**
 	 * Files staged before a record exists to attach them to.
@@ -28,7 +29,7 @@
 	// never hold a File/Blob (CLAUDE.md's client-mirror rule for this exact case).
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
 	const stagedFileData = new Map<string, File>();
-	let drag = $state(false);
+	let error = $state('');
 	let fileInput = $state<HTMLInputElement | null>(null);
 
 	$effect(() => {
@@ -41,8 +42,14 @@
 		return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
-	function addFiles(files: FileList) {
+	function addFiles(files: FileList | File[]) {
+		if (disabled) return;
+		error = '';
 		for (const file of Array.from(files)) {
+			if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) {
+				error = `${file.name}: only PDF, JPEG and PNG files can be attached.`;
+				continue;
+			}
 			const id = crypto.randomUUID();
 			stagedFileData.set(id, file);
 			stagedFiles = [...stagedFiles, { id, name: file.name, size: file.size, status: 'pending' }];
@@ -52,12 +59,6 @@
 		stagedFileData.delete(id);
 		stagedFiles = stagedFiles.filter((f) => f.id !== id);
 	}
-	function onDrop(e: DragEvent) {
-		e.preventDefault();
-		drag = false;
-		if (disabled) return;
-		if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
-	}
 	function onFileInput(e: Event) {
 		const input = e.target as HTMLInputElement;
 		if (input.files) addFiles(input.files);
@@ -66,6 +67,7 @@
 
 	/** Drops every staged file without uploading anything — "start over". */
 	export function clear() {
+		error = '';
 		stagedFileData.clear();
 		stagedFiles = [];
 	}
@@ -78,17 +80,25 @@
 			if (!file) continue;
 			const fd = new FormData();
 			fd.append('file', file);
-			const res = await fetch(`/api/records/${recordId}/attachments`, { method: 'POST', body: fd });
-			if (res.ok) {
-				stagedFileData.delete(staged.id);
-				stagedFiles = stagedFiles.filter((f) => f.id !== staged.id);
-			} else {
+			try {
+				const res = await fetch(`/api/records/${recordId}/attachments`, { method: 'POST', body: fd });
+				if (res.ok) {
+					stagedFileData.delete(staged.id);
+					stagedFiles = stagedFiles.filter((f) => f.id !== staged.id);
+				} else {
+					staged.status = 'error';
+				}
+			} catch {
 				staged.status = 'error';
 			}
 		}
 		return { failedCount: stagedFiles.filter((f) => f.status === 'error').length };
 	}
 </script>
+
+<ViewportFileDrop destination="add attachments to this new record" {disabled} onfiles={addFiles} />
+
+{#if error}<p role="alert" style="color:var(--red);">{error}</p>{/if}
 
 <div class="attach-section-header">
 	<div class="detail-section-label" style="margin:0;">Attachments</div>
@@ -100,17 +110,8 @@
 </div>
 <div
 	class="attach-drop-area"
-	class:drag
 	role="group"
 	aria-label="Attachments"
-	ondragover={(e) => {
-		if (!disabled) {
-			e.preventDefault();
-			drag = true;
-		}
-	}}
-	ondragleave={() => (drag = false)}
-	ondrop={onDrop}
 >
 	{#if stagedFiles.length > 0}
 		<div class="attach-list">

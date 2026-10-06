@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { FileSpreadsheet } from '@lucide/svelte';
+	import ViewportFileDrop from '$lib/components/ui/ViewportFileDrop.svelte';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import ProfileColumnSelect from './ProfileColumnSelect.svelte';
 	import { linesOf, type LayoutForm } from '$lib/import-profile-form.js';
@@ -101,7 +102,6 @@
 	}
 
 	let input = $state<HTMLInputElement | null>(null);
-	let dragging = $state(false);
 
 	function picked(event: Event) {
 		const target = event.currentTarget as HTMLInputElement;
@@ -110,26 +110,19 @@
 		target.value = '';
 	}
 
-	function dropped(event: DragEvent) {
-		event.preventDefault();
-		dragging = false;
-		const file = event.dataTransfer?.files?.[0];
-		if (file && canChange) onfile(file);
+	function droppedFiles(files: File[]) {
+		if (canChange && !loading && files[0]) onfile(files[0]);
 	}
+
 </script>
+
+<ViewportFileDrop destination="load an import-profile sample" disabled={!canChange || loading} onfiles={droppedFiles} />
 
 {#if headings.length === 0}
 	<!-- Nothing to show yet: the sample is the way in. -->
 	<label
 		class="st-drop"
-		class:dragging
 		class:disabled={!canChange}
-		ondragover={(event) => {
-			event.preventDefault();
-			dragging = true;
-		}}
-		ondragleave={() => (dragging = false)}
-		ondrop={dropped}
 	>
 		<input type="file" accept=".xlsx,.csv" class="st-file" disabled={!canChange || loading} onchange={picked} />
 		<FileSpreadsheet size={22} />
@@ -287,8 +280,7 @@
 		color: var(--muted-foreground);
 		cursor: pointer;
 	}
-	.st-drop:focus-within,
-	.st-drop.dragging {
+	.st-drop:focus-within {
 		border-color: var(--primary);
 		background: var(--primary-soft);
 		color: var(--foreground);
