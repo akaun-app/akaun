@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { beforeNavigate, goto } from '$app/navigation';
+	import { beforeNavigate, goto, replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { untrack, onMount, onDestroy } from 'svelte';
-	import { GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon, ShieldCheck, AlertTriangle } from '@lucide/svelte';
+	import { ChevronRight, FileText, GripVertical, Plus, X, Lock, Pencil, Trash2, Zap, RefreshCw, Upload, Image as ImageIcon, ShieldCheck, AlertTriangle } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { formatDate, formatMinor } from '$lib/format.js';
 	import { Slider } from '$lib/components/ui/slider/index.js';
@@ -18,19 +19,37 @@
 	import { draggable, droppable } from '@thisux/sveltednd';
 	import type { DragDropState } from '@thisux/sveltednd';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
-	import TemplateList from '$lib/components/templates/TemplateList.svelte';
-	import TemplateDesigner from '$lib/components/templates/TemplateDesigner.svelte';
-	import { makeDefaultLayout } from '$lib/pdf/template-types.js';
-	import { TemplateDocumentType } from '$lib/enums.js';
-	import type { TemplateRow } from '$lib/pdf/template-types.js';
+	import ColorPicker from '$lib/components/ui/ColorPicker.svelte';
+	import { LAYOUT_CATALOG, DEFAULT_LAYOUT_KEY } from '$lib/pdf/layout-catalog.js';
+	import { PDF_THEME_PRESETS } from '$lib/pdf/theme-presets.js';
 	import { renderTemplate, validateTemplate, TOKEN_REGEX, type SequenceDocType } from '$lib/sequence-template.js';
 	import type { PageData, ActionData } from './$types.js';
 	import AccountDefaults from '$lib/components/settings/AccountDefaults.svelte';
+	import { parseProfileFile, stashImportedFile } from '$lib/import-profile-portable.js';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	type Tab = 'general' | 'company' | 'books' | 'intelligence' | 'templates' | 'advanced';
-	let activeTab = $state<Tab>('general');
+	const TAB_IDS: readonly Tab[] = ['general', 'company', 'books', 'intelligence', 'templates', 'advanced'];
+
+	// The open tab is kept in the address (`?tab=intelligence`), so a page
+	// opened from a tab — an import profile, say — comes back to that tab, by
+	// the back button or by its own way back.
+	function tabFromUrl(): Tab {
+		const asked = page.url.searchParams.get('tab') as Tab | null;
+		if (!asked || !TAB_IDS.includes(asked)) return 'general';
+		if (asked === 'books' && !data.canSeeBooks) return 'general';
+		return asked;
+	}
+	let activeTab = $state<Tab>(tabFromUrl());
+
+	function showTab(id: Tab) {
+		activeTab = id;
+		const path = resolve('/(app)/settings');
+		// A shallow replace: the tab is page state, not a new page to go back to.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- route is resolved above; only the tab is appended.
+		replaceState(id === 'general' ? path : `${path}?tab=${id}`, page.state);
+	}
 
 	// Mobile detection for Sheet side
 	const screenState = useIsMobile();
@@ -510,6 +529,14 @@
 	// svelte-ignore state_referenced_locally
 	let aiCustomInstructions = $state(data.autoImportCustomInstructions);
 
+	// --- PDF template tab state ---
+	// Layout is fixed to the standard layout for now (see DEFAULT_LAYOUT_KEY) —
+	// only the accent color is user-editable.
+	// svelte-ignore state_referenced_locally
+	let pdfThemeColor = $state(data.pdfThemeColor);
+	const standardLayoutDescription =
+		LAYOUT_CATALOG.find((l) => l.key === DEFAULT_LAYOUT_KEY)?.description ?? '';
+
 	// --- Books tab: check the books, and what the one-off update decided ---
 
 	/**
@@ -660,6 +687,60 @@
 	function handleDrop(state: DragDropState<ProviderRow>) {
 		if (!state.draggedItem) return;
 		providers = reorderItems(providers, state.draggedItem, state.targetElement, state.dropPosition);
+	}
+
+	// --- Import profiles (006 US6 AS1) ---
+	// Listed here, beside the providers that read the documents. Each one opens
+	// on its own page to edit. Turning one on or off is staged like a provider
+	// switch and saved with this tab's Save; the server checks import.change
+	// for it, since this page checks no permission of its own.
+	type ProfileRow = (typeof data.importProfiles.profiles)[0];
+	/** What each kind of import profile imports, as the list says it. */
+	const KIND_LABEL: Record<ProfileRow['kind'], string> = {
+		table: 'Table rows',
+		summary: 'Summary lines',
+		transactions: 'Transaction lines',
+		mixed: 'Table rows and summary lines'
+	};
+	// svelte-ignore state_referenced_locally
+	let importProfiles = $state<ProfileRow[]>([...data.importProfiles.profiles]);
+	const canChangeProfiles = $derived(data.importProfiles.canChange);
+
+	function profileHref(id: number) {
+		return resolve('/(app)/settings/import-profiles/[id]', { id: String(id) });
+	}
+
+	// A profile file exported from another installation opens in the editor,
+	// filled in and not yet saved: a new profile, or the saved one with the
+	// same name, which Save then replaces. The file is read here and only its
+	// text is passed on; the File itself is never kept.
+	let profileFileInput = $state<HTMLInputElement | null>(null);
+
+	async function importProfileFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const chosen = input.files?.[0];
+		input.value = '';
+		if (!chosen) return;
+		if (isDirty) {
+			toast.error('Save or discard the changes in Settings, then import the profile.');
+			return;
+		}
+		let text: string;
+		try {
+			text = await chosen.text();
+		} catch {
+			toast.error('The app cannot read this file. Choose it again.');
+			return;
+		}
+		const parsed = parseProfileFile(text);
+		if (!parsed.ok) {
+			toast.error('Cannot import the profile', { description: parsed.error });
+			return;
+		}
+		const name = typeof parsed.file.profile.name === 'string' ? parsed.file.profile.name.trim().toLowerCase() : '';
+		const same = name ? importProfiles.find((p) => p.name.trim().toLowerCase() === name) : undefined;
+		stashImportedFile(parsed.file, chosen.name);
+		void goto(same ? profileHref(same.id) : resolve('/(app)/settings/import-profiles/new'));
 	}
 
 	// --- Provider Sheet state ---
@@ -897,6 +978,7 @@
 				if (action !== 'saveIntelligence') closeSheet();
 			}
 			if (action === 'saveIntelligence') {
+				importProfiles = [...data.importProfiles.profiles];
 				aiParallelTasks = data.autoImportParallelTasks;
 				aiCategoryHints = data.autoImportCategoryHints;
 				aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
@@ -936,6 +1018,12 @@
 		)
 	);
 
+	const profilesDirty = $derived(
+		importProfiles.some(
+			(p) => p.enabled !== data.importProfiles.profiles.find((saved) => saved.id === p.id)?.enabled
+		)
+	);
+
 	const isDirty = $derived(
 		mainCur !== data.currency ||
 		defaultAccount !== String(data.ledgerDefaultAccountId ?? '') ||
@@ -945,10 +1033,12 @@
 		companyRegistrationNo !== data.companyRegistrationNo ||
 		logoChange !== 'none' ||
 		providersDirty ||
+		profilesDirty ||
 		aiParallelTasks !== data.autoImportParallelTasks ||
 		aiCategoryHints !== data.autoImportCategoryHints ||
 		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
-		aiCustomInstructions !== data.autoImportCustomInstructions
+		aiCustomInstructions !== data.autoImportCustomInstructions ||
+		pdfThemeColor !== data.pdfThemeColor
 	);
 
 	function resetAllUnsaved() {
@@ -964,10 +1054,12 @@
 		logoChange = 'none';
 		if (logoFileInput) logoFileInput.value = '';
 		providers = [...data.providers];
+		importProfiles = [...data.importProfiles.profiles];
 		aiParallelTasks = data.autoImportParallelTasks;
 		aiCategoryHints = data.autoImportCategoryHints;
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
 		aiCustomInstructions = data.autoImportCustomInstructions;
+		pdfThemeColor = data.pdfThemeColor;
 		sheetOpen = false;
 	}
 
@@ -982,14 +1074,14 @@
 			pendingTab = id;
 			unsavedConfirmOpen = true;
 		} else {
-			activeTab = id;
+			showTab(id);
 		}
 	}
 
 	function discardAndProceed() {
 		resetAllUnsaved();
 		if (pendingTab) {
-			activeTab = pendingTab;
+			showTab(pendingTab);
 			pendingTab = null;
 		} else if (pendingUrl) {
 			const url = pendingUrl;
@@ -1012,33 +1104,6 @@
 		}
 		allowNavigation = false;
 	});
-
-	// --- Template tab state ---
-	// svelte-ignore state_referenced_locally
-	let templates = $state<TemplateRow[]>([...(data.templates as TemplateRow[])]);
-	// svelte-ignore state_referenced_locally
-	let selectedTemplate = $state<TemplateRow | null>(templates[0] ?? null);
-	let creatingTemplate = $state(false);
-
-	async function createNewTemplate() {
-		try {
-			const res = await fetch('/api/templates', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					name: 'New Template',
-					documentType: TemplateDocumentType.Both,
-					layout: makeDefaultLayout()
-				})
-			});
-			if (!res.ok) throw new Error(await res.text());
-			const created = (await res.json()) as TemplateRow;
-			templates = [created, ...templates];
-			selectedTemplate = created;
-		} catch {
-			// ignore — toast shown in API error path
-		}
-	}
 
 	// Derived rather than fixed only because the Books tab is there or not
 	// depending on whether this user may see the reports side of things.
@@ -1079,7 +1144,7 @@
 		</nav>
 
 		<!-- Content -->
-		<div class="set-content" style={activeTab === 'templates' ? 'overflow:hidden;padding:0;display:flex;flex-direction:column;' : ''}>
+		<div class="set-content">
 			{#if activeTab === 'general'}
 				<div class="set-section">
 					<div class="set-section-head">
@@ -1503,7 +1568,7 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Intelligence</h2>
-						<p class="set-section-sub">Providers used for receipt extraction, and how auto-import processes files.</p>
+						<p class="set-section-sub">Providers used for receipt extraction, import profiles, and how auto-import processes files.</p>
 					</div>
 
 					<form
@@ -1511,6 +1576,9 @@
 						action="?/saveIntelligence"
 						use:enhance={() => ({ update }) => update({ reset: false })}
 					>
+						{#if form?.error}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+						{/if}
 						<p class="set-subsection-label" style="margin-top:0;">Providers</p>
 						<input
 							type="hidden"
@@ -1593,6 +1661,91 @@
 							</div>
 						{/if}
 
+						{#if data.importProfiles.canView}
+							<p class="set-subsection-label" style="margin-top:28px;">Import profiles</p>
+							<input
+								type="hidden"
+								name="importProfiles"
+								value={JSON.stringify(importProfiles.map((p) => ({ id: p.id, enabled: p.enabled })))}
+							/>
+							<p class="set-row-value" style="font-size:12px; margin-top:0; margin-bottom:10px;">
+								A saved way to read one kind of document, such as a marketplace statement. Enabled profiles are offered under
+								“Read as” when uploading.
+							</p>
+							<div class="prov-header">
+								<span class="set-row-label" style="margin:0;">Saved profiles</span>
+								{#if canChangeProfiles}
+									<div class="prof-header-actions">
+										<input
+											bind:this={profileFileInput}
+											type="file"
+											accept="application/json,.json"
+											style="display:none"
+											onchange={importProfileFile}
+										/>
+										<button
+											type="button"
+											class="sheet-btn"
+											style="padding:6px 12px; font-size:13px;"
+											title="Open a profile file exported from another installation"
+											onclick={() => profileFileInput?.click()}
+										>
+											<Upload size={14} /> Import
+										</button>
+										<a
+											class="sheet-btn sheet-btn-primary"
+											style="padding:6px 12px; font-size:13px; text-decoration:none;"
+											href={resolve('/(app)/settings/import-profiles/new')}
+										>
+											<Plus size={14} /> New profile
+										</a>
+									</div>
+								{/if}
+							</div>
+							{#if importProfiles.length === 0}
+								<div class="prov-empty">
+									<FileText size={20} style="opacity:0.3;" />
+									<span>
+										No import profiles yet.{canChangeProfiles
+											? ' Select New profile to start from an example, or from blank.'
+											: ''}
+									</span>
+								</div>
+							{:else}
+								<div class="prov-list">
+									{#each importProfiles as profile (profile.id)}
+										<div class="prov-row related-link" class:prov-row-disabled={!profile.enabled}>
+											<a class="row-link prof-link" href={profileHref(profile.id)}>
+												<span class="prov-info">
+													<span class="prov-name">{profile.name}</span>
+													<span class="prov-model">
+														{KIND_LABEL[profile.kind]}, {profile.sectionCount} section{profile.sectionCount === 1 ? '' : 's'}
+													</span>
+												</span>
+												<ChevronRight size={14} color="var(--muted-foreground)" />
+											</a>
+											<button
+												type="button"
+												class="toggle-btn"
+												class:on={profile.enabled}
+												aria-pressed={profile.enabled}
+												aria-label={profile.enabled ? `Disable ${profile.name}` : `Enable ${profile.name}`}
+												title={canChangeProfiles ? undefined : 'Turning a profile on or off needs permission to change imports.'}
+												disabled={!canChangeProfiles}
+												onclick={() => {
+													importProfiles = importProfiles.map((p) =>
+														p.id === profile.id ? { ...p, enabled: !p.enabled } : p
+													);
+												}}
+											>
+												<span class="toggle-thumb"></span>
+											</button>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						{/if}
+
 						<p class="set-subsection-label" style="margin-top:28px;">Processing</p>
 						<input type="hidden" name="categoryHints" value={String(aiCategoryHints)} />
 						<input type="hidden" name="parallelTasks" value={aiParallelTasks} />
@@ -1655,6 +1808,7 @@
 								<div class="set-row-label">Custom instructions</div>
 								<div class="set-row-value" style="font-size:12px; margin-top:2px; margin-bottom:6px;">
 									Extra guidance for the AI when reading your documents — e.g. recurring suppliers, unusual formats, or category rules specific to your business.
+									A document read with an import profile uses that profile's own instructions in place of these.
 								</div>
 								<textarea
 									name="customInstructions"
@@ -1671,36 +1825,37 @@
 				</div>
 
 			{:else if activeTab === 'templates'}
-				<div class="set-section tpl-section">
-					<div class="tpl-split">
-						<aside class="tpl-sidebar">
-							<TemplateList
-								{templates}
-								selectedId={selectedTemplate?.id ?? null}
-								onSelect={(t) => (selectedTemplate = t)}
-								onCreate={createNewTemplate}
-							/>
-						</aside>
-						<main class="tpl-main">
-							{#if selectedTemplate}
-								<TemplateDesigner
-									template={selectedTemplate}
-									onSave={(updated) => {
-										templates = templates.map((t) => (t.id === updated.id ? updated : t));
-										selectedTemplate = updated;
-									}}
-									onDelete={(id) => {
-										templates = templates.filter((t) => t.id !== id);
-										selectedTemplate = templates[0] ?? null;
-									}}
-								/>
-							{:else}
-								<div class="tpl-empty">
-									<p>No template selected. Create one to get started.</p>
-								</div>
-							{/if}
-						</main>
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Templates</h2>
+						<p class="set-section-sub">Set an accent color for printed quotations and invoices</p>
 					</div>
+					<form method="POST" action="?/savePdfTemplate" use:enhance={() => ({ update }) => update({ reset: false })}>
+						{#if form?.error}
+							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
+						{/if}
+						<div class="set-rows">
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Layout</div>
+								<div class="layout-static">
+									<span class="layout-static-name">Standard</span>
+									<span class="layout-static-desc">{standardLayoutDescription}</span>
+								</div>
+							</div>
+							<div class="set-row set-row-col">
+								<div class="set-row-label">Accent color</div>
+								<ColorPicker
+									value={pdfThemeColor}
+									onValueChange={(c) => (pdfThemeColor = c)}
+									presets={PDF_THEME_PRESETS}
+								/>
+								<input type="hidden" name="themeColor" value={pdfThemeColor} />
+							</div>
+						</div>
+						<input type="hidden" name="invoiceLayoutKey" value={DEFAULT_LAYOUT_KEY} />
+						<input type="hidden" name="quotationLayoutKey" value={DEFAULT_LAYOUT_KEY} />
+						<Button type="submit" class="mt-4">Save</Button>
+					</form>
 				</div>
 
 			{:else if activeTab === 'advanced'}
@@ -2222,6 +2377,10 @@
 		justify-content: space-between;
 		margin-bottom: 12px;
 	}
+	.prof-header-actions {
+		display: flex;
+		gap: 8px;
+	}
 
 	.prov-empty {
 		display: flex;
@@ -2335,6 +2494,29 @@
 		transition: background 0.12s, color 0.12s;
 	}
 
+	/* An import profile row: the name opens the profile, the switch beside it
+	   turns it on or off. */
+	.prof-link {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: inherit;
+		text-decoration: none;
+		border-radius: 6px;
+	}
+
+	.prof-link:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+
+	.toggle-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
 	.prov-edit-btn:hover {
 		background: var(--accent);
 		color: var(--foreground);
@@ -2349,38 +2531,15 @@
 	}
 
 	/* Templates tab */
-	.tpl-section {
-		padding: 0;
-		flex: 1;
-		overflow: hidden;
-		max-width: none;
+	.layout-static {
 		display: flex;
 		flex-direction: column;
+		gap: 2px;
+		padding: 10px 12px;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--muted);
 	}
-	.tpl-split {
-		display: flex;
-		flex: 1;
-		overflow: hidden;
-	}
-	.tpl-sidebar {
-		width: 220px;
-		flex-shrink: 0;
-		border-right: 1px solid var(--border);
-		overflow-y: auto;
-		padding: 8px 0;
-	}
-	.tpl-main {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-	.tpl-empty {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex: 1;
-		color: var(--muted-foreground);
-		font-size: 14px;
-	}
+	.layout-static-name { font-size: 13px; font-weight: 600; color: var(--foreground); }
+	.layout-static-desc { font-size: 12px; color: var(--muted-foreground); }
 </style>

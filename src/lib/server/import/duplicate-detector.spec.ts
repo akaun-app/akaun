@@ -16,6 +16,7 @@ import {
   AccountRole,
   DocumentType,
   EntityType,
+  ImportState,
   LedgerRecordKind,
 } from "$lib/enums.js";
 import { detectDuplicate } from "./duplicate-detector.js";
@@ -202,5 +203,145 @@ describe("detectDuplicate over the one record store", () => {
 
     expect(result).not.toBeNull();
     expect(result!.duplicateOf).toBe(id);
+  });
+
+  it("leaves the file name out when the job has none (006 FR-025)", () => {
+    const id = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 100,
+      amountMinor: 10_000,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2020-01-01",
+      reference: "OLD",
+    });
+    db.insert(schema.users)
+      .values({ id: 1, email: "u@test", username: "u", passwordHash: "x" })
+      .run();
+    db.insert(schema.importQueue)
+      .values({
+        id: "old-job",
+        createdBy: 1,
+        state: ImportState.Imported,
+        tempFilePath: "import/temp/old.pdf",
+        originalFilename: "fees.pdf",
+        resultId: id,
+        resultType: DocumentType.Expense,
+      })
+      .run();
+    const job = {
+      ...baseJob,
+      reference: null,
+      date: "2026-08-01",
+      originalFilename: "fees.pdf",
+    };
+
+    // Amount and supplier alone are under the threshold; the shared file name
+    // is what tips a receipt over it.
+    expect(detectDuplicate(db, job)?.reasons).toContain("filename");
+    expect(detectDuplicate(db, { ...job, originalFilename: null })).toBeNull();
+  });
+
+  it("still flags a receipt whose file was imported as a group of items (006 FR-004)", () => {
+    const id = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 7,
+      amountMinor: 700,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2020-01-01",
+      reference: "OTHER",
+    });
+    db.insert(schema.users)
+      .values({ id: 1, email: "u@test", username: "u", passwordHash: "x" })
+      .run();
+    // A finished group is Imported with no record of its own; its record is on
+    // its item.
+    db.insert(schema.importQueue)
+      .values({
+        id: "group-job",
+        createdBy: 1,
+        state: ImportState.Imported,
+        tempFilePath: "records/2026/07/fees.pdf",
+        originalFilename: "fees.pdf",
+        fileHash: "same-bytes",
+      })
+      .run();
+    db.insert(schema.importItems)
+      .values({
+        id: "group-item",
+        jobId: "group-job",
+        state: ImportState.Imported,
+        position: 0,
+        sectionKey: "items",
+        resultId: id,
+        resultType: DocumentType.Expense,
+      })
+      .run();
+
+    const result = detectDuplicate(db, {
+      ...baseJob,
+      supplier: null,
+      reference: null,
+      originalFilename: "renamed.pdf",
+      fileHash: "same-bytes",
+    });
+
+    expect(result).toEqual({
+      duplicateOf: id,
+      confidence: 100,
+      reasons: ["file_hash"],
+    });
+  });
+
+  it("never offers a record whose own reference differs, for an item read from columns (006 FR-063)", () => {
+    const other = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 100,
+      amountMinor: 10_000,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2026-08-01",
+      reference: "ORDER-1",
+    });
+    const item = {
+      ...baseJob,
+      originalFilename: null,
+      reference: "ORDER-2",
+    };
+
+    // Every other reading keeps the weighted check: date, amount and other
+    // party outweigh the different reference (FR-024).
+    expect(detectDuplicate(db, item)?.duplicateOf).toBe(other);
+    // Two rows of one table with different references are two transactions.
+    expect(detectDuplicate(db, { ...item, referenceVeto: true })).toBeNull();
+    // The same reference, or none on either side, is still compared.
+    expect(
+      detectDuplicate(db, {
+        ...item,
+        reference: "ORDER-1",
+        referenceVeto: true,
+      })?.duplicateOf,
+    ).toBe(other);
+    expect(
+      detectDuplicate(db, { ...item, reference: "", referenceVeto: true })
+        ?.duplicateOf,
+    ).toBe(other);
+    const unnamed = seedRecord({
+      kind: LedgerRecordKind.Expense,
+      amount: 55,
+      amountMinor: 5_500,
+      fromAccountId: 1,
+      toAccountId: 2,
+      date: "2026-08-03",
+    });
+    expect(
+      detectDuplicate(db, {
+        ...item,
+        amount: 55,
+        date: "2026-08-03",
+        referenceVeto: true,
+      })?.duplicateOf,
+    ).toBe(unnamed);
   });
 });

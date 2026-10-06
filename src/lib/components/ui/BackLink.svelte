@@ -31,7 +31,9 @@
 		// `enter` is a fresh load or a reload: `nav.from` is null and there is no
 		// entry beneath this one.
 		hasPriorEntry = nav.type !== 'enter' && nav.from != null;
-		cameFromExactList = hasPriorEntry && nav.from?.url.pathname === href;
+		// `href` may carry a query, such as the Settings tab to open; the page is
+		// the same whatever its query says.
+		cameFromExactList = hasPriorEntry && nav.from?.url.pathname === href.split('?')[0];
 	});
 
 	function back() {

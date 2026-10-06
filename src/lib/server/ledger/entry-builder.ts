@@ -42,8 +42,13 @@ function twoSided(
   amountMinor: Minor,
 ): MovementDraft[] {
   return [
-    { accountId: intoAccountId, amountMinor, sortOrder: 0 },
-    { accountId: outOfAccountId, amountMinor: -amountMinor, sortOrder: 1 },
+    { accountId: intoAccountId, amountMinor, sortOrder: 0, label: null },
+    {
+      accountId: outOfAccountId,
+      amountMinor: -amountMinor,
+      sortOrder: 1,
+      label: null,
+    },
   ];
 }
 
@@ -187,6 +192,7 @@ function buildFor(
           accountId: m.accountId,
           amountMinor: m.amountMinor,
           sortOrder: i,
+          label: m.label ?? null,
         })),
       );
   }

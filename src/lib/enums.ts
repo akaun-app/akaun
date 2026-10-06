@@ -32,9 +32,23 @@ export const ImportState = {
   Imported: 6,
   Skipped: 7,
   Failed: 8,
+  // A document read as several items. Its items are reviewed on their own
+  // (import_items); the queue row stays to hold the file and the group, and is
+  // neither in review nor done while any item is still waiting.
+  Grouped: 9,
 } as const;
-// DocumentType is also used for import_queue.result_type
-export const DocumentType = { Expense: 1, Income: 2 } as const;
+// DocumentType is also used for import_queue.result_type. Append-only: the
+// codes are stored. A transfer (006 FR-058) is money moved between two of the
+// business's own accounts, and its direction is said from the account the
+// document is about (an import item's `account_id`): out of it to the item's
+// other account, or into it from there. Only an import profile's transfer
+// section makes one; a receipt is always an expense or an income.
+export const DocumentType = {
+  Expense: 1,
+  Income: 2,
+  TransferOut: 3,
+  TransferIn: 4,
+} as const;
 
 // --- reset scope ---
 export const ResetScope = { Settings: 1, Data: 2, Everything: 3 } as const;
@@ -71,12 +85,20 @@ export const ImportStateLabels: Record<number, string> = {
   [ImportState.Imported]: "imported",
   [ImportState.Skipped]: "skipped",
   [ImportState.Failed]: "failed",
+  [ImportState.Grouped]: "grouped",
 };
 
 export const DocumentTypeLabels: Record<number, string> = {
   [DocumentType.Expense]: "expense",
   [DocumentType.Income]: "income",
+  [DocumentType.TransferOut]: "transfer_out",
+  [DocumentType.TransferIn]: "transfer_in",
 };
+
+/** Whether a DocumentType code is a transfer, either way (006 FR-058). */
+export function isTransferType(code: number | null | undefined): boolean {
+  return code === DocumentType.TransferOut || code === DocumentType.TransferIn;
+}
 
 export const ResetScopeLabels: Record<number, string> = {
   [ResetScope.Settings]: "settings",
@@ -148,22 +170,6 @@ export const InvoiceStatusLabels: Record<number, string> = {
   [InvoiceStatus.Cancelled]: "cancelled",
 };
 export const invoiceStatusEnum = makeEnum(InvoiceStatusLabels);
-
-// --- document templates ---
-export const TemplateDocumentType = {
-  Quotation: 1,
-  Invoice: 2,
-  Both: 3,
-} as const;
-// reserved: per-document override (future — no stored status change)
-export type TemplateDocumentTypeCode =
-  (typeof TemplateDocumentType)[keyof typeof TemplateDocumentType];
-export const TemplateDocumentTypeLabels: Record<number, string> = {
-  [TemplateDocumentType.Quotation]: "quotation",
-  [TemplateDocumentType.Invoice]: "invoice",
-  [TemplateDocumentType.Both]: "both",
-};
-export const templateDocumentTypeEnum = makeEnum(TemplateDocumentTypeLabels);
 
 // --- reconciliation ---
 // RETIRED, RESERVED. Which ledger table a polymorphic reconciliation reference
@@ -506,18 +512,3 @@ export const accountSubTypeEnum = {
 };
 export const defaultAccountPurposeEnum = makeEnum(DefaultAccountPurposeLabels);
 export const ledgerRecordKindEnum = makeEnum(LedgerRecordKindLabels);
-
-export const TemplateFont = {
-  Inter: 1,
-  Roboto: 2,
-  Lato: 3,
-  Merriweather: 4,
-} as const;
-export type TemplateFontCode = (typeof TemplateFont)[keyof typeof TemplateFont];
-export const TemplateFontLabels: Record<number, string> = {
-  [TemplateFont.Inter]: "Inter",
-  [TemplateFont.Roboto]: "Roboto",
-  [TemplateFont.Lato]: "Lato",
-  [TemplateFont.Merriweather]: "Merriweather",
-};
-export const templateFontEnum = makeEnum(TemplateFontLabels);

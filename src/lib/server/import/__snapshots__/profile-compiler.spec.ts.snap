@@ -1,0 +1,505 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`compileProfile — built-in several items > compiles to the schema the providers receive 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "additionalProperties": false,
+      "properties": {
+        "counterparty": {
+          "description": "The other party's name exactly as printed on the document (the full legal or business name): the supplier for an expense, the customer for income. Never shortened, abbreviated or paraphrased. Null when none is printed.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "currency": {
+          "description": "The ISO-4217 code the amounts are in (for example USD, MYR, SGD, EUR), from any symbol or code on the document. Null when none is shown.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "date": {
+          "description": "The document's date as YYYY-MM-DD. Null when it is unclear.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "document_type": {
+          "description": "expense when the document is money the user pays out, income when it is money the user receives. The whole document is one kind.",
+          "enum": [
+            "expense",
+            "income",
+          ],
+          "type": "string",
+        },
+        "reference": {
+          "description": "The document's own invoice, statement or reference number. Null when there is none.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+      },
+      "required": [
+        "document_type",
+        "counterparty",
+        "date",
+        "reference",
+        "currency",
+      ],
+      "type": "object",
+    },
+    "ignored": {
+      "description": "A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "sections": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "description": "One entry for each charge line on the document.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "The amount on this line exactly as printed, as a number with no currency symbol and no thousands separators. Keep the minus sign when the line prints one, or prints the amount in brackets. Never work out or add up a figure yourself.",
+                "type": "number",
+              },
+              "category_account_id": {
+                "description": "The id of the best matching account from the lists in the instructions. Null when the line does not say enough to choose one. Never invent an id.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+              "date": {
+                "description": "This line's own date as YYYY-MM-DD, only when the line prints a date of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "description": {
+                "description": "A short label for this line in a few words (under 60 characters), taken from the line's own wording.",
+                "type": "string",
+              },
+              "reference": {
+                "description": "This line's own reference number, only when the line prints one of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "source_line": {
+                "description": "The number after L at the start of the line where this amount is printed, for example 12 for L0012.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+            },
+            "required": [
+              "description",
+              "amount",
+              "date",
+              "reference",
+              "source_line",
+              "category_account_id",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+      },
+      "required": [
+        "items",
+      ],
+      "type": "object",
+    },
+    "stated_total": {
+      "description": "The total the document prints for exactly the lines listed in sections.items, as printed, with no currency symbol, for example the total of charges. Never an amount due, a balance, or a grand total that includes other charges. Null when the document prints no such total.",
+      "type": [
+        "number",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "header",
+    "stated_total",
+    "sections",
+    "ignored",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`savedReadingProfile > compiles the fee_document starter to the schema the providers receive 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "additionalProperties": false,
+      "properties": {
+        "counterparty": {
+          "description": "The other party's name exactly as printed on the document (the full legal or business name): the supplier for an expense, the customer for income. Never shortened, abbreviated or paraphrased. Null when none is printed.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "currency": {
+          "description": "The ISO-4217 code the amounts are in (for example USD, MYR, SGD, EUR), from any symbol or code on the document. Null when none is shown.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "date": {
+          "description": "The document's date as YYYY-MM-DD. Null when it is unclear.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "reference": {
+          "description": "The document's own invoice, statement or reference number. Null when there is none.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+      },
+      "required": [
+        "counterparty",
+        "date",
+        "reference",
+        "currency",
+      ],
+      "type": "object",
+    },
+    "ignored": {
+      "description": "A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "sections": {
+      "additionalProperties": false,
+      "properties": {
+        "fees": {
+          "description": "Fees: Each line that charges one fee, usually in the table of charges. Every line of this section is money the user pays out.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "The amount on this line exactly as printed, as a number with no currency symbol and no thousands separators. Keep the minus sign when the line prints one, or prints the amount in brackets. Never work out or add up a figure yourself.",
+                "type": "number",
+              },
+              "category_account_id": {
+                "description": "The id of the best matching account from the lists in the instructions. Null when the line does not say enough to choose one. Never invent an id.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+              "date": {
+                "description": "This line's own date as YYYY-MM-DD, only when the line prints a date of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "description": {
+                "description": "A short label for this line in a few words (under 60 characters), taken from the line's own wording.",
+                "type": "string",
+              },
+              "fee_type": {
+                "description": "Which fee type this line is. advertising_fee: Advertising or promoted listing charges; commission_fee: Commission charged on sales; service_fee: Service, platform or programme fees; transaction_fee: Payment processing or transaction fees; subscription_fee: A monthly or yearly subscription. "none" when none of the others applies.",
+                "enum": [
+                  "advertising_fee",
+                  "commission_fee",
+                  "service_fee",
+                  "transaction_fee",
+                  "subscription_fee",
+                  "none",
+                ],
+                "type": "string",
+              },
+              "reference": {
+                "description": "This line's own reference number, only when the line prints one of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "source_line": {
+                "description": "The number after L at the start of the line where this amount is printed, for example 12 for L0012.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+            },
+            "required": [
+              "description",
+              "amount",
+              "date",
+              "reference",
+              "source_line",
+              "fee_type",
+              "category_account_id",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+      },
+      "required": [
+        "fees",
+      ],
+      "type": "object",
+    },
+    "stated_total": {
+      "description": "The figure the document prints for: The total of all the fees listed, including tax, as printed. Never an amount due that includes an earlier balance.. It is the total of exactly the lines read under sections. Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.",
+      "type": [
+        "number",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "header",
+    "stated_total",
+    "sections",
+    "ignored",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`savedReadingProfile > compiles the marketplace_summary starter to the schema the providers receive 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "additionalProperties": false,
+      "properties": {
+        "counterparty": {
+          "description": "The other party's name exactly as printed on the document (the full legal or business name): the supplier for an expense, the customer for income. Never shortened, abbreviated or paraphrased. Null when none is printed.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "currency": {
+          "description": "The ISO-4217 code the amounts are in (for example USD, MYR, SGD, EUR), from any symbol or code on the document. Null when none is shown.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "date": {
+          "description": "The document's date as YYYY-MM-DD. Null when it is unclear.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "reference": {
+          "description": "The document's own invoice, statement or reference number. Null when there is none.",
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+      },
+      "required": [
+        "counterparty",
+        "date",
+        "reference",
+        "currency",
+      ],
+      "type": "object",
+    },
+    "ignored": {
+      "description": "A short piece of text for each line left out on purpose, such as "Subtotal 1,230.00". At most 20.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "sections": {
+      "additionalProperties": false,
+      "properties": {
+        "fees": {
+          "description": "Fees and adjustments: Every other leaf line of the summary: refunds, discounts, shipping, vouchers, rebates and fees. A deduction is printed with a minus sign; a rebate or anything paid to the seller is printed without one. A line printed as a deduction (with a minus sign or in brackets) is money the user pays out; any other line is money the user receives. Keep each amount's sign as printed.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "The amount on this line exactly as printed, as a number with no currency symbol and no thousands separators. Keep the minus sign when the line prints one, or prints the amount in brackets. Never work out or add up a figure yourself.",
+                "type": "number",
+              },
+              "category_account_id": {
+                "description": "The id of the best matching account from the lists in the instructions. Null when the line does not say enough to choose one. Never invent an id.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+              "date": {
+                "description": "This line's own date as YYYY-MM-DD, only when the line prints a date of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "description": {
+                "description": "A short label for this line in a few words (under 60 characters), taken from the line's own wording.",
+                "type": "string",
+              },
+              "fee_type": {
+                "description": "Which fee type this line is. refund_amount: Money refunded to buyers for returned or cancelled orders; seller_product_discount: Product discounts the seller gave; platform_product_rebate: Product discount rebates the marketplace paid back; buyer_shipping_fee: Shipping fees the buyers paid; logistics_shipping_fee: Shipping fees the logistics provider charged; shipping_rebate: Shipping fee rebates from the marketplace; seller_shipping_promotion: Shipping fee promotions the seller paid for; return_shipping_fee: Shipping fees for returned orders; seller_voucher: Vouchers the seller sponsored; seller_coins_cashback: Coins cashback the seller sponsored; commission_fee: The marketplace's commission fee; service_fee: Service or programme fees; transaction_fee: Payment transaction fees; affiliate_commission: Commission paid to affiliates. "none" when none of the others applies.",
+                "enum": [
+                  "refund_amount",
+                  "seller_product_discount",
+                  "platform_product_rebate",
+                  "buyer_shipping_fee",
+                  "logistics_shipping_fee",
+                  "shipping_rebate",
+                  "seller_shipping_promotion",
+                  "return_shipping_fee",
+                  "seller_voucher",
+                  "seller_coins_cashback",
+                  "commission_fee",
+                  "service_fee",
+                  "transaction_fee",
+                  "affiliate_commission",
+                  "none",
+                ],
+                "type": "string",
+              },
+              "reference": {
+                "description": "This line's own reference number, only when the line prints one of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "source_line": {
+                "description": "The number after L at the start of the line where this amount is printed, for example 12 for L0012.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+            },
+            "required": [
+              "description",
+              "amount",
+              "date",
+              "reference",
+              "source_line",
+              "fee_type",
+              "category_account_id",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+        "sales": {
+          "description": "Sales: The value of the goods sold in the period, at the top of the summary. Every line of this section is money the user receives.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "The amount on this line exactly as printed, as a number with no currency symbol and no thousands separators. Keep the minus sign when the line prints one, or prints the amount in brackets. Never work out or add up a figure yourself.",
+                "type": "number",
+              },
+              "category_account_id": {
+                "description": "The id of the best matching account from the lists in the instructions. Null when the line does not say enough to choose one. Never invent an id.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+              "date": {
+                "description": "This line's own date as YYYY-MM-DD, only when the line prints a date of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "description": {
+                "description": "A short label for this line in a few words (under 60 characters), taken from the line's own wording.",
+                "type": "string",
+              },
+              "fee_type": {
+                "description": "Which fee type this line is. product_price: The price of the products sold (product price or merchandise subtotal). "none" when none of the others applies.",
+                "enum": [
+                  "product_price",
+                  "none",
+                ],
+                "type": "string",
+              },
+              "reference": {
+                "description": "This line's own reference number, only when the line prints one of its own. Otherwise null.",
+                "type": [
+                  "string",
+                  "null",
+                ],
+              },
+              "source_line": {
+                "description": "The number after L at the start of the line where this amount is printed, for example 12 for L0012.",
+                "type": [
+                  "integer",
+                  "null",
+                ],
+              },
+            },
+            "required": [
+              "description",
+              "amount",
+              "date",
+              "reference",
+              "source_line",
+              "fee_type",
+              "category_account_id",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+      },
+      "required": [
+        "sales",
+        "fees",
+      ],
+      "type": "object",
+    },
+    "stated_total": {
+      "description": "The figure the document prints for: The net amount the marketplace released to the seller for the period, such as Total Payout Released, as printed.. It is the total of exactly the lines read under sections. Copy it exactly as printed, with its sign and with no currency symbol. Null when the document does not print it.",
+      "type": [
+        "number",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "header",
+    "stated_total",
+    "sections",
+    "ignored",
+  ],
+  "type": "object",
+}
+`;

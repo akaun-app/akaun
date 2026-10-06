@@ -117,6 +117,8 @@ beforeAll(() => {
   writeStored("records/2026/08/receipt.pdf");
   writeStored("statements/august.pdf");
   writeStored("orphan.pdf");
+  writeStored("records/2026/08/wallet.xlsx");
+  writeStored("records/2026/08/wallet.csv");
 });
 
 afterAll(() => {
@@ -157,5 +159,31 @@ describe("/api/files ownership", () => {
     permission.granted = true;
     const response = await get("statements/august.pdf");
     expect(response.status).toBe(200);
+  });
+});
+
+describe("/api/files content disposition (006 FR-050)", () => {
+  it("offers a record's spreadsheet as a download and still shows a PDF in the page", async () => {
+    rows.record.add("records/2026/08/receipt.pdf");
+    rows.record.add("records/2026/08/wallet.xlsx");
+    rows.record.add("records/2026/08/wallet.csv");
+
+    const pdf = await get("records/2026/08/receipt.pdf");
+    expect(pdf.headers.get("Content-Disposition")).toMatch(/^inline; /);
+
+    const xlsx = await get("records/2026/08/wallet.xlsx");
+    expect(xlsx.status).toBe(200);
+    expect(xlsx.headers.get("Content-Type")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    expect(xlsx.headers.get("Content-Disposition")).toMatch(
+      /^attachment; filename="wallet\.xlsx"/,
+    );
+
+    const csv = await get("records/2026/08/wallet.csv");
+    expect(csv.headers.get("Content-Type")).toBe("text/csv");
+    expect(csv.headers.get("Content-Disposition")).toMatch(
+      /^attachment; filename="wallet\.csv"/,
+    );
   });
 });

@@ -741,6 +741,8 @@ th.sortable:hover .th-idle { opacity: .5; }
 .type-chip { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 999px; flex-shrink: 0; }
 .type-chip.expense { background: var(--accent); color: var(--muted-foreground); }
 .type-chip.income { background: var(--green-soft); color: var(--green); }
+/* A group whose records are both income and expenses, or that made none. */
+.type-chip.mixed { background: transparent; color: var(--muted-foreground); box-shadow: inset 0 0 0 1px var(--border); }
 .is-queued { color: var(--muted-foreground); }
 .slider-row { display: flex; align-items: center; gap: 10px; }
 .slider-val { font-size: 13.5px; font-weight: 600; min-width: 22px; text-align: right; }

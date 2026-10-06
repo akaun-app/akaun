@@ -21,7 +21,9 @@ export type RecordType =
   | "account"
   // Settling is the one action that changes a record nobody edited, so it is
   // audited in its own right (FR-041).
-  | "settlement";
+  | "settlement"
+  // A saved way of reading a document (006 FR-038).
+  | "import_profile";
 export type AuditAction = "create" | "update" | "delete";
 export type FieldChange = { field: string; before: unknown; after: unknown };
 

@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { ledgerRecords, importQueue, contacts } from '../db/schema.js';
+import { ledgerRecords, importQueue, importItems, contacts } from '../db/schema.js';
 import { ImportState, DocumentType, LedgerRecordKind } from '$lib/enums.js';
 import { normalizeName } from '../queries/contacts.js';
 import { getSetting, SETTING_KEYS } from '../settings.js';
@@ -9,7 +9,10 @@ import { getSetting, SETTING_KEYS } from '../settings.js';
 type Db = BunSQLiteDatabase<any>;
 
 type JobSnapshot = {
-	originalFilename: string;
+	// Null when the file name is no evidence: every item of one document shares
+	// it, and so does last month's document of the same kind (006 FR-025). The
+	// file name then neither finds candidates nor adds to a score.
+	originalFilename: string | null;
 	fileHash: string | null;
 	itemName: string | null;
 	supplier: string | null;
@@ -18,6 +21,13 @@ type JobSnapshot = {
 	reference: string | null;
 	extractedText: string | null;
 	documentType: number;
+	// When true, a record whose own reference differs from this item's is never
+	// its duplicate (006 FR-063): two rows of one table with different references
+	// are different transactions, however alike the rest. Set only for an item
+	// read from a table's columns, or in Every transaction mode by the AI (in
+	// one call or in pieces); every other reading keeps the weighted check
+	// below unchanged (FR-024).
+	referenceVeto?: boolean;
 };
 
 type DuplicateResult = {
@@ -69,13 +79,34 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	// File hash — byte-identical re-upload of a file already imported. Unambiguous, so it
 	// short-circuits before the (more expensive) weighted engine below runs at all.
 	if (job.fileHash) {
-		const byHash = db
-			.select({ id: importQueue.resultId })
-			.from(importQueue)
-			.where(
-				and(eq(importQueue.fileHash, job.fileHash), eq(importQueue.state, ImportState.Imported))
-			)
-			.get();
+		// A document read as several items finishes as Imported with no record of
+		// its own: its records are on its items. So a queue row only counts when it
+		// names a record, and otherwise any imported item of a document with this
+		// file stands for it (006 FR-004: a receipt is still warned).
+		const byHash =
+			db
+				.select({ id: importQueue.resultId })
+				.from(importQueue)
+				.where(
+					and(
+						eq(importQueue.fileHash, job.fileHash),
+						eq(importQueue.state, ImportState.Imported),
+						isNotNull(importQueue.resultId)
+					)
+				)
+				.get() ??
+			db
+				.select({ id: importItems.resultId })
+				.from(importItems)
+				.innerJoin(importQueue, eq(importQueue.id, importItems.jobId))
+				.where(
+					and(
+						eq(importQueue.fileHash, job.fileHash),
+						eq(importItems.state, ImportState.Imported),
+						isNotNull(importItems.resultId)
+					)
+				)
+				.get();
 		if (byHash?.id != null) {
 			return { duplicateOf: byHash.id, confidence: 100, reasons: ['file_hash'] };
 		}
@@ -132,17 +163,20 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 		}
 	}
 
-	const filenameHits = db
-		.select({ resultId: importQueue.resultId })
-		.from(importQueue)
-		.where(
-			and(
-				eq(importQueue.originalFilename, job.originalFilename),
-				eq(importQueue.state, ImportState.Imported),
-				eq(importQueue.resultType, job.documentType)
-			)
-		)
-		.all();
+	const jobFilename = job.originalFilename;
+	const filenameHits = jobFilename
+		? db
+				.select({ resultId: importQueue.resultId })
+				.from(importQueue)
+				.where(
+					and(
+						eq(importQueue.originalFilename, jobFilename),
+						eq(importQueue.state, ImportState.Imported),
+						eq(importQueue.resultType, job.documentType)
+					)
+				)
+				.all()
+		: [];
 	const filenameIds = filenameHits.map((r) => r.resultId).filter((id): id is number => id != null);
 	if (filenameIds.length) {
 		for (const row of candidateQuery(inArray(ledgerRecords.id, filenameIds)).all()) {
@@ -153,14 +187,18 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 	if (candidates.size === 0) return null;
 
 	const jobTokens = job.extractedText ? tokenSet(normalizeName(job.extractedText.slice(0, CONTENT_CHAR_LIMIT))) : null;
-	const jobFilenameTokens = tokenSet(normalizeName(stripExtension(job.originalFilename)));
+	const jobFilenameTokens = jobFilename ? tokenSet(normalizeName(stripExtension(jobFilename))) : null;
 	const jobSupplierNorm = job.supplier ? normalizeName(job.supplier) : null;
 	const jobSupplierTokens = jobSupplierNorm ? tokenSet(jobSupplierNorm) : null;
 
 	let best: { id: number; score: number; reasons: string[] } | null = null;
+	const ownReference = job.referenceVeto ? (job.reference?.trim() ?? '') : '';
 
 	for (const c of candidates.values()) {
 		const reasons: { label: string; weight: number }[] = [];
+
+		const theirReference = c.reference?.trim() ?? '';
+		if (ownReference && theirReference && theirReference !== ownReference) continue;
 
 		if (job.reference && job.reference.trim() && c.reference && c.reference.trim() === job.reference.trim()) {
 			reasons.push({ label: 'reference', weight: 65 });
@@ -189,10 +227,10 @@ export function detectDuplicate(db: Db, job: JobSnapshot): DuplicateResult {
 			}
 		}
 
-		if (c.originalFilename) {
+		if (jobFilename && jobFilenameTokens && c.originalFilename) {
 			const candFilenameNorm = normalizeName(stripExtension(c.originalFilename));
 			const candFilenameTokens = tokenSet(candFilenameNorm);
-			const jobFilenameNorm = normalizeName(stripExtension(job.originalFilename));
+			const jobFilenameNorm = normalizeName(stripExtension(jobFilename));
 			if (jobFilenameNorm && candFilenameNorm === jobFilenameNorm) {
 				reasons.push({ label: 'filename', weight: 25 });
 			} else {

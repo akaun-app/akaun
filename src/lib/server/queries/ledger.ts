@@ -35,6 +35,7 @@ import { lockStateOf } from "../ledger/locking.js";
 import { toMinor } from "../ledger/money.js";
 import { coverageFor } from "../ledger/coverage.js";
 import { recordSettlementState } from "../ledger/settlement-rules.js";
+import { resolveMovementLabel } from "../ledger/movement-label.js";
 import type {
   LedgerDb,
   LedgerRecordRow,
@@ -359,6 +360,11 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountId: ledgerMovements.accountId,
       amountMinor: ledgerMovements.amountMinor,
       sortOrder: ledgerMovements.sortOrder,
+      label: ledgerMovements.label,
+      // Only for `displayLabel` below — a movement stores no description of
+      // its own, and this is the one place `MovementView` is built, so the
+      // fallback is resolved here rather than left for every reader to redo.
+      recordDescription: ledgerRecords.description,
       accountName: accounts.name,
       accountType: accounts.type,
       accountRole: accounts.role,
@@ -366,6 +372,7 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
     })
     .from(ledgerMovements)
     .innerJoin(accounts, eq(accounts.id, ledgerMovements.accountId))
+    .innerJoin(ledgerRecords, eq(ledgerRecords.id, ledgerMovements.recordId))
     .where(inArray(ledgerMovements.recordId, recordIds))
     .orderBy(asc(ledgerMovements.sortOrder), asc(ledgerMovements.id))
     .all();
@@ -407,6 +414,8 @@ function deriveFor(db: LedgerDb, recordIds: number[]): DerivedState {
       accountRole: m.accountRole,
       accountSubType: m.accountSubType as AccountSubTypeCode | null,
       amountMinor: m.amountMinor,
+      label: m.label,
+      displayLabel: resolveMovementLabel(m.label, m.recordDescription),
     });
 
     if (owedAccountIds.has(m.accountId)) {
@@ -753,7 +762,11 @@ function replaceMovements(
     const existingId = existingBySortOrder.get(m.sortOrder);
     if (existingId === undefined) continue;
     db.update(ledgerMovements)
-      .set({ accountId: m.accountId, amountMinor: m.amountMinor })
+      .set({
+        accountId: m.accountId,
+        amountMinor: m.amountMinor,
+        label: m.label,
+      })
       .where(eq(ledgerMovements.id, existingId))
       .run();
   }
@@ -769,6 +782,7 @@ function replaceMovements(
           accountId: m.accountId,
           amountMinor: m.amountMinor,
           sortOrder: m.sortOrder,
+          label: m.label,
         })),
       )
       .run();
@@ -992,15 +1006,62 @@ export function listAttachments(
     .all();
 }
 
+/**
+ * The files attached to a record whose text may be searched as the record's
+ * own: every attachment except a document imported as several items.
+ *
+ * One stored file is attached to every record made from a document with
+ * several items (006 FR-027). Its text describes every one of those records,
+ * so indexing it would make each of them match a search for any other line of
+ * the document (FR-029). A record made that way is found by its own
+ * description, contact, reference and amount instead. The attachment row says
+ * so itself (`group_document`), so the rule still holds after the other
+ * records have let the file go, or the import has been cleared from history.
+ * A file another record also has is left out too, however it came to be
+ * shared. A file only this record has, such as a receipt added by hand, is
+ * indexed as before. Indexed or not, the file stays attached and opens from
+ * every record.
+ */
+export function searchableAttachmentFilenames(
+  db: LedgerDb,
+  recordId: number,
+): string[] {
+  return db
+    .select({ filename: recordAttachments.filename })
+    .from(recordAttachments)
+    .where(
+      and(
+        eq(recordAttachments.recordId, recordId),
+        eq(recordAttachments.groupDocument, false),
+        // Uses the index on record_attachments.filename (migration 0022).
+        sql`not exists (select 1 from record_attachments as other where other.filename = ${recordAttachments.filename} and other.record_id <> ${recordAttachments.recordId})`,
+      ),
+    )
+    .orderBy(asc(recordAttachments.id))
+    .all()
+    .map((row) => row.filename);
+}
+
+/**
+ * Attaches a stored file to a record. `groupDocument` marks a document
+ * imported as several items, whose text is then never searched as this
+ * record's own (see `searchableAttachmentFilenames`).
+ */
 export function addAttachment(
   db: LedgerDb,
   recordId: number,
   filename: string,
   displayName: string,
+  options: { groupDocument?: boolean } = {},
 ): RecordAttachmentRow {
   return db
     .insert(recordAttachments)
-    .values({ recordId, filename, displayName })
+    .values({
+      recordId,
+      filename,
+      displayName,
+      groupDocument: options.groupDocument ?? false,
+    })
     .returning()
     .get()!;
 }

@@ -3,8 +3,14 @@ import { eq, inArray } from 'drizzle-orm';
 import { randomUUID, createHash } from 'crypto';
 import { db } from '$lib/server/db/client.js';
 import { importQueue } from '$lib/server/db/schema.js';
-import { saveToTemp, sniffAllowedType, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
+import { saveToTemp, MAX_UPLOAD_BYTES } from '$lib/server/file-storage.js';
+import { importUploadNameRefusal, sniffImportUpload } from '$lib/server/import/upload-type.js';
 import { importEvents } from '$lib/server/import/events.js';
+import { jobForEvent } from '$lib/server/import/job-event.js';
+import { jobEvents } from '$lib/server/import/group-state.js';
+import { readingForUpload } from '$lib/server/import/upload-reading.js';
+import { profileSnapshotOf, serializeProfileSnapshot } from '$lib/server/import/profile-snapshot.js';
+import { deletedProfileName, getImportProfile } from '$lib/server/services/import-profiles.js';
 import { ImportState } from '$lib/enums.js';
 import type { RequestHandler } from './$types.js';
 import { hasPermission } from '$lib/server/permissions.js';
@@ -32,7 +38,10 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		return b.createdAt.localeCompare(a.createdAt);
 	});
 
-	return json(rows);
+	// The same shape as a live update: no document text, which can be tens of
+	// thousands of characters per row and which no screen reads from the list,
+	// and each group with its item counts.
+	return json(jobEvents(db, rows));
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -45,6 +54,25 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!(file instanceof File)) {
 		return json({ error: 'No file provided' }, { status: 400 });
 	}
+
+	// How to read it (FR-001). Checked before anything is stored, so a refused
+	// upload leaves no file and no queue row behind. A saved profile needs only
+	// this upload permission, the same as every other way of reading (FR-045).
+	// A profile is read in its own import mode (FR-002); an `importMode` field
+	// sent by a screen opened before that choice was removed is not read.
+	const reading = readingForUpload(
+		formData.get('readAs'),
+		(id) => getImportProfile(db, id),
+		(id) => deletedProfileName(db, id)
+	);
+	if (!reading.ok) return json({ error: reading.error }, { status: 400 });
+
+	// A copy of the chosen profile, taken now, so the queue can name it while
+	// the document waits or if it fails, and the reading can still name it if
+	// the profile is deleted first (FR-041). Reading replaces it with the
+	// profile as it is then (FR-038).
+	const chosenProfile = reading.profileId ? getImportProfile(db, Number(reading.profileId)) : null;
+	const profileSnapshot = chosenProfile ? serializeProfileSnapshot(profileSnapshotOf(chosenProfile)) : null;
 
 	// Optional: caller already ran its own OCR/extraction (e.g. Apple Vision Framework
 	// via a client-side Shortcut) and wants the server to skip its own OCR.
@@ -62,10 +90,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		if (trimmed.length > 0) preExtractedText = trimmed;
 	}
 
-	const allowedExtensions = /\.(pdf|jpe?g|png)$/i;
-	if (!allowedExtensions.test(file.name)) {
-		return json({ error: 'Unsupported file type. Upload a PDF, JPG, or PNG.' }, { status: 400 });
-	}
+	// A PDF, a photo, an Excel workbook or a CSV file (006 FR-050). Only Auto
+	// Import takes spreadsheets; Reconciliation and record attachments do not.
+	const nameRefusal = importUploadNameRefusal(file.name);
+	if (nameRefusal) return json({ error: nameRefusal }, { status: 400 });
 
 	if (file.size > MAX_UPLOAD_BYTES) {
 		return json(
@@ -76,10 +104,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 	const buffer = Buffer.from(await file.arrayBuffer());
 
-	// Validate by content, not just the client-supplied name/MIME.
-	if (!sniffAllowedType(buffer)) {
-		return json({ error: 'File content is not a valid PDF, JPG, or PNG.' }, { status: 400 });
-	}
+	// Validate by content, not just the client-supplied name/MIME. A
+	// spreadsheet's content must also match its name, since it is read by it.
+	const sniffed = sniffImportUpload(buffer, file.name);
+	if (!sniffed.ok) return json({ error: sniffed.error }, { status: 400 });
 
 	const tempFilePath = saveToTemp(buffer, file.name);
 	const fileHash = createHash('sha256').update(buffer).digest('hex');
@@ -93,12 +121,17 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			tempFilePath,
 			originalFilename: file.name,
 			fileHash,
-			preExtractedText
+			preExtractedText,
+			readAs: reading.readAs,
+			readHow: reading.readHow,
+			profileId: reading.profileId,
+			profileSnapshot,
+			importMode: reading.importMode
 		})
 		.run();
 
 	const newJob = db.select().from(importQueue).where(eq(importQueue.id, jobId)).get();
-	importEvents.emit('job-update', { userId: locals.user.id, job: newJob });
+	if (newJob) importEvents.emit('job-update', { userId: locals.user.id, job: jobForEvent(newJob) });
 
 	return json({ jobId }, { status: 202 });
 };

@@ -447,3 +447,36 @@ describe("a batch payment — several contacts settled by one payment", () => {
     expect(amountOn(m, BANK)).toBe(-15000);
   });
 });
+
+describe("a journal entry's per-line label", () => {
+  it("passes each line's label through unchanged", () => {
+    const m = movementsOf(
+      build({
+        kind: "journal",
+        amountMinor: 0,
+        contactId: null,
+        movements: [
+          { accountId: GROCERIES, amountMinor: 1000, label: "Paper" },
+          { accountId: BANK, amountMinor: -1000, label: "Scissors" },
+        ],
+      }),
+    );
+    expect(m.find((x) => x.accountId === GROCERIES)?.label).toBe("Paper");
+    expect(m.find((x) => x.accountId === BANK)?.label).toBe("Scissors");
+  });
+
+  it("defaults to null when a line names no label", () => {
+    const m = movementsOf(
+      build({
+        kind: "journal",
+        amountMinor: 0,
+        contactId: null,
+        movements: [
+          { accountId: GROCERIES, amountMinor: 1000 },
+          { accountId: BANK, amountMinor: -1000 },
+        ],
+      }),
+    );
+    expect(m.every((x) => x.label === null)).toBe(true);
+  });
+});

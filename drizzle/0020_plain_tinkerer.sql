@@ -1,0 +1,1 @@
+ALTER TABLE `ledger_movements` ADD `label` text;

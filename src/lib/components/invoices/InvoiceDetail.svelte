@@ -100,6 +100,7 @@
 				return;
 			}
 			invoice = await fetch(`/api/invoices/${invoice.id}`).then((r) => r.json());
+			issueConfirmOpen = false;
 			void auditTrailRef?.refresh();
 		} catch {
 			issueError = 'Network error — try again';

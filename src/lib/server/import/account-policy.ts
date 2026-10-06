@@ -101,3 +101,33 @@ export function validateImportAccountPair(
           "Those source and target accounts are not valid for this document.",
       };
 }
+
+/**
+ * Whether two accounts can be the two sides of an imported transfer (006
+ * FR-058): money moved between two of the business's own accounts that hold
+ * money, such as the marketplace wallet and the bank. `from` is the account
+ * the money left, `to` the one it went into.
+ *
+ * Only an item a profile's transfer section read is checked here. A receipt,
+ * or an income or expense item, is checked by `validateImportAccountPair`,
+ * which never accepts two money accounts, so it can never become a transfer.
+ */
+export function validateTransferPair(
+  from: AccountView,
+  to: AccountView,
+): { ok: true } | { ok: false; reason: string } {
+  if (from.id === to.id) {
+    return {
+      ok: false,
+      reason: "A transfer needs two different accounts.",
+    };
+  }
+  if (!isImportTransactionAsset(from) || !isImportTransactionAsset(to)) {
+    return {
+      ok: false,
+      reason:
+        "Both sides of a transfer must be accounts that hold money, such as a bank account, cash, a card or a wallet.",
+    };
+  }
+  return { ok: true };
+}

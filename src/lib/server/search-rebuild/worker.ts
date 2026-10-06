@@ -2,7 +2,6 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   ledgerRecords,
-  recordAttachments,
   quotations,
   invoices,
   contacts,
@@ -10,7 +9,11 @@ import {
 import { extractAttachmentsText } from "../extraction/attachment-text.js";
 import { createLogger } from "../logger.js";
 import { searchRebuildEvents } from "./events.js";
-import { reindexRecord, setExtractedText } from "../queries/ledger.js";
+import {
+  reindexRecord,
+  searchableAttachmentFilenames,
+  setExtractedText,
+} from "../queries/ledger.js";
 import { reindexQuotation } from "../queries/quotations.js";
 import { reindexInvoice } from "../queries/invoices.js";
 import { reindexContact } from "../queries/contacts.js";
@@ -82,13 +85,11 @@ export function startRebuild(): RebuildStatus {
  * `record_attachments` into `record_search_text`.
  */
 async function rebuildRecord(id: number) {
-  const attachments = db
-    .select({ filename: recordAttachments.filename })
-    .from(recordAttachments)
-    .where(eq(recordAttachments.recordId, id))
-    .all();
+  // A file other records share (one document imported as several items) is
+  // left out: its text describes all of them, so it would make each one match
+  // a search for any other line (006 FR-029).
   const text = await extractAttachmentsText(
-    attachments.map((a) => a.filename),
+    searchableAttachmentFilenames(db, id),
   );
   if (text != null) {
     setExtractedText(db, id, text);

@@ -10,7 +10,7 @@ import {
 import { resourceForKind } from "$lib/server/ledger/record-permissions.js";
 import { recordAudit } from "$lib/server/audit.js";
 import { emitRecordUpdate } from "$lib/server/services/ledger.js";
-import { deleteFile } from "$lib/server/file-storage.js";
+import { releaseIfUnreferenced } from "$lib/server/file-storage.js";
 
 export const DELETE: RequestHandler = async ({ locals, params }) => {
   const p = params as { id: string; attachmentId: string };
@@ -35,8 +35,9 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
     return notFound("That attachment no longer exists.");
   }
   // The row goes first: a file left behind is recoverable, a row pointing at a
-  // file that is gone is not.
-  deleteFile(attachment.filename);
+  // file that is gone is not. The file stays while another record still
+  // shows it.
+  releaseIfUnreferenced(db, attachment.filename);
 
   recordAudit(db, {
     recordType: "record",

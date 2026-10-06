@@ -19,6 +19,9 @@ const RESOURCE_BY_RECORD_TYPE: Record<RecordType, ResourceName> = {
   quotation: "quotations",
   invoice: "invoices",
   reconciliation: "reconciliation",
+  // Anyone who may see the import screen may read how a profile changed;
+  // changing one needs import.change (006 FR-045).
+  import_profile: "import",
 };
 
 export const GET: RequestHandler = ({ locals, params }) => {

@@ -37,6 +37,7 @@ import type {
   LedgerDb,
   Minor,
 } from "../ledger/types.js";
+import { resolveMovementLabel } from "../ledger/movement-label.js";
 
 /**
  * Reading the chart of accounts.
@@ -409,6 +410,7 @@ export function accountHistory(
       date: ledgerRecords.date,
       kind: ledgerRecords.kind,
       description: ledgerRecords.description,
+      label: ledgerMovements.label,
       contactName: contacts.legalName,
     })
     .from(ledgerMovements)
@@ -428,7 +430,7 @@ export function accountHistory(
       recordNumber: row.recordNumber,
       date: row.date,
       kind: row.kind as LedgerRecordKindCode,
-      description: row.description,
+      description: resolveMovementLabel(row.label, row.description),
       contactName: row.contactName ?? null,
       amountMinor: row.amountMinor,
       runningBalanceMinor: running,

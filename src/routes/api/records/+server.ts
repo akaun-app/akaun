@@ -94,6 +94,8 @@ const createSchema = z.discriminatedUnion("kind", [
         z.object({
           accountId,
           amountMinor: z.number().int(),
+          /** This line's own name. Absent or null falls back to the record's description. */
+          label: z.string().trim().max(200).nullable().optional(),
         }),
       )
       .min(2),
@@ -118,10 +120,18 @@ const fromSidesSchema = z.object({
   toAccountId: accountId,
   /** Third and later sides. Requires `adjustments` (FR-031). */
   extraSides: z
-    .array(z.object({ accountId, amountMinor: z.number().int() }))
+    .array(
+      z.object({
+        accountId,
+        amountMinor: z.number().int(),
+        label: z.string().trim().max(200).nullable().optional(),
+      }),
+    )
     .optional(),
   /** The named category's own typed amount, alongside `extraSides`. */
   categoryAmountMinor: z.number().int().positive().optional(),
+  /** The named category's own name, alongside `extraSides`. */
+  categoryLabel: z.string().trim().max(200).nullable().optional(),
 });
 
 const bodySchema = z.union([createSchema, fromSidesSchema]);
@@ -238,6 +248,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
         contactId: raw.contactId ?? null,
         extraSides: raw.extraSides,
         categoryAmountMinor: raw.categoryAmountMinor,
+        categoryLabel: raw.categoryLabel,
       },
       {
         accountById: (id) => {

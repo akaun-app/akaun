@@ -7,13 +7,18 @@ import { AccountType } from "$lib/enums.js";
 import type { PageServerLoad, Actions } from "./$types.js";
 import { z } from "zod";
 import { db } from "$lib/server/db/client.js";
-import { listTemplates } from "$lib/server/queries/templates.js";
 import {
   getSetting,
   setSetting,
   SETTING_KEYS,
   hasAnyDocuments,
 } from "$lib/server/settings.js";
+import {
+  LAYOUT_CATALOG,
+  DEFAULT_LAYOUT_KEY,
+  isLayoutKey,
+} from "$lib/pdf/layout-catalog.js";
+import { DEFAULT_PDF_THEME_COLOR } from "$lib/pdf/theme-presets.js";
 import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
@@ -40,6 +45,11 @@ import {
 import type { ProviderType } from "$lib/server/import/providers/index.js";
 import { fail } from "@sveltejs/kit";
 import { getAccountDefaults } from "$lib/server/services/account-defaults.js";
+import {
+  applyProfileSwitches,
+  importProfileList,
+  planProfileSwitches,
+} from "$lib/server/loaders/import-profiles.js";
 
 /**
  * A category IS an account (FR-006a) — the everyday word on screen, the chart of
@@ -148,6 +158,18 @@ export const load: PageServerLoad = async ({ locals }) => {
     apiKey: "", // never send actual key to browser
   }));
 
+  // Import profiles, listed beside the providers (006 US6 AS1). This loader
+  // checks no permission, so the list checks its own: seeing it needs
+  // import.view and changing it import.change (FR-045).
+  const importProfiles = importProfileList(locals);
+
+  const pdfInvoiceLayoutKey =
+    getSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey) ?? DEFAULT_LAYOUT_KEY;
+  const pdfQuotationLayoutKey =
+    getSetting(db, SETTING_KEYS.pdfQuotationLayoutKey) ?? DEFAULT_LAYOUT_KEY;
+  const pdfThemeColor =
+    getSetting(db, SETTING_KEYS.pdfThemeColor) ?? DEFAULT_PDF_THEME_COLOR;
+
   return {
     canManageAccounts,
     moneyAccounts,
@@ -170,7 +192,11 @@ export const load: PageServerLoad = async ({ locals }) => {
     companyRegistrationNo,
     companyLogoUrl,
     providers,
-    templates: listTemplates(db),
+    importProfiles,
+    layoutCatalog: LAYOUT_CATALOG,
+    pdfInvoiceLayoutKey,
+    pdfQuotationLayoutKey,
+    pdfThemeColor,
   };
 };
 
@@ -259,6 +285,26 @@ export const actions: Actions = {
     return { success: true, action: "saveCompany" };
   },
 
+  savePdfTemplate: async ({ request }) => {
+    const data = await request.formData();
+    const invoiceLayoutKey = String(data.get("invoiceLayoutKey") ?? "");
+    const quotationLayoutKey = String(data.get("quotationLayoutKey") ?? "");
+    const themeColor = String(data.get("themeColor") ?? "").trim();
+
+    if (!isLayoutKey(invoiceLayoutKey) || !isLayoutKey(quotationLayoutKey)) {
+      return fail(400, { error: "Choose a valid layout." });
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(themeColor)) {
+      return fail(400, { error: "Choose a valid accent color." });
+    }
+
+    setSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey, invoiceLayoutKey);
+    setSetting(db, SETTING_KEYS.pdfQuotationLayoutKey, quotationLayoutKey);
+    setSetting(db, SETTING_KEYS.pdfThemeColor, themeColor);
+
+    return { success: true, action: "savePdfTemplate" };
+  },
+
   saveSequenceTemplate: async ({ request }) => {
     if (hasAnyDocuments(db)) {
       return fail(400, {
@@ -306,9 +352,20 @@ export const actions: Actions = {
     return { success: true, action: "deleteProvider" };
   },
 
-  saveIntelligence: async ({ request }) => {
+  saveIntelligence: async ({ locals, request }) => {
     const data = await request.formData();
     const raw = String(data.get("providers") ?? "[]");
+
+    // The import profiles turned on or off in the list, staged like the
+    // provider switches. Checked first, so a refusal saves nothing on the tab;
+    // applied last, each one audited.
+    const profileSwitches = planProfileSwitches(
+      locals,
+      data.get("importProfiles"),
+    );
+    if (!profileSwitches.ok) {
+      return fail(profileSwitches.status, { error: profileSwitches.error });
+    }
 
     type ExistingEntry = { id: string; enabled: boolean };
     type NewEntry = {
@@ -407,6 +464,8 @@ export const actions: Actions = {
       SETTING_KEYS.autoImportCustomInstructions,
       customInstructions,
     );
+
+    applyProfileSwitches(locals.user!.id, profileSwitches.switches);
 
     return { success: true, action: "saveIntelligence" };
   },
