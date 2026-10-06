@@ -5,6 +5,7 @@
   let {
     role,
     disabled = false,
+    edited = false,
     initialLabel,
     matchedContactId,
     suggestions,
@@ -12,6 +13,7 @@
   }: {
     role: typeof Role.Supplier | typeof Role.Customer;
     disabled?: boolean;
+    edited?: boolean;
     initialLabel: string | null;
     matchedContactId: number | null;
     suggestions: { id: number; legalName: string; score?: number }[];
@@ -66,6 +68,17 @@
   });
 </script>
 
+<div class="contact-label-row">
+  <span class="rfield-label">
+    Contact
+    {#if edited}<span class="edited-tag">edited</span>{/if}
+  </span>
+  <span aria-live="polite">
+    {#if resolvedKey === lookupKey && outcome}
+      <span class="contact-outcome">{outcome}</span>
+    {/if}
+  </span>
+</div>
 <ContactSelect
   {role}
   {disabled}
@@ -78,21 +91,19 @@
     onChange(next);
   }}
 />
-<div aria-live="polite">
-  {#if resolvedKey === lookupKey && outcome}
-    <span class="contact-outcome"
-      >{outcome === "existing"
-        ? "Existing contact"
-        : "Will create new contact"}</span
-    >
-  {/if}
-</div>
 
 <style>
+  .contact-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
   .contact-outcome {
     display: inline-block;
     border-radius: 999px;
-    padding: 2px 7px;
+    padding: 0 7px;
     background: var(--secondary);
     color: var(--secondary-foreground);
     font-size: 11.5px;
