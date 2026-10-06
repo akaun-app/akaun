@@ -252,11 +252,8 @@
 			<!-- Contact (role follows the chosen category). A transfer has none. -->
 			{#if !transfer}
 				<div class="rfield">
-					<span class="rfield-label">
-						Contact
-						{#if isEdited('supplier') || isEdited('contactId') || isEdited('newContactName')}<span class="edited-tag">edited</span>{/if}
-					</span>
 					<ImportContactSelect
+						edited={isEdited('supplier') || isEdited('contactId') || isEdited('newContactName')}
 						role={isIncome ? Role.Customer : Role.Supplier}
 						initialLabel={row.supplier}
 						matchedContactId={(row.documentType === 'income') === isIncome ? row.matchedContactId : null}
