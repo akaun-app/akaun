@@ -94,7 +94,10 @@ export function loadImportPage(locals: App.Locals, database: LedgerDb = db) {
   return {
     jobs,
     readAsChoices: readAsChoices(database),
-    perms: { readAgain: canReadAgain(locals) },
+    perms: {
+      change: hasPermission(locals, "import", "change"),
+      readAgain: canReadAgain(locals),
+    },
     ...reviewOptions(database),
   };
 }
