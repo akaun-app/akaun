@@ -486,6 +486,42 @@
 		}
 	}
 
+	// "Skip" on a group card: every item still waiting is skipped, as "Skip all"
+	// does on the group's page. The state is not set here: the group ends
+	// skipped, imported (some items were already confirmed) or still grouped (an
+	// item is mid-confirm), and the job-update event says which.
+	let skipGroupAsk = $state<{ id: string; filename: string; waiting: number } | null>(null);
+	let skipGroupDialogOpen = $state(false);
+	let skippingGroups = $state<Record<string, boolean>>({});
+
+	function askSkipGroup(job: Job) {
+		const counts = job.itemCounts;
+		skipGroupAsk = {
+			id: job.id,
+			filename: job.originalFilename,
+			waiting: (counts?.ready ?? 0) + (counts?.needsAttention ?? 0),
+		};
+		skipGroupDialogOpen = true;
+	}
+
+	async function skipGroup(jobId: string) {
+		skippingGroups[jobId] = true;
+		try {
+			const res = await fetch(`/api/import/${jobId}/skip`, {
+				method: 'POST',
+				credentials: 'include',
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({}));
+				confirmErrors[jobId] = err.error ?? "That couldn't be skipped. Try again.";
+				return;
+			}
+			delete confirmErrors[jobId];
+		} finally {
+			delete skippingGroups[jobId];
+		}
+	}
+
 	async function retryJob(jobId: string) {
 		const file = fileStore.get(jobId);
 		if (!file) return;
@@ -829,7 +865,12 @@
 					<!-- A document read as several items: one card that opens its page.
 					     "Confirm all" above is for receipts only; a group has its own. -->
 					{#each groups as job (job.id)}
-						<ImportGroupCard {job} />
+						<ImportGroupCard
+							{job}
+							busy={skippingGroups[job.id] ?? false}
+							error={confirmErrors[job.id] ?? null}
+							onskip={() => askSkipGroup(job)}
+						/>
 					{/each}
 					{#each review as job (job.id)}
 						<ImportReviewCard
@@ -972,6 +1013,22 @@
 		replaces={readAgainReplaces(readAgainJob)}
 	/>
 {/if}
+
+<ConfirmDialog
+	bind:open={skipGroupDialogOpen}
+	title="Skip every waiting item?"
+	description={skipGroupAsk
+		? `No record is made for the ${skipGroupAsk.waiting} item${skipGroupAsk.waiting === 1 ? '' : 's'} still waiting in ${skipGroupAsk.filename}. Items already confirmed keep their records.`
+		: ''}
+	confirmLabel="Skip"
+	danger
+	onConfirm={() => {
+		const ask = skipGroupAsk;
+		skipGroupDialogOpen = false;
+		skipGroupAsk = null;
+		if (ask) void skipGroup(ask.id);
+	}}
+/>
 
 <ConfirmDialog
 	bind:open={clearHistoryDialogOpen}
