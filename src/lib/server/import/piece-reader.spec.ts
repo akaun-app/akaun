@@ -258,6 +258,23 @@ describe("a long document", () => {
     expect(second.system).not.toContain('"header"');
   });
 
+  it("shows every piece the pinned lines above its window, once, as no piece's own (FR-069)", async () => {
+    const { text } = report(45);
+    const fake = serve("main");
+    await read(text, { pinned: [2, 1] });
+
+    const pieces = fake.calls.filter((call) => call.kind === "lines");
+    const first = pieces.find((call) => call.owned?.[0] === 1)!;
+    const second = pieces.find((call) => call.owned?.[0] === 11)!;
+    // In the document's order, between the page mark and the context.
+    expect(second.user).toMatch(
+      /<document>\n--- page 1 ---\nL0001│[^\n]*\nL0002│[^\n]*\nL0008│/,
+    );
+    expect(second.owned).toEqual([11, 20]);
+    // A piece whose window already holds them is not shown them twice.
+    expect(first.user.match(/L0001│/g)).toHaveLength(1);
+  });
+
   it("reads the header once, from the start of the first page and the end of the last", async () => {
     const { text } = report(45, 20);
     const fake = serve("main");

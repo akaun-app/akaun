@@ -51,7 +51,13 @@ import {
   isTransferType,
   type ImportStateCode,
 } from "$lib/enums.js";
-import { readsFromColumns, readsTable } from "$lib/import-profile-schema.js";
+import {
+  foldTableText,
+  nameFromKey,
+  profileFileTypes,
+  readsFromColumns,
+  readsTable,
+} from "$lib/import-profile-schema.js";
 import {
   ImportMode,
   ImportReadAs,
@@ -100,7 +106,18 @@ import {
 } from "./document-reader.js";
 import { emitItemUpdates, emitJobUpdate } from "./group-state.js";
 import { callLLMWithProviders } from "./llm.js";
-import { detectProfile, phraseMatch } from "./profile-detect.js";
+import {
+  DETECT_HEAD_CHARS,
+  detectProfile,
+  phraseMatch,
+} from "./profile-detect.js";
+import {
+  hasProfileTable,
+  headingLines,
+  missingSheet,
+  profileSheet,
+  sheetsHead,
+} from "./profile-sheet.js";
 import { RECEIPT_TEXT_LIMIT } from "./providers/shared.js";
 import { alreadyImported } from "./repeat-file.js";
 import { sameMoneyNotes } from "./same-money.js";
@@ -120,6 +137,7 @@ import {
   builtinItemsPlan,
   needsAi,
   isSpreadsheetJob,
+  jobFileType,
   needsCells,
   planForProfile,
   readsCells,
@@ -129,7 +147,6 @@ import {
 import type { ReviewFields } from "./review-fields.js";
 import {
   TableReadError,
-  layoutMatches,
   readTable,
   withoutTableRows,
   type AiPart,
@@ -497,10 +514,10 @@ export async function processImportJob(
     return;
   }
 
-  // The cells and the numbered text for a table, the numbered text alone
-  // for the AI.
+  // The cells and the numbered text for a table, or for a profile that reads
+  // one sheet of a workbook (FR-069); the numbered text alone for the AI.
   let source: DocumentSource | null;
-  if (needsCells(plan)) {
+  if (needsCells(plan) || (plan.kind === "profile" && readsCells(job))) {
     source = await documentText(
       db,
       job,
@@ -608,7 +625,7 @@ async function readAutoDetected(
   setState(db, job.id, userId, ImportState.Processing);
 
   const detection = texts.workbook
-    ? await detectSpreadsheet(job, texts, texts.workbook, profiles, calls)
+    ? await detectSpreadsheet(job, texts.workbook, profiles, calls)
     : await detectDocument(job, texts.plain, profiles, calls);
   if (typeof detection === "string") {
     markFailed(db, job.id, userId, detection);
@@ -673,27 +690,65 @@ function cellsForColumns(
   source: DocumentSource,
   plan: ItemsPlan,
   options: ProcessJobOptions,
-): { text: string; workbook?: Workbook } | string {
+): Cells | string {
   const delimiter = plan.table?.layout.csvDelimiter ?? null;
   const isCsv = inferMimeType(job.originalFilename) === CSV_MIME_TYPE;
   if (!plan.table || delimiter === null || !isCsv) {
-    return { text: source.numbered, workbook: source.workbook };
+    return oneSheetOf(plan, {
+      text: source.numbered,
+      workbook: source.workbook,
+    });
   }
   try {
     const bytes = readFileSync(join(options.storageRoot, job.tempFilePath));
     const workbook = readCsv(bytes, { delimiter });
-    return { text: spreadsheetText(workbook).numbered, workbook };
+    return oneSheetOf(plan, {
+      text: spreadsheetText(workbook).numbered,
+      workbook,
+    });
   } catch (err) {
     log.error({ jobId: job.id, err }, "Reading the CSV file again failed");
     return err instanceof Error ? err.message : String(err);
   }
 }
 
+/** A workbook's cells and numbered text, and the one sheet they hold. */
+type Cells = {
+  text: string;
+  workbook?: Workbook;
+  /** The sheet a profile reads, when the file has more than one (FR-069). */
+  sheet?: string;
+};
+
+/**
+ * The cells and numbered text cut down to the one sheet a saved profile
+ * reads (FR-069), or the reason it cannot be read: the sheet it names is not
+ * in the file. The text is made again from that sheet alone, so the table
+ * reader, the AI and every line number go by the same text. The built-in
+ * reading, and a file with no cells, are left as they are.
+ */
+function oneSheetOf(plan: ItemsPlan, cells: Cells): Cells | string {
+  if (plan.kind !== "profile" || !cells.workbook) return cells;
+  const picked = profileSheet(
+    cells.workbook,
+    { name: plan.profileName ?? "", sheet: plan.sheet },
+    plan.table?.layout.headers ?? null,
+  );
+  if ("refused" in picked) return picked.refused;
+  if (picked.workbook === cells.workbook) return cells;
+  return {
+    text: spreadsheetText(picked.workbook).numbered,
+    workbook: picked.workbook,
+    ...(picked.of > 1 ? { sheet: picked.name } : {}),
+  };
+}
+
 /**
  * Auto-detect for a PDF or a photo (FR-039): `detectProfile`, among the
  * profiles that could read it. A profile that reads a table by code is left
- * out: it is made for a spreadsheet's table, and a PDF has no cells. With no
- * other profile, nothing is asked and the document is read the standard way.
+ * out: it is made for a spreadsheet's table, and a PDF has no cells. So is
+ * one made for other files (FR-070). With no other profile, nothing is asked
+ * and the document is read the standard way.
  */
 async function detectDocument(
   job: ImportJob,
@@ -701,7 +756,12 @@ async function detectDocument(
   profiles: ImportProfileView[],
   calls: Omit<ReadingInput, "text">,
 ): Promise<{ route: number | "standard" }> {
-  const readable = profiles.filter((profile) => !readsTable(profile));
+  // A spreadsheet given as text is read here too, as a spreadsheet.
+  const fileType = jobFileType(job);
+  const readable = profiles.filter(
+    (profile) =>
+      !readsTable(profile) && profileFileTypes(profile).includes(fileType),
+  );
   if (readable.length === 0) return { route: "standard" };
   return detectProfile({
     text,
@@ -735,13 +795,21 @@ async function detectDocument(
  */
 async function detectSpreadsheet(
   job: ImportJob,
-  texts: DocumentSource,
   workbook: Workbook,
   profiles: ImportProfileView[],
   calls: Omit<ReadingInput, "text">,
 ): Promise<{ route: number | "standard" } | string> {
-  const byHeadings = profiles.filter(
-    (profile) => profile.layout && layoutMatches(workbook, profile.layout),
+  // A profile made for PDF files and photos does not read it (FR-070), nor
+  // one whose sheet is not in the file (FR-069).
+  const readable = profiles.filter(
+    (profile) =>
+      profileFileTypes(profile).includes("spreadsheet") &&
+      missingSheet(workbook, profile) === null,
+  );
+  const byHeadings = readable.filter(
+    (profile) =>
+      profile.layout &&
+      hasProfileTable(workbook, profile, profile.layout.headers),
   );
   if (byHeadings.length === 1) {
     log.info(
@@ -754,8 +822,22 @@ async function detectSpreadsheet(
   const among =
     byHeadings.length > 1
       ? byHeadings
-      : profiles.filter((profile) => !readsTable(profile));
-  const words = detectionText(workbook);
+      : readable.filter((profile) => !readsTable(profile));
+  // A profile that names its sheet is recognised by that sheet's words, and
+  // any other by the whole workbook's. Each text is made once, however many
+  // profiles look in it.
+  const texts = new Map<string, string>();
+  const words = (profile: ImportProfileView) => {
+    const picked = profile.sheet ? profileSheet(workbook, profile, null) : null;
+    const scope = picked && "workbook" in picked ? picked : null;
+    const key = scope ? `sheet:${foldTableText(scope.name)}` : "workbook";
+    let text = texts.get(key);
+    if (text === undefined) {
+      text = detectionText(scope ? scope.workbook : workbook);
+      texts.set(key, text);
+    }
+    return text;
+  };
   const byPhrases = phraseMatch(words, among);
   if (byPhrases.length === 1) {
     log.info(
@@ -773,8 +855,15 @@ async function detectSpreadsheet(
   }
 
   return detectProfile({
-    text: texts.plain,
-    phraseText: words,
+    // The start of each sheet, not only of the first, and of a hidden sheet
+    // a profile names (FR-069).
+    text: sheetsHead(
+      workbook,
+      DETECT_HEAD_CHARS,
+      among.flatMap((profile) => (profile.sheet ? [profile.sheet] : [])),
+    ),
+    // Already looked for above; neither one decided.
+    phraseMatched: byPhrases,
     profiles: among,
     providers: calls.providers,
     intervalMs: calls.rateLimitMs,
@@ -826,6 +915,8 @@ type ReadingInput = {
   text: string;
   /** A spreadsheet's cells, for a reading from its columns. */
   workbook?: Workbook;
+  /** The one sheet a profile read, when the file has more (FR-069). */
+  sheet?: string;
   providers: ReturnType<typeof getEnabledProviders>;
   rateLimitMs: number;
   accountLists: Omit<LLMCallParams, "text">;
@@ -936,22 +1027,6 @@ async function readReceipt(
 }
 
 /**
- * The remark an item starts with: its line type, then each extra field, each as
- * "name: value" (FR-034, FR-035), for example "Line type: commission_fee;
- * order_no: 2408". Null when it has neither, as for every item of the built-in
- * several-items reading.
- */
-function itemRemark(item: DocumentItem): string | null {
-  const parts: string[] = [];
-  if (item.feeType) parts.push(`Line type: ${item.feeType}`);
-  for (const [name, value] of Object.entries(item.extras ?? {})) {
-    if (value === null || value === undefined || value === "") continue;
-    parts.push(`${name}: ${String(value)}`);
-  }
-  return parts.length ? parts.join("; ") : null;
-}
-
-/**
  * What to tell the reviewer when the category the item's fee type is tied to
  * could not be used because it is for the other kind of record, or null.
  *
@@ -962,7 +1037,10 @@ function itemRemark(item: DocumentItem): string | null {
  * and this says so, on the item, rather than dropping the tie silently.
  */
 export function tiedCategoryNote(
-  item: Pick<DocumentItem, "kind" | "feeType" | "tiedCategoryAccountId">,
+  item: Pick<
+    DocumentItem,
+    "kind" | "feeType" | "feeTypeName" | "tiedCategoryAccountId"
+  >,
   sectionKind: string | undefined,
   filedUnder: Pick<ReviewFields, "categoryAccountId" | "category">,
   ctx: Pick<ReviewContext, "incomeChoices" | "expenseChoices">,
@@ -985,7 +1063,7 @@ export function tiedCategoryNote(
   const instead = filedUnder.category
     ? `It is filed under “${filedUnder.category}” instead`
     : "It has no category instead";
-  return `The category “${otherKind.name}” tied to the line type “${item.feeType}” is ${tiedKind}, but ${why}. ${instead}: choose its category.`;
+  return `The category “${otherKind.name}” tied to the line type “${item.feeTypeName || nameFromKey(item.feeType ?? "")}” is ${tiedKind}, but ${why}. ${instead}: choose its category.`;
 }
 
 async function itemFields(
@@ -1047,7 +1125,8 @@ async function itemFields(
         reference: item.reference,
         currency: reading.currency,
         categoryAccountId,
-        remark: itemRemark(item),
+        // The remark is the reviewer's to write: an import never fills it.
+        remark: null,
         // No file name, hash or text: shared by every item of the document
         // and by last month's, so none of them says an item is a duplicate.
         // The file hash was checked for the whole document before reading.
@@ -1198,6 +1277,9 @@ async function readParts(
     if (plan.ai.pieces) {
       const read = await readEnvelopeInPieces(params, input.providers, {
         intervalMs: input.rateLimitMs,
+        pinned: input.workbook
+          ? headingLines(input.workbook, table?.reading.found.headerRow ?? null)
+          : [],
         onProgress: (progress: PieceProgress) =>
           showProgress(db, job.id, userId, progress),
         stillWanted: () => isStillReading(db, job.id),
@@ -1212,7 +1294,9 @@ async function readParts(
       ai = { envelope: read.envelope, method: "ai", statedTotalDescription };
     }
   }
-  return joinParts({ table, ai }, plan.reading, plan.mode, context);
+  const reading = joinParts({ table, ai }, plan.reading, plan.mode, context);
+  if (input.sheet) reading.notes.sheet = input.sheet;
+  return reading;
 }
 
 async function readItems(

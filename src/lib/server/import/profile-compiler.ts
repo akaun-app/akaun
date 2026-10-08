@@ -203,6 +203,8 @@ export type SectionKind =
 /** One fee type a section lists, and the category it is tied to. */
 export interface FeeTypeSpec {
   key: string;
+  /** What a person calls it. Absent in a spec built by hand. */
+  name?: string;
   /** Tells the model which lines are this type. May be empty. */
   description: string;
   /**
@@ -401,7 +403,10 @@ function itemField(section: SectionSpec): FieldSpec {
       nullable: true,
       enum: section.feeTypes.map((feeType) => feeType.key),
       description: `Which fee type this line is. ${section.feeTypes
-        .map((feeType) => `${feeType.key}: ${feeType.description}`)
+        .map(
+          (feeType) =>
+            `${feeType.key}${feeType.name ? ` (${feeType.name})` : ""}: ${feeType.description}`,
+        )
         .join("; ")}`,
     };
   }
@@ -667,6 +672,9 @@ const SAVED_PROFILE_RULES = `- Read only the sections the schema names under sec
 - Put one entry in a section for each line that states one amount for one thing.
 - Never list a subtotal, a total, an amount due, a balance or a balance brought forward, or any
   figure that adds up other lines. Add such lines to ignored.
+- The one exception is a line a section's fee type names. A fee type may be a total, such as
+  "Total Fees": the user chose to import that total as one line, so list it under that fee type,
+  and add the lines it adds up to ignored, so that no amount is read twice.
 - When a section lists fee types, give each line the fee type it is. When a line is none of them,
   set its fee_type to "${NONE_VALUE}": never choose the closest type for a line that is not one.
 - An extra field the line does not print is null (or "${NONE_VALUE}" for a field with a list of
@@ -764,6 +772,7 @@ export function savedReadingProfile(
   const sections: SectionSpec[] = read.map((section) => {
     const feeTypes = section.feeTypes.map((feeType) => ({
       key: feeType.key,
+      name: feeType.name,
       description: feeType.description,
       categoryAccountId: feeType.categoryAccountId,
     }));

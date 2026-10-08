@@ -174,6 +174,13 @@ export interface PieceReadOptions {
    * `ReadingStoppedError` and makes no more calls.
    */
   stillWanted?: () => boolean;
+  /**
+   * Lines every piece is shown above its own context, by their number: a
+   * spreadsheet's "Sheet:" line and its column-heading row (FR-069), so a
+   * piece from far down a sheet still knows what each column holds. They
+   * are never a piece's own lines, so nothing is read from them twice.
+   */
+  pinned?: readonly number[];
 }
 
 /**
@@ -286,17 +293,29 @@ const PART_STARTS = "--- part starts ---";
 const PART_ENDS = "--- part ends ---";
 
 /**
- * The text one piece is sent: the page its first line is on, its context
- * before, its own lines between two marks, and its context after.
+ * The text one piece is sent: the page its first line is on, the pinned
+ * lines of that page above its window, its context before, its own lines
+ * between two marks, and its context after.
  */
 function pieceText(
   doc: DocumentLines,
   owned: LineRange,
   window: LineRange,
+  pinned: readonly number[] = [],
 ): string {
   const out: string[] = [];
   const marker = markerAbove(doc, window.start);
   if (marker) out.push(marker);
+  for (const number of pinned) {
+    const index = doc.indexOf.get(number);
+    if (
+      index !== undefined &&
+      index < window.start &&
+      doc.pages[index] === doc.pages[window.start]
+    ) {
+      out.push(doc.rows[doc.lineRows[index]]);
+    }
+  }
   if (window.start < owned.start) {
     out.push(
       ...doc.rows.slice(doc.lineRows[window.start], doc.lineRows[owned.start]),
@@ -402,10 +421,11 @@ function piecePrompt(
   doc: DocumentLines,
   owned: LineRange,
   window: LineRange,
+  pinned: readonly number[],
 ): string {
   return `This part's own lines are ${rangeLabel(doc, owned)}.
 
-${wrapDocument(pieceText(doc, owned, window))}`;
+${wrapDocument(pieceText(doc, owned, window, pinned))}`;
 }
 
 // ── Calls ───────────────────────────────────────────────────────────────────
@@ -738,6 +758,8 @@ export async function readEnvelopeInPieces(
 
   const { profile } = params;
   const doc = documentLines(params.text);
+  // In order, so they are shown as the document has them.
+  const pinned = [...(options.pinned ?? [])].sort((a, b) => a - b);
   const lineCount = doc.lineRows.length;
   const callers: Callers = {
     order: [...providers],
@@ -864,7 +886,7 @@ export async function readEnvelopeInPieces(
           schema: linesPart.schema,
           parse: linesPart.parse,
           instructions,
-          prompt: piecePrompt(doc, piece, window),
+          prompt: piecePrompt(doc, piece, window, pinned),
           ...callLimits,
           onUsage: (reported) => {
             usage = reported;

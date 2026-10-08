@@ -145,12 +145,14 @@
 	// then (FR-017, FR-038). Empty for the built-in reading, whose one section
 	// has no name of its own. With one section, its name says nothing new.
 	const sectionNames = $derived(new Map(data.sections.map((section) => [section.key, section.name])));
+	// What each line type is called, by section, for an item's line type.
+	const feeTypeNames = $derived(new Map(data.sections.map((section) => [section.key, section.feeTypeNames])));
 	const showSections = $derived(data.sections.length > 1);
 
 	function itemSub(item: Item): string {
 		return [
 			showSections ? (sectionNames.get(item.sectionKey) ?? null) : null,
-			item.feeType,
+			item.feeType ? (feeTypeNames.get(item.sectionKey)?.[item.feeType] ?? item.feeType) : null,
 			...item.extras,
 			item.sourceLine != null ? `line ${item.sourceLine}` : null
 		]

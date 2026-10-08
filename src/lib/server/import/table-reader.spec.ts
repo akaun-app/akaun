@@ -34,7 +34,6 @@ import {
   TableReadError,
   columnsReadingId,
   findTable,
-  layoutMatches,
   parseTableAmount,
   parseTableDate,
   readFromColumns,
@@ -264,18 +263,15 @@ describe("parseTableDate", () => {
 describe("findTable", () => {
   it("finds the headings in any row, ignoring case and spacing", () => {
     const workbook = readXlsx(walletReportFixture().xlsx);
-    const found = findTable(workbook, walletLayout());
+    const found = findTable(workbook, walletLayout().headers);
     expect(found?.sheet.rows[found.headerAt].number).toBe(18);
     expect(found?.columns.get("amount")).toBe(5);
     expect(
-      layoutMatches(workbook, {
-        sheet: "transaction report",
-        headers: ["  DATE ", "money   direction"],
-      }),
-    ).toBe(true);
+      findTable(workbook, ["  DATE ", "money   direction"]),
+    ).not.toBeNull();
   });
 
-  it("reads a visible sheet's table before a hidden sheet's, with no sheet named", () => {
+  it("reads a visible sheet's table before a hidden sheet's", () => {
     const workbook = readXlsx(
       buildXlsx({
         sheets: [
@@ -284,22 +280,12 @@ describe("findTable", () => {
         ],
       }),
     );
-    const layout = { sheet: null, headers: ["Date", "Amount"] };
-    expect(findTable(workbook, layout)?.sheet.name).toBe("Report");
-    // Named, the hidden sheet is read all the same.
-    expect(findTable(workbook, { ...layout, sheet: "Old" })?.sheetIndex).toBe(
-      0,
-    );
+    expect(findTable(workbook, ["Date", "Amount"])?.sheet.name).toBe("Report");
   });
 
-  it("finds nothing when a heading is missing, or on another sheet", () => {
+  it("finds nothing when a heading is missing", () => {
     const workbook = readXlsx(walletReportFixture().xlsx);
-    expect(
-      layoutMatches(workbook, { sheet: null, headers: ["Date", "Fee"] }),
-    ).toBe(false);
-    expect(
-      layoutMatches(workbook, { sheet: "Summary", headers: ["Date"] }),
-    ).toBe(false);
+    expect(findTable(workbook, ["Date", "Fee"])).toBeNull();
   });
 });
 
@@ -345,7 +331,6 @@ describe("readFromColumns", () => {
       amount: 12.5,
       date: "2026-03-29",
       reference: "A1",
-      extras: { "Transaction Type": "Order Income" },
       counterAccountId: null,
     });
     expect(withdrawal).toMatchObject({
@@ -556,12 +541,14 @@ describe("readFromColumns", () => {
         feeTypes: [
           {
             key: "orders",
+            name: "Orders",
             description: "",
             categoryAccountId: 12,
             values: ["Order Income"],
           },
           {
             key: "adjustments",
+            name: "Adjustments",
             description: "",
             categoryAccountId: null,
             values: ["Adjustment", "Correction"],
@@ -596,11 +583,18 @@ describe("readFromColumns", () => {
     const workbook = small([row()]);
     expect(() =>
       read(
-        workbook,
-        draft(orderSections(), { ...noTotals, sheet: "Elsewhere" }),
+        readXlsx(
+          buildXlsx({
+            sheets: [
+              { name: "Summary", rows: [["Total"]] },
+              { name: "Notes", rows: [["Date"]] },
+            ],
+          }),
+        ),
+        draft(orderSections(), noTotals),
       ),
     ).toThrow(
-      /There is no sheet "Elsewhere" with a row with all of its headings: "Date", "Transaction Type"/,
+      /No sheet has a row with all of its headings: "Date", "Transaction Type"/,
     );
     expect(() =>
       read(

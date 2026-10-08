@@ -91,17 +91,34 @@ function folded(text: string): string {
 }
 
 /**
+ * The text phrases are looked for in: one for every profile, or each
+ * profile's own, as for a spreadsheet profile that reads one sheet (FR-069).
+ */
+export type PhraseText<P> = string | ((profile: P) => string);
+
+/**
  * The enabled profiles whose recognition phrases all appear in the text.
  * A profile with no phrases is never among them: it has nothing to be
  * recognised by, and would otherwise match every document.
  */
 export function phraseMatch<P extends DetectableProfile>(
-  text: string,
+  text: PhraseText<P>,
   profiles: readonly P[],
 ): P[] {
-  const haystack = folded(text);
+  // Folded once per text, however many profiles look in it.
+  const foldedTexts = new Map<string, string>();
+  const haystackOf = (profile: P) => {
+    const raw = typeof text === "string" ? text : text(profile);
+    let haystack = foldedTexts.get(raw);
+    if (haystack === undefined) {
+      haystack = folded(raw);
+      foldedTexts.set(raw, haystack);
+    }
+    return haystack;
+  };
   return profiles.filter((profile) => {
     if (profile.enabled === false) return false;
+    const haystack = haystackOf(profile);
     const phrases = profile.phrases
       .map(folded)
       .filter((phrase) => phrase.length > 0);
@@ -208,10 +225,11 @@ function standard(via: Detection["via"], reason: string): Detection {
 /** A detection, and whether the AI call failed on every provider. */
 type Decided = Detection & { failed?: true };
 
-async function decide(input: {
+async function decide<P extends DetectableProfile>(input: {
   text: string;
-  phraseText?: string;
-  profiles: readonly DetectableProfile[];
+  phraseText?: PhraseText<P>;
+  phraseMatched?: readonly P[];
+  profiles: readonly P[];
   providers: LLMProviderConfig[];
   intervalMs?: number;
 }): Promise<Decided> {
@@ -220,7 +238,8 @@ async function decide(input: {
     return standard("none", "No import profile is enabled.");
   }
 
-  const matched = phraseMatch(input.phraseText ?? input.text, enabled);
+  const matched =
+    input.phraseMatched ?? phraseMatch(input.phraseText ?? input.text, enabled);
   if (matched.length === 1) {
     return {
       route: matched[0].id,
@@ -277,12 +296,17 @@ async function decide(input: {
  *
  * `phraseText` is the text the recognition phrases are looked for in, when it
  * is not `text`: a spreadsheet's words without the ` | ` between its cells
- * (`detectionText`), so a phrase is found even across two cells.
+ * (`detectionText`), so a phrase is found even across two cells; for a
+ * profile that reads one sheet, that sheet's words (FR-069).
+ *
+ * `phraseMatched` is the profiles whose phrases the caller already found, so
+ * the phrases are not looked for twice.
  */
-export async function detectProfile(input: {
+export async function detectProfile<P extends DetectableProfile>(input: {
   text: string;
-  phraseText?: string;
-  profiles: readonly DetectableProfile[];
+  phraseText?: PhraseText<P>;
+  phraseMatched?: readonly P[];
+  profiles: readonly P[];
   providers: LLMProviderConfig[];
   intervalMs?: number;
   /** For the log line only. */

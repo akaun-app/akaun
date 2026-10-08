@@ -3,6 +3,7 @@ import {
   blankForm,
   errorsAt,
   errorsUnder,
+  feeTypeKeys,
   formFingerprint,
   formFromDraft,
   layoutHeadings,
@@ -13,11 +14,12 @@ import {
   newSectionFor,
   payloadFromForm,
   problemPlace,
+  readsSpreadsheets,
   sectionKeys,
   setKind,
+  toggleFileType,
   transactionsSection,
   slugifyKey,
-  typingKey,
 } from "./import-profile-form.js";
 import {
   checkProfile,
@@ -30,9 +32,9 @@ import {
   withdrawalSection,
 } from "./server/import/__fixtures__/wallet-table.js";
 import {
-  IMPORT_PROFILE_STARTERS,
-  starterDraft,
-} from "./import-profile-starters.js";
+  PROFILE_DRAFT_IDS,
+  profileDraft,
+} from "./server/import/__fixtures__/profile-drafts.js";
 
 /**
  * The import profile editor's form (006 US6, FR-030, FR-035). The editor
@@ -57,11 +59,51 @@ describe("keys made from names", () => {
     expect(key.length).toBeLessThanOrEqual(32);
     expect(key.endsWith("_")).toBe(false);
   });
+});
 
-  it("cleans a line type key as it is typed, keeping a trailing _", () => {
-    expect(typingKey("Commission Fee")).toBe("commission_fee");
-    expect(typingKey("ads-")).toBe("ads_");
-    expect(typingKey("tax (6%)")).toBe("tax_6");
+describe("line type keys", () => {
+  it("makes a new line type's key from its name", () => {
+    const fee = { ...newFeeType(), name: "Commission fee" };
+    expect(feeTypeKeys([fee])).toEqual(["commission_fee"]);
+  });
+
+  it("keeps a saved line type's key when it is renamed", () => {
+    const form = formFromDraft(profileDraft("fee_document"));
+    const fees = form.sections[0].feeTypes;
+    fees[1].name = "Sales commission";
+    expect(feeTypeKeys(fees)[1]).toBe("commission_fee");
+  });
+
+  it("numbers a new line type whose name gives a key already used", () => {
+    const saved = formFromDraft(profileDraft("fee_document")).sections[0]
+      .feeTypes[1];
+    const again = { ...newFeeType(), name: "Commission-fee" };
+    expect(feeTypeKeys([saved, again])).toEqual([
+      "commission_fee",
+      "commission_fee_2",
+    ]);
+  });
+
+  it("never makes the key that means none of the types", () => {
+    const fee = { ...newFeeType(), name: "None" };
+    expect(feeTypeKeys([fee])).toEqual(["none_2"]);
+  });
+
+  it("names a line type with no usable letter by its place", () => {
+    const fees = [newFeeType(), { ...newFeeType(), name: "%" }];
+    expect(feeTypeKeys(fees)).toEqual(["line_type_1", "line_type_2"]);
+  });
+
+  it("sends each line type's name and the key made from it", () => {
+    const form = formFromDraft(profileDraft("fee_document"));
+    form.sections[0].feeTypes = [{ ...newFeeType(), name: "Ads & promotions" }];
+    const payload = payloadFromForm(form) as {
+      sections: { feeTypes: { key: string; name: string }[] }[];
+    };
+    expect(payload.sections[0].feeTypes[0]).toMatchObject({
+      key: "ads_promotions",
+      name: "Ads & promotions",
+    });
   });
 });
 
@@ -72,13 +114,13 @@ describe("section keys", () => {
   });
 
   it("keeps a saved section's key when it is renamed", () => {
-    const form = formFromDraft(starterDraft("fee_document")!);
+    const form = formFromDraft(profileDraft("fee_document"));
     form.sections[0].name = "Charges";
     expect(sectionKeys(form.sections)).toEqual(["fees"]);
   });
 
   it("numbers a new section whose name another section already uses", () => {
-    const saved = formFromDraft(starterDraft("fee_document")!).sections[0];
+    const saved = formFromDraft(profileDraft("fee_document")).sections[0];
     const again = { ...newSection(), name: "Fees" };
     const third = { ...newSection(), name: "Fees" };
     expect(sectionKeys([saved, again, third])).toEqual([
@@ -94,7 +136,7 @@ describe("section keys", () => {
   });
 });
 
-/** A starter with both its accounts chosen, as a wallet report one needs. */
+/** A draft with both its accounts chosen, as a wallet report one needs. */
 function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
   if (!draft.sections.some((section) => section.kind === "transfer")) {
     return draft;
@@ -111,17 +153,78 @@ function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
 }
 
 describe("the form and the profile", () => {
-  it.each(IMPORT_PROFILE_STARTERS.map((starter) => [starter.id]))(
+  it.each(PROFILE_DRAFT_IDS.map((id) => [id]))(
     "%s comes back unchanged through the form",
     (id) => {
-      const draft = withAccounts(starterDraft(id)!);
+      const draft = withAccounts(profileDraft(id));
       const result = checkProfile(payloadFromForm(formFromDraft(draft)));
       expect(result).toEqual({ ok: true, profile: draft });
     },
   );
 
+  it("carries the profile's sheet, for a profile the AI reads too (FR-069)", () => {
+    const draft = {
+      ...withAccounts(profileDraft("marketplace_summary")),
+      sheet: "Summary",
+    };
+    const form = formFromDraft(draft);
+    expect(form.sheet).toBe("Summary");
+    expect(payloadFromForm(form)).toMatchObject({ sheet: "Summary" });
+    form.sheet = "  ";
+    expect(payloadFromForm(form)).toMatchObject({ sheet: null });
+    expect(checkProfile(payloadFromForm(formFromDraft(draft)))).toEqual({
+      ok: true,
+      profile: draft,
+    });
+  });
+
+  it("carries the files the profile reads, and its sheet only when it reads spreadsheets (FR-070)", () => {
+    const draft = withAccounts(profileDraft("marketplace_summary"));
+    const form = formFromDraft({ ...draft, sheet: "Summary" });
+    expect(form.fileTypes).toEqual(["document", "spreadsheet"]);
+    expect(readsSpreadsheets(form)).toBe(true);
+
+    toggleFileType(form, "spreadsheet");
+    expect(form.fileTypes).toEqual(["document"]);
+    expect(readsSpreadsheets(form)).toBe(false);
+    // Kept in the form for a tick back, but not sent.
+    expect(form.sheet).toBe("Summary");
+    expect(payloadFromForm(form)).toMatchObject({
+      fileTypes: ["document"],
+      sheet: null,
+    });
+    const checked = checkProfile(payloadFromForm(form));
+    expect(checked.ok && checked.profile.fileTypes).toEqual(["document"]);
+
+    // None ticked shows no sheet, and the check refuses it.
+    toggleFileType(form, "document");
+    expect(readsSpreadsheets(form)).toBe(false);
+    expect(checkProfile(payloadFromForm(form)).ok).toBe(false);
+  });
+
+  it("is not dirty after a kind of file is unticked and ticked again", () => {
+    const form = formFromDraft(
+      withAccounts(profileDraft("marketplace_summary")),
+    );
+    const before = formFingerprint(form);
+    toggleFileType(form, "document");
+    expect(formFingerprint(form)).not.toBe(before);
+    toggleFileType(form, "document");
+    expect(form.fileTypes).toEqual(["document", "spreadsheet"]);
+    expect(formFingerprint(form)).toBe(before);
+  });
+
+  it("sends no files for a kind that reads a table, which reads spreadsheets only", () => {
+    const form = formFromDraft(
+      withAccounts(profileDraft("wallet_withdrawals")),
+    );
+    form.fileTypes = ["document"];
+    expect(payloadFromForm(form)).not.toHaveProperty("fileTypes");
+    expect(readsSpreadsheets(form)).toBe(true);
+  });
+
   it("is not dirty the moment a saved profile with a layout is opened", () => {
-    const draft = withAccounts(starterDraft("wallet_every_transaction")!);
+    const draft = withAccounts(profileDraft("wallet_every_transaction"));
     const checked = checkProfile(draft);
     expect(checked.ok).toBe(true);
     if (!checked.ok) return;
@@ -132,7 +235,7 @@ describe("the form and the profile", () => {
 
   it("edits a table layout: headings, columns, direction and totals, one per line", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_withdrawals")!),
+      withAccounts(profileDraft("wallet_withdrawals")),
     );
     const layout = form.layout!;
     expect(layoutHeadings(layout)).toContain("Money Direction");
@@ -140,7 +243,6 @@ describe("the form and the profile", () => {
     layout.directionInText = "Money In\nCredit";
     layout.totalsText = "Total Money In\n";
     layout.balanceColumn = "";
-    layout.remarkColumns = ["Fee"];
     layout.csvDelimiter = ";";
     layout.currency = "myr";
     const result = checkProfile(payloadFromForm(form));
@@ -154,16 +256,16 @@ describe("the form and the profile", () => {
         out: ["Money Out"],
       },
       statedTotalLabels: { every_transaction: ["Total Money In"] },
-      remarkColumns: ["Fee"],
       csvDelimiter: ";",
       currency: "MYR",
     });
     expect("balanceColumn" in result.profile.layout!).toBe(false);
+    expect("remarkColumns" in result.profile.layout!).toBe(false);
   });
 
   it("reports a direction with values but no column, rather than dropping it", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_withdrawals")!),
+      withAccounts(profileDraft("wallet_withdrawals")),
     );
     form.layout!.directionColumn = "";
     const result = checkProfile(payloadFromForm(form));
@@ -210,7 +312,7 @@ describe("the form and the profile", () => {
 
   it("keeps a section's row rules while the AI reads it, and sends them only from the table (FR-057)", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_every_transaction")!),
+      withAccounts(profileDraft("wallet_every_transaction")),
     );
     expect(form.kind).toBe("table");
     setKind(form, "mixed");
@@ -236,7 +338,7 @@ describe("the form and the profile", () => {
 
   it("asks no description of a section read from the table (FR-057)", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_withdrawals")!),
+      withAccounts(profileDraft("wallet_withdrawals")),
     );
     for (const section of form.sections) section.description = "";
     expect(checkProfile(payloadFromForm(form)).ok).toBe(true);
@@ -244,7 +346,7 @@ describe("the form and the profile", () => {
 
   it("sends the profiles a section names as the same money, never for a transfer (FR-066)", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_every_transaction")!),
+      withAccounts(profileDraft("wallet_every_transaction")),
     );
     form.sections[0].sameMoneyAs = [4];
     form.sections[2].sameMoneyAs = [4];
@@ -258,7 +360,7 @@ describe("the form and the profile", () => {
   });
 
   it("keeps a transfer section's accounts through the form (FR-058)", () => {
-    const draft = starterDraft(IMPORT_PROFILE_STARTERS[0].id)!;
+    const draft = profileDraft("fee_document");
     const transfer = {
       ...draft,
       accountId: 7,
@@ -299,6 +401,7 @@ describe("the form and the profile", () => {
       feeTypes: [
         {
           key: "orders",
+          name: "Orders",
           description: "",
           categoryAccountId: null,
           values: ["Order Income"],
@@ -361,7 +464,7 @@ describe("the form and the profile", () => {
   });
 
   it("keeps the profile's mode and its stated totals through the form", () => {
-    const draft = withAccounts(starterDraft("wallet_every_transaction")!);
+    const draft = withAccounts(profileDraft("wallet_every_transaction"));
     draft.statedTotalLabels = { every_transaction: " Total money in " };
     const form = formFromDraft(draft);
     expect(form.mode).toBe("every_transaction");
@@ -381,7 +484,7 @@ describe("the form and the profile", () => {
 
   it("reads only the profile mode's stated total of a profile saved with one per mode", () => {
     const draft: ImportProfileDraft = {
-      ...starterDraft("marketplace_summary")!,
+      ...profileDraft("marketplace_summary"),
       statedTotalLabels: {
         summary: "Total payout released",
         every_transaction: "Total money in",
@@ -398,7 +501,7 @@ describe("the form and the profile", () => {
   it("keeps a section saved in the other mode as a problem until it is moved or kept (FR-032)", () => {
     // A profile from when each section had its own mode, with both: it
     // reads Summary, and its Every transaction section is flagged.
-    const base = starterDraft("marketplace_summary")!;
+    const base = profileDraft("marketplace_summary");
     const draft: ImportProfileDraft = {
       ...base,
       mode: "summary",
@@ -441,7 +544,7 @@ describe("the form and the profile", () => {
   });
 
   it("sends the extra fields as typed, and the check reads them", () => {
-    const form = formFromDraft(starterDraft("fee_document")!);
+    const form = formFromDraft(profileDraft("fee_document"));
     form.sections[0].extrasText =
       '{"type":"object","properties":{"order_no":{"type":["string","null"]}}}';
     const result = checkProfile(payloadFromForm(form));
@@ -454,7 +557,7 @@ describe("the form and the profile", () => {
   });
 
   it("shows saved extra fields as JSON text, and none as empty", () => {
-    const draft = starterDraft("fee_document")!;
+    const draft = profileDraft("fee_document");
     draft.sections[0].extras = {
       type: "object",
       properties: { order_no: { type: "string" } },
@@ -463,7 +566,7 @@ describe("the form and the profile", () => {
     expect(JSON.parse(form.sections[0].extrasText)).toEqual(
       draft.sections[0].extras,
     );
-    expect(formFromDraft(starterDraft("fee_document")!).sections[0]).toEqual(
+    expect(formFromDraft(profileDraft("fee_document")).sections[0]).toEqual(
       expect.objectContaining({ extrasText: "" }),
     );
   });
@@ -485,14 +588,14 @@ describe("the form and the profile", () => {
 
 describe("unsaved changes", () => {
   it("is the same for the same form, whatever the row ids", () => {
-    const draft = starterDraft("marketplace_summary")!;
+    const draft = profileDraft("marketplace_summary");
     expect(formFingerprint(formFromDraft(draft))).toBe(
       formFingerprint(formFromDraft(draft)),
     );
   });
 
   it("changes when a line type is added or a category pinned", () => {
-    const form = formFromDraft(starterDraft("fee_document")!);
+    const form = formFromDraft(profileDraft("fee_document"));
     const before = formFingerprint(form);
     form.sections[0].feeTypes.push(newFeeType());
     const added = formFingerprint(form);
@@ -531,10 +634,10 @@ describe("what a profile imports (FR-055, FR-057)", () => {
   it("is the kind saved, or worked out from an older profile's shape", () => {
     expect(blankForm().kind).toBe("summary");
     expect(
-      formFromDraft(withAccounts(starterDraft("wallet_withdrawals")!)).kind,
+      formFromDraft(withAccounts(profileDraft("wallet_withdrawals"))).kind,
     ).toBe("table");
     const { kind: _kind, ...older } = withAccounts(
-      starterDraft("wallet_withdrawals")!,
+      profileDraft("wallet_withdrawals"),
     );
     void _kind;
     expect(formFromDraft(older).kind).toBe("table");
@@ -542,7 +645,7 @@ describe("what a profile imports (FR-055, FR-057)", () => {
 
   it("sets the mode, the table and the sections when it changes", () => {
     const form = formFromDraft(
-      withAccounts(starterDraft("wallet_every_transaction")!),
+      withAccounts(profileDraft("wallet_every_transaction")),
     );
     const rules = form.sections.map((section) => section.rows);
 
@@ -607,6 +710,10 @@ describe("problemPlace", () => {
       targets: ["pf-name"],
     });
     expect(problemPlace("mode", form).label).toBe("What to import");
+    expect(problemPlace("fileTypes", form)).toEqual({
+      label: "Reads",
+      targets: ["pf-file-types"],
+    });
     expect(problemPlace("phrases[2]", form)).toEqual({
       label: "Fixed phrases",
       targets: ["pf-phrases"],
@@ -646,8 +753,13 @@ describe("problemPlace", () => {
       ],
       sectionUid: fees.uid,
     });
+    // The key is never shown, so a problem with it is shown on the name.
     expect(problemPlace("sections[0].feeTypes[0].key", form).label).toBe(
-      "Section “Fees” › Line type 1",
+      "Section “Fees” › Line type 1 › Name",
+    );
+    fees.feeTypes[0].name = "Ads";
+    expect(problemPlace("sections[0].feeTypes[0].name", form).label).toBe(
+      "Section “Fees” › Line type “Ads” › Name",
     );
     expect(problemPlace("sections[0].feeTypes", form).label).toBe(
       "Section “Fees” › Line types",

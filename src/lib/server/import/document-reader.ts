@@ -17,6 +17,7 @@
  */
 
 import { DocumentType, type DocumentTypeCode } from "$lib/enums.js";
+import { feeTypeName } from "$lib/import-profile-schema.js";
 import {
   DOCUMENT_ITEMS_MAX,
   DOCUMENT_TEXT_MAX_CHARS,
@@ -145,7 +146,14 @@ export interface DocumentItem {
   reference: string;
   /** The document line the amount is printed on, when the model said. */
   sourceLine: number | null;
+  /** The line type's key, as the model or the table's rows gave it. */
   feeType: string | null;
+  /**
+   * The line type's name, which is also the item's description. Null with
+   * no line type;
+   * absent in an item built by hand, which shows the key read as words.
+   */
+  feeTypeName?: string | null;
   /**
    * The category to propose: the first of `categoryCandidates`. The worker
    * still checks it against the user's list.
@@ -621,7 +629,14 @@ export function readingFromEnvelope(
       items.push({
         sectionKey: section.key,
         kind,
-        description: truncate(line.description, MAX_LABEL_LENGTH),
+        // A line of a listed type is called by the type's name: the type is
+        // a rule the user set, so its name wins over the printed wording.
+        description: truncate(
+          line.fee_type
+            ? feeTypeName(section.feeTypes, line.fee_type)
+            : line.description,
+          MAX_LABEL_LENGTH,
+        ),
         amountMinor,
         amount: fromMinor(amountMinor),
         date: ownDate || date,
@@ -630,6 +645,9 @@ export function readingFromEnvelope(
           (profile.ownReferencesOnly || section.fromTable ? "" : reference),
         sourceLine,
         feeType: line.fee_type ?? null,
+        feeTypeName: line.fee_type
+          ? feeTypeName(section.feeTypes, line.fee_type)
+          : null,
         categoryAccountId: categoryCandidates[0] ?? null,
         categoryCandidates,
         counterAccountId:

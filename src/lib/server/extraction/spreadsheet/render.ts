@@ -13,7 +13,13 @@
  * cells (see `xlsx.ts`); numbers are written in full, as Excel shows them.
  */
 
-import { cellText, isBlankRow, type Sheet, type Workbook } from "./types.js";
+import {
+  cellText,
+  isBlankRow,
+  type Sheet,
+  type SheetRow,
+  type Workbook,
+} from "./types.js";
 
 /** Where one row went in the text. */
 export interface RenderedRow {
@@ -83,16 +89,53 @@ export function renderWorkbook(workbook: Workbook): RenderedWorkbook {
     line++;
     for (const row of sheet.rows) {
       if (isBlankRow(row)) continue;
-      const text = rowLine(
-        row.cells.map((cell) => renderedCell(cellText(cell))),
-      ).trimEnd();
-      lines.push(text);
+      lines.push(rowText(row));
       line++;
       rows.push({ sheetIndex, rowNumber: row.number, line });
     }
     pages.push(lines.join("\n"));
   });
   return { pages, rows };
+}
+
+/** One row as a line of the text. */
+function rowText(row: SheetRow): string {
+  return rowLine(
+    row.cells.map((cell) => renderedCell(cellText(cell))),
+  ).trimEnd();
+}
+
+/**
+ * The start of a sheet's page, as `renderWorkbook` writes it, cut at
+ * `maxChars`. Only the rows that reach that far are turned into text, so the
+ * start of a sheet of a hundred thousand rows costs no more than a short one.
+ */
+export function sheetHead(sheet: Sheet, maxChars: number): string {
+  let text = sheetHeading(sheet);
+  for (const row of sheet.rows) {
+    if (text.length >= maxChars) break;
+    if (isBlankRow(row)) continue;
+    text += `\n${rowText(row)}`;
+  }
+  return text.slice(0, maxChars);
+}
+
+/**
+ * The line a row has in the text of a one-sheet workbook: the "Sheet:" line
+ * is line 1, and every row with text takes the next, as `renderWorkbook`
+ * numbers them. Null for a row with no text, or one not on the sheet.
+ */
+export function lineOfRow(sheet: Sheet, rowNumber: number): number | null {
+  let line = 1;
+  for (const row of sheet.rows) {
+    if (isBlankRow(row)) {
+      if (row.number === rowNumber) return null;
+      continue;
+    }
+    line++;
+    if (row.number === rowNumber) return line;
+  }
+  return null;
 }
 
 /**

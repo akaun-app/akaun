@@ -1,42 +1,26 @@
 /**
- * The built-in starters a new import profile can begin from (006 FR-030,
- * US6 AS2). A starter is only data: the editor copies one into a new profile
- * for the user to change, and nothing reads a starter directly, so editing a
- * starter here never changes a saved profile.
+ * Whole import profiles for the specs: a fee document, a marketplace
+ * statement summary, and two wallet report profiles that read the same
+ * report's table. Test data only; nothing in the app reads them.
  *
- * No starter pins a category or an account. The categories and accounts are
- * the user's own, which a starter cannot know; the user picks them in the
- * editor. The two wallet report starters cannot be saved until both of their
- * accounts are chosen (FR-030, FR-058): the wallet the report lists, and the
- * bank account each withdrawal goes to.
- *
- * The two wallet report starters are alternatives for the same report: the
- * same table, the same headings and the same words, so no recognition phrase
- * can tell one from the other. They suggest no phrases, and each says to turn
- * on only one of the two. With both on, Auto-detect cannot choose without an
- * AI provider and says so, naming them.
+ * No draft pins a category or an account. The two wallet report drafts
+ * cannot be saved until both of their accounts are chosen (FR-030, FR-058):
+ * the wallet the report lists, and the bank account each withdrawal goes to.
+ * They are alternatives for the same report, so no recognition phrase can
+ * tell one from the other.
  */
 
 import type {
   ImportProfileDraft,
   ProfileSection,
   TableLayout,
-} from "./import-profile-schema.js";
+} from "../../../import-profile-schema.js";
 
-export type ImportProfileStarterId =
+export type ProfileDraftId =
   | "fee_document"
   | "marketplace_summary"
   | "wallet_withdrawals"
   | "wallet_every_transaction";
-
-export interface ImportProfileStarter {
-  id: ImportProfileStarterId;
-  /** What the editor's "Start from" list shows. */
-  label: string;
-  /** One sentence on what the starter is for. */
-  hint: string;
-  draft: ImportProfileDraft;
-}
 
 /**
  * A notice that lists one or more fees, such as an ads or a platform fee
@@ -68,26 +52,31 @@ const FEE_DOCUMENT: ImportProfileDraft = {
       feeTypes: [
         {
           key: "advertising_fee",
+          name: "Advertising fee",
           description: "Advertising or promoted listing charges",
           categoryAccountId: null,
         },
         {
           key: "commission_fee",
+          name: "Commission fee",
           description: "Commission charged on sales",
           categoryAccountId: null,
         },
         {
           key: "service_fee",
+          name: "Service fee",
           description: "Service, platform or programme fees",
           categoryAccountId: null,
         },
         {
           key: "transaction_fee",
+          name: "Transaction fee",
           description: "Payment processing or transaction fees",
           categoryAccountId: null,
         },
         {
           key: "subscription_fee",
+          name: "Subscription fee",
           description: "A monthly or yearly subscription",
           categoryAccountId: null,
         },
@@ -130,6 +119,7 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
       feeTypes: [
         {
           key: "product_price",
+          name: "Product price",
           description:
             "The price of the products sold (product price or merchandise subtotal)",
           categoryAccountId: null,
@@ -147,72 +137,86 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
       feeTypes: [
         {
           key: "refund_amount",
+          name: "Refund amount",
           description:
             "Money refunded to buyers for returned or cancelled orders",
           categoryAccountId: null,
         },
         {
           key: "seller_product_discount",
+          name: "Seller product discount",
           description: "Product discounts the seller gave",
           categoryAccountId: null,
         },
         {
           key: "platform_product_rebate",
+          name: "Platform product rebate",
           description: "Product discount rebates the marketplace paid back",
           categoryAccountId: null,
         },
         {
           key: "buyer_shipping_fee",
+          name: "Buyer shipping fee",
           description: "Shipping fees the buyers paid",
           categoryAccountId: null,
         },
         {
           key: "logistics_shipping_fee",
+          name: "Logistics shipping fee",
           description: "Shipping fees the logistics provider charged",
           categoryAccountId: null,
         },
         {
           key: "shipping_rebate",
+          name: "Shipping rebate",
           description: "Shipping fee rebates from the marketplace",
           categoryAccountId: null,
         },
         {
           key: "seller_shipping_promotion",
+          name: "Seller shipping promotion",
           description: "Shipping fee promotions the seller paid for",
           categoryAccountId: null,
         },
         {
           key: "return_shipping_fee",
+          name: "Return shipping fee",
           description: "Shipping fees for returned orders",
           categoryAccountId: null,
         },
         {
           key: "seller_voucher",
+          name: "Seller voucher",
           description: "Vouchers the seller sponsored",
           categoryAccountId: null,
         },
         {
           key: "seller_coins_cashback",
+          name: "Seller coins cashback",
           description: "Coins cashback the seller sponsored",
           categoryAccountId: null,
         },
         {
           key: "commission_fee",
+          name: "Commission fee",
           description: "The marketplace's commission fee",
           categoryAccountId: null,
         },
         {
           key: "service_fee",
+          name: "Service fee",
           description: "Service or programme fees",
           categoryAccountId: null,
         },
         {
           key: "transaction_fee",
+          name: "Transaction fee",
           description: "Payment transaction fees",
           categoryAccountId: null,
         },
         {
           key: "affiliate_commission",
+          name: "Affiliate commission",
           description: "Commission paid to affiliates",
           categoryAccountId: null,
         },
@@ -240,7 +244,6 @@ const MARKETPLACE_SUMMARY: ImportProfileDraft = {
  */
 function walletReportLayout(over: Partial<TableLayout> = {}): TableLayout {
   return {
-    sheet: null,
     headers: [
       "Date",
       "Transaction Type",
@@ -269,7 +272,6 @@ function walletReportLayout(over: Partial<TableLayout> = {}): TableLayout {
     currency: null,
     // The end of the period the report covers.
     documentDateLabel: "To",
-    remarkColumns: [],
     statedTotalLabels: {},
     balanceColumn: "Balance After Transactions",
     ...over,
@@ -312,7 +314,7 @@ const WITHDRAWALS: ProfileSection = {
 const WALLET_DESCRIPTION =
   "A marketplace wallet's balance transaction report, as a spreadsheet: the seller's account details and the total money in and out for a period, then one row per transaction (order income, adjustments and withdrawals to the bank) with the balance after each.";
 
-/** What each wallet report starter says about the other. */
+/** What each wallet report draft says about the other. */
 const ONLY_ONE =
   "Made for the same report as the other wallet report profile: turn on only one of the two.";
 
@@ -351,7 +353,6 @@ const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
   instructions: WALLET_INSTRUCTIONS,
   statedTotalLabels: {},
   layout: walletReportLayout({
-    remarkColumns: ["Transaction Type"],
     statedTotalLabels: {
       every_transaction: ["Total Money In", "Total Money Out"],
     },
@@ -395,43 +396,16 @@ const WALLET_EVERY_TRANSACTION: ImportProfileDraft = {
   ],
 };
 
-export const IMPORT_PROFILE_STARTERS: readonly ImportProfileStarter[] = [
-  {
-    id: "fee_document",
-    label: "Fee document",
-    hint: "A notice with a list of fees. Each fee is an expense.",
-    draft: FEE_DOCUMENT,
-  },
-  {
-    id: "marketplace_summary",
-    label: "Marketplace statement summary",
-    hint: "The summary of a marketplace statement. Sales are income. Fees and rebates use their sign.",
-    draft: MARKETPLACE_SUMMARY,
-  },
-  {
-    id: "wallet_withdrawals",
-    label: "Marketplace wallet report — withdrawals only",
-    hint: "A wallet report spreadsheet. Each withdrawal to the bank is a transfer. Use it with the statement summary. Turn on only one of the two wallet report profiles.",
-    draft: WALLET_WITHDRAWALS,
-  },
-  {
-    id: "wallet_every_transaction",
-    label: "Marketplace wallet report — every transaction",
-    hint: "All rows of a wallet report spreadsheet. The statement summary also has the order income. Import only one of the two, or the app counts the sales two times. Turn on only one of the two wallet report profiles.",
-    draft: WALLET_EVERY_TRANSACTION,
-  },
-];
+const DRAFTS: Record<ProfileDraftId, ImportProfileDraft> = {
+  fee_document: FEE_DOCUMENT,
+  marketplace_summary: MARKETPLACE_SUMMARY,
+  wallet_withdrawals: WALLET_WITHDRAWALS,
+  wallet_every_transaction: WALLET_EVERY_TRANSACTION,
+};
 
-/**
- * A fresh copy of a starter's profile, for the editor to change. Null for an
- * id that is not a starter.
- */
-export function starterDraft(id: string): ImportProfileDraft | null {
-  const starter = IMPORT_PROFILE_STARTERS.find((entry) => entry.id === id);
-  return starter ? structuredClone(starter.draft) : null;
-}
+export const PROFILE_DRAFT_IDS = Object.keys(DRAFTS) as ProfileDraftId[];
 
-/** Whether a value names one of the starters, such as `?starter=` on the editor. */
-export function isStarterId(id: string): id is ImportProfileStarterId {
-  return IMPORT_PROFILE_STARTERS.some((entry) => entry.id === id);
+/** A fresh copy of a draft, for a spec to change. */
+export function profileDraft(id: ProfileDraftId): ImportProfileDraft {
+  return structuredClone(DRAFTS[id]);
 }

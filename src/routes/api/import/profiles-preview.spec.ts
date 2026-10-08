@@ -13,6 +13,7 @@ import {
   it,
   vi,
 } from "vitest";
+import type { ProfileDraftId } from "$lib/server/import/__fixtures__/profile-drafts.js";
 
 /**
  * The profile editor's preview of a sample spreadsheet (006 S4.7, FR-053 to
@@ -64,7 +65,8 @@ vi.mock("$lib/server/logger.js", () => {
   return { createLogger: () => silent };
 });
 
-const { starterDraft } = await import("$lib/import-profile-starters.js");
+const { profileDraft } =
+  await import("$lib/server/import/__fixtures__/profile-drafts.js");
 const { formFromDraft, payloadFromForm } =
   await import("$lib/import-profile-form.js");
 const schema = await import("$lib/server/db/schema.js");
@@ -104,9 +106,9 @@ afterAll(() => {
 
 type Handler = (event: never) => Promise<Response> | Response;
 
-/** The editor's payload for a starter, as it is before any field is filled in. */
-function editorPayload(id: string) {
-  return payloadFromForm(formFromDraft(starterDraft(id)!));
+/** The editor's payload for a draft, as it is before any field is filled in. */
+function editorPayload(id: ProfileDraftId) {
+  return payloadFromForm(formFromDraft(profileDraft(id)));
 }
 
 async function preview(
@@ -154,7 +156,7 @@ describe("POST /api/import/profiles/preview", { timeout: 30_000 }, () => {
     storedNothing();
   });
 
-  it("reads a sample with an unsaved starter, before its accounts are chosen, and stores nothing", async () => {
+  it("reads a sample with an unsaved profile, before its accounts are chosen, and stores nothing", async () => {
     const report = walletWorkbook();
     const res = await preview(
       { name: "wallet.xlsx", data: report.xlsx },

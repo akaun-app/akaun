@@ -272,7 +272,10 @@ export function buildXlsx(workbook: FixtureWorkbook): Buffer {
  * blocks, and one row per transaction below a heading row at row 18. The
  * values are invented; only the layout follows the real report.
  */
-export function walletReportFixture(): {
+export function walletReportFixture(
+  /** Sheets put before the report's own, such as a summary sheet. */
+  before: FixtureSheet[] = [],
+): {
   xlsx: Buffer;
   moneyOutCents: number;
   transactions: number;
@@ -392,7 +395,9 @@ export function walletReportFixture(): {
     ...transactions,
   ];
   return {
-    xlsx: buildXlsx({ sheets: [{ name: "Transaction Report", rows }] }),
+    xlsx: buildXlsx({
+      sheets: [...before, { name: "Transaction Report", rows }],
+    }),
     moneyOutCents,
     transactions: transactions.length,
   };

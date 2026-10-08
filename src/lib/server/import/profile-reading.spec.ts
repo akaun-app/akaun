@@ -20,7 +20,10 @@ import {
   mockModel,
   type Reply,
 } from "../llm/__fixtures__/mock-model.js";
-import { walletReportFixture } from "../extraction/spreadsheet/__fixtures__/build-xlsx.js";
+import {
+  buildXlsx,
+  walletReportFixture,
+} from "../extraction/spreadsheet/__fixtures__/build-xlsx.js";
 import {
   fakeReader,
   fakeReportPages,
@@ -274,6 +277,7 @@ function statementProfile(over: Partial<ProfileInput> = {}): ProfileInput {
         feeTypes: [
           {
             key: "product_price",
+            name: "Product price",
             description: "Product price",
             categoryAccountId: ids.sales,
           },
@@ -289,16 +293,19 @@ function statementProfile(over: Partial<ProfileInput> = {}): ProfileInput {
         feeTypes: [
           {
             key: "commission_fee",
+            name: "Commission fee",
             description: "Commission",
             categoryAccountId: ids.fees,
           },
           {
             key: "ads_fee",
+            name: "Ads fee",
             description: "Advertising",
             categoryAccountId: null,
           },
           {
             key: "shipping_rebate",
+            name: "Shipping rebate",
             description: "Shipping rebate",
             categoryAccountId: ids.rebates,
           },
@@ -484,6 +491,7 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: item.documentType,
         amount: item.amount,
         categoryAccountId: item.categoryAccountId,
+        itemName: item.itemName,
         remark: item.remark,
       })),
     ).toEqual([
@@ -493,7 +501,9 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Income,
         amount: 15012.4,
         categoryAccountId: ids.sales,
-        remark: "Line type: product_price",
+        // A line of a listed type is called by the type's name.
+        itemName: "Product price",
+        remark: null,
       },
       {
         sectionKey: "fees",
@@ -502,7 +512,9 @@ describe("reading a marketplace summary with a profile", () => {
         amount: 812.35,
         // Tied to Marketplace Fees: the model's Advertising is passed over.
         categoryAccountId: ids.fees,
-        remark: "Line type: commission_fee",
+        // A line of a listed type is called by the type's name.
+        itemName: "Commission fee",
+        remark: null,
       },
       {
         sectionKey: "fees",
@@ -511,7 +523,9 @@ describe("reading a marketplace summary with a profile", () => {
         amount: 450.1,
         // Not tied: the model's valid suggestion is used.
         categoryAccountId: ids.ads,
-        remark: "Line type: ads_fee",
+        // A line of a listed type is called by the type's name.
+        itemName: "Ads fee",
+        remark: null,
       },
       {
         sectionKey: "fees",
@@ -520,7 +534,9 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Income,
         amount: 32.61,
         categoryAccountId: ids.rebates,
-        remark: "Line type: shipping_rebate",
+        // A line of a listed type is called by the type's name.
+        itemName: "Shipping rebate",
+        remark: null,
       },
     ]);
     // Each kind starts on its own side: what is owed, or what is due.
@@ -577,8 +593,22 @@ describe("reading a marketplace summary with a profile", () => {
       mode: ImportMode.Summary,
     });
     expect(page.sections).toEqual([
-      { key: "sales", name: "Sales", kind: "income" },
-      { key: "fees", name: "Fees and rebates", kind: "by_sign" },
+      {
+        key: "sales",
+        name: "Sales",
+        kind: "income",
+        feeTypeNames: { product_price: "Product price" },
+      },
+      {
+        key: "fees",
+        name: "Fees and rebates",
+        kind: "by_sign",
+        feeTypeNames: {
+          commission_fee: "Commission fee",
+          ads_fee: "Ads fee",
+          shipping_rebate: "Shipping rebate",
+        },
+      },
     ]);
     expect(page.job).not.toHaveProperty("profileSnapshot");
   });
@@ -603,6 +633,12 @@ describe("reading a marketplace summary with a profile", () => {
             key: "rows",
             name: "Transactions",
             mode: ImportMode.EveryTransaction,
+            // Kept before line types had names.
+            feeTypes: statementProfile().sections[1].feeTypes.map((feeType) => {
+              const old: Partial<typeof feeType> = { ...feeType };
+              delete old.name;
+              return old;
+            }),
           },
         ],
       },
@@ -621,7 +657,17 @@ describe("reading a marketplace summary with a profile", () => {
       mode: ImportMode.EveryTransaction,
     });
     expect(page.sections).toEqual([
-      { key: "rows", name: "Transactions", kind: "by_sign" },
+      {
+        key: "rows",
+        name: "Transactions",
+        kind: "by_sign",
+        // Read from the keys.
+        feeTypeNames: {
+          commission_fee: "Commission fee",
+          ads_fee: "Ads fee",
+          shipping_rebate: "Shipping rebate",
+        },
+      },
     ]);
   });
 
@@ -670,7 +716,7 @@ describe("reading a marketplace summary with a profile", () => {
     expect(systemPrompt(receipt)).toContain("GLOBAL NOTE");
   });
 
-  it("files a line with no fee type under the section's fixed category, and adds extra fields to the remark", async () => {
+  it("files a line with no fee type under the section's fixed category, and never adds extra fields to the remark", async () => {
     const profileId = saveProfile({
       name: "Fee notice",
       description: "A platform's fee notice.",
@@ -734,13 +780,14 @@ describe("reading a marketplace summary with a profile", () => {
     ).toEqual([
       {
         categoryAccountId: ids.ads,
-        remark: "campaign: Raya; clicks: 340",
+        // Shown on the item only: the remark is the reviewer's.
+        remark: null,
         extras: { campaign: "Raya", clicks: 340 },
         documentType: DocumentType.Expense,
       },
       {
         categoryAccountId: ids.ads,
-        remark: "campaign: Merdeka",
+        remark: null,
         extras: { campaign: "Merdeka", clicks: null },
         documentType: DocumentType.Expense,
       },
@@ -800,13 +847,13 @@ describe("reading a marketplace summary with a profile", () => {
         documentType: DocumentType.Expense,
         categoryAccountId: ids.ads,
         reviewNote:
-          "The category “Rebates” tied to the line type “shipping_rebate” is an income category, but this line is printed negative, so it is an expense. It is filed under “Advertising” instead: choose its category.",
+          "The category “Rebates” tied to the line type “Shipping rebate” is an income category, but this line is printed negative, so it is an expense. It is filed under “Advertising” instead: choose its category.",
       },
       {
         documentType: DocumentType.Income,
         categoryAccountId: ids.uncategorisedIncome,
         reviewNote:
-          "The category “Marketplace Fees” tied to the line type “commission_fee” is an expense category, but this line is printed positive, so it is an income. It is filed under “Uncategorised Income” instead: choose its category.",
+          "The category “Marketplace Fees” tied to the line type “Commission fee” is an expense category, but this line is printed positive, so it is an income. It is filed under “Uncategorised Income” instead: choose its category.",
       },
       {
         documentType: DocumentType.Expense,
@@ -848,7 +895,8 @@ describe("reading a marketplace summary with a profile", () => {
     expect(row).toMatchObject({
       documentType: DocumentType.Expense,
       categoryAccountId: ids.uncategorised,
-      remark: "Line type: shipping_rebate",
+      itemName: "Shipping rebate",
+      remark: null,
     });
     expect(row.reviewNote).toContain("“Rebates”");
     expect(row.reviewNote).toContain("printed negative");
@@ -877,7 +925,8 @@ describe("reading a marketplace summary with a profile", () => {
       documentType: DocumentType.Income,
       amount: 99,
       categoryAccountId: ids.sales,
-      remark: "Line type: product_price",
+      itemName: "Product price",
+      remark: null,
       profileId: String(profileId),
     });
     expect(parseProfileSnapshot(row.profileSnapshot)?.name).toBe(
@@ -1175,6 +1224,33 @@ describe("Auto-detect", () => {
       itemName: "Paper",
       amount: 12.5,
     });
+  });
+
+  it("leaves out a profile made for spreadsheets, and refuses it when chosen (FR-070)", async () => {
+    const profileId = saveProfile(
+      statementProfile({
+        kind: "summary",
+        fileTypes: ["spreadsheet"],
+        phrases: ["Shopee Income Statement"],
+      }),
+    );
+    const model = serve([receiptAnswer()]);
+    const row = await run(autoJob());
+
+    // Its phrases match, but a PDF is not for it: read the standard way.
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(systemPrompt(model)).toContain(RECEIPT_PROMPT);
+    expect(row).toMatchObject({
+      readHow: ImportReadHow.Standard,
+      profileId: null,
+    });
+
+    const chosen = await run(profileJob(profileId));
+    expect(chosen.state).toBe(ImportState.Failed);
+    expect(chosen.error).toContain(
+      'The import profile "Shopee statement" reads spreadsheets (.xlsx or .csv), and this file is a PDF file or a photo.',
+    );
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 
   it("uses the one profile whose phrases all match, with no detection call", async () => {
@@ -1509,6 +1585,215 @@ describe("a spreadsheet read with a profile, or by Auto-detect", () => {
       /^This spreadsheet is too long to be read as a receipt or invoice: .* at most 6,000\./,
     );
   });
+
+  it("leaves out a profile made for PDF files and photos, and refuses it when chosen (FR-070)", async () => {
+    const profileId = saveProfile(
+      statementProfile({
+        kind: "summary",
+        fileTypes: ["document"],
+        phrases: ["Balance After Transactions"],
+      }),
+    );
+    const model = serve([json({})]);
+    const row = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Auto,
+        readHow: ImportReadHow.Standard,
+      }),
+    );
+
+    // Its phrases are in the cells, but it is neither chosen nor offered.
+    for (let call = 0; call < model.doGenerateCalls.length; call++) {
+      expect(systemPrompt(model, call)).not.toContain(DETECT_PROMPT);
+      expect(systemPrompt(model, call)).not.toContain("PROFILE NOTE");
+    }
+    expect(row.profileId).toBeNull();
+
+    const calls = model.doGenerateCalls.length;
+    const chosen = await run(
+      queueFile("wallet.xlsx", walletReportFixture().xlsx, {
+        readAs: ImportReadAs.Profile,
+        profileId: String(profileId),
+        importMode: ImportMode.Summary,
+      }),
+    );
+    expect(chosen.state).toBe(ImportState.Failed);
+    expect(chosen.error).toContain(
+      'The import profile "Shopee statement" reads PDF files and photos, and this file is a spreadsheet (.xlsx or .csv).',
+    );
+    expect(model.doGenerateCalls).toHaveLength(calls);
+  });
+
+  describe("one sheet per profile (FR-069)", () => {
+    /** A marketplace report: a summary, its orders, and a hidden sheet. */
+    function report(over: { summaryFirst?: boolean } = {}) {
+      const summary = {
+        name: "Summary",
+        rows: [
+          ["Shopee Income Statement August"],
+          ["Product price", { raw: "15012.40" }],
+          ["Commission fee", { raw: "-812.35" }],
+          ["Ads fee", { raw: "-120.00" }],
+          ["Shipping rebate", { raw: "30.00" }],
+          ["Total Payout Released", { raw: "14110.05" }],
+        ],
+      };
+      const orders = {
+        name: "Orders",
+        rows: [
+          ["Order ID", "Amount"],
+          ["ORDER-ROW-1", { raw: "10.00" }],
+          ["ORDER-ROW-2", { raw: "20.00" }],
+        ],
+      };
+      const old = {
+        name: "Old",
+        state: "hidden" as const,
+        rows: [["HIDDEN-ROW", { raw: "1.00" }]],
+      };
+      return buildXlsx({
+        sheets:
+          over.summaryFirst === false
+            ? [old, orders, summary]
+            : [old, summary, orders],
+      });
+    }
+
+    it("sends the AI only the sheet the profile names, and says which", async () => {
+      const profileId = saveProfile(statementProfile({ sheet: " summary " }));
+      const model = serve([json(statementAnswer())]);
+      const row = await run(
+        queueFile("report.xlsx", report({ summaryFirst: false }), {
+          readAs: ImportReadAs.Profile,
+          profileId: String(profileId),
+          importMode: ImportMode.Summary,
+        }),
+      );
+
+      expect(model.doGenerateCalls).toHaveLength(1);
+      const sent = sentPrompt(model);
+      expect(sent).toContain("L0001│Sheet: Summary");
+      expect(sent).toContain("Product price | 15012.40");
+      expect(sent).not.toContain("ORDER-ROW-1");
+      expect(sent).not.toContain("HIDDEN-ROW");
+      expect(sent).not.toContain("Sheet: Orders");
+      expect(sent).not.toContain("Sheet: Old");
+      expect(row.state).toBe(ImportState.Grouped);
+      expect(parseExtractionNotes(row.extractionNotes)?.sheet).toBe("Summary");
+    });
+
+    it("reads the first visible sheet when the profile names none", async () => {
+      const profileId = saveProfile(statementProfile());
+      const model = serve([json(statementAnswer())]);
+      await run(
+        queueFile("report.xlsx", report(), {
+          readAs: ImportReadAs.Profile,
+          profileId: String(profileId),
+          importMode: ImportMode.Summary,
+        }),
+      );
+
+      const sent = sentPrompt(model);
+      expect(sent).toContain("L0001│Sheet: Summary");
+      expect(sent).not.toContain("HIDDEN-ROW");
+      expect(sent).not.toContain("ORDER-ROW-1");
+    });
+
+    it("refuses a workbook without the profile's sheet, before asking the AI", async () => {
+      const profileId = saveProfile(statementProfile({ sheet: "Payouts" }));
+      const model = serve([json(statementAnswer())]);
+      const row = await run(
+        queueFile("report.xlsx", report(), {
+          readAs: ImportReadAs.Profile,
+          profileId: String(profileId),
+          importMode: ImportMode.Summary,
+        }),
+      );
+
+      expect(model.doGenerateCalls).toHaveLength(0);
+      expect(row.state).toBe(ImportState.Failed);
+      expect(row.error).toBe(
+        'The import profile "Shopee statement" reads the sheet "Payouts", and this workbook has no sheet of that name. Its sheets are: "Old" (hidden), "Summary", "Orders".',
+      );
+    });
+
+    it("leaves out of Auto-detect a profile whose sheet the workbook does not have", async () => {
+      saveProfile(
+        statementProfile({
+          name: "Lazada statement",
+          phrases: ["Income Statement"],
+          sheet: "Payouts",
+        }),
+      );
+      const shopee = saveProfile(
+        statementProfile({ phrases: ["Income Statement"] }),
+      );
+      const model = serve([json(statementAnswer())]);
+      const row = await run(
+        queueFile("report.xlsx", report(), {
+          readAs: ImportReadAs.Auto,
+          readHow: ImportReadHow.Standard,
+        }),
+      );
+
+      // Only one profile could read it, so the phrases decided: no detect call.
+      expect(model.doGenerateCalls).toHaveLength(1);
+      expect(systemPrompt(model)).not.toContain(DETECT_PROMPT);
+      expect(row).toMatchObject({
+        readHow: ImportReadHow.Detected,
+        profileId: String(shopee),
+      });
+    });
+
+    it("looks for a profile's phrases on its own sheet only", async () => {
+      // "ORDER-ROW-1" is on Orders; the profile reads Summary.
+      saveProfile(
+        statementProfile({ phrases: ["ORDER-ROW-1"], sheet: "Summary" }),
+      );
+      const other = saveProfile(
+        statementProfile({ name: "Orders report", phrases: ["ORDER-ROW-1"] }),
+      );
+      const model = serve([json(statementAnswer())]);
+      const row = await run(
+        queueFile("report.xlsx", report(), {
+          readAs: ImportReadAs.Auto,
+          readHow: ImportReadHow.Standard,
+        }),
+      );
+
+      expect(systemPrompt(model)).not.toContain(DETECT_PROMPT);
+      expect(row.profileId).toBe(String(other));
+    });
+
+    it("shows Auto-detect's AI call the start of every visible sheet", async () => {
+      saveProfile(statementProfile());
+      saveProfile(statementProfile({ name: "Lazada statement" }));
+      const long = Array.from({ length: 400 }, (_, i) => [
+        `Summary line ${i}`,
+        { raw: "1.00" },
+      ]);
+      // "none": the standard reading follows, and refuses a sheet this long.
+      const model = serve([json({ profile: "none" })]);
+      await run(
+        queueFile(
+          "report.xlsx",
+          buildXlsx({
+            sheets: [
+              { name: "Summary", rows: long },
+              { name: "Orders", rows: [["ORDER-ROW-1", { raw: "10.00" }]] },
+            ],
+          }),
+          { readAs: ImportReadAs.Auto, readHow: ImportReadHow.Standard },
+        ),
+      );
+
+      expect(systemPrompt(model, 0)).toContain(DETECT_PROMPT);
+      const sent = sentPrompt(model, 0);
+      expect(sent).toContain("Sheet: Summary");
+      expect(sent).toContain("Sheet: Orders");
+      expect(sent).toContain("ORDER-ROW-1");
+    });
+  });
 });
 
 describe("a long document read in pieces (FR-043)", () => {
@@ -1753,6 +2038,12 @@ describe("a long document read in pieces (FR-043)", () => {
     expect(fake.calls[0].kind).toBe("header");
     expect(fake.calls.filter((call) => call.kind === "lines").length).toBe(2);
     expect(fake.calls[1].user).toContain(`│${rowText(rows[0])}`);
+    // The second piece starts far below the headings, and is shown them
+    // all the same (FR-069).
+    expect(fake.calls[2].user).not.toContain(`│${rowText(rows[0])}`);
+    expect(fake.calls[2].user).toContain(
+      "L0002│Date | Reference | Description | Amount",
+    );
     expect(row.state).toBe(ImportState.Grouped);
     expect(itemsOf(row.id)).toHaveLength(60);
     expect(parseExtractionNotes(row.extractionNotes)?.method).toBe("ai_pieces");

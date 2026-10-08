@@ -190,7 +190,6 @@ export function walletWorkbook(
 /** The wallet report's table layout. */
 export function walletLayout(over: Partial<TableLayout> = {}): TableLayout {
   return {
-    sheet: null,
     headers: [...WALLET_HEADERS],
     columns: {
       date: "Date",
@@ -209,7 +208,6 @@ export function walletLayout(over: Partial<TableLayout> = {}): TableLayout {
     counterparty: "Example Marketplace",
     currency: "MYR",
     documentDateLabel: "To",
-    remarkColumns: ["Transaction Type"],
     statedTotalLabels: {
       every_transaction: ["Total Money In", "Total Money Out"],
     },

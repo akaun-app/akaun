@@ -108,8 +108,8 @@ export const SAMPLE_ROWS = 10;
 // ── Column roles ────────────────────────────────────────────────────────────
 
 /**
- * What a column is used for. A column holds at most one role; Remark may be
- * held by many columns.
+ * What a column is used for. A column holds at most one role, and each role
+ * at most one column. No role fills the remark: it is the reviewer's to write.
  */
 export type ColumnRole =
   | "date"
@@ -118,7 +118,6 @@ export type ColumnRole =
   | "reference"
   | "direction"
   | "balance"
-  | "remark"
   | "none";
 
 export const COLUMN_ROLES: { value: ColumnRole; label: string }[] = [
@@ -129,7 +128,6 @@ export const COLUMN_ROLES: { value: ColumnRole; label: string }[] = [
   { value: "reference", label: "Reference" },
   { value: "direction", label: "Money in or out" },
   { value: "balance", label: "Running balance" },
-  { value: "remark", label: "Add to remark" },
 ];
 
 /** The roles one column at most may hold, and where the layout keeps each. */
@@ -147,7 +145,7 @@ export function columnRole(layout: LayoutForm, heading: string): ColumnRole {
   for (const [role, field] of Object.entries(SINGLE_ROLES)) {
     if (layout[field] === heading) return role as ColumnRole;
   }
-  return layout.remarkColumns.includes(heading) ? "remark" : "none";
+  return "none";
 }
 
 /**
@@ -169,12 +167,7 @@ export function setColumnRole(
       }
     }
   }
-  layout.remarkColumns = layout.remarkColumns.filter((h) => h !== heading);
   if (role === "none") return;
-  if (role === "remark") {
-    layout.remarkColumns = [...layout.remarkColumns, heading];
-    return;
-  }
   const field = SINGLE_ROLES[role];
   if (role === "direction" && layout.directionColumn !== heading) {
     layout.directionInText = "";
@@ -217,7 +210,7 @@ export function setDirection(
 }
 
 /**
- * The layout a sample gives: its sheet, its headings, and the columns, date
+ * The layout a sample gives: its headings, and the columns, date
  * format and separators it looks like it has. What the sample cannot say
  * (the other party, the currency, the labels outside the table) is kept from
  * `keep`, the layout the user had, so loading a sample never loses them.
@@ -230,7 +223,6 @@ export function layoutFromSample(
   const base = keep ? { ...keep } : newLayout();
   return {
     ...base,
-    sheet: sample.sheets.length > 1 ? sample.sheet : "",
     headersText: sample.headers.join("\n"),
     date: guess.date ?? "",
     description: guess.description ?? "",
@@ -242,9 +234,6 @@ export function layoutFromSample(
     directionOutText: (guess.direction?.out ?? []).join("\n"),
     decimalSeparator: guess.decimalSeparator,
     csvDelimiter: guess.csvDelimiter ?? "",
-    remarkColumns: (keep?.remarkColumns ?? []).filter((h) =>
-      sample.headers.includes(h),
-    ),
     balanceColumn: guess.balance ?? "",
   };
 }

@@ -35,6 +35,7 @@ import { readXlsx } from "../extraction/spreadsheet/xlsx.js";
 import {
   parseTableAmount,
   parseTableDate,
+  sheetNamed,
   tableDataRows,
 } from "./table-reader.js";
 
@@ -89,7 +90,7 @@ function isHeadingCell(cell: CellValue | null | undefined): boolean {
  * block above the real table ("Total Money In 54.15") is passed over. On a
  * tie the higher row wins.
  */
-function guessHeaderAt(sheet: Sheet): number {
+export function guessHeaderAt(sheet: Sheet): number {
   const limit = Math.min(sheet.rows.length, HEADER_SEARCH_ROWS);
   let best = -1;
   let bestScore = 0;
@@ -355,12 +356,16 @@ export function inspectSample(
   );
   let sheet: Sheet | undefined;
   let headerAt = -1;
-  if (choice.sheet) {
-    sheet = workbook.sheets.find(
-      (s) => foldTableText(s.name) === foldTableText(choice.sheet!),
-    );
+  // A file of one sheet is read whatever its sheet is called, as the reading
+  // reads it (FR-069).
+  if (choice.sheet && workbook.sheets.length > 1) {
+    sheet = sheetNamed(workbook, choice.sheet);
     if (!sheet) {
-      return { ok: false, error: `There is no sheet "${choice.sheet}".` };
+      const names = workbook.sheets.map((s) => `"${s.name}"`).join(", ");
+      return {
+        ok: false,
+        error: `There is no sheet "${choice.sheet}". The sample's sheets are: ${names}.`,
+      };
     }
   }
   if (choice.headerRow != null) {
