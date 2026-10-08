@@ -5,7 +5,7 @@ import { BROWSER_COOKIE, OAuthFailure } from "$lib/server/oauth/service.js";
 import { allowedScopes } from "$lib/server/oauth/scopes.js";
 
 export const load: PageServerLoad = ({ url, cookies, locals, setHeaders }) => {
-  setHeaders({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+  setHeaders({ "Cache-Control": "no-store", "Referrer-Policy": "same-origin" });
   if (!oauth || !config) error(404, "OAuth is disabled");
   try {
     const p = oauth.pending(

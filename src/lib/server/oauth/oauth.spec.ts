@@ -811,6 +811,9 @@ describe("OAuth hook and MCP scope integration", () => {
     );
     expect(consent.status).toBe(200);
     expect(consent.headers.get("Cache-Control")).toBe("no-store");
+    expect(consent.headers.get("Referrer-Policy")).toBe("same-origin");
+    const loginPage = await throughHook(new Request(`${config.issuer}/login`));
+    expect(loginPage.headers.get("Referrer-Policy")).toBe("same-origin");
   });
   it("sends a browser-binding cookie usable on HTTP localhost", async () => {
     const localConfig = {
@@ -851,7 +854,7 @@ describe("OAuth hook and MCP scope integration", () => {
       "/profile?/revokeApp",
       `/oauth/authorize?transaction=${id}`,
     ]) {
-      for (const origin of ["https://attacker.example.com", ""]) {
+      for (const origin of ["https://attacker.example.com", "null", ""]) {
         const res = await throughHook(
           new Request(`${config.issuer}${path}`, {
             method: "POST",
@@ -862,6 +865,20 @@ describe("OAuth hook and MCP scope integration", () => {
         );
         expect(res.status).toBe(403);
       }
+    }
+    const sameSiteHeaders: HeadersInit[] = [
+      { Origin: config.issuer },
+      { Referer: `${config.issuer}/login?oauth=fixture` },
+    ];
+    for (const headers of sameSiteHeaders) {
+      const response = await throughHook(
+        new Request(`${config.issuer}/login`, {
+          method: "POST",
+          headers,
+          body: "username=fixture",
+        }),
+      );
+      expect(response.status).toBe(200);
     }
     expect(oauth.pending(id, browser)).toBeDefined();
   });

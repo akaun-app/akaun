@@ -163,7 +163,9 @@ export function createRequestHandle(
       event.locals.isSuperuser = false;
       const response = await resolve(event);
       response.headers.set("Cache-Control", "no-store");
-      response.headers.set("Referrer-Policy", "no-referrer");
+      // Keep same-site form provenance for CSRF checks without leaking OAuth
+      // transaction URLs to external sites. no-referrer can yield a null Origin.
+      response.headers.set("Referrer-Policy", "same-origin");
       return withSecurityHeaders(response);
     }
 
@@ -177,7 +179,7 @@ export function createRequestHandle(
     const response = await resolve(event);
     if (pathname === "/oauth/authorize" || pathname === "/login") {
       response.headers.set("Cache-Control", "no-store");
-      response.headers.set("Referrer-Policy", "no-referrer");
+      response.headers.set("Referrer-Policy", "same-origin");
     }
     return withSecurityHeaders(response);
   };
