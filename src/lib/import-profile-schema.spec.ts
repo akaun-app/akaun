@@ -8,9 +8,13 @@ import {
   checkProfile,
   checkTablePreview,
   extraFieldsOf,
+  feeTypeName,
+  fileTypesOf,
   foldTableText,
   formatProfileErrors,
   legacyProfileMode,
+  nameFromKey,
+  profileFileTypes,
   profileSections,
   readsFromColumns,
   validateExtrasFragment,
@@ -24,9 +28,9 @@ import {
   withdrawalSection,
 } from "./server/import/__fixtures__/wallet-table.js";
 import {
-  IMPORT_PROFILE_STARTERS,
-  starterDraft,
-} from "./import-profile-starters.js";
+  PROFILE_DRAFT_IDS,
+  profileDraft,
+} from "./server/import/__fixtures__/profile-drafts.js";
 
 /**
  * The one check of an import profile, which the editor and the server both
@@ -50,8 +54,8 @@ function profile(): ImportProfileDraft {
         kind: "expense",
         fixedCategoryAccountId: null,
         feeTypes: [
-          { key: "ads", description: "Ads", categoryAccountId: 7 },
-          { key: "tax", description: "", categoryAccountId: null },
+          { key: "ads", name: "Ads", description: "Ads", categoryAccountId: 7 },
+          { key: "tax", name: "Tax", description: "", categoryAccountId: null },
         ],
         extras: null,
       },
@@ -72,8 +76,8 @@ function paths(errors: ProfileError[]): string[] {
 }
 
 /**
- * A starter with both its accounts chosen, as the user must before saving a
- * wallet report starter (FR-030). A starter with no transfer is unchanged.
+ * A draft with both its accounts chosen, as the user must before saving a
+ * wallet report profile (FR-030). A draft with no transfer is unchanged.
  */
 function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
   if (!draft.sections.some((section) => section.kind === "transfer")) {
@@ -90,23 +94,23 @@ function withAccounts(draft: ImportProfileDraft): ImportProfileDraft {
   };
 }
 
-describe("starters", () => {
-  it.each(IMPORT_PROFILE_STARTERS.map((starter) => [starter.id, starter]))(
+describe("the spec drafts", () => {
+  it.each(PROFILE_DRAFT_IDS.map((id) => [id]))(
     "%s passes the check unchanged, once its accounts are chosen",
-    (_id, starter) => {
-      const draft = withAccounts(starterDraft(starter.id)!);
+    (id) => {
+      const draft = withAccounts(profileDraft(id));
       const result = checkProfile(draft);
       expect(result).toEqual({ ok: true, profile: draft });
     },
   );
 
-  it.each([["wallet_withdrawals"], ["wallet_every_transaction"]])(
+  it.each([["wallet_withdrawals"], ["wallet_every_transaction"]] as const)(
     "%s cannot be saved until both of its accounts are chosen (FR-030)",
     (id) => {
-      const result = checkProfile(starterDraft(id));
+      const result = checkProfile(profileDraft(id));
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      const transfer = starterDraft(id)!.sections.findIndex(
+      const transfer = profileDraft(id).sections.findIndex(
         (section) => section.kind === "transfer",
       );
       expect(paths(result.errors).sort()).toEqual(
@@ -114,79 +118,6 @@ describe("starters", () => {
       );
     },
   );
-
-  it("gives both wallet report starters the wallet layout, found by its headings", () => {
-    for (const id of ["wallet_withdrawals", "wallet_every_transaction"]) {
-      const draft = starterDraft(id)!;
-      expect(draft.layout?.sheet).toBeNull();
-      expect(draft.layout?.headers).toContain("Transaction Type");
-      expect(draft.layout?.balanceColumn).toBe("Balance After Transactions");
-      expect(draft.mode).toBe("every_transaction");
-      expect(readsFromColumns(draft)).toBe(true);
-    }
-    // Withdrawals only has no control total: its rows are a few of the
-    // report's, and the report totals all of them.
-    expect(
-      starterDraft("wallet_withdrawals")!.layout?.statedTotalLabels,
-    ).toEqual({});
-    expect(
-      starterDraft("wallet_every_transaction")!.layout?.statedTotalLabels,
-    ).toEqual({ every_transaction: ["Total Money In", "Total Money Out"] });
-  });
-
-  it("warns on the every-transaction starter that its sales repeat the statement", () => {
-    const starter = IMPORT_PROFILE_STARTERS.find(
-      (entry) => entry.id === "wallet_every_transaction",
-    )!;
-    expect(starter.hint).toMatch(/counts the sales two times/);
-    expect(starter.draft.description).toMatch(/counted twice/);
-  });
-
-  it("mirrors the marketplace summary: 15 leaf lines over two sections", () => {
-    const draft = starterDraft("marketplace_summary")!;
-    expect(
-      draft.sections.map((section) => [section.key, section.kind]),
-    ).toEqual([
-      ["sales", "income"],
-      ["fees", "by_sign"],
-    ]);
-    const keys = draft.sections.flatMap((section) =>
-      section.feeTypes.map((feeType) => feeType.key),
-    );
-    expect(keys).toHaveLength(15);
-    expect(draft.instructions).toMatch(/never list a subtotal/i);
-  });
-
-  it("gives a fresh copy each time, so the editor never changes the starter", () => {
-    const copy = starterDraft("fee_document")!;
-    copy.sections[0].feeTypes.pop();
-    expect(starterDraft("fee_document")!.sections[0].feeTypes).toHaveLength(5);
-    expect(starterDraft("nothing")).toBeNull();
-  });
-
-  it("reads a document starter in Summary and a wallet report in Every transaction", () => {
-    const modes = Object.fromEntries(
-      IMPORT_PROFILE_STARTERS.map((starter) => [
-        starter.id,
-        starter.draft.mode,
-      ]),
-    );
-    expect(modes).toEqual({
-      fee_document: "summary",
-      marketplace_summary: "summary",
-      wallet_withdrawals: "every_transaction",
-      wallet_every_transaction: "every_transaction",
-    });
-    for (const starter of IMPORT_PROFILE_STARTERS) {
-      // The mode is the profile's: no section carries one of its own.
-      for (const section of starter.draft.sections) {
-        expect(section).not.toHaveProperty("mode");
-      }
-      expect(Object.keys(starter.draft.statedTotalLabels)).toEqual(
-        starter.draft.layout ? [] : ["summary"],
-      );
-    }
-  });
 });
 
 describe("checkProfile", () => {
@@ -356,7 +287,12 @@ describe("checkProfile", () => {
     input.sections.push({ ...input.sections[0], key: "x".repeat(33) });
     input.sections.push({ ...structuredClone(input.sections[0]), key: "" });
     input.sections[2].feeTypes = [
-      { key: "9lives", description: "", categoryAccountId: null },
+      {
+        key: "9lives",
+        name: "9lives",
+        description: "",
+        categoryAccountId: null,
+      },
     ];
     const errors = validateProfile(input);
     expect(paths(errors)).toEqual([
@@ -369,6 +305,35 @@ describe("checkProfile", () => {
     ]);
     expect(errors[0].message).toMatch(/lower-case letter/);
     expect(errors[1].message).toMatch(/listed twice/);
+  });
+
+  it("names a line type saved before line types had names by its key", () => {
+    const input = profile() as unknown as {
+      sections: { feeTypes: Record<string, unknown>[] }[];
+    };
+    delete input.sections[0].feeTypes[0].name;
+    input.sections[0].feeTypes[1].name = "  ";
+    const result = checkProfile(input);
+    if (!result.ok) throw new Error(formatProfileErrors(result.errors));
+    expect(result.profile.sections[0].feeTypes.map((fee) => fee.name)).toEqual([
+      "Ads",
+      "Tax",
+    ]);
+    expect(nameFromKey("seller_coins_cashback")).toBe("Seller coins cashback");
+  });
+
+  it("refuses two line types with one name in a section, whatever the case", () => {
+    const input = profile();
+    input.sections[0].feeTypes[1].name = "ADS";
+    const errors = validateProfile(input);
+    expect(paths(errors)).toEqual(["sections[0].feeTypes[1].name"]);
+    expect(errors[0].message).toMatch(/"ADS" is listed twice/);
+  });
+
+  it("shows a line type by its name, or its key as words when it is gone", () => {
+    const fees = [{ key: "ads", name: "Advertising" }];
+    expect(feeTypeName(fees, "ads")).toBe("Advertising");
+    expect(feeTypeName(fees, "old_fee")).toBe("Old fee");
   });
 
   it("refuses two sections with one key", () => {
@@ -470,7 +435,12 @@ describe("checkProfile", () => {
     const input = profile();
     input.sections[0].feeTypes = Array.from(
       { length: PROFILE_FEE_TYPES_MAX + 1 },
-      (_, i) => ({ key: `fee_${i}`, description: "", categoryAccountId: null }),
+      (_, i) => ({
+        key: `fee_${i}`,
+        name: `Fee ${i}`,
+        description: "",
+        categoryAccountId: null,
+      }),
     );
     expect(paths(validateProfile(input))).toEqual(["sections[0].feeTypes"]);
   });
@@ -480,6 +450,7 @@ describe("checkProfile", () => {
     const fees = (prefix: string, n: number) =>
       Array.from({ length: n }, (_, i) => ({
         key: `${prefix}_${i}`,
+        name: `${prefix} ${i}`,
         description: "",
         categoryAccountId: null,
       }));
@@ -807,15 +778,23 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
     expect("rows" in result.profile.sections[0]).toBe(false);
   });
 
+  it("drops the remark columns a layout was saved with: no column fills the remark", () => {
+    const value = wallet() as unknown as {
+      layout: Record<string, unknown>;
+    };
+    value.layout.remarkColumns = ["Transaction Type", "Not a heading"];
+    const result = checkProfile(value);
+    if (!result.ok) throw new Error(formatProfileErrors(result.errors));
+    expect("remarkColumns" in result.profile.layout!).toBe(false);
+  });
+
   it("refuses a column that is not one of the headings, wherever it is named", () => {
     const errors = errorsOf((value) => {
       value.layout.columns.amount = "Total";
-      value.layout.remarkColumns = ["Note"];
       value.sections[0].rows.where[0].column = "Kind";
     });
     expect(paths(errors)).toEqual([
       "layout.columns.amount",
-      "layout.remarkColumns[0]",
       "sections[0].rows.where[0].column",
     ]);
     expect(errors[0].message).toBe(
@@ -905,12 +884,14 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
           value.sections[0].feeTypes = [
             {
               key: "orders",
+              name: "Orders",
               description: "",
               categoryAccountId: null,
               values: ["Order Income"],
             },
             {
               key: "refunds",
+              name: "Refunds",
               description: "",
               categoryAccountId: null,
               values: ["Refund"],
@@ -957,6 +938,7 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
         feeTypes: [
           {
             key: "orders",
+            name: "Orders",
             description: "",
             categoryAccountId: null,
             values: ["Order"],
@@ -1111,6 +1093,115 @@ describe("table layout and row rules (FR-053, FR-054)", () => {
         }),
       ),
     ).toEqual(["sections[0].sameMoneyAs"]);
+  });
+});
+
+describe("the one sheet a profile reads (FR-069)", () => {
+  it("keeps the sheet on the profile, for every kind, and none when it names none", () => {
+    const result = checkProfile({ ...profile(), sheet: "  Summary " });
+    expect(result.ok && result.profile.sheet).toBe("Summary");
+    const none = checkProfile({ ...profile(), sheet: "" });
+    expect(none.ok && "sheet" in none.profile).toBe(false);
+  });
+
+  it("reads the sheet of a profile saved when it was on the table layout", () => {
+    const result = checkProfile({
+      ...withAccounts(profileDraft("wallet_withdrawals")),
+      layout: {
+        ...profileDraft("wallet_withdrawals").layout,
+        sheet: "Transaction Report",
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.profile.sheet).toBe("Transaction Report");
+    expect(result.profile.layout).not.toHaveProperty("sheet");
+  });
+
+  it("refuses a sheet name longer than Excel allows, at the Sheet field even from an old layout", () => {
+    expect(
+      paths(validateProfile({ ...profile(), sheet: "x".repeat(32) })),
+    ).toEqual(["sheet"]);
+    const draft = withAccounts(profileDraft("wallet_withdrawals"));
+    expect(
+      paths(
+        validateProfile({
+          ...draft,
+          layout: { ...draft.layout, sheet: "x".repeat(32) },
+        }),
+      ),
+    ).toEqual(["sheet"]);
+  });
+});
+
+describe("the files a profile reads (FR-070)", () => {
+  it("reads what its kind allows when nothing is stored: both for the AI, spreadsheets for a table", () => {
+    expect(fileTypesOf("summary")).toEqual(["document", "spreadsheet"]);
+    expect(fileTypesOf("transactions", [])).toEqual([
+      "document",
+      "spreadsheet",
+    ]);
+    expect(fileTypesOf("table")).toEqual(["spreadsheet"]);
+    expect(fileTypesOf("mixed", ["document"])).toEqual(["spreadsheet"]);
+    expect(profileFileTypes(profile())).toEqual(["document", "spreadsheet"]);
+  });
+
+  it("keeps one kind of file on a profile the AI reads", () => {
+    const result = checkProfile({
+      ...profile(),
+      kind: "summary",
+      fileTypes: ["document"],
+    });
+    expect(result.ok && result.profile.fileTypes).toEqual(["document"]);
+    expect(result.ok && profileFileTypes(result.profile)).toEqual(["document"]);
+  });
+
+  it("stores nothing for both, however they are sent", () => {
+    for (const fileTypes of [
+      ["spreadsheet", "document"],
+      ["document", "document", "spreadsheet"],
+      null,
+    ]) {
+      const result = checkProfile({ ...profile(), kind: "summary", fileTypes });
+      expect(result.ok && "fileTypes" in result.profile).toBe(false);
+    }
+  });
+
+  it("refuses none ticked, and a kind of file it does not know, at the Reads field", () => {
+    expect(
+      paths(validateProfile({ ...profile(), kind: "summary", fileTypes: [] })),
+    ).toEqual(["fileTypes"]);
+    expect(
+      paths(
+        validateProfile({ ...profile(), kind: "summary", fileTypes: ["pdf"] }),
+      ),
+    ).toEqual(["fileTypes"]);
+  });
+
+  it("drops a choice sent with a kind that reads a table", () => {
+    const result = checkProfile({
+      ...withAccounts(profileDraft("wallet_withdrawals")),
+      fileTypes: ["document"],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && "fileTypes" in result.profile).toBe(false);
+  });
+
+  it("keeps no sheet on a profile that reads no spreadsheet, and does not check one", () => {
+    const result = checkProfile({
+      ...profile(),
+      kind: "summary",
+      fileTypes: ["document"],
+      sheet: "x".repeat(32),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && "sheet" in result.profile).toBe(false);
+    const both = checkProfile({
+      ...profile(),
+      kind: "summary",
+      sheet: "Income",
+    });
+    expect(both.ok && both.profile.sheet).toBe("Income");
   });
 });
 

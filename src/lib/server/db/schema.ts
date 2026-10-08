@@ -244,6 +244,10 @@ export const llmProviders = sqliteTable("llm_providers", {
   type: text("type").notNull(),
   name: text("name").notNull(),
   apiKey: text("api_key").notNull().default(""),
+  // A `chatgpt` provider signs in instead of holding a key: the OAuth tokens
+  // from Sign in with ChatGPT, as JSON (`ChatgptCredentials`). Held like the
+  // key — the settings loader strips it before anything reaches a browser.
+  oauthCredentials: text("oauth_credentials"),
   model: text("model").notNull(),
   baseUrl: text("base_url"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),

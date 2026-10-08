@@ -18,6 +18,8 @@
 	import ProfileSampleTable from './ProfileSampleTable.svelte';
 	import {
 		PROFILE_FEE_TYPES_MAX,
+		PROFILE_FILE_TYPES,
+		PROFILE_FILE_TYPE_LABELS,
 		PROFILE_PHRASES_MAX,
 		PROFILE_SAME_MONEY_MAX,
 		PROFILE_SECTIONS_MAX,
@@ -32,7 +34,6 @@
 		type RowConditionOp
 	} from '$lib/import-profile-schema.js';
 	import { ImportMode, importModeLabel, type ImportModeValue } from '$lib/import-reading.js';
-	import { IMPORT_PROFILE_STARTERS, starterDraft, type ImportProfileStarterId } from '$lib/import-profile-starters.js';
 	import {
 		blankForm,
 		errorsAt,
@@ -47,9 +48,10 @@
 		payloadFromForm,
 		problemPlace,
 		readsFromTable,
+		readsSpreadsheets,
 		sectionKeys,
 		setKind as setProfileKind,
-		typingKey,
+		toggleFileType,
 		type ConditionForm,
 		type FeeTypeForm,
 		type LayoutForm,
@@ -107,7 +109,6 @@
 
 	let {
 		profile,
-		starter,
 		expenseCategories,
 		incomeCategories,
 		moneyAccounts,
@@ -115,7 +116,6 @@
 		canChange
 	}: {
 		profile: ImportProfileView | null;
-		starter: ImportProfileStarterId | null;
 		expenseCategories: Choice[];
 		incomeCategories: Choice[];
 		/** Accounts that hold money: the profile's account and each transfer's other one (FR-058). */
@@ -128,34 +128,23 @@
 	const HOME = '/settings?tab=intelligence';
 
 	// ── The staged form ────────────────────────────────────────────────────────
-	type Start = ImportProfileStarterId | 'blank';
-
-	function startingForm(from: Start): ProfileForm {
-		const draft = from === 'blank' ? null : starterDraft(from);
-		return draft ? formFromDraft(draft) : blankForm();
-	}
-
 	// The saved profile this page last knew: what Discard goes back to. A new
 	// profile has none.
 	// svelte-ignore state_referenced_locally
 	let saved = $state<ImportProfileView | null>(profile);
 	// svelte-ignore state_referenced_locally
-	let startedFrom = $state<Start>(starter ?? 'blank');
-	// svelte-ignore state_referenced_locally
-	let form = $state<ProfileForm>(profile ? formFromDraft(profile) : startingForm(starter ?? 'blank'));
+	let form = $state<ProfileForm>(profile ? formFromDraft(profile) : blankForm());
 
 	/**
 	 * What "no unsaved changes" looks like. A saved profile: the form as saved.
-	 * A new blank profile: the blank form, so an untouched page asks nothing on
-	 * the way out. A new profile from a starter is unsaved from the start, so
-	 * the save bar is there to save it as it is.
+	 * A new profile: the blank form, so an untouched page asks nothing on the
+	 * way out.
 	 */
-	function baselineFor(view: ImportProfileView | null, from: Start): string {
-		if (view) return formFingerprint(formFromDraft(view));
-		return from === 'blank' ? formFingerprint(blankForm()) : '';
+	function baselineFor(view: ImportProfileView | null): string {
+		return formFingerprint(view ? formFromDraft(view) : blankForm());
 	}
 	// svelte-ignore state_referenced_locally
-	let baseline = $state(baselineFor(profile, starter ?? 'blank'));
+	let baseline = $state(baselineFor(profile));
 
 	// Another profile opened from here reuses this component: start again from
 	// what the server sent for it.
@@ -166,8 +155,8 @@
 		if (id === seededFor) return;
 		seededFor = id;
 		saved = profile;
-		form = profile ? formFromDraft(profile) : startingForm(starter ?? 'blank');
-		baseline = baselineFor(profile, starter ?? 'blank');
+		form = profile ? formFromDraft(profile) : blankForm();
+		baseline = baselineFor(profile);
 		attempted = false;
 		saveError = null;
 		serverProblems = null;
@@ -220,7 +209,7 @@
 		{
 			value: 'transactions',
 			label: 'Transaction lines',
-			hint: 'Each transaction line of a PDF file or photo. The AI reads it.'
+			hint: 'Each transaction line of a document. The AI reads it.'
 		},
 		{
 			value: 'mixed',
@@ -288,6 +277,10 @@
 	// What only the AI uses is shown only when it reads some part.
 	const usesAi = $derived(kindUsesAi(form.kind));
 	const sorting = $derived(kindReadsTable(form.kind) ? sortingOf(form) : null);
+	// What the profile reads (FR-070): a kind that reads a table reads only
+	// spreadsheets, and only a profile that reads them has a sheet.
+	const tableKind = $derived(kindReadsTable(form.kind));
+	const readsSheets = $derived(readsSpreadsheets(form));
 
 	// "Rows become": one section for every row, until the user splits the rows
 	// by a column's values. A profile already split shows the split.
@@ -347,6 +340,9 @@
 		if (where) {
 			body.set('sheet', where.sheet);
 			body.set('headerRow', String(where.headerRow));
+		} else if (form.sheet.trim()) {
+			// The sheet the profile reads, so the columns shown are that sheet's (FR-069).
+			body.set('sheet', form.sheet.trim());
 		}
 		try {
 			const res = await fetch('/api/import/profiles/sample', { method: 'POST', body, credentials: 'include' });
@@ -363,7 +359,7 @@
 			sample = reply as SampleInspection;
 			preview = null;
 			previewError = null;
-			if (where || !form.layout || linesOf(form.layout.headersText).length === 0) adoptSample();
+			if (where || !form.layout || linesOf(form.layout.headersText).length === 0) adoptSample(where !== null);
 		} catch {
 			sampleError = 'The server did not get the request. Make sure that you are connected, then try again.';
 		} finally {
@@ -371,9 +367,16 @@
 		}
 	}
 
-	function adoptSample() {
+	/**
+	 * Takes the sample's table as the layout. The sample's sheet becomes the
+	 * profile's when the file has several and the user typed none, or picked
+	 * another table in the sample (`located`); a sheet the user typed is
+	 * otherwise kept.
+	 */
+	function adoptSample(located = false) {
 		if (!sample) return;
 		form.layout = layoutFromSample(sample, form.layout);
+		if (sample.sheets.length > 1 && (located || !form.sheet.trim())) form.sheet = sample.sheet;
 	}
 	// The form as it was previewed, to say when the preview no longer shows it.
 	let previewedFingerprint = $state('');
@@ -588,17 +591,6 @@
 		section.feeTypes = section.feeTypes.filter((fee) => fee.uid !== uid);
 	}
 
-	/**
-	 * A line type key as it is typed: "Commission fee" becomes
-	 * "commission_fee". The input is set to the cleaned text too, so what is
-	 * shown is always the key that will be saved.
-	 */
-	function typeKey(fee: { key: string }, input: HTMLInputElement) {
-		const cleaned = typingKey(input.value);
-		fee.key = cleaned;
-		if (input.value !== cleaned) input.value = cleaned;
-	}
-
 	// ── Saving ─────────────────────────────────────────────────────────────────
 	let auditRef = $state<{ refresh: () => Promise<void> } | null>(null);
 
@@ -663,7 +655,7 @@
 	function revert() {
 		setAside = null;
 		imported = null;
-		form = saved ? formFromDraft(saved) : startingForm(startedFrom);
+		form = saved ? formFromDraft(saved) : blankForm();
 		attempted = false;
 		saveError = null;
 		serverProblems = null;
@@ -735,33 +727,6 @@
 			toast.info('The file is the same as the saved profile');
 		}
 	});
-
-	// ── Starting from an example ───────────────────────────────────────────────
-	// A new profile can begin from a built-in starter. One chosen after the
-	// form was changed replaces those changes, so it asks first. Discard goes
-	// back to the starter chosen.
-	let starterAsked = $state<ImportProfileStarterId | null>(null);
-	let starterOpen = $state(false);
-
-	function askStarter(id: ImportProfileStarterId) {
-		// Changed since it started, blank or from an example: not the save
-		// bar's question, which counts an untouched example as unsaved.
-		const edited = formFingerprint(form) !== formFingerprint(startingForm(startedFrom));
-		if (startedFrom === id && !edited) return;
-		if (!edited) return useStarter(id);
-		starterAsked = id;
-		starterOpen = true;
-	}
-
-	function useStarter(id: ImportProfileStarterId) {
-		setAside = null;
-		startedFrom = id;
-		form = startingForm(id);
-		attempted = false;
-		saveError = null;
-		serverProblems = null;
-		revealed = {};
-	}
 
 	const title = $derived(saved ? saved.name : 'New import profile');
 </script>
@@ -870,22 +835,31 @@
 					{/each}
 				</div>
 				{@render problemList([...shown('kind'), ...shown('mode')])}
-				{#if !saved && canChange}
-					<div class="pf-starters">
-						<span class="pf-starters-label">Or begin with an example:</span>
-						{#each IMPORT_PROFILE_STARTERS as starterChoice (starterChoice.id)}
-							<button
-								type="button"
-								class="sheet-btn pf-starter"
-								class:on={startedFrom === starterChoice.id}
-								title={starterChoice.hint}
-								onclick={() => askStarter(starterChoice.id)}
-							>
-								{starterChoice.label}
-							</button>
-						{/each}
-					</div>
+			</div>
+
+			<div class="field" id="pf-file-types">
+				<span class="field-label">Reads *</span>
+				<div class="pf-modes" role="group" aria-label="Reads">
+					{#each PROFILE_FILE_TYPES as type (type)}
+						{@const on = tableKind ? type === 'spreadsheet' : form.fileTypes.includes(type)}
+						<label class="pf-mode" class:on>
+							<input
+								type="checkbox"
+								checked={on}
+								disabled={!canChange || tableKind}
+								onchange={() => toggleFileType(form, type)}
+							/>
+							<span class="pf-mode-main">
+								<span class="pf-mode-label">{PROFILE_FILE_TYPE_LABELS[type].label}</span>
+								<span class="pf-mode-hint">{PROFILE_FILE_TYPE_LABELS[type].hint}</span>
+							</span>
+						</label>
+					{/each}
+				</div>
+				{#if tableKind}
+					<p class="field-hint">Table rows are read from a spreadsheet's cells, so this profile reads Excel and CSV files only.</p>
 				{/if}
+				{@render problemList(shown('fileTypes'))}
 			</div>
 
 			<div class="field">
@@ -894,7 +868,8 @@
 				{@render problemList(shown('name'))}
 			</div>
 
-			<div class="field" id="pf-account" style="margin-bottom:0;">
+			<!-- The card's last field when there is no Sheet field below it. -->
+			<div class="field" id="pf-account" style={readsSheets ? undefined : 'margin-bottom:0;'}>
 				<span class="field-label">Account</span>
 				<ProfileCategorySelect
 					groups={accountGroups}
@@ -910,6 +885,31 @@
 				</p>
 				{@render problemList(shown('accountId'))}
 			</div>
+
+			{#if readsSheets}
+				<div class="field" id="pf-l-sheet" style="margin-bottom:0;">
+					<label class="field-label" for="pf-sheet">Sheet</label>
+					<Input
+						id="pf-sheet"
+						bind:value={form.sheet}
+						disabled={!canChange}
+						class="w-full"
+						list={sample && sample.sheets.length > 1 ? 'pf-sheet-names' : undefined}
+						placeholder={kindReadsTable(form.kind) ? 'The sheet with the table headings' : 'The first sheet'}
+					/>
+					{#if sample && sample.sheets.length > 1}
+						<datalist id="pf-sheet-names">
+							{#each sample.sheets as option (option.name)}
+								<option value={option.name}></option>
+							{/each}
+						</datalist>
+					{/if}
+					<p class="field-hint">
+						For an Excel file with more than one sheet. A CSV file has one sheet, so this does not apply to it. The profile reads this one sheet only, and the AI never sees the other sheets. Leave it empty to read {kindReadsTable(form.kind) ? 'the sheet with the table headings' : 'the first sheet'}.
+					</p>
+					{@render problemList(shown('sheet'))}
+				</div>
+			{/if}
 		</section>
 
 		{#if form.layout}
@@ -1017,24 +1017,6 @@
 				{/if}
 			</section>
 		{/if}
-		<section class="detail-card">
-			<div class="detail-card-head"><span class="detail-card-title">About profiles</span></div>
-			<ul class="pf-notes">
-				<li>Select the profile in “Read as” on the upload page. The app imports only the sections of the profile.</li>
-				<li>
-					A profile imports one thing: table rows, summary lines or transaction lines. To import a document in two ways, make two profiles.
-				</li>
-				<li>
-					Auto-detect cannot find the difference between two profiles for the same document. Turn one off, or give each profile different fixed phrases.
-				</li>
-				<li>
-					A profile with a table reads only spreadsheets. The app reads the table rows exactly. The table rows do not go to the AI.
-				</li>
-				<li>Make the table from a sample file. Test the profile on the sample before you save. The app does not keep the sample.</li>
-				<li>The AI copies the printed values. The app calculates the totals and signs to the cent.</li>
-				<li>Changes to a profile do not change the documents that you imported before.</li>
-			</ul>
-		</section>
 		{#if saved}
 			<section class="detail-card">
 				<div class="detail-card-head"><span class="detail-card-title">History</span></div>
@@ -1328,7 +1310,7 @@
 							placeholder={'{\n  "type": "object",\n  "properties": {\n    "order_no": { "type": ["string", "null"], "description": "The order number" }\n  }\n}'}
 						/>
 						<p class="field-hint">
-							Values to read from each line, for example an order number. Write them as a JSON Schema object. Each field can use only <code>type</code> (string, number, integer, boolean, or one of these with "null"), <code>description</code> and <code>enum</code> (text only). The app adds each value to the remark as "name: value".
+							Values to read from each line, for example an order number. Write them as a JSON Schema object. Each field can use only <code>type</code> (string, number, integer, boolean, or one of these with "null"), <code>description</code> and <code>enum</code> (text only). The app shows each value on the item as "name: value".
 						</p>
 						{#each extrasProblems(index) as message, messageIndex (messageIndex)}
 							<p class="pf-problem">{message}</p>
@@ -1367,12 +1349,11 @@
 				...shown('layout.direction.column'),
 				...(attempted ? errorsUnder(problems, 'layout.direction.in') : []),
 				...(attempted ? errorsUnder(problems, 'layout.direction.out') : []),
-				...shown('layout.balanceColumn'),
-				...(attempted ? errorsUnder(problems, 'layout.remarkColumns') : [])
+				...shown('layout.balanceColumn')
 			]}
 			onfile={(file) => loadSample(file)}
 			onlocate={(where) => sampleFile && loadSample(sampleFile, where)}
-			onadopt={adoptSample}
+			onadopt={() => adoptSample()}
 		/>
 
 		<Disclosure label="More options" bind:open={moreOpen} forceOpen={layoutProblems.length > 0 || revealed.table === true} class="mt-4">
@@ -1448,11 +1429,6 @@
 						/>
 						{@render problemList(shown('layout.csvDelimiter'))}
 					</div>
-					<div class="field" id="pf-l-sheet">
-						<label class="field-label" for="pf-sheet">Sheet</label>
-						<Input id="pf-sheet" bind:value={layout.sheet} disabled={!canChange} class="w-full" placeholder="Any sheet" />
-						{@render problemList(shown('layout.sheet'))}
-					</div>
 				</div>
 
 				<div class="field" id="pf-l-headers">
@@ -1473,7 +1449,6 @@
 						</div>
 					</div>
 				{/if}
-				{@render problemList(attempted ? errorsUnder(problems, 'layout.sheet') : [])}
 			</div>
 		</Disclosure>
 	</section>
@@ -1513,32 +1488,31 @@
 		{#if section.feeTypes.length > 0}
 			<div class="pf-fees">
 				<div class="pf-fee pf-fee-head" aria-hidden="true">
-					<span>Line type</span><span>{fromTable ? 'Values' : 'Description'}</span><span>Category</span><span></span>
+					<span>Name</span><span>{fromTable ? 'Values' : 'How to identify'}</span><span>Category</span><span></span>
 				</div>
 				{#each section.feeTypes as fee, feeIndex (fee.uid)}
 					{@const feeAt = `${at}.feeTypes[${feeIndex}]`}
 					<div class="pf-fee" id="pf-s-{section.uid}-fee-{fee.uid}">
 						<div>
 							<Input
-								value={fee.key}
-								aria-label="Line type key"
-								placeholder="commission_fee"
+								bind:value={fee.name}
+								aria-label="Line type name"
+								placeholder="Commission fee"
 								disabled={!canChange}
-								class="w-full pf-mono"
-								oninput={(event: Event) => typeKey(fee, event.currentTarget as HTMLInputElement)}
+								class="w-full"
 							/>
 						</div>
 						<div>
 							{#if !fromTable}
 								<Input
 									bind:value={fee.description}
-									aria-label="Which lines are this type"
-									placeholder="Example: Commission on sales"
+									aria-label="How to identify this line type"
+									placeholder="Example: The commission on each sale"
 									disabled={!canChange}
 									class="w-full"
 								/>
 							{:else if columnValues}
-								<div class="pf-value-chips" role="group" aria-label="Values that mean {fee.key || 'this line type'}">
+								<div class="pf-value-chips" role="group" aria-label="Values that mean {fee.name.trim() || 'this line type'}">
 									{#each columnValues as value (value)}
 										<button
 											type="button"
@@ -1555,7 +1529,7 @@
 									bind:value={fee.valuesText}
 									rows={2}
 									disabled={!canChange}
-									aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.key || 'this line type'}"
+									aria-label="Values of {section.rows.feeTypeColumn} that mean {fee.name.trim() || 'this line type'}"
 									placeholder="One per line"
 									class="leading-relaxed"
 								/>
@@ -1568,7 +1542,7 @@
 								groups={categoryGroups(section.kind)}
 								value={fee.categoryAccountId}
 								noneLabel="Auto"
-								ariaLabel="Category for {fee.key || 'this line type'}"
+								ariaLabel="Category for {fee.name.trim() || 'this line type'}"
 								disabled={!canChange}
 								onchange={(value) => (fee.categoryAccountId = value)}
 							/>
@@ -1584,6 +1558,7 @@
 					{@render problemList([
 						...shown(feeAt),
 						...shown(`${feeAt}.key`),
+						...shown(`${feeAt}.name`),
 						...shown(`${feeAt}.description`),
 						...shown(`${feeAt}.categoryAccountId`),
 						...(attempted ? errorsUnder(problems, `${feeAt}.values`) : [])
@@ -1792,16 +1767,6 @@
 {/snippet}
 
 <ConfirmDialog
-	bind:open={starterOpen}
-	title="Replace what you entered with the example?"
-	description="The form changes to the example. What you entered here is not kept."
-	confirmLabel="Use the example"
-	onConfirm={() => {
-		if (starterAsked) useStarter(starterAsked);
-	}}
-/>
-
-<ConfirmDialog
 	bind:open={deleteOpen}
 	title="Delete this import profile?"
 	description={`“${saved?.name ?? ''}” will not show in “Read as”. Documents that you imported with it do not change. Their records do not change.`}
@@ -1846,33 +1811,6 @@
 	:global(.pf-mono) {
 		font-family: 'Geist Mono', monospace;
 		font-size: 12.5px;
-	}
-
-	/* Starting from an example */
-	.pf-starters {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 6px;
-		margin-top: 10px;
-	}
-	.pf-starters-label {
-		font-size: 12.5px;
-		color: var(--muted-foreground);
-		margin-right: 2px;
-	}
-	.pf-starter {
-		height: 28px;
-		padding: 0 10px;
-		font-size: 12.5px;
-	}
-	.pf-starter.on {
-		border-color: var(--primary);
-		background: var(--accent);
-	}
-	.pf-starter:focus-visible {
-		outline: 2px solid var(--primary);
-		outline-offset: 2px;
 	}
 
 	/* Phrases */

@@ -292,7 +292,7 @@ Each stage is built, reviewed by a second agent, fixed and committed, as in S0â€
 
 **S4.5 Table layout and the reader with no AI.**
 
-- Shared types in `import-profile-schema.ts`: `TableLayout` (sheet, header names, date with format, description, amount, reference; optionally the direction column and its in/out values, decimal separator, CSV delimiter, other party, currency, document-date label, remark columns, stated-total labels per mode); section `rows` (`where` and `flagWhen` with `is`, `is_not`, `is_one_of`, `contains`, empty, not empty; `feeTypeColumn`); `feeTypes[].values`.
+- Shared types in `import-profile-schema.ts`: `TableLayout` (sheet, header names, date with format, description, amount, reference; optionally the direction column and its in/out values, decimal separator, CSV delimiter, other party, currency, document-date label, stated-total labels per mode); section `rows` (`where` and `flagWhen` with `is`, `is_not`, `is_one_of`, `contains`, empty, not empty; `feeTypeColumn`); `feeTypes[].values`.
 - New `import/table-reader.ts`, pure code, workbook â†’ `ReadEnvelope`:
   1. find the header row;
   2. data rows run to the first blank row;

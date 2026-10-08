@@ -7,9 +7,9 @@
  *
  * - Each section and line type carries a `uid`, so a list that is reordered or
  *   shortened keeps each row's own inputs.
- * - A new section's key follows its name (`keyFromName`). A saved section
- *   keeps the key it was saved with, so renaming it changes only what the
- *   screens show.
+ * - A new section's or line type's key follows its name (`keyFromName`). A
+ *   saved one keeps the key it was saved with, so renaming it changes only
+ *   what the screens show. A line type's key is never shown.
  * - "Advanced: extra fields" is the JSON text the user typed, not the parsed
  *   fragment. The shared check (`import-profile-schema.ts`) reads text and
  *   reports a typing mistake with its path, so the editor never parses it on
@@ -28,12 +28,15 @@
  */
 
 import {
+  NONE_VALUE,
+  PROFILE_FILE_TYPES,
   PROFILE_KEY_PATTERN,
   kindReadsTable,
   modeOf,
   profileKind,
   type ImportProfileDraft,
   type ProfileError,
+  type ProfileFileType,
   type ProfileKind,
   type ProfileSectionKind,
   type RowCondition,
@@ -47,8 +50,15 @@ import { ImportMode, type ImportModeValue } from "./import-reading.js";
 
 export interface FeeTypeForm {
   uid: string;
-  /** What the model writes back, and what the remark names. */
+  /**
+   * The key a saved line type has: what the model writes back and what an item
+   * stores. Ignored while `keyFromName` is true. Never shown.
+   */
   key: string;
+  /** True for a line type not saved yet: its key is made from its name. */
+  keyFromName: boolean;
+  /** What the screens show, and each item of this type is called. */
+  name: string;
   description: string;
   /** The pinned category, or null for "Auto". */
   categoryAccountId: number | null;
@@ -86,8 +96,6 @@ export interface RowsForm {
  * binds to an input as it is; `payloadFromForm` makes the layout from it.
  */
 export interface LayoutForm {
-  /** The sheet's name, or "" for the first sheet that has the headings. */
-  sheet: string;
   /** The table's headings, one per line. */
   headersText: string;
   date: string;
@@ -106,7 +114,6 @@ export interface LayoutForm {
   counterparty: string;
   currency: string;
   documentDateLabel: string;
-  remarkColumns: string[];
   /** The stated-total labels, one per line. */
   totalsText: string;
   /** The running-balance column, or "" for none. */
@@ -168,6 +175,18 @@ export interface ProfileForm {
   /** The account the document is about (FR-058), or null for none. */
   accountId: number | null;
   /**
+   * The files a kind the AI reads takes (FR-070), as ticked, in
+   * `PROFILE_FILE_TYPES` order. Kept while the kind reads a table, which
+   * reads only spreadsheets, for a switch back.
+   */
+  fileTypes: ProfileFileType[];
+  /**
+   * The one sheet of a workbook the profile reads (FR-069), or "" for the
+   * default: the sheet with the table's headings, or the first visible one.
+   * Kept, unsent, while the profile reads no spreadsheet.
+   */
+  sheet: string;
+  /**
    * The table layout for reading a spreadsheet from its columns (FR-053), or
    * null when the profile has none.
    */
@@ -206,28 +225,13 @@ export function slugifyKey(name: string): string {
   return PROFILE_KEY_PATTERN.test(plain) ? plain : "";
 }
 
-/**
- * A line type key as it is being typed: spaces and dashes become "_", capitals
- * become small letters, and anything else a key cannot hold is dropped. A
- * trailing "_" is kept, because the next word may follow it. Whatever is left
- * that still breaks the rule (a leading digit, say) is reported by the shared
- * check, not silently changed.
- */
-export function typingKey(text: string): string {
-  return text
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_")
-    .replace(/[^a-z0-9_]/g, "")
-    .slice(0, 32);
-}
-
 /** An empty line type row. */
 export function newFeeType(): FeeTypeForm {
   return {
     uid: newUid(),
     key: "",
+    keyFromName: true,
+    name: "",
     description: "",
     categoryAccountId: null,
     valuesText: "",
@@ -255,7 +259,6 @@ export function newRows(): RowsForm {
 /** An empty table layout. */
 export function newLayout(): LayoutForm {
   return {
-    sheet: "",
     headersText: "",
     date: "",
     description: "",
@@ -270,7 +273,6 @@ export function newLayout(): LayoutForm {
     counterparty: "",
     currency: "",
     documentDateLabel: "",
-    remarkColumns: [],
     totalsText: "",
     balanceColumn: "",
   };
@@ -297,7 +299,6 @@ function rowsForm(rows: SectionRows): RowsForm {
 
 function layoutForm(layout: TableLayout, mode: ImportModeValue): LayoutForm {
   return {
-    sheet: layout.sheet ?? "",
     headersText: layout.headers.join("\n"),
     date: layout.columns.date,
     description: layout.columns.description,
@@ -312,7 +313,6 @@ function layoutForm(layout: TableLayout, mode: ImportModeValue): LayoutForm {
     counterparty: layout.counterparty ?? "",
     currency: layout.currency ?? "",
     documentDateLabel: layout.documentDateLabel ?? "",
-    remarkColumns: [...layout.remarkColumns],
     totalsText: (layout.statedTotalLabels[mode] ?? []).join("\n"),
     balanceColumn: layout.balanceColumn ?? "",
   };
@@ -354,7 +354,6 @@ function layoutPayload(
   const directionIn = linesOf(layout.directionInText);
   const directionOut = linesOf(layout.directionOutText);
   return {
-    sheet: layout.sheet || null,
     headers: linesOf(layout.headersText),
     columns: {
       date: layout.date,
@@ -378,7 +377,6 @@ function layoutPayload(
     counterparty: layout.counterparty || null,
     currency: layout.currency || null,
     documentDateLabel: layout.documentDateLabel || null,
-    remarkColumns: layout.remarkColumns,
     statedTotalLabels,
     balanceColumn: layout.balanceColumn || null,
   };
@@ -476,6 +474,29 @@ export function setKind(form: ProfileForm, kind: ProfileKind): void {
 }
 
 /**
+ * Ticks or unticks one kind of file the profile reads (FR-070). The list is
+ * rebuilt in `PROFILE_FILE_TYPES` order, so ticking again what was unticked
+ * leaves the form as it was.
+ */
+export function toggleFileType(form: ProfileForm, type: ProfileFileType): void {
+  const on = !form.fileTypes.includes(type);
+  form.fileTypes = PROFILE_FILE_TYPES.filter((t) =>
+    t === type ? on : form.fileTypes.includes(t),
+  );
+}
+
+/**
+ * Whether the profile reads spreadsheets, and so has a sheet (FR-069). Read
+ * from the ticks as they are, so a form with none ticked, which cannot be
+ * saved, shows no sheet either.
+ */
+export function readsSpreadsheets(
+  form: Pick<ProfileForm, "kind" | "fileTypes">,
+): boolean {
+  return kindReadsTable(form.kind) || form.fileTypes.includes("spreadsheet");
+}
+
+/**
  * A new section added under "Lines to import": read by the AI, except in a
  * "table" profile, which has no AI sections.
  */
@@ -498,6 +519,8 @@ export function blankForm(): ProfileForm {
     mode: ImportMode.Summary,
     statedTotal: "",
     accountId: null,
+    fileTypes: [...PROFILE_FILE_TYPES],
+    sheet: "",
     layout: null,
     sections: [newSection()],
     kind: "summary",
@@ -505,9 +528,8 @@ export function blankForm(): ProfileForm {
 }
 
 /**
- * The form for a profile, saved or from a starter. Its sections keep the keys
- * they have: a saved profile's were saved with it, and a starter chose its
- * own.
+ * The form for a profile, saved or read from a file. Its sections keep the
+ * keys they have.
  */
 export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
   return {
@@ -518,6 +540,8 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
     mode: draft.mode,
     statedTotal: draft.statedTotalLabels[draft.mode] ?? "",
     accountId: draft.accountId ?? null,
+    fileTypes: [...(draft.fileTypes ?? PROFILE_FILE_TYPES)],
+    sheet: draft.sheet ?? "",
     layout: draft.layout ? layoutForm(draft.layout, draft.mode) : null,
     sections: draft.sections.map((section) => ({
       uid: newUid(),
@@ -536,6 +560,8 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
       feeTypes: section.feeTypes.map((feeType) => ({
         uid: newUid(),
         key: feeType.key,
+        keyFromName: false,
+        name: feeType.name,
         description: feeType.description,
         categoryAccountId: feeType.categoryAccountId,
         valuesText: (feeType.values ?? []).join("\n"),
@@ -557,16 +583,38 @@ export function formFromDraft(draft: ImportProfileDraft): ProfileForm {
  * no usable letter gives "section_<n>".
  */
 export function sectionKeys(sections: readonly SectionForm[]): string[] {
+  return keysFromNames(sections, "section");
+}
+
+/**
+ * The key each of a section's line types is sent with, in order, made the way
+ * `sectionKeys` makes a section's. "none" is never made, as it means a line of
+ * none of the types, and a name with no usable letter gives "line_type_<n>".
+ */
+export function feeTypeKeys(feeTypes: readonly FeeTypeForm[]): string[] {
+  return keysFromNames(feeTypes, "line_type", [NONE_VALUE]);
+}
+
+/**
+ * Saved rows keep their key. A new row's is made from its name, with a number
+ * added when it is taken by another row or is one of `reserved`.
+ */
+function keysFromNames(
+  rows: readonly { key: string; keyFromName: boolean; name: string }[],
+  fallback: string,
+  reserved: readonly string[] = [],
+): string[] {
   const keys: string[] = [];
-  const taken = new Set(
-    sections.filter((section) => !section.keyFromName).map((s) => s.key),
-  );
-  sections.forEach((section, index) => {
-    if (!section.keyFromName) {
-      keys.push(section.key);
+  const taken = new Set([
+    ...reserved,
+    ...rows.filter((row) => !row.keyFromName).map((row) => row.key),
+  ]);
+  rows.forEach((row, index) => {
+    if (!row.keyFromName) {
+      keys.push(row.key);
       return;
     }
-    const base = slugifyKey(section.name) || `section_${index + 1}`;
+    const base = slugifyKey(row.name) || `${fallback}_${index + 1}`;
     let key = base;
     for (let n = 2; taken.has(key); n++) {
       const suffix = `_${n}`;
@@ -601,12 +649,16 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
     mode: form.mode,
     statedTotalLabels: label ? { [form.mode]: label } : {},
     accountId: form.accountId,
+    // A kind that reads a table reads only spreadsheets: nothing to send.
+    ...(kindReadsTable(form.kind) ? {} : { fileTypes: form.fileTypes }),
+    sheet: readsSpreadsheets(form) ? form.sheet.trim() || null : null,
     // Sent only when there is one, as a profile without one is saved.
     ...(form.layout ? { layout: layoutPayload(form.layout, form.mode) } : {}),
     sections: form.sections.map((section, index) => {
       const table = readsFromTable(form, section);
       // Set to the table with no rules yet: rules that take every row.
       const rows = table ? (section.rows ?? newRows()) : null;
+      const feeKeys = feeTypeKeys(section.feeTypes);
       return {
         key: keys[index],
         name: section.name,
@@ -616,8 +668,9 @@ export function payloadFromForm(form: ProfileForm): Record<string, unknown> {
         ...(section.legacyMode ? { mode: section.legacyMode } : {}),
         kind: section.kind,
         fixedCategoryAccountId: section.fixedCategoryAccountId,
-        feeTypes: section.feeTypes.map((feeType) => ({
-          key: feeType.key,
+        feeTypes: section.feeTypes.map((feeType, feeIndex) => ({
+          key: feeKeys[feeIndex],
+          name: feeType.name,
           description: feeType.description,
           categoryAccountId: feeType.categoryAccountId,
           ...(table && linesOf(feeType.valuesText).length
@@ -698,7 +751,6 @@ export interface ProblemPlace {
 
 /** The fields under the table's "More options", by their key in the layout. */
 const TABLE_MORE_LABELS: Record<string, string> = {
-  sheet: "Sheet",
   headers: "Headings",
   dateFormat: "Date format",
   decimalSeparator: "Decimal separator",
@@ -710,15 +762,16 @@ const TABLE_MORE_LABELS: Record<string, string> = {
 };
 
 /** The fields of the table that are chosen above the sample's columns. */
-const TABLE_COLUMN_KEYS = new Set([
-  "columns",
-  "balanceColumn",
-  "remarkColumns",
-]);
+const TABLE_COLUMN_KEYS = new Set(["columns", "balanceColumn"]);
 
-/** A line type's fields, by key. Its key is the line type itself. */
+/**
+ * A line type's fields, by key. Its key is made from its name and never shown,
+ * so a problem with the key is shown on the name.
+ */
 const FEE_TYPE_FIELDS: Record<string, string | undefined> = {
-  description: "Description",
+  key: "Name",
+  name: "Name",
+  description: "How to identify",
   values: "Values",
   categoryAccountId: "Category",
 };
@@ -728,6 +781,8 @@ const PROFILE_PLACES: Record<string, { label: string; target: string }> = {
   kind: { label: "What to import", target: "pf-kind" },
   mode: { label: "What to import", target: "pf-kind" },
   accountId: { label: "Account", target: "pf-account" },
+  fileTypes: { label: "Reads", target: "pf-file-types" },
+  sheet: { label: "Sheet", target: "pf-sheet" },
   description: { label: "Document description", target: "pf-description" },
   phrases: { label: "Fixed phrases", target: "pf-phrases" },
   instructions: { label: "Instructions", target: "pf-instructions" },
@@ -785,9 +840,11 @@ function sectionPlace(
   const fee = rest.match(/^\.feeTypes\[(\d+)\](?:\.([a-zA-Z]+))?/);
   if (fee) {
     const feeIndex = Number(fee[1]);
-    const feeUid = section.feeTypes[feeIndex]?.uid;
-    const field = FEE_TYPE_FIELDS[fee[2] ?? "key"];
-    const label = `Line type ${feeIndex + 1}${field ? ` › ${field}` : ""}`;
+    const feeType = section.feeTypes[feeIndex];
+    const feeUid = feeType?.uid;
+    const field = fee[2] ? FEE_TYPE_FIELDS[fee[2]] : undefined;
+    const feeName = feeType?.name.trim();
+    const label = `${feeName ? `Line type “${feeName}”` : `Line type ${feeIndex + 1}`}${field ? ` › ${field}` : ""}`;
     return place(label, [
       ...(feeUid ? [`${at}-fee-${feeUid}`] : []),
       `${at}-fees`,

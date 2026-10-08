@@ -121,8 +121,8 @@ const { createAccount } = await import("../services/accounts.js");
 const { createRecord } = await import("../services/ledger.js");
 const { createImportProfile, updateImportProfile } =
   await import("../services/import-profiles.js");
-const { IMPORT_PROFILE_STARTERS, starterDraft } =
-  await import("$lib/import-profile-starters.js");
+const { profileDraft } =
+  await import("$lib/server/import/__fixtures__/profile-drafts.js");
 const { confirmGroupItems, setGroupItemsCategory, skipGroupItems } =
   await import("../services/import-items.js");
 const { monthsCoveredBy } = await import("./same-money.js");
@@ -267,7 +267,6 @@ function otherLayoutProfile(): ProfileInput {
         reference: null,
       },
       direction: null,
-      remarkColumns: [],
     }),
     sections: [
       {
@@ -402,7 +401,8 @@ describe("reading a spreadsheet from its columns", () => {
       reference: "A1",
       date: "2026-03-29",
       categoryAccountId: ids.sales,
-      remark: "Transaction Type: Order Income",
+      // An import never fills the remark: it is the reviewer's.
+      remark: null,
       supplier: "Example Marketplace",
       sectionKey: "orders",
     });
@@ -515,6 +515,20 @@ describe("reading a spreadsheet from its columns", () => {
     );
     expect(good.state).toBe(ImportState.Grouped);
     expect(itemsOf(good.id).map((item) => item.amount)).toEqual([12.5, 5]);
+
+    // A profile that names a sheet, as one made from a workbook does, reads
+    // the CSV file's one sheet all the same (FR-069).
+    const named = await run(
+      withProfile(
+        saveProfile(
+          fullProfile({ name: "From a workbook", sheet: "Orders", layout }),
+        ),
+        csv,
+        "wallet-copy.csv",
+      ),
+    );
+    expect(named.error).toBeNull();
+    expect(itemsOf(named.id)).toHaveLength(2);
 
     // Read with another separator, no row has the headings.
     const wrong = await run(
@@ -843,15 +857,15 @@ describe("Auto-detect on a spreadsheet", () => {
   });
 });
 
-// ── The wallet report starters and the overlap guard (006 S4.7) ─────────────
+// ── The wallet report profiles and the overlap guard (006 S4.7) ─────────────
 
-describe("the wallet report starters", () => {
-  /** A starter as the user saves it: both accounts chosen (FR-030). */
-  function fromStarter(
+describe("the wallet report profiles", () => {
+  /** A wallet report draft as the user saves it: both accounts chosen (FR-030). */
+  function savedWallet(
     id: "wallet_withdrawals" | "wallet_every_transaction",
     edit: (draft: ProfileInput) => void = () => {},
   ): number {
-    const draft = starterDraft(id)!;
+    const draft = profileDraft(id);
     draft.accountId = ids.wallet;
     for (const section of draft.sections) {
       if (section.kind === "transfer") section.counterAccountId = ids.bank;
@@ -860,20 +874,8 @@ describe("the wallet report starters", () => {
     return saveProfile(draft);
   }
 
-  it("say to turn on only one of the two, since no phrase can tell them apart", () => {
-    for (const id of [
-      "wallet_withdrawals",
-      "wallet_every_transaction",
-    ] as const) {
-      const starter = IMPORT_PROFILE_STARTERS.find((entry) => entry.id === id)!;
-      expect(starter.hint).toContain("Turn on only one of the two");
-      expect(starter.draft.description).toContain("turn on only one");
-      expect(starter.draft.phrases).toEqual([]);
-    }
-  });
-
   it("read in their own mode, Every transaction, with no provider (FR-002)", async () => {
-    const profileId = fromStarter("wallet_withdrawals");
+    const profileId = savedWallet("wallet_withdrawals");
     const row = await run(
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Profile,
@@ -892,8 +894,8 @@ describe("the wallet report starters", () => {
   });
 
   it("both turned on, with no provider, fail naming both and saying to turn one off", async () => {
-    fromStarter("wallet_withdrawals");
-    fromStarter("wallet_every_transaction");
+    savedWallet("wallet_withdrawals");
+    savedWallet("wallet_every_transaction");
     const row = await run(
       queueFile("wallet.xlsx", walletReportFixture().xlsx, {
         readAs: ImportReadAs.Auto,
@@ -915,7 +917,7 @@ describe("the wallet report starters", () => {
     const created = createImportProfile(
       db,
       1,
-      starterDraft("wallet_withdrawals"),
+      profileDraft("wallet_withdrawals"),
     );
     expect(created.ok).toBe(false);
     if (created.ok) return;
@@ -928,7 +930,7 @@ describe("the wallet report starters", () => {
   it("reads withdrawals only, with no AI: 10 transfers, one flagged, 726 left out", async () => {
     const report = walletWorkbook();
     const row = await run(
-      withProfile(fromStarter("wallet_withdrawals"), report.xlsx),
+      withProfile(savedWallet("wallet_withdrawals"), report.xlsx),
     );
     expect(row.state).toBe(ImportState.Grouped);
     const items = itemsOf(row.id);
@@ -950,7 +952,7 @@ describe("the wallet report starters", () => {
   });
 
   it("reads every transaction, with a matching control total", async () => {
-    const row = await run(withProfile(fromStarter("wallet_every_transaction")));
+    const row = await run(withProfile(savedWallet("wallet_every_transaction")));
     const items = itemsOf(row.id);
     expect(items).toHaveLength(walletReportFixture().transactions);
     const notes = parseExtractionNotes(row.extractionNotes)!;
@@ -1000,7 +1002,7 @@ describe("the wallet report starters", () => {
 
     function statementProfile(): number {
       return saveProfile({
-        ...starterDraft("marketplace_summary")!,
+        ...profileDraft("marketplace_summary"),
         name: "Income statement",
       });
     }
@@ -1008,7 +1010,7 @@ describe("the wallet report starters", () => {
     it("notes order income in a month the statement's records cover, never a transfer", async () => {
       const statement = statementProfile();
       recordReadWith(statement, "2026-03-31");
-      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+      const wallet = savedWallet("wallet_every_transaction", (draft) => {
         draft.sections[0].sameMoneyAs = [statement];
       });
       const row = await run(withProfile(wallet));
@@ -1032,7 +1034,7 @@ describe("the wallet report starters", () => {
     it("keeps the note when a category is chosen, so Confirm all still leaves the item behind", async () => {
       const statement = statementProfile();
       recordReadWith(statement, "2026-03-31");
-      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+      const wallet = savedWallet("wallet_every_transaction", (draft) => {
         draft.sections[0].sameMoneyAs = [statement];
       });
       const row = await run(withProfile(wallet));
@@ -1083,7 +1085,7 @@ describe("the wallet report starters", () => {
       const options = { actingUserId: 1, storageRoot };
       // The first reading, with no guard, confirms three of its order income
       // lines and skips the rest, so the group finishes and joins the history.
-      const first = fromStarter("wallet_every_transaction");
+      const first = savedWallet("wallet_every_transaction");
       const firstRow = await run(withProfile(first));
       const firstItems = itemsOf(firstRow.id);
       const confirmed = firstItems
@@ -1114,7 +1116,7 @@ describe("the wallet report starters", () => {
       expect(monthsCoveredBy(db, first, "none")).toEqual(months);
 
       // A second profile that names the first finds its records all the same.
-      const second = fromStarter("wallet_every_transaction", (draft) => {
+      const second = savedWallet("wallet_every_transaction", (draft) => {
         draft.name = "Wallet report, read again";
         draft.sections[0].sameMoneyAs = [first];
       });
@@ -1131,7 +1133,7 @@ describe("the wallet report starters", () => {
     it("says nothing when the statement's records cover another month, or none exist", async () => {
       const statement = statementProfile();
       recordReadWith(statement, "2026-02-28");
-      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+      const wallet = savedWallet("wallet_every_transaction", (draft) => {
         draft.sections[0].sameMoneyAs = [statement];
       });
       const row = await run(withProfile(wallet));
@@ -1169,7 +1171,7 @@ describe("the wallet report starters", () => {
       const gone = recordReadWith(statement, "2026-03-30");
       db.delete(ledgerRecords).where(eq(ledgerRecords.id, gone)).run();
 
-      const wallet = fromStarter("wallet_every_transaction", (draft) => {
+      const wallet = savedWallet("wallet_every_transaction", (draft) => {
         draft.sections[0].sameMoneyAs = [statement];
       });
       const row = await run(withProfile(wallet));
@@ -1180,7 +1182,7 @@ describe("the wallet report starters", () => {
 
     it("refuses to save a section naming a profile that is gone, or itself", () => {
       const statement = statementProfile();
-      const draft = starterDraft("wallet_every_transaction")!;
+      const draft = profileDraft("wallet_every_transaction");
       draft.accountId = ids.wallet;
       draft.sections[2].counterAccountId = ids.bank;
       draft.sections[0].sameMoneyAs = [statement + 100];
@@ -1280,6 +1282,31 @@ describe("reading the table by code and the rest by the AI", () => {
     const snapshot = parseProfileSnapshot(row.profileSnapshot)!;
     expect(describeReading({ ...row, profile: snapshot })).toBe(
       "Read with “Wallet report, with its fee” (chosen) · Every transaction · table read from columns, the rest by AI",
+    );
+  });
+
+  it("sends the AI only the table's own sheet of a workbook with several (FR-069)", async () => {
+    const profileId = saveProfile(hybridProfile());
+    addProvider();
+    const model = serve([{ text: JSON.stringify(feeAnswer) }]);
+    const workbook = walletReportFixture([
+      { name: "Payout summary", rows: [["OTHER-SHEET-TEXT", { raw: "9.99" }]] },
+    ]).xlsx;
+    const row = await run(withProfile(profileId, workbook));
+
+    expect(row.state).toBe(ImportState.Grouped);
+    const prompt = JSON.stringify(model.doGenerateCalls[0].prompt);
+    expect(prompt).not.toContain("OTHER-SHEET-TEXT");
+    expect(prompt).toContain("L0001│Sheet: Transaction Report");
+    expect(
+      itemsOf(row.id).filter((item) => item.sectionKey !== "fees"),
+    ).toHaveLength(6);
+
+    const notes = parseExtractionNotes(row.extractionNotes)!;
+    expect(notes.sheet).toBe("Transaction Report");
+    const snapshot = parseProfileSnapshot(row.profileSnapshot)!;
+    expect(describeReading({ ...row, profile: snapshot })).toBe(
+      "Read with “Wallet report, with its fee” (chosen) · Every transaction · sheet “Transaction Report” · table read from columns, the rest by AI",
     );
   });
 

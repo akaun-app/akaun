@@ -171,6 +171,7 @@ describe("readDocumentItems", () => {
         reference: "FN-2026-08",
         sourceLine: 3,
         feeType: null,
+        feeTypeName: null,
         categoryAccountId: 11,
         categoryCandidates: [11],
         counterAccountId: null,
@@ -600,6 +601,7 @@ describe("readingFromEnvelope — a profile's sections", () => {
       sections: [
         {
           key: "lines",
+          name: "Lines",
           description: "",
           kind: "by_sign",
           categoryFromModel: false,
@@ -632,10 +634,13 @@ describe("readingFromEnvelope — a profile's sections", () => {
       sections: [
         {
           key: "fees",
+          name: "Fees",
           description: "",
           kind: "expense",
           categoryFromModel: false,
-          feeTypes: [{ key: "commission", description: "" }],
+          feeTypes: [
+            { key: "commission", name: "Commission", description: "" },
+          ],
         },
       ],
     };
@@ -665,6 +670,48 @@ describe("readingFromEnvelope — a profile's sections", () => {
     expect(reading.notes.ignored).toEqual(["Mystery -2.00"]);
     expect(reading.notes.statedTotal?.minor).toBe(-800);
     expect(reading.controlTotal?.matches).toBe(true);
+  });
+
+  it("calls a line of a listed type by the type's name, and any other line by its own words", () => {
+    const profile: ReadingProfile = {
+      ...SEVERAL_ITEMS_PROFILE,
+      sections: [
+        {
+          key: "fees",
+          name: "Fees",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+          feeTypes: [
+            { key: "commission", name: "Sales commission", description: "" },
+          ],
+        },
+        {
+          key: "other",
+          name: "Other",
+          description: "",
+          kind: "expense",
+          categoryFromModel: false,
+        },
+      ],
+    };
+
+    const reading = readingFromEnvelope(
+      envelope(
+        {
+          fees: [item("Commission 3% - Order 2408", -8, "commission")],
+          other: [item("Bank charge", -2, null)],
+        },
+        10,
+      ),
+      profile,
+      context,
+    );
+
+    expect(reading.items.map((entry) => entry.description)).toEqual([
+      "Sales commission",
+      "Bank charge",
+    ]);
   });
 });
 
@@ -721,12 +768,14 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
       profile([
         {
           key: "sales",
+          name: "Sales",
           description: "",
           kind: "income",
           categoryFromModel: false,
         },
         {
           key: "fees",
+          name: "Fees",
           description: "",
           kind: "expense",
           categoryFromModel: false,
@@ -762,6 +811,7 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
       profile([
         {
           key: "sales",
+          name: "Sales",
           description: "",
           kind: "income",
           categoryFromModel: false,
@@ -827,6 +877,7 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
         profile([
           {
             key: "fees",
+            name: "Fees",
             description: "",
             kind: "expense",
             categoryFromModel: false,
@@ -879,17 +930,29 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
       profile([
         {
           key: "fees",
+          name: "Fees",
           description: "",
           kind: "expense",
           categoryFromModel: true,
           fixedCategoryAccountId: 30,
           feeTypes: [
-            { key: "commission", description: "", categoryAccountId: 12 },
-            { key: "ads", description: "", categoryAccountId: null },
+            {
+              key: "commission",
+              name: "Commission",
+              description: "",
+              categoryAccountId: 12,
+            },
+            {
+              key: "ads",
+              name: "Ads",
+              description: "",
+              categoryAccountId: null,
+            },
           ],
         },
         {
           key: "other",
+          name: "Other",
           description: "",
           kind: "expense",
           categoryFromModel: false,
@@ -941,20 +1004,32 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
       profile([
         {
           key: "sales",
+          name: "Sales",
           description: "",
           kind: "income",
           categoryFromModel: false,
-          feeTypes: [{ key: "product_price", description: "" }],
+          feeTypes: [
+            { key: "product_price", name: "Product price", description: "" },
+          ],
         },
         {
           key: "fees",
+          name: "Fees",
           description: "",
           kind: "by_sign",
           categoryFromModel: false,
           feeTypes: [
-            { key: "commission_fee", description: "" },
-            { key: "transaction_fee", description: "" },
-            { key: "shipping_rebate", description: "" },
+            { key: "commission_fee", name: "Commission fee", description: "" },
+            {
+              key: "transaction_fee",
+              name: "Transaction fee",
+              description: "",
+            },
+            {
+              key: "shipping_rebate",
+              name: "Shipping rebate",
+              description: "",
+            },
           ],
         },
       ]),
@@ -986,6 +1061,7 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
         [
           {
             key: "fees",
+            name: "Fees",
             description: "",
             kind: "expense",
             categoryFromModel: false,
@@ -1003,6 +1079,7 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
     const sections: ReadingProfile["sections"] = [
       {
         key: "rows",
+        name: "Rows",
         description: "",
         kind: "by_sign",
         categoryFromModel: false,
@@ -1067,6 +1144,7 @@ describe("readingFromEnvelope — a saved profile's rules", () => {
       profile([
         {
           key: "rows",
+          name: "Rows",
           description: "",
           kind: "by_sign",
           categoryFromModel: false,
@@ -1098,7 +1176,14 @@ describe("readDocumentItems — with a saved profile", () => {
         description: "Each fee line.",
         kind: "expense",
         fixedCategoryAccountId: null,
-        feeTypes: [{ key: "ads", description: "Ads", categoryAccountId: null }],
+        feeTypes: [
+          {
+            key: "ads",
+            name: "Ads",
+            description: "Ads",
+            categoryAccountId: null,
+          },
+        ],
         extras: null,
       },
     ],

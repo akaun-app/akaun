@@ -2,6 +2,8 @@ import { json } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { llmProviders } from '$lib/server/db/schema.js';
+import { listChatgptModels } from '$lib/server/llm/chatgpt-oauth.js';
+import { createTokenSource, dbCredentialStore } from '$lib/server/llm/chatgpt-tokens.js';
 import type { RequestHandler } from './$types.js';
 
 interface ModelInfo {
@@ -15,6 +17,20 @@ export const GET: RequestHandler = async ({ params, locals, fetch }) => {
 
 	const provider = db.select().from(llmProviders).where(eq(llmProviders.id, params.id)).get();
 	if (!provider) return new Response('Not found', { status: 404 });
+
+	if (provider.type === 'chatgpt') {
+		// Signed in, not keyed: the token comes from the stored sign-in, and is
+		// refreshed first if it has run out.
+		try {
+			const token = await createTokenSource(provider.id, dbCredentialStore).token();
+			const models = await listChatgptModels(token, fetch);
+			return json({ models: models.map((m) => ({ ...m, isFree: false })) });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : 'Failed to fetch models';
+			return json({ error: msg }, { status: 502 });
+		}
+	}
+
 	if (!provider.apiKey) return json({ models: [] });
 
 	try {

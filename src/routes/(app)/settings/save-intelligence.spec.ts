@@ -65,7 +65,8 @@ vi.mock("$lib/server/logger.js", () => {
 
 const schema = await import("$lib/server/db/schema.js");
 const { auditLog, users } = schema;
-const { starterDraft } = await import("$lib/import-profile-starters.js");
+const { profileDraft } =
+  await import("$lib/server/import/__fixtures__/profile-drafts.js");
 const { createImportProfile, getImportProfile } =
   await import("$lib/server/services/import-profiles.js");
 const { getAllProviders, insertProvider } =
@@ -119,7 +120,7 @@ function saveIntelligence(fields: Record<string, string>) {
 describe("saving the Intelligence tab", () => {
   it("saves nothing at all when a profile switch is refused with 403", async () => {
     const created = createImportProfile(db, 1, {
-      ...starterDraft("fee_document")!,
+      ...profileDraft("fee_document"),
       name: "Fee notice",
     });
     if (!created.ok) throw new Error(created.reason);
@@ -182,7 +183,7 @@ describe("saving the Intelligence tab", () => {
 
   it("saves the tab and the switch together when the user may change imports", async () => {
     const created = createImportProfile(db, 1, {
-      ...starterDraft("fee_document")!,
+      ...profileDraft("fee_document"),
       name: "Fee notice",
     });
     if (!created.ok) throw new Error(created.reason);

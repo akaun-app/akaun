@@ -15,6 +15,7 @@
 import { DocumentTypeLabels, type DocumentTypeCode } from "$lib/enums.js";
 import {
   checkTablePreview,
+  nameFromKey,
   profileSections,
   type ProfileError,
 } from "$lib/import-profile-schema.js";
@@ -27,6 +28,7 @@ import {
 } from "../extraction/spreadsheet/types.js";
 import { readXlsx } from "../extraction/spreadsheet/xlsx.js";
 import { savedReadingProfile } from "./profile-compiler.js";
+import { profileSheet } from "./profile-sheet.js";
 import { readFromColumns, readTable, TableReadError } from "./table-reader.js";
 import { DocumentLimitError } from "./document-reader.js";
 
@@ -45,6 +47,7 @@ export interface PreviewItem {
   /** Whole cents, without a sign: the kind says which way. */
   amountMinor: number;
   reference: string;
+  /** The line type's name, or null with none. */
   feeType: string | null;
   /** The reviewer's note from the section's flag rule, or null. */
   note: string | null;
@@ -126,12 +129,14 @@ export function previewTable(
     .filter((section) => !section.rows)
     .map((section) => section.name || section.key);
 
-  const workbook = workbookOf(
+  const fileWorkbook = workbookOf(
     file.bytes,
     file.type,
     profile.layout.csvDelimiter ?? undefined,
   );
-  if (typeof workbook === "string") return { ok: false, error: workbook };
+  if (typeof fileWorkbook === "string") {
+    return { ok: false, error: fileWorkbook };
+  }
 
   const table = {
     name: profile.name || "this profile",
@@ -139,6 +144,14 @@ export function previewTable(
     layout: profile.layout,
     sections: profile.sections,
   };
+  // The one sheet the profile reads, as the reading itself cuts it (FR-069).
+  const picked = profileSheet(
+    fileWorkbook,
+    { name: table.name, sheet: profile.sheet },
+    profile.layout.headers,
+  );
+  if ("refused" in picked) return { ok: false, error: picked.refused };
+  const { workbook } = picked;
   let found;
   let reading;
   try {
@@ -198,7 +211,9 @@ export function previewTable(
         description: item.description,
         amountMinor: item.amountMinor,
         reference: item.reference,
-        feeType: item.feeType,
+        feeType: item.feeType
+          ? item.feeTypeName || nameFromKey(item.feeType)
+          : null,
         note: item.reviewNote,
       })),
       itemCount: reading.items.length,

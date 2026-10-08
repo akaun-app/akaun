@@ -141,7 +141,7 @@ exports[`compileProfile — built-in several items > compiles to the schema the 
 }
 `;
 
-exports[`savedReadingProfile > compiles the fee_document starter to the schema the providers receive 1`] = `
+exports[`savedReadingProfile > compiles the fee_document draft to the schema the providers receive 1`] = `
 {
   "additionalProperties": false,
   "properties": {
@@ -223,7 +223,7 @@ exports[`savedReadingProfile > compiles the fee_document starter to the schema t
                 "type": "string",
               },
               "fee_type": {
-                "description": "Which fee type this line is. advertising_fee: Advertising or promoted listing charges; commission_fee: Commission charged on sales; service_fee: Service, platform or programme fees; transaction_fee: Payment processing or transaction fees; subscription_fee: A monthly or yearly subscription. "none" when none of the others applies.",
+                "description": "Which fee type this line is. advertising_fee (Advertising fee): Advertising or promoted listing charges; commission_fee (Commission fee): Commission charged on sales; service_fee (Service fee): Service, platform or programme fees; transaction_fee (Transaction fee): Payment processing or transaction fees; subscription_fee (Subscription fee): A monthly or yearly subscription. "none" when none of the others applies.",
                 "enum": [
                   "advertising_fee",
                   "commission_fee",
@@ -286,7 +286,7 @@ exports[`savedReadingProfile > compiles the fee_document starter to the schema t
 }
 `;
 
-exports[`savedReadingProfile > compiles the marketplace_summary starter to the schema the providers receive 1`] = `
+exports[`savedReadingProfile > compiles the marketplace_summary draft to the schema the providers receive 1`] = `
 {
   "additionalProperties": false,
   "properties": {
@@ -368,7 +368,7 @@ exports[`savedReadingProfile > compiles the marketplace_summary starter to the s
                 "type": "string",
               },
               "fee_type": {
-                "description": "Which fee type this line is. refund_amount: Money refunded to buyers for returned or cancelled orders; seller_product_discount: Product discounts the seller gave; platform_product_rebate: Product discount rebates the marketplace paid back; buyer_shipping_fee: Shipping fees the buyers paid; logistics_shipping_fee: Shipping fees the logistics provider charged; shipping_rebate: Shipping fee rebates from the marketplace; seller_shipping_promotion: Shipping fee promotions the seller paid for; return_shipping_fee: Shipping fees for returned orders; seller_voucher: Vouchers the seller sponsored; seller_coins_cashback: Coins cashback the seller sponsored; commission_fee: The marketplace's commission fee; service_fee: Service or programme fees; transaction_fee: Payment transaction fees; affiliate_commission: Commission paid to affiliates. "none" when none of the others applies.",
+                "description": "Which fee type this line is. refund_amount (Refund amount): Money refunded to buyers for returned or cancelled orders; seller_product_discount (Seller product discount): Product discounts the seller gave; platform_product_rebate (Platform product rebate): Product discount rebates the marketplace paid back; buyer_shipping_fee (Buyer shipping fee): Shipping fees the buyers paid; logistics_shipping_fee (Logistics shipping fee): Shipping fees the logistics provider charged; shipping_rebate (Shipping rebate): Shipping fee rebates from the marketplace; seller_shipping_promotion (Seller shipping promotion): Shipping fee promotions the seller paid for; return_shipping_fee (Return shipping fee): Shipping fees for returned orders; seller_voucher (Seller voucher): Vouchers the seller sponsored; seller_coins_cashback (Seller coins cashback): Coins cashback the seller sponsored; commission_fee (Commission fee): The marketplace's commission fee; service_fee (Service fee): Service or programme fees; transaction_fee (Transaction fee): Payment transaction fees; affiliate_commission (Affiliate commission): Commission paid to affiliates. "none" when none of the others applies.",
                 "enum": [
                   "refund_amount",
                   "seller_product_discount",
@@ -444,7 +444,7 @@ exports[`savedReadingProfile > compiles the marketplace_summary starter to the s
                 "type": "string",
               },
               "fee_type": {
-                "description": "Which fee type this line is. product_price: The price of the products sold (product price or merchandise subtotal). "none" when none of the others applies.",
+                "description": "Which fee type this line is. product_price (Product price): The price of the products sold (product price or merchandise subtotal). "none" when none of the others applies.",
                 "enum": [
                   "product_price",
                   "none",

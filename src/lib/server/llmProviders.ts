@@ -45,6 +45,7 @@ export function insertProvider(
 		apiKey: string;
 		model: string;
 		baseUrl?: string | null;
+		oauthCredentials?: string | null;
 	}
 ): ProviderRow {
 	const id = crypto.randomUUID();
@@ -56,6 +57,7 @@ export function insertProvider(
 			type: data.type,
 			name: data.name,
 			apiKey: data.apiKey,
+			oauthCredentials: data.oauthCredentials ?? null,
 			model: data.model,
 			baseUrl: data.baseUrl ?? null,
 			enabled: true,
@@ -73,6 +75,7 @@ export function updateProvider(
 	data: Partial<{
 		name: string;
 		apiKey: string;
+		oauthCredentials: string | null;
 		model: string;
 		baseUrl: string | null;
 		enabled: boolean;

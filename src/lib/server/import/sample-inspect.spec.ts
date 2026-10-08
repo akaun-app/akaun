@@ -87,12 +87,25 @@ describe("inspectSample", () => {
       { headerRow: 11 },
     );
     expect(result.ok && result.sample.headers[0]).toBe("Summary");
-    const missing = inspectSample(
+    // A file of one sheet is read whatever the sheet is called (FR-069).
+    const one = inspectSample(
       new Uint8Array(walletReportFixture().xlsx),
       "xlsx",
       { sheet: "Nope" },
     );
-    expect(missing).toEqual({ ok: false, error: 'There is no sheet "Nope".' });
+    expect(one.ok && one.sample.sheet).toBe("Transaction Report");
+    const missing = inspectSample(
+      new Uint8Array(
+        walletReportFixture([{ name: "Summary", rows: [["Total"]] }]).xlsx,
+      ),
+      "xlsx",
+      { sheet: "Nope" },
+    );
+    expect(missing).toEqual({
+      ok: false,
+      error:
+        'There is no sheet "Nope". The sample\'s sheets are: "Summary", "Transaction Report".',
+    });
   });
 
   it("guesses a CSV's day-first dates and decimal commas", () => {
@@ -196,9 +209,6 @@ describe("building a table profile from a sample", () => {
     expect(layout.description).toBe("Order ID");
     expect(layout.reference).toBe("");
     expect(columnRole(layout, "Description")).toBe("none");
-    setColumnRole(layout, "Status", "remark");
-    setColumnRole(layout, "Transaction Type", "remark");
-    expect(layout.remarkColumns).toEqual(["Status", "Transaction Type"]);
     setColumnRole(layout, "Money Direction", "none");
     expect(layout.directionColumn).toBe("");
     expect(layout.directionInText).toBe("");

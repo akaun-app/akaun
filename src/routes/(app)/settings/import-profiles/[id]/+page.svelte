@@ -7,7 +7,6 @@
 
 <ImportProfileEditor
 	profile={data.profile}
-	starter={null}
 	expenseCategories={data.expenseCategories}
 	incomeCategories={data.incomeCategories}
 	moneyAccounts={data.moneyAccounts}

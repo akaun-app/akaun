@@ -4,7 +4,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountType } from "$lib/enums.js";
-import { starterDraft } from "$lib/import-profile-starters.js";
+import { profileDraft } from "$lib/server/import/__fixtures__/profile-drafts.js";
 
 /**
  * The loads behind the import profile screens, and the Settings list's
@@ -80,7 +80,7 @@ const viewOnly = (resource: string, action: string) =>
 
 function saved(name: string, enabled = true): number {
   const created = createImportProfile(db, 1, {
-    ...starterDraft("fee_document")!,
+    ...profileDraft("fee_document"),
     name,
   });
   if (!created.ok) throw new Error(created.reason);
@@ -153,30 +153,17 @@ describe("the list on Settings › Intelligence", () => {
 });
 
 describe("the editor for a new profile", () => {
-  const url = (query = "") =>
-    new URL(`http://test.local/settings/import-profiles/new${query}`);
-
   it("needs import.change, and sends anyone else back to the list", () => {
     holder.allow = viewOnly;
-    expect(redirectOf(() => loadImportProfileNew(locals, url(), db))).toEqual(
+    expect(redirectOf(() => loadImportProfileNew(locals, db))).toEqual(
       expect.objectContaining({ status: 302, location: PROFILES_HOME }),
     );
-  });
-
-  it("names the starter asked for, and starts blank for any other", () => {
-    expect(
-      loadImportProfileNew(locals, url("?starter=fee_document"), db).starter,
-    ).toBe("fee_document");
-    expect(
-      loadImportProfileNew(locals, url("?starter=nope"), db).starter,
-    ).toBeNull();
-    expect(loadImportProfileNew(locals, url(), db).starter).toBeNull();
   });
 
   it("offers the categories by kind, as the save checks them", () => {
     createAccount(db, 1, { name: "Ads Fees", type: AccountType.Expense });
     createAccount(db, 1, { name: "Online Sales", type: AccountType.Revenue });
-    const data = loadImportProfileNew(locals, url(), db);
+    const data = loadImportProfileNew(locals, db);
     expect(data.expenseCategories.map((c) => c.name)).toContain("Ads Fees");
     expect(data.expenseCategories.map((c) => c.name)).not.toContain(
       "Online Sales",

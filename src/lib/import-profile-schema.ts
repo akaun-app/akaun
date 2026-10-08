@@ -177,12 +177,24 @@ export interface ExtrasFragment {
 }
 
 /**
- * One kind of line a section lists, such as "commission_fee" (FR-034). The
+ * One kind of line a section lists, such as "Commission fee" (FR-034). The
  * screens call it a "line type"; it is stored as `feeTypes`, its name from
  * before income sections used it too.
  */
 export interface ProfileFeeType {
+  /**
+   * What the model answers with and what an item stores. The editor makes it
+   * from the name and never shows it; a saved line type keeps its key when it
+   * is renamed, so items already read still name it.
+   */
   key: string;
+  /**
+   * What a person sees: in the editor and the previews, and the description
+   * of each item of this type.
+   * One saved before line types had names takes it from its key
+   * (`nameFromKey`).
+   */
+  name: string;
   /** Tells the model which lines are this type. May be empty. */
   description: string;
   /** The category every line of this type gets. Wins over any other. */
@@ -193,6 +205,28 @@ export interface ProfileFeeType {
    * section the AI reads: the model picks the type from its description.
    */
   values?: string[];
+}
+
+/**
+ * The name a key reads as, for a line type saved before line types had names:
+ * "commission_fee" gives "Commission fee".
+ */
+export function nameFromKey(key: string): string {
+  const words = key.replace(/_+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "";
+}
+
+/**
+ * What a person sees for a line type key: its name in the section's list, or
+ * the key read as words when the list no longer has it.
+ */
+export function feeTypeName(
+  feeTypes: readonly { key: string; name?: string }[] | undefined,
+  key: string,
+): string {
+  return (
+    feeTypes?.find((feeType) => feeType.key === key)?.name || nameFromKey(key)
+  );
 }
 
 // ── Reading from columns (FR-053 to FR-055) ─────────────────────────────────
@@ -280,8 +314,6 @@ export const TABLE_CSV_DELIMITERS: readonly TableCsvDelimiter[] = [
  * `headers`: the headings that, all in one row, are how the table is found.
  */
 export interface TableLayout {
-  /** The sheet the table is on. Null: the first sheet that has the headings. */
-  sheet: string | null;
   headers: string[];
   columns: {
     date: string;
@@ -307,8 +339,6 @@ export interface TableLayout {
   currency: string | null;
   /** The label the document's date is printed beside, or null. */
   documentDateLabel: string | null;
-  /** Columns whose values are added to each item's remark. */
-  remarkColumns: string[];
   /**
    * The labels the stated total is printed beside, such as "Total Money In"
    * and "Total Money Out". The figures beside them are added up in code. The
@@ -333,11 +363,11 @@ export const LAYOUT_HEADERS_MAX = 50;
 export const ROW_CONDITIONS_MAX = 10;
 /** Most values one list (is one of, a line type, a direction) holds. */
 export const ROW_VALUES_MAX = 50;
-/** Most remark columns, and most stated-total labels. */
+/** Most stated-total labels. */
 const LAYOUT_LIST_MAX = 10;
 const CELL_VALUE_MAX = 100;
 /** Excel's own limit on a sheet's name. */
-const SHEET_NAME_MAX = 31;
+export const SHEET_NAME_MAX = 31;
 
 /**
  * A cell or heading as row rules and headings compare it: Unicode-normalised,
@@ -447,6 +477,63 @@ export function profileKind(
   profile: Pick<ImportProfileDraft, "kind" | "layout" | "sections" | "mode">,
 ): ProfileKind {
   return profile.kind ?? legacyKind(profile);
+}
+
+/**
+ * The files a profile reads (FR-070): PDF files and photos, spreadsheets, or
+ * both. Excel and CSV are one group, so one profile reads both exports of a
+ * report; a CSV file is one sheet.
+ */
+export type ProfileFileType = "document" | "spreadsheet";
+export const PROFILE_FILE_TYPES: readonly ProfileFileType[] = [
+  "document",
+  "spreadsheet",
+];
+
+export function isProfileFileType(value: unknown): value is ProfileFileType {
+  return (PROFILE_FILE_TYPES as readonly unknown[]).includes(value);
+}
+
+/** How the editor and the "Read as" list name each group. */
+export const PROFILE_FILE_TYPE_LABELS: Record<
+  ProfileFileType,
+  { label: string; hint: string; only: string }
+> = {
+  document: {
+    label: "PDF files and photos",
+    hint: "PDF, JPG or PNG.",
+    only: "PDFs and photos only",
+  },
+  spreadsheet: {
+    label: "Spreadsheets",
+    hint: "Excel (.xlsx) and CSV, so one profile reads both exports of a report.",
+    only: "spreadsheets only",
+  },
+};
+
+/**
+ * The files a kind reads, given what a profile of it stored. The one rule: a
+ * kind that reads a table reads only a spreadsheet, whatever was stored; a
+ * kind the AI reads takes what was ticked, and every file when nothing was,
+ * as a profile saved before the choice existed.
+ */
+export function fileTypesOf(
+  kind: ProfileKind,
+  stored?: readonly ProfileFileType[] | null,
+): readonly ProfileFileType[] {
+  if (kindReadsTable(kind)) return ["spreadsheet"];
+  const picked = PROFILE_FILE_TYPES.filter((type) => stored?.includes(type));
+  return picked.length > 0 ? picked : PROFILE_FILE_TYPES;
+}
+
+/** The files a profile reads (FR-070). See `fileTypesOf`. */
+export function profileFileTypes(
+  profile: Pick<
+    ImportProfileDraft,
+    "kind" | "layout" | "sections" | "mode" | "fileTypes"
+  >,
+): readonly ProfileFileType[] {
+  return fileTypesOf(profileKind(profile), profile.fileTypes);
 }
 
 /**
@@ -564,6 +651,21 @@ export interface ImportProfileDraft {
    * existed, when the profile names none.
    */
   accountId?: number | null;
+  /**
+   * The files the profile reads (FR-070), in `PROFILE_FILE_TYPES` order. Only
+   * a kind the AI reads stores it, and only when one group is ticked: absent
+   * means both, and a kind that reads a table reads only spreadsheets. Read
+   * it through `profileFileTypes`.
+   */
+  fileTypes?: ProfileFileType[];
+  /**
+   * The one sheet of a workbook the profile reads (FR-069), by name, matched
+   * as `foldTableText` folds it. Absent when it names none: a profile that
+   * reads a table then reads the sheet its headings are on, and one the AI
+   * reads takes the first visible sheet. Every reading of the profile, by
+   * code and by the AI alike, sees that sheet and no other.
+   */
+  sheet?: string | null;
   /**
    * Where a spreadsheet's table is and what its columns hold (FR-053). Absent
    * when the profile has none: a document is then read by the AI.
@@ -773,13 +875,8 @@ function tableLayout(
   }
   const at = (key: string) => join(path, key);
 
-  const sheet = optionalText(
-    raw.sheet,
-    at("sheet"),
-    "The sheet name",
-    errors,
-    SHEET_NAME_MAX,
-  );
+  // A layout saved before the sheet moved to the profile (FR-069) still
+  // names it here; `readProfile` reads it from there.
   const headers = valueList(raw.headers, at("headers"), "Headings", errors, {
     min: 1,
     max: LAYOUT_HEADERS_MAX,
@@ -906,39 +1003,9 @@ function tableLayout(
     CELL_VALUE_MAX,
   );
 
-  const remarkColumns: string[] = [];
-  const rawRemarks = raw.remarkColumns ?? [];
-  if (!Array.isArray(rawRemarks)) {
-    errors.push({
-      path: at("remarkColumns"),
-      message: "The remark columns must be a list.",
-    });
-  } else {
-    if (rawRemarks.length > LAYOUT_LIST_MAX) {
-      errors.push({
-        path: at("remarkColumns"),
-        message: `At most ${LAYOUT_LIST_MAX} columns can be added to the remark; this has ${rawRemarks.length}.`,
-      });
-    }
-    const seen = new Set<string>();
-    rawRemarks.forEach((entry, index) => {
-      const remarkPath = `${at("remarkColumns")}[${index}]`;
-      const name = columnRef(entry, remarkPath, headings, errors, {
-        required: true,
-        label: "A remark column",
-      });
-      if (!name) return;
-      if (seen.has(foldTableText(name))) {
-        errors.push({
-          path: remarkPath,
-          message: `"${name}" is listed twice.`,
-        });
-        return;
-      }
-      seen.add(foldTableText(name));
-      remarkColumns.push(name);
-    });
-  }
+  // A layout saved when a column could be added to the remark may still
+  // name some (`remarkColumns`). An import no longer fills the remark, so they
+  // are left out here, and the next save drops them.
 
   // One list of labels, kept under the profile's mode (see the type).
   const statedTotalLabels: TableLayout["statedTotalLabels"] = {};
@@ -985,7 +1052,6 @@ function tableLayout(
   }
 
   return {
-    sheet,
     headers,
     columns,
     dateFormat: dateFormat as TableDateFormat,
@@ -995,7 +1061,6 @@ function tableLayout(
     counterparty,
     currency,
     documentDateLabel,
-    remarkColumns,
     statedTotalLabels,
     // Only a layout that names one carries the key, as one saved before the
     // check existed does not.
@@ -1503,6 +1568,7 @@ function feeTypes(
     });
   }
   const seen = new Set<string>();
+  const seenNames = new Set<string>();
   return raw.map((entry, index) => {
     const at = `${path}[${index}]`;
     const value = isRecord(entry) ? entry : {};
@@ -1534,12 +1600,27 @@ function feeTypes(
       });
     }
     seen.add(key);
+    // A line type saved before names were added reads its key as words.
+    const name =
+      text(value.name, `${at}.name`, "The line type name", errors, {
+        max: SECTION_NAME_MAX,
+        required: false,
+      }) || nameFromKey(key);
+    const folded = name.toLowerCase();
+    if (name && seenNames.has(folded)) {
+      errors.push({
+        path: `${at}.name`,
+        message: `The line type "${name}" is listed twice in this section.`,
+      });
+    }
+    seenNames.add(folded);
     const fee: ProfileFeeType = {
       key,
+      name,
       description: text(
         value.description,
         `${at}.description`,
-        "The line type description",
+        "The “How to identify” text",
         errors,
         { max: SHORT_DESCRIPTION_MAX, required: false },
       ),
@@ -1855,6 +1936,25 @@ function readProfile(input: unknown): {
     });
   }
 
+  // The files it reads (FR-070). Absent means what the kind allows; an empty
+  // list is refused below, once the kind is known.
+  let fileTypes: ProfileFileType[] | null = null;
+  if (input.fileTypes !== undefined && input.fileTypes !== null) {
+    if (
+      Array.isArray(input.fileTypes) &&
+      input.fileTypes.every(isProfileFileType)
+    ) {
+      const sent: unknown[] = input.fileTypes;
+      fileTypes = PROFILE_FILE_TYPES.filter((type) => sent.includes(type));
+    } else {
+      errors.push({
+        path: "fileTypes",
+        message:
+          "Choose the files the profile reads: PDF files and photos, spreadsheets, or both.",
+      });
+    }
+  }
+
   // What the profile imports (FR-002, FR-032). A profile sent without one,
   // as an editor opened before the mode was on the profile sends it, gets the
   // mode its sections were saved in.
@@ -1915,6 +2015,28 @@ function readProfile(input: unknown): {
     errors,
     "Choose the account from the list, or none.",
   );
+
+  // The one sheet the profile reads (FR-069). A profile saved before it was
+  // on the profile names it on its table layout, and is read from there.
+  const legacySheet =
+    input.sheet === undefined && isRecord(input.layout)
+      ? input.layout.sheet
+      : undefined;
+  // Either way, a problem with it is the Sheet field's, where it is edited.
+  // A profile that reads no spreadsheet has no sheet: what an editor kept of
+  // one, hidden, is not read (FR-070).
+  const readsSheets =
+    sentKind === null ||
+    fileTypesOf(sentKind, fileTypes).includes("spreadsheet");
+  let sheet = readsSheets
+    ? optionalText(
+        legacySheet === undefined ? input.sheet : legacySheet,
+        "sheet",
+        "The sheet name",
+        errors,
+        SHEET_NAME_MAX,
+      )
+    : null;
 
   // The table layout, read before the sections: their row rules name its
   // columns (FR-053, FR-054).
@@ -1983,6 +2105,17 @@ function readProfile(input: unknown): {
 
   const kind = sentKind ?? legacyKind({ layout, sections, mode });
   if (sentKind) checkKind(sentKind, layout, sections, mode, errors);
+  // A kind that reads a table reads only spreadsheets, so a choice sent with
+  // one is dropped, as a layout sent with a kind the AI reads is.
+  if (kindReadsTable(kind)) {
+    fileTypes = null;
+  } else if (fileTypes?.length === 0) {
+    errors.push({
+      path: "fileTypes",
+      message: "Choose at least one kind of file the profile reads.",
+    });
+  }
+  if (!fileTypesOf(kind, fileTypes).includes("spreadsheet")) sheet = null;
   if (!kindReadsTable(kind) && !description) {
     errors.push({
       path: "description",
@@ -2003,6 +2136,10 @@ function readProfile(input: unknown): {
       // A profile that names no account carries no key for it, as one saved
       // before the account existed does.
       ...(accountId !== null ? { accountId } : {}),
+      // Likewise one that reads both kinds of file, or what its kind allows.
+      ...(fileTypes?.length === 1 ? { fileTypes } : {}),
+      // Likewise one that names no sheet.
+      ...(sheet !== null ? { sheet } : {}),
       // Likewise a profile with no table layout carries no key for it.
       ...(layout ? { layout } : {}),
       sections,
@@ -2068,6 +2205,7 @@ function stopsTableReading(path: string): boolean {
   if (
     path === "mode" ||
     path === "sections" ||
+    path === "sheet" ||
     path === "layout" ||
     path.startsWith("layout.")
   )
