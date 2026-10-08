@@ -8,7 +8,7 @@ import { join } from "path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountType, ImportState } from "$lib/enums.js";
 import type { ImportProfileDraft } from "$lib/import-profile-schema.js";
-import { starterDraft } from "$lib/import-profile-starters.js";
+import { profileDraft } from "$lib/server/import/__fixtures__/profile-drafts.js";
 
 /**
  * Saving import profiles (006 US6, FR-030, FR-035, FR-038).
@@ -74,7 +74,7 @@ function category(name: string, type: number): number {
 }
 
 function feeDocument(): ImportProfileDraft {
-  const draft = starterDraft("fee_document")!;
+  const draft = profileDraft("fee_document");
   draft.sections[0].feeTypes[0].categoryAccountId = feesCategoryId;
   return draft;
 }
@@ -114,9 +114,68 @@ describe("createImportProfile", () => {
     ]);
   });
 
-  it("saves both starters as they are", () => {
-    for (const id of ["fee_document", "marketplace_summary"]) {
-      const draft = starterDraft(id)!;
+  it("keeps the profile's sheet, and reads one saved on the table layout (FR-069)", () => {
+    const saved = create({ ...feeDocument(), sheet: "Summary" });
+    expect(getImportProfile(db, saved.id)?.sheet).toBe("Summary");
+
+    // A row saved before the sheet moved off the layout.
+    const old = create({ ...feeDocument(), name: "Old layout" });
+    db.update(importProfiles)
+      .set({
+        optionsJson: JSON.stringify({
+          mode: "summary",
+          layout: { sheet: "Transaction Report", headers: ["Date"] },
+        }),
+      })
+      .where(eq(importProfiles.id, old.id))
+      .run();
+    const read = getImportProfile(db, old.id)!;
+    expect(read.sheet).toBe("Transaction Report");
+    expect(read.layout).not.toHaveProperty("sheet");
+  });
+
+  it("keeps the files a profile reads, and reads both on a row saved before (FR-070)", () => {
+    const saved = create({ ...feeDocument(), fileTypes: ["document"] });
+    expect(getImportProfile(db, saved.id)?.fileTypes).toEqual(["document"]);
+
+    const old = create({ ...feeDocument(), name: "Saved before" });
+    db.update(importProfiles)
+      .set({
+        optionsJson: JSON.stringify({ mode: "summary", kind: "summary" }),
+      })
+      .where(eq(importProfiles.id, old.id))
+      .run();
+    expect(getImportProfile(db, old.id)).not.toHaveProperty("fileTypes");
+  });
+
+  it("names each line type of a profile saved before line types had names", () => {
+    const old = create({ ...feeDocument(), name: "Old line types" });
+    const stored = JSON.parse(
+      db
+        .select()
+        .from(importProfiles)
+        .where(eq(importProfiles.id, old.id))
+        .get()!.sectionsJson,
+    ) as { feeTypes: Record<string, unknown>[] }[];
+    for (const fee of stored[0].feeTypes) delete fee.name;
+    db.update(importProfiles)
+      .set({ sectionsJson: JSON.stringify(stored) })
+      .where(eq(importProfiles.id, old.id))
+      .run();
+
+    const read = getImportProfile(db, old.id)!;
+    expect(read.sections[0].feeTypes.map((fee) => fee.name)).toEqual([
+      "Advertising fee",
+      "Commission fee",
+      "Service fee",
+      "Transaction fee",
+      "Subscription fee",
+    ]);
+  });
+
+  it("saves a profile the AI reads as it is", () => {
+    for (const id of ["fee_document", "marketplace_summary"] as const) {
+      const draft = profileDraft(id);
       expect(create(draft)).toMatchObject(draft);
     }
     expect(listImportProfiles(db).map((p) => p.name)).toEqual([
@@ -171,13 +230,13 @@ describe("createImportProfile", () => {
   });
 
   it("lets a By sign section pin an income or an expense category", () => {
-    const draft = starterDraft("marketplace_summary")!;
+    const draft = profileDraft("marketplace_summary");
     draft.sections[0].fixedCategoryAccountId = salesCategoryId;
     draft.sections[1].feeTypes[0].categoryAccountId = salesCategoryId;
     draft.sections[1].feeTypes[1].categoryAccountId = feesCategoryId;
     expect(createImportProfile(db, userId, draft).ok).toBe(true);
 
-    const wrong = starterDraft("marketplace_summary")!;
+    const wrong = profileDraft("marketplace_summary");
     wrong.name = "Another";
     wrong.sections[0].fixedCategoryAccountId = feesCategoryId;
     expect(createImportProfile(db, userId, wrong)).toMatchObject({
@@ -255,7 +314,7 @@ describe("updateImportProfile", () => {
 describe("setImportProfileEnabled", () => {
   it("hides a disabled profile from the enabled list, and audits it", () => {
     const fees = create();
-    const marketplace = create(starterDraft("marketplace_summary")!);
+    const marketplace = create(profileDraft("marketplace_summary"));
 
     const result = setImportProfileEnabled(db, userId, fees.id, false);
 

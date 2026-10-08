@@ -40,7 +40,9 @@ export interface PortableChoices {
 export type AccountReference = { code: string; name: string };
 
 export const PROFILE_FILE_FORMAT = "akaun.import-profile";
-export const PROFILE_FILE_VERSION = 1;
+// Version 2 moves sheet selection to the profile and adds file-type restrictions.
+// Older readers must refuse it rather than silently discard these settings.
+export const PROFILE_FILE_VERSION = 2;
 
 /**
  * The file. `profile` is an `ImportProfileDraft` with each account id an
@@ -114,6 +116,9 @@ export function profileFile(
     mode: draft.mode,
     statedTotalLabels: draft.statedTotalLabels,
     accountId: toRef(draft.accountId, choices.moneyAccounts, "Account"),
+    // Absent means both, as an older installation reads a file without it.
+    ...(draft.fileTypes ? { fileTypes: draft.fileTypes } : {}),
+    sheet: draft.sheet ?? null,
     layout: draft.layout ?? null,
     sections: draft.sections.map((section, index) => {
       const at = sectionLabel(section, index);
@@ -137,7 +142,7 @@ export function profileFile(
           categoryAccountId: toRef(
             fee.categoryAccountId,
             pool,
-            `${at}, line type “${fee.key}”: category`,
+            `${at}, line type “${fee.name || fee.key}”: category`,
           ),
         })),
         ...(section.counterAccountId !== undefined
@@ -329,12 +334,16 @@ export function draftFromFile(
               if (typeof fee !== "object" || fee === null) return fee;
               const typed = fee as Record<string, unknown>;
               const key = typeof typed.key === "string" ? typed.key : "";
+              const label =
+                typeof typed.name === "string" && typed.name.trim()
+                  ? typed.name.trim()
+                  : key;
               return {
                 ...typed,
                 categoryAccountId: resolve(
                   typed.categoryAccountId,
                   pool,
-                  `${at}, line type “${key}”: category`,
+                  `${at}, line type “${label}”: category`,
                   null,
                 ),
               };

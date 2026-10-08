@@ -152,6 +152,15 @@ function cacheKey(provider: LLMProviderConfig, schemaId: string): string {
   return `${provider.type}:${provider.model}:${schemaId}`;
 }
 
+// Every call asks for temperature 0, so the same document reads the same way
+// twice. The one exception is a ChatGPT plan: its preview rejects the field for
+// every model, so the fetch removes it anyway (chatgpt-fetch.ts), and its models
+// are reasoning models, for which the SDK logs a warning on each call that
+// sends one. So it is not sent there, and nothing else changes.
+function temperatureFor(provider: LLMProviderConfig): number | undefined {
+  return provider.type === "chatgpt" ? undefined : 0;
+}
+
 // True when the provider refused the request itself (HTTP 400). The SDK retries
 // some errors on its own and then wraps the last one in a RetryError, so a 400
 // that came after a retried 429 arrives wrapped.
@@ -227,7 +236,7 @@ export async function callStructured<T>(
           output: Output.object({ schema: spec.schema }),
           instructions: spec.instructions,
           prompt: spec.prompt,
-          temperature: 0,
+          temperature: temperatureFor(provider),
           maxOutputTokens: spec.maxOutputTokens,
           abortSignal,
         }),
@@ -319,7 +328,7 @@ export async function callStructured<T>(
       model,
       instructions: spec.instructions,
       prompt: spec.prompt,
-      temperature: 0,
+      temperature: temperatureFor(provider),
       maxOutputTokens: spec.maxOutputTokens,
       abortSignal,
     }),

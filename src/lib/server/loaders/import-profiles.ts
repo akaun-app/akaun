@@ -1,9 +1,5 @@
 import { redirect } from "@sveltejs/kit";
 import { profileKind } from "$lib/import-profile-schema.js";
-import {
-  isStarterId,
-  type ImportProfileStarterId,
-} from "$lib/import-profile-starters.js";
 import { db } from "$lib/server/db/client.js";
 import { isImportTransactionAsset } from "$lib/server/import/account-policy.js";
 import { categoryChoices } from "$lib/server/import/category-accounts.js";
@@ -107,22 +103,16 @@ export function importProfileList(locals: App.Locals, database: LedgerDb = db) {
 /**
  * The editor for a new profile. Adding one is managing profiles, so it needs
  * `import.change` (FR-045); without it the editor is never shown, rather than
- * shown and then refused on save. `?starter=` names a built-in starter to
- * begin from (US6 AS2); any other value starts blank.
+ * shown and then refused on save.
  */
 export function loadImportProfileNew(
   locals: App.Locals,
-  url: URL,
   database: LedgerDb = db,
 ) {
   if (!hasPermission(locals, "import", "change")) {
     throw redirect(302, PROFILES_HOME);
   }
-  const raw = url.searchParams.get("starter");
-  const starter: ImportProfileStarterId | null =
-    raw && isStarterId(raw) ? raw : null;
   return {
-    starter,
     ...categoryOptions(database),
     ...editorChoices(database, null),
   };

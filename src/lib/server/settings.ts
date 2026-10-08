@@ -24,6 +24,10 @@ export const SETTING_KEYS = {
   autoImportFreeModelsOnly: "autoImport.freeModelsOnly",
   autoImportCustomInstructions: "autoImport.customInstructions",
   autoImportDuplicateThreshold: "autoImport.duplicateThreshold",
+  // The OAuth client id Sign in with ChatGPT issued this installation on its
+  // first sign-in. Reused for later sign-ins, so each one does not register
+  // Akaun with OpenAI again.
+  chatgptClientId: "chatgpt.clientId",
   companyName: "company.name",
   companyAddress: "company.address",
   companyRegistrationNo: "company.registrationNo",

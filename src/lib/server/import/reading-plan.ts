@@ -19,8 +19,10 @@ import { eq } from "drizzle-orm";
 import {
   kindReadsTable,
   kindUsesAi,
+  profileFileTypes,
   profileKind,
   profileSections,
+  type ProfileFileType,
 } from "$lib/import-profile-schema.js";
 import {
   ImportMode,
@@ -70,6 +72,12 @@ export interface ItemsPlan {
   table: TableProfile | null;
   /** What the AI reads, and whether in pieces, or null. */
   ai: { reading: ReadingProfile; pieces: boolean } | null;
+  /**
+   * The sheet a saved profile names (FR-069), or null for the default
+   * (`profileSheet`). A saved profile reads one sheet of a workbook; the
+   * built-in reading reads every sheet, and has null here too.
+   */
+  sheet: string | null;
 }
 
 export type ReadingPlan = { kind: "receipt" } | ItemsPlan;
@@ -95,6 +103,7 @@ export function builtinItemsPlan(): ItemsPlan {
     mode: null,
     table: null,
     ai: { reading: SEVERAL_ITEMS_PROFILE, pieces: false },
+    sheet: null,
   };
 }
 
@@ -103,6 +112,16 @@ export function isSpreadsheetJob(
   job: Pick<ImportJob, "originalFilename">,
 ): boolean {
   return isSpreadsheetMimeType(inferMimeType(job.originalFilename));
+}
+
+/**
+ * Which kind of file a profile must read to read the job's (FR-070): a
+ * spreadsheet by its name, even one given as text, else a PDF file or a photo.
+ */
+export function jobFileType(
+  job: Pick<ImportJob, "originalFilename">,
+): ProfileFileType {
+  return isSpreadsheetJob(job) ? "spreadsheet" : "document";
 }
 
 /**
@@ -181,6 +200,17 @@ export function planForProfile(
         : `The import profile "${saved.name}" reads a spreadsheet's table, and this file is not a spreadsheet (.xlsx or .csv). Read it with a profile made for it.`,
     };
   }
+  // Likewise a profile the AI reads, for the files it was made for (FR-070).
+  const fileType = jobFileType(job);
+  if (!profileFileTypes(saved).includes(fileType)) {
+    return {
+      ok: false,
+      reason:
+        fileType === "spreadsheet"
+          ? `The import profile "${saved.name}" reads PDF files and photos, and this file is a spreadsheet (.xlsx or .csv). Read it with a profile made for it, or tick Spreadsheets in the profile.`
+          : `The import profile "${saved.name}" reads spreadsheets (.xlsx or .csv), and this file is a PDF file or a photo. Read it with a profile made for it, or tick PDF files and photos in the profile.`,
+    };
+  }
 
   const full = savedReadingProfile(saved);
   // A table's copy names what was read, the layout and the sections, not a
@@ -225,6 +255,7 @@ export function planForProfile(
             pieces: mode === ImportMode.EveryTransaction,
           }
         : null,
+      sheet: saved.sheet ?? null,
     },
   };
 }

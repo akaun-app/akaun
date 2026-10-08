@@ -1,4 +1,4 @@
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createReadServer } from "./server.js";
 import type { ReadContext } from "./common.js";
 import { scopeChallenge } from "./oauth-challenge.js";
@@ -29,19 +29,25 @@ export async function handleMcpRequest(
 
   const challenge = await scopeChallenge(request, context.locals);
   if (challenge) return challenge;
-  const server = createReadServer(context);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
+  // Capture this request's authenticated context only. SDK v2 serves modern
+  // per-request envelopes and stateless legacy traffic from the same factory.
+  const handler = createMcpHandler(() => createReadServer(context), {
+    legacy: "stateless",
+    // Auto returns JSON for these synchronous reads; no handler emits related
+    // protocol notifications that would upgrade a modern response to SSE.
+    responseMode: "auto",
     maxRequestBodySize: 128 * 1024,
+    // Akaun has no MCP change-notification channel. Do not hold a stream open
+    // against a handler whose lifetime is a single authenticated request.
+    maxSubscriptions: 0,
   });
   try {
-    await server.connect(transport);
-    const response = await transport.handleRequest(request);
+    const response = await handler.fetch(request);
     response.headers.set("Cache-Control", "no-store");
     return response;
   } finally {
-    // JSON mode resolves only after the result is serialized; safe to close.
-    await server.close();
+    // The SDK owns per-request server cleanup, including the legacy SSE leg.
+    // close() releases the modern handler's bus and completed exchanges.
+    await handler.close();
   }
 }

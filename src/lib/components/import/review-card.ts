@@ -134,8 +134,9 @@ export function reviewRowFrom(raw: any): ReviewRow {
 
 /**
  * An item's extra fields, as "name: value" (006 FR-035), in the order the
- * profile lists them. A field the line did not print is left out, as it is
- * from the remark. Empty for a receipt, which has none.
+ * profile lists them. A field the line did not print is left out. They are
+ * shown on the item only: an import never writes the record's remark.
+ * Empty for a receipt, which has none.
  */
 export function extraFieldsShown(extrasJson: unknown): string[] {
   if (typeof extrasJson !== "string" || !extrasJson) return [];
@@ -503,7 +504,10 @@ export function describeReading(job: ReadingOf): string {
     // the reading (FR-002, FR-038), so an older reading still says it.
     const readIn = job.profile?.mode;
     const mode = isImportMode(readIn) ? ` · ${importModeLabel(readIn)}` : "";
-    const method = parseExtractionNotes(job.extractionNotes)?.method;
+    const notes = parseExtractionNotes(job.extractionNotes);
+    const method = notes?.method;
+    // The one sheet of a workbook it read, when the file has more (FR-069).
+    const sheet = notes?.sheet ? ` · sheet “${notes.sheet}”` : "";
     const read =
       method === "columns"
         ? " · read from columns"
@@ -512,7 +516,7 @@ export function describeReading(job: ReadingOf): string {
           : method === "ai_pieces"
             ? " · read in parts"
             : "";
-    return `Read with ${name} (${how})${mode}${read}`;
+    return `Read with ${name} (${how})${mode}${sheet}${read}`;
   }
   // The receipt or invoice reading: chosen, the Auto-detect fallback, or a
   // row from before 006 (FR-040, FR-048).

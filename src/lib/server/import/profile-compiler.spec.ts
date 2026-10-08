@@ -1,7 +1,10 @@
 import type { JSONSchema7 } from "ai";
 import { describe, expect, it } from "vitest";
 import { checkProfile } from "$lib/import-profile-schema.js";
-import { IMPORT_PROFILE_STARTERS } from "$lib/import-profile-starters.js";
+import {
+  PROFILE_DRAFT_IDS,
+  profileDraft,
+} from "$lib/server/import/__fixtures__/profile-drafts.js";
 import {
   SEVERAL_ITEMS_PROFILE,
   compileHeaderPart,
@@ -26,7 +29,12 @@ const feeProfile: ReadingProfile = {
       kind: "expense",
       categoryFromModel: false,
       feeTypes: [
-        { key: "commission", description: "Commission on a sale" },
+        {
+          key: "commission",
+          name: "Sales commission",
+          description: "Commission on a sale",
+        },
+        // A spec built by hand may leave the name out.
         { key: "shipping", description: "Shipping charged to the seller" },
       ],
       extras: {
@@ -257,7 +265,10 @@ describe("compileProfile — a saved profile's shape", () => {
       enum: ["commission", "shipping", "none"],
     });
     expect(asSchema(fee.properties?.fee_type).description).toContain(
-      "commission: Commission on a sale",
+      "commission (Sales commission): Commission on a sale",
+    );
+    expect(asSchema(fee.properties?.fee_type).description).toContain(
+      "shipping: Shipping charged to the seller",
     );
     expect(asSchema(fee.properties?.fee_type).description).toContain(
       '"none" when none of the others applies.',
@@ -448,31 +459,28 @@ describe("savedReadingProfile", () => {
   const reading = savedReadingProfile(saved(shopLike));
   const compiled = compileProfile(reading);
 
-  // A wallet report starter is read from its columns, by code: it sends no
+  // A wallet report draft is read from its columns, by code: it sends no
   // schema anywhere unless its row rules are removed (columns-reading.spec).
   it.each(
-    IMPORT_PROFILE_STARTERS.filter((starter) => !starter.draft.layout).map(
-      (starter) => [starter.id, starter],
-    ),
-  )(
-    "compiles the %s starter to the schema the providers receive",
-    (_id, starter) => {
-      const profile = savedReadingProfile(saved(starter.draft, 1));
-      const wire = compileProfile(profile).wire;
-      expect(wire).toMatchSnapshot();
-      walk(wire, (node) => {
-        for (const keyword of Object.keys(node)) {
-          expect(ALLOWED_KEYWORDS.has(keyword), keyword).toBe(true);
-        }
-        for (const value of node.enum ?? []) {
-          expect(typeof value).toBe("string");
-        }
-        // A list of choices is never also typed null: a strict provider
-        // could then not return the null (see `toWireSchema`).
-        if (node.enum) expect(types(node)).not.toContain("null");
-      });
-    },
-  );
+    PROFILE_DRAFT_IDS.filter((id) => !profileDraft(id).layout).map((id) => [
+      id,
+    ]),
+  )("compiles the %s draft to the schema the providers receive", (id) => {
+    const profile = savedReadingProfile(saved(profileDraft(id), 1));
+    const wire = compileProfile(profile).wire;
+    expect(wire).toMatchSnapshot();
+    walk(wire, (node) => {
+      for (const keyword of Object.keys(node)) {
+        expect(ALLOWED_KEYWORDS.has(keyword), keyword).toBe(true);
+      }
+      for (const value of node.enum ?? []) {
+        expect(typeof value).toBe("string");
+      }
+      // A list of choices is never also typed null: a strict provider
+      // could then not return the null (see `toWireSchema`).
+      if (node.enum) expect(types(node)).not.toContain("null");
+    });
+  });
 
   it.each<Choice>(["full", "nulls", "last"])(
     "accepts every value its schema admits (%s)",
@@ -509,6 +517,20 @@ describe("savedReadingProfile", () => {
     expect(SEVERAL_ITEMS_PROFILE.schemaRequired).toBeUndefined();
   });
 
+  it("reads a total a fee type names, and leaves out the lines under it", () => {
+    // A statement profile may import "Total Fees" as one line, rather than
+    // each fee under it: its fee type outranks the rule against totals.
+    expect(reading.instructions).toContain("Never list a subtotal, a total");
+    expect(reading.instructions).toContain(
+      "The one exception is a line a section's fee type names.",
+    );
+    expect(reading.instructions).toContain(
+      "add the lines it adds up to ignored, so that no amount is read twice.",
+    );
+    // The built-in reading has no fee types, and no exception.
+    expect(SEVERAL_ITEMS_PROFILE.instructions).not.toContain("exception");
+  });
+
   it("asks for a category only where code does not decide it", () => {
     // A fixed category and no fee types: code decides.
     expect(sectionItem(compiled.wire, "sales").properties).not.toHaveProperty(
@@ -535,17 +557,23 @@ describe("savedReadingProfile", () => {
       type: "string",
       enum: ["commission_fee", "ads_fee", "none"],
     });
-    expect(fee.description).toContain("ads_fee: Advertising");
+    expect(fee.description).toContain("ads_fee (Ads fee): Advertising");
     expect(sectionItem(compiled.wire, "sales").properties).not.toHaveProperty(
       "fee_type",
     );
     expect(reading.sections[1].feeTypes).toEqual([
       {
         key: "commission_fee",
+        name: "Commission fee",
         description: "Commission",
         categoryAccountId: 11,
       },
-      { key: "ads_fee", description: "Advertising", categoryAccountId: null },
+      {
+        key: "ads_fee",
+        name: "Ads fee",
+        description: "Advertising",
+        categoryAccountId: null,
+      },
     ]);
     expect(reading.sections[0].fixedCategoryAccountId).toBe(21);
   });

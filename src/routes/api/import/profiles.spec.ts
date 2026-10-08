@@ -64,7 +64,8 @@ vi.mock("$lib/server/logger.js", () => {
   return { createLogger: () => silent };
 });
 
-const { starterDraft } = await import("$lib/import-profile-starters.js");
+const { profileDraft } =
+  await import("$lib/server/import/__fixtures__/profile-drafts.js");
 const schema = await import("$lib/server/db/schema.js");
 const { auditLog, importProfiles, importQueue, users } = schema;
 const { createImportProfile, setImportProfileEnabled, getImportProfile } =
@@ -108,7 +109,7 @@ const locals = { user: { id: 1 } } as never;
 type Handler = (event: never) => Promise<Response> | Response;
 
 function feeDocument(name = "Fee notice"): ProfileDraft {
-  return { ...starterDraft("fee_document")!, name };
+  return { ...profileDraft("fee_document"), name };
 }
 
 /** The fee document, read as Every transaction instead (FR-032). */
@@ -622,6 +623,23 @@ describe("the Read as choices on the upload screen", () => {
     expect(choices().slice(3)).toEqual([
       { value: `profile:${alpha}`, label: "Alpha fees" },
       { value: `profile:${beta}`, label: "Beta statement" },
+    ]);
+  });
+
+  it("marks a profile that reads one kind of file, and none that reads both (FR-070)", () => {
+    const both = saved("Both");
+    const photos = saved("Photos", true, (name) => ({
+      ...feeDocument(name),
+      fileTypes: ["document"],
+    }));
+    const sheets = saved("Sheets", true, (name) => ({
+      ...feeDocument(name),
+      fileTypes: ["spreadsheet"],
+    }));
+    expect(choices().slice(3)).toEqual([
+      { value: `profile:${both}`, label: "Both" },
+      { value: `profile:${photos}`, label: "Photos (PDFs and photos only)" },
+      { value: `profile:${sheets}`, label: "Sheets (spreadsheets only)" },
     ]);
   });
 

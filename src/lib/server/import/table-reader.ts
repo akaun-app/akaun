@@ -12,8 +12,9 @@
  *
  * What the reading does, in order:
  *
- * 1. Finds the heading row: the first row, on the layout's sheet or else on
- *    any sheet, that holds every heading.
+ * 1. Finds the heading row: the first row that holds every heading. The
+ *    workbook is cut to the profile's one sheet before it gets here
+ *    (`profile-sheet.ts`, FR-069).
  * 2. Reads the rows below it, up to the first blank row (`isBlankRow`, the
  *    same rule the text rendering uses).
  * 3. Gives each row to the one section whose rules it meets. A row that meets
@@ -94,25 +95,34 @@ export interface FoundTable {
 }
 
 /**
- * The first row that holds every heading of the layout, on its sheet or, when
- * it names none, on the first visible sheet that has one, and only then on a
- * hidden one. Null when there is none.
+ * The sheet with this name, matched as `foldTableText` folds it, or
+ * undefined. The one place a sheet is found by its name: the reading, Auto-
+ * detect and the editor's sample all go by it (FR-069).
+ */
+export function sheetNamed(
+  workbook: Workbook,
+  name: string,
+): Sheet | undefined {
+  const wanted = foldTableText(name);
+  return workbook.sheets.find((sheet) => foldTableText(sheet.name) === wanted);
+}
+
+/**
+ * The first row that holds every heading, on the first visible sheet that
+ * has one, and only then on a hidden one. Null when there is none.
  * When a heading is in two columns of that row, the first one is used.
  */
 export function findTable(
   workbook: Workbook,
-  layout: Pick<TableLayout, "sheet" | "headers">,
+  headers: readonly string[],
 ): FoundTable | null {
-  const wanted = layout.headers.map(foldTableText);
-  const sheetName = layout.sheet === null ? null : foldTableText(layout.sheet);
-  // Visible sheets first: with no sheet named, a hidden copy of the table
-  // (a pivot's source, an old export) is read only when no visible sheet has
-  // it.
+  const wanted = headers.map(foldTableText);
+  // Visible sheets first: a hidden copy of the table (a pivot's source, an
+  // old export) is read only when no visible sheet has it.
   const order = [...workbook.sheets.entries()].sort(
     ([, a], [, b]) => Number(a.hidden === true) - Number(b.hidden === true),
   );
   for (const [sheetIndex, sheet] of order) {
-    if (sheetName !== null && foldTableText(sheet.name) !== sheetName) continue;
     for (const [headerAt, row] of sheet.rows.entries()) {
       const columns = new Map<string, number>();
       row.cells.forEach((cell, column) => {
@@ -143,17 +153,6 @@ export function tableDataRows(sheet: Sheet, headerAt: number): SheetRow[] {
     previous = row.number;
   }
   return dataRows;
-}
-
-/**
- * Whether the workbook has the layout's table: Auto-detect's first and
- * cheapest test of a spreadsheet (US10 AS12).
- */
-export function layoutMatches(
-  workbook: Workbook,
-  layout: Pick<TableLayout, "sheet" | "headers">,
-): boolean {
-  return findTable(workbook, layout) !== null;
 }
 
 // ── Reading one cell ────────────────────────────────────────────────────────
@@ -416,12 +415,13 @@ export function readTable(
 ): TableReading {
   const { layout, mode } = profile;
   const currency = layout.currency ?? mainCurrency;
-  const table = findTable(workbook, layout);
+  const table = findTable(workbook, layout.headers);
   if (!table) {
+    // Cut to one sheet, the workbook names the sheet that was looked in.
     const where =
-      layout.sheet === null
-        ? "No sheet has"
-        : `There is no sheet "${brief(layout.sheet)}" with`;
+      workbook.sheets.length === 1
+        ? `The sheet "${brief(workbook.sheets[0].name)}" has no`
+        : "No sheet has";
     const headings = layout.headers.map((h) => `"${brief(h)}"`).join(", ");
     throw new TableReadError(
       `The table of the import profile "${profile.name}" was not found in this spreadsheet. ${where} a row with all of its headings: ${headings}.`,
@@ -585,11 +585,6 @@ export function readTable(
       layout.columns.reference === null
         ? ""
         : cellText(cellAt(row, layout.columns.reference)).trim();
-    const extras: Record<string, string> = {};
-    for (const heading of layout.remarkColumns) {
-      const value = cellText(cellAt(row, heading)).trim();
-      if (value) extras[heading] = value;
-    }
 
     const item: ReadItem = {
       description,
@@ -600,7 +595,6 @@ export function readTable(
       source_line: lines.get(row.number) ?? null,
     };
     if (section.feeTypes.length > 0) item.fee_type = feeType;
-    if (Object.keys(extras).length > 0) item.extras = extras;
     if (rules.flagWhen.length > 0 && meetsAll(row, rules.flagWhen)) {
       item.review_note = rules.flagNote;
     }
@@ -823,14 +817,19 @@ export function checkRunningBalance(
  * the sections it reads, so a later edit to either is a different id.
  */
 export function columnsReadingId(
-  saved: Pick<ImportProfileDraft, "layout" | "sections" | "mode"> & {
+  saved: Pick<ImportProfileDraft, "sheet" | "layout" | "sections" | "mode"> & {
     id: number;
   },
 ): string {
   const sections = profileSections(saved);
   const hash = createHash("sha256")
     .update(
-      JSON.stringify({ layout: saved.layout, mode: saved.mode, sections }),
+      JSON.stringify({
+        sheet: saved.sheet ?? null,
+        layout: saved.layout,
+        mode: saved.mode,
+        sections,
+      }),
     )
     .digest("hex");
   return `columns:${saved.id}:${hash}`;

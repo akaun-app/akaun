@@ -26,9 +26,12 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import {
   checkProfile,
   formatProfileErrors,
+  isProfileFileType,
   isProfileKind,
+  kindReadsTable,
   legacyKind,
   legacyProfileMode,
+  nameFromKey,
   type ProfileKind,
   type ImportProfileDraft,
   type ProfileError,
@@ -112,7 +115,18 @@ const isPlainObject = (value: unknown) =>
  */
 type ProfileOptions = {
   accountId?: number | null;
-  layout?: TableLayout | null;
+  /** Only on a profile the AI reads that reads one kind of file (FR-070). */
+  fileTypes?: unknown;
+  /** Absent on a profile saved before it moved off the layout (FR-069). */
+  sheet?: string | null;
+  /**
+   * `sheet` and `remarkColumns` are only on a layout saved before the sheet
+   * moved to the profile (FR-069), or before an import stopped filling the
+   * remark.
+   */
+  layout?:
+    | (TableLayout & { sheet?: string | null; remarkColumns?: unknown })
+    | null;
   mode?: ImportModeValue;
   /** Absent on a profile saved before it was stored (`legacyKind`). */
   kind?: ProfileKind;
@@ -126,32 +140,61 @@ function optionAccountId(options: ProfileOptions): number | null {
     : null;
 }
 
+/**
+ * The sections as stored, with a name on every line type. One saved before
+ * line types had names takes it from its key, as the check gives it on save:
+ * the stored rows are not checked again on the way out, so without this the
+ * editor and everything else reading the profile would see none.
+ */
+function storedSections(stored: string): ProfileSection[] {
+  const sections = parseColumn<ProfileSection[]>(stored, [], Array.isArray);
+  return sections.map((section) => ({
+    ...section,
+    feeTypes: (section.feeTypes ?? []).map((feeType) => ({
+      ...feeType,
+      name: feeType.name || nameFromKey(feeType.key),
+    })),
+  }));
+}
+
 function toView(row: ProfileRow): ImportProfileView {
   const options = parseColumn<ProfileOptions>(
     row.optionsJson,
     {},
     isPlainObject,
   );
-  const sections = parseColumn<ProfileSection[]>(
-    row.sectionsJson,
-    [],
-    Array.isArray,
-  );
+  const sections = storedSections(row.sectionsJson);
   const mode = isImportMode(options.mode)
     ? options.mode
     : legacyProfileMode(sections);
-  const layout = isPlainObject(options.layout)
-    ? (options.layout as TableLayout)
-    : null;
+  // A layout saved before the sheet moved to the profile still names it
+  // (FR-069): it is the profile's sheet, and the layout keeps no copy.
+  let layout: TableLayout | null = null;
+  let layoutSheet: unknown = null;
+  if (isPlainObject(options.layout)) {
+    const { sheet: oldSheet, ...rest } = options.layout!;
+    // No column fills the remark any more: the remark is the reviewer's.
+    delete rest.remarkColumns;
+    layout = rest;
+    layoutSheet = oldSheet;
+  }
+  const sheet = [options.sheet, layoutSheet].find(
+    (name): name is string => typeof name === "string" && name !== "",
+  );
+  const kind = isProfileKind(options.kind)
+    ? options.kind
+    : legacyKind({ layout, sections, mode });
+  // Kept as the check keeps it: one kind of file, on a kind the AI reads.
+  const fileTypes = Array.isArray(options.fileTypes)
+    ? options.fileTypes.filter(isProfileFileType)
+    : [];
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     phrases: parseColumn<string[]>(row.phrasesJson, [], Array.isArray),
     instructions: row.instructions,
-    kind: isProfileKind(options.kind)
-      ? options.kind
-      : legacyKind({ layout, sections, mode }),
+    kind,
     mode,
     statedTotalLabels: parseColumn<ImportProfileDraft["statedTotalLabels"]>(
       row.statedTotalLabelsJson,
@@ -159,6 +202,8 @@ function toView(row: ProfileRow): ImportProfileView {
       isPlainObject,
     ),
     accountId: optionAccountId(options),
+    ...(fileTypes.length === 1 && !kindReadsTable(kind) ? { fileTypes } : {}),
+    ...(sheet ? { sheet } : {}),
     // Checked when it was saved, like the sections.
     ...(layout ? { layout } : {}),
     sections,
@@ -179,6 +224,8 @@ function audited(profile: ImportProfileDraft) {
     mode: profile.mode,
     statedTotalLabels: profile.statedTotalLabels,
     accountId: profile.accountId ?? null,
+    fileTypes: profile.fileTypes ?? null,
+    sheet: profile.sheet ?? null,
     layout: profile.layout ?? null,
     sections: profile.sections,
   };
@@ -194,6 +241,8 @@ function columns(profile: ImportProfileDraft) {
     statedTotalLabelsJson: JSON.stringify(profile.statedTotalLabels),
     optionsJson: JSON.stringify({
       ...(profile.accountId == null ? {} : { accountId: profile.accountId }),
+      ...(profile.fileTypes ? { fileTypes: profile.fileTypes } : {}),
+      ...(profile.sheet ? { sheet: profile.sheet } : {}),
       ...(profile.layout ? { layout: profile.layout } : {}),
       mode: profile.mode,
       ...(profile.kind ? { kind: profile.kind } : {}),

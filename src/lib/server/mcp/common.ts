@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { LedgerDb } from "../ledger/types.js";
 import { type ResourceName } from "../permissions.js";
 import { canMcpRead } from "../oauth/scopes.js";
@@ -87,7 +87,10 @@ export function evidence(text: string | null | undefined) {
 }
 
 const outputSchema = z.object({
-  data: z.record(z.string(), z.unknown()),
+  // Values include scalars, arrays and nested objects. z.unknown() emits an
+  // unconstrained {} schema that some MCP clients cannot consume reliably.
+  // Declare JSON values explicitly rather than narrowing every value to object.
+  data: z.record(z.string(), z.json()),
   meta: z.object({
     observedAt: z.string(),
     mainCurrency: z.string(),

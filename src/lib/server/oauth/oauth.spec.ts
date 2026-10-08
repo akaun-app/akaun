@@ -949,7 +949,7 @@ describe("OAuth hook and MCP scope integration", () => {
       expect((await c.listTools()).tools.map((tool) => tool.name)).toEqual([
         "list_accounts",
       ]);
-      await expect(c.listPrompts()).rejects.toThrow("Method not found");
+      expect((await c.listPrompts()).prompts).toEqual([]);
       expect((await c.listResources()).resources.map((r) => r.uri)).toEqual([
         "akaun://context",
       ]);

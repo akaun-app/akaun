@@ -14,9 +14,10 @@
  * name, the mode, the section names) from the job event or the page's loader.
  */
 
-import type {
-  ImportProfileDraft,
-  ProfileSectionKind,
+import {
+  nameFromKey,
+  type ImportProfileDraft,
+  type ProfileSectionKind,
 } from "$lib/import-profile-schema.js";
 import {
   ImportMode,
@@ -81,6 +82,8 @@ export function profileSnapshotOf(
       mode: saved.mode,
       statedTotalLabels: saved.statedTotalLabels,
       accountId: saved.accountId ?? null,
+      ...(saved.fileTypes ? { fileTypes: saved.fileTypes } : {}),
+      ...(saved.sheet ? { sheet: saved.sheet } : {}),
       ...(saved.layout ? { layout: saved.layout } : {}),
       sections: saved.sections,
     },
@@ -128,6 +131,8 @@ export interface SnapshotSection {
   key: string;
   name: string;
   kind: ProfileSectionKind;
+  /** Each line type's name by its key, for an item's line type. */
+  feeTypeNames: Record<string, string>;
 }
 
 /**
@@ -142,5 +147,16 @@ export function snapshotSections(snapshot: ProfileSnapshot): SnapshotSection[] {
     : ImportMode.Summary;
   return snapshot.profile.sections
     .filter((section) => (section.mode ?? noModeMeans) === snapshot.mode)
-    .map(({ key, name, kind }) => ({ key, name, kind }));
+    .map(({ key, name, kind, feeTypes }) => ({
+      key,
+      name,
+      kind,
+      // A copy from before line types had names reads the key as words.
+      feeTypeNames: Object.fromEntries(
+        (feeTypes ?? []).map((feeType) => [
+          feeType.key,
+          feeType.name || nameFromKey(feeType.key),
+        ]),
+      ),
+    }));
 }

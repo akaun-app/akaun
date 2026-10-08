@@ -4,7 +4,7 @@ Date: 2026-10-08. Status: implemented with optional OAuth configuration; live Ch
 
 ## Implementation decision
 
-Selected and pinned `@node-oauth/oauth2-server` 5.3.0. It provides the authorization-code, S256 PKCE, token response/verification and refresh-grant engine behind Web Request/Response adapters. Akaun implements its SQLite model, resource binding, metadata, client registration and browser consent. The in-memory integration suite proves linking and refresh through the official MCP SDK 1.32.0 on Bun, plus hook dispatch, RBAC/scope isolation, revocation and replay handling.
+Selected and pinned `@node-oauth/oauth2-server` 5.3.0. It provides the authorization-code, S256 PKCE, token response/verification and refresh-grant engine behind Web Request/Response adapters. Akaun implements its SQLite model, resource binding, metadata, client registration and browser consent. The in-memory integration suite proves linking and refresh through the official legacy MCP SDK 1.32.1 against the MCP v2 server on Bun, plus hook dispatch, RBAC/scope isolation, revocation and replay handling.
 
 The onboarding mechanism is DCR with public (`none`) and confidential (`client_secret_basic` / `client_secret_post`) clients. CIMD is not advertised. The published MCP 2025-11-25 specification recommends CIMD and allows DCR; this release chooses DCR to avoid a remote metadata-fetching surface. See [the specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
 
@@ -18,19 +18,19 @@ This agrees with the attached conversation's architecture. It is OAuth for conne
 
 ## Findings in the repository
 
-| Area                               | Existing behavior                                                                              | Required change                                                                       |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Stack                              | SvelteKit 2 / Svelte 5, Bun, adapter-node, Drizzle and SQLite; MCP SDK declared as `^1.32.0`   | Select a component compatible with this runtime and request model                     |
-| `src/hooks.server.ts`              | `/mcp` uses bearer auth; `/api/*` shares it; other unauthenticated routes redirect to `/login` | Explicitly dispatch public discovery/protocol routes before browser login enforcement |
-| `src/lib/server/bearer-auth.ts`    | Looks up the supplied token directly against `users.bearerToken` and loads current RBAC        | Add a separate MCP OAuth verifier; retain the legacy REST verifier                    |
-| `src/lib/server/db/schema.ts`      | A single plaintext bearer token per user; separate browser sessions                            | Separate persisted clients, authorization transactions, grants and OAuth tokens       |
-| `src/routes/login/+page.server.ts` | Argon2 credentials, login rate limiting, 30-day session, unconditional redirect to `/`         | Resume a validated pending authorization after login                                  |
-| `src/lib/server/permissions.ts`    | Groups plus additive user permissions; `hasPermission` always returns true for superusers      | OAuth scope checks must precede any superuser bypass                                  |
-| `src/lib/server/mcp/common.ts`     | Tools filtered at registration and checked again at invocation                                 | Enforce both scopes and current View permissions through one MCP helper               |
-| `src/lib/server/mcp/server.ts`     | Also exposes context, description policy and review prompt                                     | Apply the same scope boundary to resources/prompts and permission projections         |
-| `src/lib/server/mcp/http.ts`       | Stateless POST transport, no cookie auth, exact same-origin check, no-store                    | Preserve transport; standardize discovery-aware authentication challenges             |
-| `src/lib/server/mcp/mcp.spec.ts`   | In-memory SQLite and official MCP client; custom fetch bypasses the SvelteKit hook             | Add real hook/route coverage, not just transport/helper tests                         |
-| Deployment                         | Docker and conventional server; documented public `ORIGIN`                                     | Derive canonical OAuth URLs from validated configuration, not request headers         |
+| Area                               | Existing behavior                                                                                                               | Required change                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Stack                              | SvelteKit 2 / Svelte 5, Bun, adapter-node, Drizzle and SQLite; MCP v2 server; legacy SDK retained for OAuth compatibility tests | Select a component compatible with this runtime and request model                     |
+| `src/hooks.server.ts`              | `/mcp` uses bearer auth; `/api/*` shares it; other unauthenticated routes redirect to `/login`                                  | Explicitly dispatch public discovery/protocol routes before browser login enforcement |
+| `src/lib/server/bearer-auth.ts`    | Looks up the supplied token directly against `users.bearerToken` and loads current RBAC                                         | Add a separate MCP OAuth verifier; retain the legacy REST verifier                    |
+| `src/lib/server/db/schema.ts`      | A single plaintext bearer token per user; separate browser sessions                                                             | Separate persisted clients, authorization transactions, grants and OAuth tokens       |
+| `src/routes/login/+page.server.ts` | Argon2 credentials, login rate limiting, 30-day session, unconditional redirect to `/`                                          | Resume a validated pending authorization after login                                  |
+| `src/lib/server/permissions.ts`    | Groups plus additive user permissions; `hasPermission` always returns true for superusers                                       | OAuth scope checks must precede any superuser bypass                                  |
+| `src/lib/server/mcp/common.ts`     | Tools filtered at registration and checked again at invocation                                                                  | Enforce both scopes and current View permissions through one MCP helper               |
+| `src/lib/server/mcp/server.ts`     | Also exposes context, description policy and review prompt                                                                      | Apply the same scope boundary to resources/prompts and permission projections         |
+| `src/lib/server/mcp/http.ts`       | Stateless POST transport, no cookie auth, exact same-origin check, no-store                                                     | Preserve transport; standardize discovery-aware authentication challenges             |
+| `src/lib/server/mcp/mcp.spec.ts`   | In-memory SQLite and official MCP client; custom fetch bypasses the SvelteKit hook                                              | Add real hook/route coverage, not just transport/helper tests                         |
+| Deployment                         | Docker and conventional server; documented public `ORIGIN`                                                                      | Derive canonical OAuth URLs from validated configuration, not request headers         |
 
 The existing API token inherits REST privileges even though MCP tools are read-only. OAuth MCP credentials must not acquire those privileges. Existing API-token storage hardening is a separate follow-up, not a migration dependency for OAuth.
 

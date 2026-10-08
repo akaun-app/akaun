@@ -145,6 +145,11 @@ export type ExtractionNotes = {
    * nothing was checked.
    */
   balance?: { matches: boolean; message: string };
+  /**
+   * The one sheet of a workbook a profile read (FR-069), when the file has
+   * more than one. Absent for a file of one sheet, and for any other reading.
+   */
+  sheet?: string;
 };
 
 /** Cuts the ignored lines to the kept number and length. */
@@ -179,6 +184,7 @@ export function serializeExtractionNotes(notes: ExtractionNotes): string {
       : {}),
     ...(notes.method !== undefined ? { method: notes.method } : {}),
     ...(notes.balance !== undefined ? { balance: notes.balance } : {}),
+    ...(notes.sheet !== undefined ? { sheet: notes.sheet } : {}),
   } satisfies ExtractionNotes);
 }
 
@@ -230,6 +236,9 @@ export function parseExtractionNotes(
     typeof balance.message === "string"
   ) {
     notes.balance = { matches: balance.matches, message: balance.message };
+  }
+  if (typeof value.sheet === "string" && value.sheet) {
+    notes.sheet = value.sheet;
   }
   return notes;
 }

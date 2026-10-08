@@ -11,7 +11,7 @@ import {
   checkProfile,
   type ImportProfileDraft,
 } from "./import-profile-schema.js";
-import { starterDraft } from "./import-profile-starters.js";
+import { profileDraft } from "./server/import/__fixtures__/profile-drafts.js";
 import {
   orderSections,
   walletLayout,
@@ -82,7 +82,7 @@ describe("profileFile", () => {
     );
     expect(lost).toEqual([]);
     expect(file.format).toBe("akaun.import-profile");
-    expect(file.version).toBe(1);
+    expect(file.version).toBe(2);
     expect(file.exportedAt).toBe("2026-10-05T00:00:00.000Z");
     const profile = file.profile as {
       accountId: unknown;
@@ -164,7 +164,7 @@ describe("draftFromFile", () => {
   });
 
   it("looks up an income section's category among income categories only", () => {
-    const base = starterDraft("marketplace_summary")!;
+    const base = profileDraft("marketplace_summary");
     base.sections[0].fixedCategoryAccountId = 201;
     base.sections[1].feeTypes[0].categoryAccountId = 101;
     const { file } = profileFile(base, here);
@@ -234,6 +234,27 @@ describe("draftFromFile", () => {
     ]);
   });
 
+  it("keeps each line type's name, and reads a file without one by its key", () => {
+    const draft = profileDraft("fee_document");
+    draft.sections[0].feeTypes[0].name = "Ads";
+    const file = roundTrip(profileFile(draft, here).file);
+    const read = draftFromFile(file, here, null);
+    if (!read.ok) throw new Error(read.error);
+    expect(read.draft.sections[0].feeTypes[0]).toMatchObject({
+      key: "advertising_fee",
+      name: "Ads",
+    });
+
+    // A file exported before line types had names.
+    const sections = file.profile.sections as {
+      feeTypes: Record<string, unknown>[];
+    }[];
+    for (const fee of sections[0].feeTypes) delete fee.name;
+    const old = draftFromFile(file, here, null);
+    if (!old.ok) throw new Error(old.error);
+    expect(old.draft.sections[0].feeTypes[0].name).toBe("Advertising fee");
+  });
+
   it("refuses a profile that is not one the editor can show", () => {
     const { file } = profileFile(walletDraft(), here);
     (file.profile as Record<string, unknown>).name = "";
@@ -242,6 +263,33 @@ describe("draftFromFile", () => {
     expect(!read.ok && read.error).toMatch(
       /^The profile in this file has problems: /,
     );
+  });
+});
+
+describe("the profile's sheet (FR-069)", () => {
+  it("goes with the profile, and comes back on import", () => {
+    const draft = { ...walletDraft(), sheet: "Transaction Report" };
+    const { file } = profileFile(draft, here);
+    expect(file.version).toBe(2);
+    expect(file.profile.sheet).toBe("Transaction Report");
+    const back = draftFromFile(roundTrip(file), there, null);
+    expect(back.ok && back.draft.sheet).toBe("Transaction Report");
+  });
+});
+
+describe("the files a profile reads (FR-070)", () => {
+  it("go with the profile when it reads one kind, and are left out for both", () => {
+    const draft: ImportProfileDraft = {
+      ...profileDraft("fee_document"),
+      fileTypes: ["document"],
+    };
+    const { file } = profileFile(draft, here);
+    expect(file.profile.fileTypes).toEqual(["document"]);
+    const back = draftFromFile(roundTrip(file), there, null);
+    expect(back.ok && back.draft.fileTypes).toEqual(["document"]);
+
+    const both = profileFile({ ...draft, fileTypes: undefined }, here);
+    expect(both.file.profile).not.toHaveProperty("fileTypes");
   });
 });
 
@@ -259,7 +307,7 @@ describe("parseProfileFile", () => {
       /no version/,
     );
     expect(
-      error('{"format":"akaun.import-profile","version":2,"profile":{}}'),
+      error('{"format":"akaun.import-profile","version":3,"profile":{}}'),
     ).toMatch(/newer version/);
     expect(error('{"format":"akaun.import-profile","version":1}')).toMatch(
       /no profile/,

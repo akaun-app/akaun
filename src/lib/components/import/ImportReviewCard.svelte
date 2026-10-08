@@ -397,8 +397,8 @@
 				/>
 			</div>
 
-			<!-- Remark: the record's remark. An item read with a profile starts with
-			     its line type and extra fields (FR-034, FR-035); a receipt with none. -->
+			<!-- Remark: the record's remark, for the reviewer to write. An import
+			     never fills it. -->
 			<div class="rfield rfield-wide">
 				<span class="rfield-label">
 					Remark
