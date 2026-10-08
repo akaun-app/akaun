@@ -117,17 +117,25 @@ export async function handleOAuthProtocol(
       if (url.search.length > 8192) throw new OAuthFailure("invalid_request");
       const browser = cookies.get(BROWSER_COOKIE) || opaque();
       const id = service.begin(parameters(url.searchParams), browser);
-      cookies.set(BROWSER_COOKIE, browser, {
+      const cookieOptions = {
         path: "/",
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "lax" as const,
         secure: config.issuer.startsWith("https:"),
         maxAge: 1800,
-      });
+      };
+      // This response bypasses resolve(), where SvelteKit normally attaches
+      // cookies.set() updates. Emit the binding cookie on the redirect itself.
+      const browserCookie = cookies.serialize(
+        BROWSER_COOKIE,
+        browser,
+        cookieOptions,
+      );
       return new Response(null, {
         status: 302,
         headers: {
           Location: authorizationPath(id),
+          "Set-Cookie": browserCookie,
           "Cache-Control": "no-store",
         },
       });

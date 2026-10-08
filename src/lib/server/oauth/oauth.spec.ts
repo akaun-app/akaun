@@ -33,6 +33,7 @@ import { createRequestHandle } from "../request-hook.js";
 import { handleMcpRequest } from "../mcp/http.js";
 import { requireView } from "../mcp/common.js";
 import { canMcpRead } from "./scopes.js";
+import { handleOAuthProtocol } from "./http.js";
 import { oauthConfig, type OAuthConfig } from "./config.js";
 import {
   BROWSER_COOKIE,
@@ -176,7 +177,8 @@ function cookieJar() {
     delete: (name) => {
       values.delete(name);
     },
-    serialize: () => "",
+    serialize: (name, value, options) =>
+      `${name}=${encodeURIComponent(value)}; Path=${options.path}; HttpOnly; SameSite=Lax${options.secure ? "; Secure" : ""}`,
   };
   return cookies;
 }
@@ -775,11 +777,22 @@ describe("OAuth hook and MCP scope integration", () => {
       jar,
     );
     expect(start.status).toBe(302);
-    expect(jar.get(BROWSER_COOKIE)).toBeTruthy();
+    // A fresh browser receives only the response header, not cookie API state
+    // inside the request hook. Replay that header on the redirect's next hop.
+    const header = start.headers.get("set-cookie")!;
+    expect(header).toContain(`${BROWSER_COOKIE}=`);
+    expect(header).toContain("HttpOnly");
+    expect(header).toContain("SameSite=Lax");
+    expect(header).toContain("Secure");
+    expect(jar.get(BROWSER_COOKIE)).toBeUndefined();
+    const nextJar = cookieJar();
+    nextJar.set(BROWSER_COOKIE, header.split(";")[0].split("=")[1], {
+      path: "/",
+    });
     const location = start.headers.get("location")!;
     const login = await throughHook(
       new Request(`${config.issuer}${location}`),
-      jar,
+      nextJar,
     );
     expect(login.status).toBe(302);
     expect(login.headers.get("location")).toMatch("/login?oauth=");
@@ -791,14 +804,43 @@ describe("OAuth hook and MCP scope integration", () => {
         )
       ).status,
     ).toBe(400);
-    jar.set("session", createSession(db, 1), { path: "/" });
+    nextJar.set("session", createSession(db, 1), { path: "/" });
     const consent = await throughHook(
       new Request(`${config.issuer}${location}`),
-      jar,
+      nextJar,
     );
     expect(consent.status).toBe(200);
     expect(consent.headers.get("Cache-Control")).toBe("no-store");
   });
+  it("sends a browser-binding cookie usable on HTTP localhost", async () => {
+    const localConfig = {
+      issuer: "http://localhost:5173",
+      resource: "http://localhost:5173/mcp",
+    };
+    const localOAuth = createOAuth(db, localConfig);
+    const response = await handleOAuthProtocol(
+      new Request(
+        `${localConfig.issuer}/oauth/authorize?${new URLSearchParams(params({ resource: localConfig.resource }))}`,
+      ),
+      cookieJar(),
+      address,
+      localOAuth,
+      localConfig,
+    );
+    expect(response!.status).toBe(302);
+    const header = response!.headers.get("set-cookie")!;
+    expect(header).toContain(`${BROWSER_COOKIE}=`);
+    expect(header).not.toContain("Secure");
+    const browserValue = header.split(";")[0].split("=")[1];
+    const id = new URL(
+      response!.headers.get("location")!,
+      localConfig.issuer,
+    ).searchParams.get("transaction")!;
+    expect(localOAuth.pending(id, browserValue).params.resource).toBe(
+      localConfig.resource,
+    );
+  });
+
   it("protects browser login, consent and revocation from cross-site form submissions", async () => {
     const jar = cookieJar();
     jar.set("session", createSession(db, 1), { path: "/" });
@@ -1020,6 +1062,10 @@ describe("OAuth hook and MCP scope integration", () => {
       expect(authorizeUrl).toBeDefined();
       const jar = cookieJar();
       const start = await throughHook(new Request(authorizeUrl!), jar);
+      const browserCookie = start.headers.get("set-cookie")!;
+      jar.set(BROWSER_COOKIE, browserCookie.split(";")[0].split("=")[1], {
+        path: "/",
+      });
       const id = new URL(
         start.headers.get("location")!,
         config.issuer,
