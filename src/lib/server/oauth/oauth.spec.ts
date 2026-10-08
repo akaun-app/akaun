@@ -34,6 +34,7 @@ import { handleMcpRequest } from "../mcp/http.js";
 import { requireView } from "../mcp/common.js";
 import { canMcpRead } from "./scopes.js";
 import { handleOAuthProtocol } from "./http.js";
+import { isSameOriginRequest } from "../browser-origin.js";
 import { oauthConfig, type OAuthConfig } from "./config.js";
 import {
   BROWSER_COOKIE,
@@ -869,6 +870,8 @@ describe("OAuth hook and MCP scope integration", () => {
     const sameSiteHeaders: HeadersInit[] = [
       { Origin: config.issuer },
       { Referer: `${config.issuer}/login?oauth=fixture` },
+      { Origin: "null", "Sec-Fetch-Site": "same-origin" },
+      { "Sec-Fetch-Site": "same-origin" },
     ];
     for (const headers of sameSiteHeaders) {
       const response = await throughHook(
@@ -882,6 +885,46 @@ describe("OAuth hook and MCP scope integration", () => {
     }
     expect(oauth.pending(id, browser)).toBeDefined();
   });
+  it("checks browser fetch metadata without allowing foreign origins to override consent CSRF", async () => {
+    const id = oauth.begin(params(), browser);
+    const jar = cookieJar();
+    jar.set(BROWSER_COOKIE, browser, { path: "/" });
+    jar.set("session", createSession(db, 1), { path: "/" });
+    const headersToReject: HeadersInit[] = [
+      { Origin: "null", "Sec-Fetch-Site": "cross-site" },
+      { Origin: "null", "Sec-Fetch-Site": "same-site" },
+      { Origin: "null", "Sec-Fetch-Site": "none" },
+      {
+        Origin: "https://attacker.example.com",
+        "Sec-Fetch-Site": "same-origin",
+      },
+      {
+        Origin: "null",
+        Referer: "https://attacker.example.com/",
+        "Sec-Fetch-Site": "same-origin",
+      },
+      { Origin: "invalid", "Sec-Fetch-Site": "same-origin" },
+    ];
+    for (const headers of headersToReject) {
+      const request = new Request(
+        `${config.issuer}/oauth/authorize?transaction=${id}`,
+        { method: "POST", headers },
+      );
+      expect(isSameOriginRequest(request, config.issuer)).toBe(false);
+      expect((await throughHook(request, jar)).status).toBe(403);
+    }
+    const request = new Request(
+      `${config.issuer}/oauth/authorize?transaction=${id}`,
+      {
+        method: "POST",
+        headers: { Origin: "null", "Sec-Fetch-Site": "same-origin" },
+      },
+    );
+    expect(isSameOriginRequest(request, config.issuer)).toBe(true);
+    expect((await throughHook(request, jar)).status).toBe(200);
+    expect(oauth.pending(id, browser)).toBeDefined();
+  });
+
   it("revokes through the public protocol endpoint without redirecting to login", async () => {
     const t = await tokens();
     const response = await throughHook(

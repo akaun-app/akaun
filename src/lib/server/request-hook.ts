@@ -3,6 +3,7 @@ import type { LedgerDb } from "./ledger/types.js";
 import { getSessionUser } from "./auth.js";
 import { bearerLocals } from "./bearer-auth.js";
 import { getEffectivePermissions } from "./permissions.js";
+import { isSameOriginRequest } from "./browser-origin.js";
 import { mcpChallenge, type OAuthConfig } from "./oauth/config.js";
 import { BROWSER_COOKIE, type AkaunOAuth } from "./oauth/service.js";
 import { handleOAuthProtocol, isOAuthPublicPath } from "./oauth/http.js";
@@ -132,17 +133,7 @@ export function createRequestHandle(
     // SvelteKit trustedOrigins is '*' for bearer/form API interoperability.
     // Browser actions (including login and connected-app revocation) need our own CSRF check.
     if (MUTATING_METHODS.has(event.request.method)) {
-      const source =
-        event.request.headers.get("origin") ??
-        event.request.headers.get("referer");
-      let sameOrigin = false;
-      try {
-        sameOrigin =
-          source !== null && new URL(source).origin === event.url.origin;
-      } catch {
-        /* invalid origin */
-      }
-      if (!sameOrigin)
+      if (!isSameOriginRequest(event.request, event.url.origin))
         return withSecurityHeaders(
           new Response("Forbidden (CSRF origin check failed)", { status: 403 }),
         );

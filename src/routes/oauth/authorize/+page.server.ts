@@ -2,6 +2,7 @@ import { error, fail, redirect } from "@sveltejs/kit";
 import type { Actions, PageServerLoad } from "./$types.js";
 import { oauth, config } from "$lib/server/oauth/runtime.js";
 import { BROWSER_COOKIE, OAuthFailure } from "$lib/server/oauth/service.js";
+import { isSameOriginRequest } from "$lib/server/browser-origin.js";
 import { allowedScopes } from "$lib/server/oauth/scopes.js";
 
 export const load: PageServerLoad = ({ url, cookies, locals, setHeaders }) => {
@@ -35,7 +36,7 @@ export const actions: Actions = {
   default: async ({ url, cookies, locals, request }) => {
     if (!oauth || !config) error(404, "OAuth is disabled");
     // Defense in addition to the browser-action CSRF check in request-hook.ts.
-    if (request.headers.get("origin") !== config.issuer)
+    if (!isSameOriginRequest(request, config.issuer))
       error(403, "Invalid form origin");
     const form = await request.formData();
     let location: string;
