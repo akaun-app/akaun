@@ -42,15 +42,12 @@ import {
   deleteProvider,
   reorderProviders,
 } from "$lib/server/llmProviders.js";
-import {
-  parseStoredCredentials,
-  revokeCredentials,
-} from "$lib/server/llm/chatgpt-oauth.js";
+import { parseStoredCredentials } from "$lib/server/llm/chatgpt-oauth.js";
 import {
   peekConnection,
   takeConnection,
+  connectionModelAllowed,
 } from "$lib/server/llm/chatgpt-sign-in.js";
-import { createLogger } from "$lib/server/logger.js";
 import type { ProviderType } from "$lib/server/import/providers/index.js";
 import { fail } from "@sveltejs/kit";
 import { getAccountDefaults } from "$lib/server/services/account-defaults.js";
@@ -65,8 +62,6 @@ import {
  * accounts underneath. There is no second list and no mapping between the two,
  * so what Settings offers and what an expense screen offers can never drift.
  */
-const log = createLogger("settings");
-
 export const load: PageServerLoad = async ({ locals }) => {
   // Categories are accounts, and accounts are created, renamed and archived on
   // the Accounts screen. Settings no longer lists them (FR-019, FR-020); this
@@ -355,14 +350,26 @@ export const actions: Actions = {
     // one, the saved sign-in stays.
     const connectionId = String(data.get("connectionId") ?? "").trim();
     if (connectionId) {
-      const signIn = locals.user && takeConnection(locals.user.id, connectionId);
+      const provider = getAllProviders(db).find((p) => p.id === id);
+      if (provider?.type !== "chatgpt")
+        return fail(400, {
+          error: "Device sign-in is only available for ChatGPT providers.",
+        });
+      if (
+        !locals.user ||
+        !connectionModelAllowed(locals.user.id, connectionId, model)
+      )
+        return fail(400, {
+          error:
+            "Load the available ChatGPT models and select one before saving.",
+        });
+      const signIn =
+        locals.user && takeConnection(locals.user.id, connectionId);
       if (!signIn)
         return fail(400, {
-          error: "The ChatGPT sign-in expired before it was saved. Sign in again.",
+          error:
+            "The ChatGPT sign-in expired before it was saved. Sign in again.",
         });
-      // The session it replaces is not revoked, unlike on Delete. The new
-      // sign-in uses the same client id for the same person, and a server
-      // may revoke every token of that pair (RFC 7009 §2.1), the new one too.
       updates.oauthCredentials = JSON.stringify(signIn);
     }
     if (baseUrlRaw !== null)
@@ -378,25 +385,7 @@ export const actions: Actions = {
     const id = String(data.get("id") ?? "").trim();
     if (!id) return fail(400, { error: "Provider ID is required" });
 
-    // Ends a `chatgpt` provider's session at OpenAI as well. Best effort: the
-    // provider is deleted either way, and a session left open can still be
-    // removed under ChatGPT's connected apps.
-    // Not when another provider is signed in to the same account: a revoke
-    // may end every session of that client and person (RFC 7009 §2.1).
-    const rows = getAllProviders(db);
-    const signIn = parseStoredCredentials(
-      rows.find((p) => p.id === id)?.oauthCredentials,
-    );
-    const shared =
-      signIn !== null &&
-      rows.some(
-        (p) =>
-          p.id !== id &&
-          parseStoredCredentials(p.oauthCredentials)?.subject === signIn.subject,
-      );
-    if (signIn && !shared && !(await revokeCredentials(signIn)))
-      log.warn({ providerId: id }, "ChatGPT sign-in could not be revoked");
-
+    // Codex sessions are disconnected locally; upstream sessions are managed in ChatGPT.
     deleteProvider(db, id);
 
     return { success: true, action: "deleteProvider" };
@@ -469,11 +458,22 @@ export const actions: Actions = {
     const userId = locals.user!.id;
     // Each new `chatgpt` row needs a sign-in that is still waiting. All of them
     // are checked before anything is created, so an expired one saves nothing.
+    const usedConnections = new Set<string>();
     for (const e of entries) {
-      if ("isNew" in e && e.type === "chatgpt" && !peekConnection(userId, e.connectionId))
+      if (!("isNew" in e) || e.type !== "chatgpt") continue;
+      if (!peekConnection(userId, e.connectionId))
         return fail(400, {
           error: `The ChatGPT sign-in for ${e.name || "a new provider"} expired before it was saved. Open it and sign in again.`,
         });
+      if (
+        usedConnections.has(e.connectionId) ||
+        !connectionModelAllowed(userId, e.connectionId, e.model)
+      )
+        return fail(400, {
+          error:
+            "Each new ChatGPT provider needs its own connection and a model selected from its available models.",
+        });
+      usedConnections.add(e.connectionId);
     }
 
     const tempIdToRealId = new Map<string, string>();

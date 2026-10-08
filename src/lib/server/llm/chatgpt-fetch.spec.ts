@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, generateText, Output } from "ai";
 import { z } from "zod";
@@ -10,7 +10,17 @@ import {
   type TokenSource,
 } from "./chatgpt-fetch.js";
 
+import { createModel } from "./model-factory.js";
+vi.mock("./chatgpt-tokens.js", () => ({
+  createTokenSource: () => ({
+    token: async () => "token-1",
+    refresh: async () => "token-2",
+    accountId: async () => "account-1",
+  }),
+  dbCredentialStore: {},
+}));
 beforeEach(() => clearUsageLimitRest());
+afterEach(() => vi.unstubAllGlobals());
 
 type Call = { url: string; headers: Headers; body: unknown };
 
@@ -63,6 +73,7 @@ function tokens(): TokenSource & {
   refresh: ReturnType<typeof vi.fn>;
 } {
   return {
+    accountId: async () => "account-1",
     token: vi.fn(async () => "token-1"),
     refresh: vi.fn(async () => "token-2"),
   };
@@ -88,7 +99,7 @@ function model(
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
 ) {
   return createOpenAI({
-    baseURL: "https://api.openai.com/v1",
+    baseURL: "https://chatgpt.com/backend-api/codex",
     apiKey: "chatgpt-plan",
     fetch: fetchFn as typeof fetch,
   })("gpt-test");
@@ -97,7 +108,7 @@ function model(
 const schema = z.object({ total: z.number() });
 
 describe("rewriteBody", () => {
-  it("removes the fields the preview rejects and forces stream and store", () => {
+  it("removes the fields Codex rejects and forces stream and store", () => {
     const out = JSON.parse(
       rewriteBody(
         JSON.stringify({
@@ -116,6 +127,8 @@ describe("rewriteBody", () => {
     expect(out).toEqual({
       model: "m",
       input: [],
+      instructions:
+        "Follow the supplied task instructions and return the requested output.",
       stream: true,
       store: false,
       text: { format: { type: "json_schema" } },
@@ -124,6 +137,35 @@ describe("rewriteBody", () => {
 });
 
 describe("createChatgptFetch", () => {
+  it("wires the real model factory to the subscription API and ignores a custom base URL", async () => {
+    const up = upstream([
+      () =>
+        streamOf([
+          frame({
+            type: "response.completed",
+            response: responseObject("hello"),
+          }),
+        ]),
+    ]);
+    vi.stubGlobal("fetch", up.fn);
+    const result = await generateText({
+      model: createModel({
+        id: "provider",
+        type: "chatgpt",
+        name: "ChatGPT",
+        model: "gpt-test",
+        apiKey: "",
+        baseUrl: "https://example.com",
+      }),
+      prompt: "Say hello",
+      maxRetries: 0,
+    });
+    expect(result.text).toBe("hello");
+    expect(up.calls[0].url).toBe(
+      "https://chatgpt.com/backend-api/codex/responses",
+    );
+    expect(up.calls[0].headers.get("chatgpt-account-id")).toBe("account-1");
+  });
   it("streams the request and gives the SDK the completed response as one reply", async () => {
     const up = upstream([
       () =>
@@ -139,7 +181,19 @@ describe("createChatgptFetch", () => {
     const result = await generateText({
       model: model(createChatgptFetch(tokens(), up.fn)),
       output: Output.object({ schema }),
-      prompt: "read this",
+      system: "Extract receipt totals and return JSON.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "read this" },
+            {
+              type: "image",
+              image: new URL("https://example.com/receipt.png"),
+            },
+          ],
+        },
+      ],
       temperature: 0,
       maxOutputTokens: 500,
       maxRetries: 0,
@@ -149,10 +203,15 @@ describe("createChatgptFetch", () => {
     expect(result.finishReason).toBe("stop");
     expect(result.usage.outputTokens).toBe(5);
     const [call] = up.calls;
-    expect(call.url).toBe("https://api.openai.com/v1/responses");
+    expect(call.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(call.headers.get("authorization")).toBe("Bearer token-1");
     expect(call.headers.get("accept")).toBe("text/event-stream");
+    expect(call.headers.get("chatgpt-account-id")).toBe("account-1");
+    expect(call.headers.get("OpenAI-Beta")).toBe("responses=experimental");
     expect(call.body).toMatchObject({ stream: true, store: false });
+    expect(JSON.stringify(call.body)).toContain("Extract receipt totals");
+    expect(JSON.stringify(call.body)).toContain("input_image");
+    expect(call.body).toHaveProperty("text.format.type", "json_schema");
     expect(call.body).not.toHaveProperty("temperature");
     expect(call.body).not.toHaveProperty("max_output_tokens");
   });
@@ -222,7 +281,7 @@ describe("createChatgptFetch", () => {
           response: {
             status: "failed",
             error: {
-              code: "subscription_sharing_usage_limit_exceeded",
+              code: "usage_limit_reached",
               message: "limit",
             },
           },
@@ -250,7 +309,7 @@ describe("createChatgptFetch", () => {
     const up = upstream([
       () =>
         Response.json(
-          { error: { code: "subscription_sharing_usage_limit_exceeded" } },
+          { error: { code: "usage_limit_reached" } },
           { status: 429, headers: { "retry-after": "120" } },
         ),
     ]);
@@ -258,7 +317,7 @@ describe("createChatgptFetch", () => {
       tokens(),
       up.fn,
       "provider-2",
-    )("https://api.openai.com/v1/responses", {
+    )("https://chatgpt.com/backend-api/codex/responses", {
       method: "POST",
       body: "{}",
     }).catch((e: unknown) => e);
@@ -324,7 +383,7 @@ describe("createChatgptFetch", () => {
   it("passes other requests through with the token and no body change", async () => {
     const up = upstream([() => Response.json({ models: [] })]);
     const fetchFn = createChatgptFetch(tokens(), up.fn);
-    const res = await fetchFn("https://api.openai.com/v1/models", {
+    const res = await fetchFn("https://chatgpt.com/backend-api/codex/models", {
       headers: { accept: "application/json" },
     });
     expect(res.status).toBe(200);

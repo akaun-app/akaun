@@ -153,7 +153,7 @@ function cacheKey(provider: LLMProviderConfig, schemaId: string): string {
 }
 
 // Every call asks for temperature 0, so the same document reads the same way
-// twice. The one exception is a ChatGPT plan: its preview rejects the field for
+// twice. The one exception is a ChatGPT plan: the Codex backend rejects the field for
 // every model, so the fetch removes it anyway (chatgpt-fetch.ts), and its models
 // are reasoning models, for which the SDK logs a warning on each call that
 // sends one. So it is not sent there, and nothing else changes.

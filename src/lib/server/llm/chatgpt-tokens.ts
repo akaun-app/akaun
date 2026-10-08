@@ -59,6 +59,9 @@ export function createTokenSource(
   };
 
   return {
+    async accountId() {
+      return (await load()).accountId;
+    },
     async token() {
       const current = await load();
       const now = Date.now();

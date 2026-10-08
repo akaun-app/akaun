@@ -35,7 +35,10 @@ export type StreamSource = {
 
 const HEARTBEAT_MS = 15_000;
 
-export function eventStream(sources: StreamSource[]): Response {
+export function eventStream(
+  sources: StreamSource[],
+  snapshot?: () => object | null,
+): Response {
   const encoder = new TextEncoder();
   const encodeEvent = (data: object) =>
     encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
@@ -68,6 +71,9 @@ export function eventStream(sources: StreamSource[]): Response {
           registered.push({ emitter: source.emitter, name, handler });
         }
       }
+
+      const initial = snapshot?.();
+      if (initial) controller.enqueue(encodeEvent(initial));
 
       const heartbeat = setInterval(() => {
         try {

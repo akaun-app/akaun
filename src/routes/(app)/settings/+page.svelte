@@ -634,7 +634,7 @@
 
 	onDestroy(() => {
 		rebuildEventSource?.close();
-		closeSignInStream();
+		cancelChatgptSignIn();
 	});
 
 	async function triggerRebuild() {
@@ -770,7 +770,9 @@
 	let sfAccountEmail = $state<string | null>(null);
 	let sfSignInState = $state<string | null>(null);
 	let sfSignInUrl = $state('');
-	let sfPastedUrl = $state('');
+	let sfDeviceCode = $state('');
+	let sfDeviceExpiresAt = $state(0);
+	let signInGeneration = 0;
 	let sfSigningIn = $state(false);
 	let sfSignInError = $state('');
 	let signInStream: EventSource | null = null;
@@ -781,24 +783,33 @@
 	}
 
 	function resetChatgptSignIn() {
-		closeSignInStream();
+		cancelChatgptSignIn();
 		sfConnectionId = null;
 		sfAccountEmail = null;
 		sfSignInState = null;
 		sfSignInUrl = '';
-		sfPastedUrl = '';
+		sfDeviceCode = '';
+		sfFetching = false;
 		sfSigningIn = false;
 		sfSignInError = '';
+	}
+
+	function changeSheetProviderType() {
+		resetChatgptSignIn();
+		sfModels = [];
+		sfModel = '';
+		sfError = '';
 	}
 
 	function signInFinished(connectionId: string, email: string | null) {
 		closeSignInStream();
 		sfConnectionId = connectionId;
+		sfModel = '';
 		sfAccountEmail = email;
 		sfSigningIn = false;
 		sfSignInState = null;
 		sfSignInUrl = '';
-		sfPastedUrl = '';
+		sfDeviceCode = '';
 		void fetchChatgptModels(connectionId);
 	}
 
@@ -809,75 +820,75 @@
 		sfSignInState = null;
 	}
 
-	// A sign-in already in hand is kept until a new one replaces it, so giving
-	// up on "Sign in again" leaves the provider as it was.
+	// Keep the saved connection until a replacement is saved.
 	async function startChatgptSignIn() {
-		closeSignInStream();
-		sfSignInState = null;
-		sfSignInUrl = '';
-		sfPastedUrl = '';
+		cancelChatgptSignIn();
+		const generation = ++signInGeneration;
 		sfSignInError = '';
 		sfSigningIn = true;
-		// Listening starts first, so a quick sign-in cannot finish unheard.
-		signInStream = new EventSource('/api/providers/chatgpt/sign-in/stream');
-		signInStream.onmessage = (e) => {
-			const msg = JSON.parse(e.data);
-			if (!sfSignInState || msg.state !== sfSignInState) return;
-			if (msg.type === 'sign-in-complete') signInFinished(msg.connectionId, msg.email ?? null);
-			else if (msg.type === 'sign-in-failed') signInFailed(msg.message);
-		};
 		try {
 			const res = await fetch('/api/providers/chatgpt/sign-in', { method: 'POST' });
 			const body = await res.json().catch(() => ({}));
+			if (generation !== signInGeneration) {
+				if (body.state) void cancelServerSignIn(body.state);
+				return;
+			}
 			if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
 			sfSignInState = body.state;
-			sfSignInUrl = body.authorizeUrl;
-			// The desktop app hands a new window to the system browser
-			// (`on_new_window` in src-tauri/src/lib.rs).
-			window.open(body.authorizeUrl, '_blank', 'noopener');
+			sfSignInUrl = body.verificationUrl;
+			sfDeviceCode = body.userCode;
+			sfDeviceExpiresAt = body.expiresAt;
+			// The stream sends a snapshot, so approval before connect is not lost.
+			signInStream = new EventSource(`/api/providers/chatgpt/sign-in/stream?state=${encodeURIComponent(body.state)}`);
+			signInStream.onmessage = (e) => {
+				const msg = JSON.parse(e.data);
+				if (generation !== signInGeneration || msg.state !== sfSignInState) return;
+				if (msg.type === 'sign-in-complete') signInFinished(msg.connectionId, msg.email ?? null);
+				else if (msg.type === 'sign-in-failed') signInFailed(msg.message);
+			};
+			signInStream.onerror = () => {
+				if (generation === signInGeneration && signInStream?.readyState === EventSource.CLOSED)
+					signInFailed('The sign-in is no longer available. Start again.');
+			};
 		} catch (err) {
-			signInFailed(err instanceof Error ? err.message : 'Sign-in could not start');
+			if (generation === signInGeneration) signInFailed(err instanceof Error ? err.message : 'Sign-in could not start');
 		}
 	}
 
-	// Stops waiting. The server drops the unfinished sign-in by itself.
+	async function cancelServerSignIn(state: string) {
+		await fetch('/api/providers/chatgpt/sign-in/cancel', {
+			method: 'POST', headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ state }), keepalive: true
+		}).catch(() => undefined);
+	}
 	function cancelChatgptSignIn() {
+		++signInGeneration;
+		if (sfSignInState) void cancelServerSignIn(sfSignInState);
 		closeSignInStream();
 		sfSigningIn = false;
 		sfSignInState = null;
 		sfSignInUrl = '';
-		sfPastedUrl = '';
+		sfDeviceCode = '';
 	}
-
-	// For an Akaun on another machine, where the redirect cannot reach it.
-	async function submitPastedUrl() {
-		sfSignInError = '';
-		const res = await fetch('/api/providers/chatgpt/sign-in/complete', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ url: sfPastedUrl })
-		});
-		const body = await res.json().catch(() => ({}));
-		if (!res.ok) {
-			sfSignInError = body.error ?? `HTTP ${res.status}`;
-			return;
-		}
-		// The stream may have reported the same result first.
-		if (sfConnectionId !== body.connectionId) signInFinished(body.connectionId, body.email ?? null);
+	async function copyDeviceCode() {
+		try { await navigator.clipboard.writeText(sfDeviceCode); toast.success('Code copied'); }
+		catch { toast.error('Select and copy the code manually.'); }
 	}
 
 	async function fetchChatgptModels(connectionId: string) {
+		const generation = signInGeneration;
 		sfFetching = true;
 		sfError = '';
 		try {
 			const res = await fetch(`/api/providers/chatgpt/models?connection=${encodeURIComponent(connectionId)}`);
 			const body = await res.json().catch(() => ({}));
+			if (generation !== signInGeneration || sfConnectionId !== connectionId || sfType !== 'chatgpt') return;
 			if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
 			sfModels = body.models ?? [];
 		} catch (err) {
-			sfError = err instanceof Error ? err.message : 'Failed to fetch models';
+			if (generation === signInGeneration) sfError = err instanceof Error ? err.message : 'Failed to fetch models';
 		} finally {
-			sfFetching = false;
+			if (generation === signInGeneration) sfFetching = false;
 		}
 	}
 
@@ -1074,8 +1085,7 @@
 
 	function closeSheet() {
 		sheetOpen = false;
-		closeSignInStream();
-		sfSigningIn = false;
+		cancelChatgptSignIn();
 	}
 
 	let deleteConfirmOpen = $state(false);
@@ -1201,7 +1211,7 @@
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
 		aiCustomInstructions = data.autoImportCustomInstructions;
 		pdfThemeColor = data.pdfThemeColor;
-		sheetOpen = false;
+		closeSheet();
 	}
 
 	let pendingTab = $state<Tab | null>(null);
@@ -1779,7 +1789,7 @@
 										<span class="prov-type-badge">{PROVIDER_LABELS[prov.type] ?? prov.type}</span>
 										<div class="prov-info">
 											<span class="prov-name">{prov.name}</span>
-											<span class="prov-model">{truncateModel(prov.model)}{#if prov.chatgptAccount?.email} · {prov.chatgptAccount.email}{/if}</span>
+											<span class="prov-model">{truncateModel(prov.model)}{#if prov.chatgptAccount?.email} · {prov.chatgptAccount.email}{/if}{#if prov.type === 'chatgpt' && !prov.chatgptAccount} · Reconnect required{/if}</span>
 										</div>
 										<button
 											type="button"
@@ -2101,6 +2111,7 @@
 							type="single"
 							name="type"
 							bind:value={sfType}
+							onValueChange={changeSheetProviderType}
 							disabled={editingProvider !== null && !editingProvider.isNew}
 						>
 							<Select.Trigger id="sf-type" class="w-full">
@@ -2121,7 +2132,7 @@
 							{:else if sfType === 'groq'}
 								Fast open-source model inference (Llama, Mixtral and more). <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" style="color:var(--primary);">Get a key ↗</a>
 							{:else if sfType === 'chatgpt'}
-								Uses your ChatGPT plan instead of an API key. Requests count toward the plan's usage limits, which Codex shares. OpenAI offers this for personal and locally run apps; a server hosted for a team may need OpenAI's approval.
+								Uses your ChatGPT subscription's Codex access instead of an API key. Enable device code login in ChatGPT Security settings, or ask your workspace administrator.
 							{/if}
 						</span>
 					</div>
@@ -2159,25 +2170,19 @@
 								</div>
 							{/if}
 							{#if sfSigningIn && sfSignInUrl}
-								<span style="font-size:11px; color:var(--muted-foreground); margin-top:6px; display:block;">
-									Finish signing in on the page that opened.
-									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an OpenAI page outside the app, not a route. -->
-									<a href={sfSignInUrl} target="_blank" rel="noopener noreferrer" style="color:var(--primary);">Open it again ↗</a>
-								</span>
-								<label class="field-label" for="sf-pasted" style="margin-top:14px;">Akaun running on another computer?</label>
-								<span style="font-size:11px; color:var(--muted-foreground); display:block; margin-bottom:6px;">
-									After you sign in, the browser shows a page that cannot load. Copy that page's whole address and paste it here.
-								</span>
-								<div style="display:flex; gap:8px;">
-									<Input
-										id="sf-pasted"
-										class="w-full"
-										placeholder="http://127.0.0.1:…/auth/callback?code=…"
-										value={sfPastedUrl}
-										oninput={(e) => (sfPastedUrl = (e.target as HTMLInputElement).value)}
-									/>
-									<button type="button" class="sheet-btn" disabled={!sfPastedUrl} onclick={submitPastedUrl}>Finish</button>
+								<div class="field" style="margin-top:12px;">
+									<span class="field-label">Your one-time sign-in code</span>
+									<div style="display:flex; gap:8px; align-items:center;">
+										<strong style="font-family:monospace; font-size:20px; user-select:all;">{sfDeviceCode}</strong>
+										<button type="button" class="sheet-btn" onclick={copyDeviceCode}>Copy code</button>
+									</div>
+									<span style="font-size:12px; color:var(--muted-foreground);">Open ChatGPT, enter this code and approve. Akaun will connect automatically. Expires at {new Date(sfDeviceExpiresAt).toLocaleTimeString()}.</span>
+									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external OpenAI verification page. -->
+									<a href={sfSignInUrl} target="_blank" rel="noopener noreferrer" class="sheet-btn">Open ChatGPT ↗</a>
 								</div>
+							{/if}
+							{#if editingProvider && !editingProvider.isNew && !editingProvider.chatgptAccount && !sfConnectionId && !sfSigningIn}
+								<span style="font-size:12px; color:var(--muted-foreground);">This provider needs device sign-in. Reconnect and select an available model before saving.</span>
 							{/if}
 							{#if sfSignInError}
 								<div style="font-size:12px; color:var(--red); margin-top:6px;">{sfSignInError}</div>
@@ -2227,6 +2232,9 @@
 							</div>
 						{:else if sfError}
 							<div style="font-size:12px; color:var(--red); margin-bottom:6px;">{sfError}</div>
+							{#if sfType === 'chatgpt' && sfConnectionId}
+								<button type="button" class="sheet-btn" onclick={() => sfConnectionId && fetchChatgptModels(sfConnectionId)}>Retry loading models</button>
+							{/if}
 						{/if}
 
 						{#if sfFilteredModels.length > 0}
@@ -2242,7 +2250,7 @@
 								</Select.Content>
 							</Select.Root>
 						{:else}
-							{@const fallbackModel = editingProvider !== null ? (editingProvider?.model ?? '') : ''}
+							{@const fallbackModel = editingProvider !== null && !(sfType === 'chatgpt' && sfConnectionId) ? (editingProvider?.model ?? '') : ''}
 							<input type="hidden" name="model" value={sfModel || fallbackModel} />
 							<div style="font-size:12px; color:var(--muted-foreground); padding:8px 12px; border:1px solid var(--border); border-radius:6px; background:var(--muted);">
 								{fallbackModel || (sfType === 'chatgpt' ? 'Sign in to load available models' : 'Enter API key to load available models')}
@@ -2270,8 +2278,8 @@
 							disabled={!sfName ||
 								(!sfModel && !editingProvider) ||
 								(sfType === 'chatgpt' &&
-									!sfConnectionId &&
-									!(editingProvider && !editingProvider.isNew && editingProvider.chatgptAccount))}
+									(sfSigningIn || (sfConnectionId && (sfFetching || !sfModels.some((m) => m.id === sfModel))) ||
+									(!sfConnectionId && !(editingProvider && !editingProvider.isNew && editingProvider.chatgptAccount))))}
 						>
 							{editingProvider ? 'Save changes' : 'Add provider'}
 						</button>
