@@ -86,6 +86,21 @@ describe("callStructured", () => {
     expect(mocks.throttle).toHaveBeenCalledWith(250);
   });
 
+  it("sends no temperature to a ChatGPT plan, in either mode", async () => {
+    const model = mockModel([
+      { error: httpError(400, "response_format is unsupported") },
+      { text: JSON.stringify(thing) },
+    ]);
+    const config = { ...provider("plan", "gpt-5.6-luna"), type: "chatgpt" };
+
+    await expect(
+      callStructured(model, config, spec("thing@1")),
+    ).resolves.toEqual(thing);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(model.doGenerateCalls[0].temperature).toBeUndefined();
+    expect(model.doGenerateCalls[1].temperature).toBeUndefined();
+  });
+
   it("falls back to text on a 400 and remembers it for that schema only", async () => {
     const model = mockModel([
       { error: httpError(400, "response_format is unsupported") },

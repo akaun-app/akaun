@@ -42,6 +42,15 @@ import {
   deleteProvider,
   reorderProviders,
 } from "$lib/server/llmProviders.js";
+import {
+  parseStoredCredentials,
+  revokeCredentials,
+} from "$lib/server/llm/chatgpt-oauth.js";
+import {
+  peekConnection,
+  takeConnection,
+} from "$lib/server/llm/chatgpt-sign-in.js";
+import { createLogger } from "$lib/server/logger.js";
 import type { ProviderType } from "$lib/server/import/providers/index.js";
 import { fail } from "@sveltejs/kit";
 import { getAccountDefaults } from "$lib/server/services/account-defaults.js";
@@ -56,6 +65,8 @@ import {
  * accounts underneath. There is no second list and no mapping between the two,
  * so what Settings offers and what an expense screen offers can never drift.
  */
+const log = createLogger("settings");
+
 export const load: PageServerLoad = async ({ locals }) => {
   // Categories are accounts, and accounts are created, renamed and archived on
   // the Accounts screen. Settings no longer lists them (FR-019, FR-020); this
@@ -152,11 +163,17 @@ export const load: PageServerLoad = async ({ locals }) => {
     ? `/api/files/${encodeURIComponent(companyLogoPath)}`
     : null;
 
-  const providers = getAllProviders(db).map((p) => ({
-    ...p,
-    hasApiKey: p.apiKey.length > 0,
-    apiKey: "", // never send actual key to browser
-  }));
+  const providers = getAllProviders(db).map(({ oauthCredentials, ...p }) => {
+    // A `chatgpt` provider's tokens never leave the server either: the
+    // browser is told only who signed in.
+    const signIn = parseStoredCredentials(oauthCredentials);
+    return {
+      ...p,
+      hasApiKey: p.apiKey.length > 0,
+      apiKey: "", // never send actual key to browser
+      chatgptAccount: signIn ? { email: signIn.email ?? null } : null,
+    };
+  });
 
   // Import profiles, listed beside the providers (006 US6 AS1). This loader
   // checks no permission, so the list checks its own: seeing it needs
@@ -320,7 +337,7 @@ export const actions: Actions = {
     return { success: true, action: "saveSequenceTemplate" };
   },
 
-  updateProvider: async ({ request }) => {
+  updateProvider: async ({ locals, request }) => {
     const data = await request.formData();
     const id = String(data.get("id") ?? "").trim();
     if (!id) return fail(400, { error: "Provider ID is required" });
@@ -334,6 +351,20 @@ export const actions: Actions = {
     if (name) updates.name = name;
     if (model) updates.model = model;
     if (apiKey) updates.apiKey = apiKey;
+    // A new sign-in on a saved `chatgpt` provider replaces its tokens; without
+    // one, the saved sign-in stays.
+    const connectionId = String(data.get("connectionId") ?? "").trim();
+    if (connectionId) {
+      const signIn = locals.user && takeConnection(locals.user.id, connectionId);
+      if (!signIn)
+        return fail(400, {
+          error: "The ChatGPT sign-in expired before it was saved. Sign in again.",
+        });
+      // The session it replaces is not revoked, unlike on Delete. The new
+      // sign-in uses the same client id for the same person, and a server
+      // may revoke every token of that pair (RFC 7009 §2.1), the new one too.
+      updates.oauthCredentials = JSON.stringify(signIn);
+    }
     if (baseUrlRaw !== null)
       updates.baseUrl = String(baseUrlRaw).trim() || null;
 
@@ -346,6 +377,25 @@ export const actions: Actions = {
     const data = await request.formData();
     const id = String(data.get("id") ?? "").trim();
     if (!id) return fail(400, { error: "Provider ID is required" });
+
+    // Ends a `chatgpt` provider's session at OpenAI as well. Best effort: the
+    // provider is deleted either way, and a session left open can still be
+    // removed under ChatGPT's connected apps.
+    // Not when another provider is signed in to the same account: a revoke
+    // may end every session of that client and person (RFC 7009 §2.1).
+    const rows = getAllProviders(db);
+    const signIn = parseStoredCredentials(
+      rows.find((p) => p.id === id)?.oauthCredentials,
+    );
+    const shared =
+      signIn !== null &&
+      rows.some(
+        (p) =>
+          p.id !== id &&
+          parseStoredCredentials(p.oauthCredentials)?.subject === signIn.subject,
+      );
+    if (signIn && !shared && !(await revokeCredentials(signIn)))
+      log.warn({ providerId: id }, "ChatGPT sign-in could not be revoked");
 
     deleteProvider(db, id);
 
@@ -377,12 +427,15 @@ export const actions: Actions = {
       model: string;
       baseUrl: string | null;
       enabled: boolean;
+      /** A `chatgpt` row's finished sign-in, waiting for this save. */
+      connectionId: string;
     };
 
     const VALID_TYPES: ProviderType[] = [
       "openrouter",
       "google_ai_studio",
       "groq",
+      "chatgpt",
     ];
 
     let entries: (ExistingEntry | NewEntry)[];
@@ -402,6 +455,7 @@ export const actions: Actions = {
             model: String(e.model ?? "").trim(),
             baseUrl: String(e.baseUrl ?? "").trim() || null,
             enabled: Boolean(e.enabled),
+            connectionId: String(e.connectionId ?? "").trim(),
           } satisfies NewEntry;
         }
         return { id: String(e?.id ?? ""), enabled: Boolean(e?.enabled) };
@@ -412,6 +466,16 @@ export const actions: Actions = {
       return fail(400, { error: "Invalid provider list data" });
     }
 
+    const userId = locals.user!.id;
+    // Each new `chatgpt` row needs a sign-in that is still waiting. All of them
+    // are checked before anything is created, so an expired one saves nothing.
+    for (const e of entries) {
+      if ("isNew" in e && e.type === "chatgpt" && !peekConnection(userId, e.connectionId))
+        return fail(400, {
+          error: `The ChatGPT sign-in for ${e.name || "a new provider"} expired before it was saved. Open it and sign in again.`,
+        });
+    }
+
     const tempIdToRealId = new Map<string, string>();
     for (const e of entries) {
       if (!("isNew" in e)) continue;
@@ -420,12 +484,15 @@ export const actions: Actions = {
       if (!e.name) return fail(400, { error: "Name is required" });
       if (!e.model) return fail(400, { error: "Model is required" });
 
+      const signIn =
+        e.type === "chatgpt" ? takeConnection(userId, e.connectionId) : null;
       const created = insertProvider(db, {
         type: e.type as ProviderType,
         name: e.name,
-        apiKey: e.apiKey,
+        apiKey: e.type === "chatgpt" ? "" : e.apiKey,
         model: e.model,
         baseUrl: e.baseUrl ?? undefined,
+        oauthCredentials: signIn ? JSON.stringify(signIn) : null,
       });
       tempIdToRealId.set(e.tempId, created.id);
     }
