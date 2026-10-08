@@ -256,6 +256,8 @@ export { alreadyImported };
  * gave with the upload, or from the file.
  */
 interface TextForm<T> {
+  /** Requires workbook cells when the file is a spreadsheet. */
+  needsWorkbook?: boolean;
   given: (text: string) => T;
   /** From a PDF or a photo. */
   extract: (absPath: string, mimeType: string) => Promise<T>;
@@ -291,6 +293,7 @@ const NUMBERED_TEXT: TextForm<string> = {
  * pass, so an image is read by OCR once and a workbook unpacked once.
  */
 const SOURCE_TEXTS: TextForm<DocumentSource> = {
+  needsWorkbook: true,
   given: (text) => ({ plain: text, numbered: numberDocumentLines([text]) }),
   extract: extractPlainAndNumberedText,
   fromSource: (source) => source,
@@ -315,7 +318,14 @@ async function documentText<T>(
   let text: T;
   let extracted = false;
   const kept = keptText(job);
-  if (job.preExtractedText && job.preExtractedText.trim().length > 0) {
+  // A source read needs the actual spreadsheet cells for sheet selection and
+  // detection; caller-provided text cannot establish which sheet it came from.
+  const needsWorkbook = form.needsWorkbook && isSpreadsheetJob(job);
+  if (
+    !needsWorkbook &&
+    job.preExtractedText &&
+    job.preExtractedText.trim().length > 0
+  ) {
     // Caller already ran its own OCR/extraction — skip server-side extraction entirely.
     text = form.given(job.preExtractedText.trim());
     log.debug(
@@ -517,7 +527,7 @@ export async function processImportJob(
   // The cells and the numbered text for a table, or for a profile that reads
   // one sheet of a workbook (FR-069); the numbered text alone for the AI.
   let source: DocumentSource | null;
-  if (needsCells(plan) || (plan.kind === "profile" && readsCells(job))) {
+  if (needsCells(plan) || (plan.kind === "profile" && isSpreadsheetJob(job))) {
     source = await documentText(
       db,
       job,

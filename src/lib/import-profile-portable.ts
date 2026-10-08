@@ -40,7 +40,9 @@ export interface PortableChoices {
 export type AccountReference = { code: string; name: string };
 
 export const PROFILE_FILE_FORMAT = "akaun.import-profile";
-export const PROFILE_FILE_VERSION = 1;
+// Version 2 moves sheet selection to the profile and adds file-type restrictions.
+// Older readers must refuse it rather than silently discard these settings.
+export const PROFILE_FILE_VERSION = 2;
 
 /**
  * The file. `profile` is an `ImportProfileDraft` with each account id an

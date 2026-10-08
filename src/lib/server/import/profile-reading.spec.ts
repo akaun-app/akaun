@@ -1682,6 +1682,46 @@ describe("a spreadsheet read with a profile, or by Auto-detect", () => {
       expect(parseExtractionNotes(row.extractionNotes)?.sheet).toBe("Summary");
     });
 
+    it.each([ImportReadAs.Profile, ImportReadAs.Auto])(
+      "selects the workbook sheet despite caller-provided text (readAs %s)",
+      async (readAs) => {
+        const profileId = saveProfile(
+          statementProfile({ sheet: "Summary", phrases: ["Income Statement"] }),
+        );
+        const model = serve([json(statementAnswer())]);
+        const row = await run(
+          queueFile("report.xlsx", report(), {
+            readAs,
+            profileId: readAs === ImportReadAs.Profile ? String(profileId) : null,
+            importMode: ImportMode.Summary,
+            preExtractedText: "ORDER-ROW-1 from the wrong sheet",
+          }),
+        );
+
+        expect(row.state).toBe(ImportState.Grouped);
+        expect(sentPrompt(model)).toContain("Sheet: Summary");
+        expect(sentPrompt(model)).not.toContain("ORDER-ROW-1");
+        expect(parseExtractionNotes(row.extractionNotes)?.sheet).toBe("Summary");
+      },
+    );
+
+    it("validates a named sheet despite caller-provided text", async () => {
+      const profileId = saveProfile(statementProfile({ sheet: "Payouts" }));
+      const model = serve([json(statementAnswer())]);
+      const row = await run(
+        queueFile("report.xlsx", report(), {
+          readAs: ImportReadAs.Profile,
+          profileId: String(profileId),
+          importMode: ImportMode.Summary,
+          preExtractedText: "Income Statement from a different sheet",
+        }),
+      );
+
+      expect(row.state).toBe(ImportState.Failed);
+      expect(row.error).toContain('reads the sheet "Payouts"');
+      expect(model.doGenerateCalls).toHaveLength(0);
+    });
+
     it("reads the first visible sheet when the profile names none", async () => {
       const profileId = saveProfile(statementProfile());
       const model = serve([json(statementAnswer())]);

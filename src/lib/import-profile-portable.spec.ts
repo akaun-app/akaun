@@ -82,7 +82,7 @@ describe("profileFile", () => {
     );
     expect(lost).toEqual([]);
     expect(file.format).toBe("akaun.import-profile");
-    expect(file.version).toBe(1);
+    expect(file.version).toBe(2);
     expect(file.exportedAt).toBe("2026-10-05T00:00:00.000Z");
     const profile = file.profile as {
       accountId: unknown;
@@ -270,6 +270,7 @@ describe("the profile's sheet (FR-069)", () => {
   it("goes with the profile, and comes back on import", () => {
     const draft = { ...walletDraft(), sheet: "Transaction Report" };
     const { file } = profileFile(draft, here);
+    expect(file.version).toBe(2);
     expect(file.profile.sheet).toBe("Transaction Report");
     const back = draftFromFile(roundTrip(file), there, null);
     expect(back.ok && back.draft.sheet).toBe("Transaction Report");
@@ -306,7 +307,7 @@ describe("parseProfileFile", () => {
       /no version/,
     );
     expect(
-      error('{"format":"akaun.import-profile","version":2,"profile":{}}'),
+      error('{"format":"akaun.import-profile","version":3,"profile":{}}'),
     ).toMatch(/newer version/);
     expect(error('{"format":"akaun.import-profile","version":1}')).toMatch(
       /no profile/,
