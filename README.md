@@ -166,6 +166,8 @@ Akaun exposes read-only bookkeeping tools at `/mcp`. Agents can query records, a
    | Server URL     | Your Akaun URL followed by `/mcp`, e.g. `https://books.example.com/mcp` |
    | Authentication | HTTP header `Authorization: Bearer <your-api-token>`                    |
 
+MCP Inspector supports this endpoint with Protocol Era **Modern** (2026-07-28), **Auto**, or **Legacy**. Select **Modern** or **Auto** to verify modern support; the same URL and bearer token work in both eras.
+
 For the default local Docker setup, the URL is `http://localhost:6969/mcp`. Use HTTPS for remote connections. The client must be able to reach the Akaun server; a client running on another machine needs that server's reachable address instead of `localhost`.
 
 ### Codex example
