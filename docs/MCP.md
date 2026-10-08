@@ -95,17 +95,86 @@ Use `review-record-descriptions` to ask the agent for a bounded before/after tab
 
 ## Deployment and transport
 
-`/mcp` is a single MCP protocol endpoint; tools are dispatched by `tools/call`, not individual REST paths. The server uses the official TypeScript SDK's Web Standard Streamable HTTP transport, with request-scoped servers and stateless JSON responses.
+`/mcp` is a single MCP protocol endpoint; tools are dispatched by `tools/call`, not individual REST paths. The server uses SDK v2's Web Standard `createMcpHandler`, with request-scoped servers supporting both modern (2026-07-28) and legacy (2025-era) clients.
 
-- POST handles initialization, requests and notifications. Clients must send the protocol's JSON content type and Accept headers.
+- POST handles modern per-request traffic and legacy initialization, requests and notifications. Clients must send the protocol's JSON content type and Accept headers. Modern responses use JSON for Akaun's reads; the SDK's stateless legacy compatibility leg returns request results over SSE.
 - GET, DELETE and other methods return 405 (`Allow: POST`). No session IDs or standalone event stream are issued.
 - Cookie sessions are not accepted; missing/invalid bearer credentials return 401 with a Bearer challenge, without a login redirect.
 - Native clients may omit Origin. If provided, Origin must exactly match the application's public origin, including scheme and port. Configure the app's trusted public `ORIGIN` correctly behind a reverse proxy. Cross-origin browser access is not enabled.
-- Responses use `Cache-Control: no-store`. Existing `/api/*/stream` endpoints continue serving browser SSE updates independently.
+- Responses use `Cache-Control: no-store`. Modern discovery, list and resource results also carry `ttlMs: 0` and `cacheScope: "private"`. No MCP change-notification capabilities are advertised, and `subscriptions/listen` is refused without opening a stream. Existing `/api/*/stream` endpoints continue serving browser SSE updates independently.
 
-Reverse proxies need to forward `/mcp`, Authorization, Accept, Content-Type and MCP protocol headers without changing the request body. This phase does not need MCP streaming-specific proxy tuning.
+Reverse proxies need to forward `/mcp`, Authorization, Accept, Content-Type, `Mcp-Protocol-Version`, `Mcp-Method` and `Mcp-Name` without changing the request body or header values. Allow `text/event-stream` responses and avoid buffering the legacy compatibility responses. There is no standalone GET event stream.
 
 ## Implementation and verification
+
+### Inspector schema portability
+
+All ten tools share the output envelope in `src/lib/server/mcp/common.ts`.
+Its `data` field is a string-keyed record of JSON values (`z.json()`), including
+scalars, null, arrays and nested objects. The previous `z.unknown()` value schema
+emitted `additionalProperties: {}`, which accepts anything and triggers the
+Inspector's unconstrained-schema portability warning. An object-only replacement
+would reject valid results such as counts, lists and nullable balances.
+
+The integration suite checks the schemas actually returned by `tools/list` for
+unconstrained schema objects and exercises client validation of real results.
+This is a shared JSON-value contract; tool-specific output schemas would provide
+more precise field documentation and validation in a future change.
+
+### Modern protocol support
+
+Akaun uses `@modelcontextprotocol/server` v2 in production and
+`@modelcontextprotocol/client` v2 in its integration tests. The v1 dependency
+has been removed. `src/lib/server/mcp/http.ts` serves both eras through
+`createMcpHandler(() => createReadServer(context))`, with `legacy: "stateless"`.
+The factory captures only the current authenticated request's database and locals.
+Bearer authentication, exact Origin checks, POST-only access, the 128 KiB request
+limit and per-call permission checks apply to both eras.
+
+In MCP Inspector, select **Streamable HTTP**, enter the `/mcp` URL and configure
+the bearer header, then choose Protocol Era **Modern** or **Auto**. Auto probes
+`server/discover` and selects the modern era. **Legacy** remains supported for
+clients using the initialize handshake. Inspector defaults can vary by version;
+choose the era explicitly when verifying this migration.
+
+Modern revision **2026-07-28** removes the initialize handshake and protocol
+sessions. Each request carries the protocol version and client capabilities in
+`_meta`, with matching `Mcp-Method` and, where applicable, `Mcp-Name` headers.
+SDK v2 handles discovery, wire `resultType`, server identity metadata, protocol
+validation and response cleanup. Catalogs/resources have explicit private,
+zero-TTL cache hints so clients re-evaluate current data and permissions.
+Tool registration order is deterministic for each permission set.
+
+For an SDK v2 client, opt into automatic negotiation:
+
+```ts
+const client = new Client(clientInfo, {
+  versionNegotiation: { mode: "auto" },
+});
+```
+
+For strict modern testing use `mode: { pin: "2026-07-28" }`; for legacy use
+`mode: "legacy"`. The SDK's default client mode still uses the legacy handshake.
+The API token and `/mcp` URL are identical across eras.
+
+The HTTP integration suite runs the same schema, bookkeeping, permission,
+concurrent-user and revocation scenarios in all three modes. It also checks the
+actual modern request/response envelopes, discovery, headers, cache hints,
+unsupported revisions and method/name mismatches. In-memory transport tests
+exercise registration and error handling separately; they are legacy-only and
+are not used as evidence of modern wire support.
+
+Akaun does not use protocol subscriptions, sampling, roots, elicitation or
+experimental tasks. List-change/subscription capabilities are explicitly disabled;
+MCP subscription streams are not offered. Pino audit logging is separate from
+MCP protocol logging.
+
+Primary references (researched 2026-10-07):
+
+- [2026-07-28 specification changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+- [Official TypeScript SDK v1-to-v2 migration](https://ts.sdk.modelcontextprotocol.io/v2/migration/upgrade-to-v2)
+- [Explicit modern serving and negotiation](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28.html)
+- [Inspector protocol-era configuration](https://github.com/modelcontextprotocol/inspector/blob/main/docs/mcp-server-configuration.md)
 
 The route and authentication hook connect callers to request-scoped tool registrations. Reads reuse existing query/report functions; contact counts and paged outstanding/import queries run against SQLite. No second database-owning service or model call is introduced.
 
