@@ -826,10 +826,14 @@
 		const generation = ++signInGeneration;
 		sfSignInError = '';
 		sfSigningIn = true;
+		// Reserve the tab during the click so browsers allow it before the request completes.
+		const signInTab = window.open('about:blank', '_blank');
+		if (signInTab) signInTab.opener = null;
 		try {
 			const res = await fetch('/api/providers/chatgpt/sign-in', { method: 'POST' });
 			const body = await res.json().catch(() => ({}));
 			if (generation !== signInGeneration) {
+				signInTab?.close();
 				if (body.state) void cancelServerSignIn(body.state);
 				return;
 			}
@@ -838,6 +842,7 @@
 			sfSignInUrl = body.verificationUrl;
 			sfDeviceCode = body.userCode;
 			sfDeviceExpiresAt = body.expiresAt;
+			if (signInTab && !signInTab.closed) signInTab.location.replace(sfSignInUrl);
 			// The stream sends a snapshot, so approval before connect is not lost.
 			signInStream = new EventSource(`/api/providers/chatgpt/sign-in/stream?state=${encodeURIComponent(body.state)}`);
 			signInStream.onmessage = (e) => {
@@ -851,6 +856,7 @@
 					signInFailed('The sign-in is no longer available. Start again.');
 			};
 		} catch (err) {
+			signInTab?.close();
 			if (generation === signInGeneration) signInFailed(err instanceof Error ? err.message : 'Sign-in could not start');
 		}
 	}
