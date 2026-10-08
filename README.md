@@ -154,7 +154,22 @@ For the curious: Akaun is built with [SvelteKit](https://kit.svelte.dev/) (Svelt
 
 Akaun exposes read-only bookkeeping tools at `/mcp`. Agents can query records, accounts, contacts, outstanding amounts, financial reports and Auto Import jobs, and suggest standardized descriptions for manual review.
 
-### Connect an MCP client
+### Connect using OAuth
+
+For clients supporting MCP OAuth, enable it in the server environment and restart Akaun:
+
+```env
+ORIGIN=https://books.example.com
+OAUTH_ENABLED=true
+```
+
+Use your own public HTTPS address. `PUBLIC_BASE_URL` defaults to `ORIGIN`; if set separately, it must match. Database migrations apply automatically on startup. A tunnel or reverse proxy must forward OAuth/discovery endpoints and `/mcp` without an additional access-login barrier.
+
+Add `https://books.example.com/mcp` to your client's MCP settings and select OAuth. Clients supporting dynamic registration obtain their client ID automatically; Akaun supports public clients and clients using Basic or form-based client-secret authentication. Sign in with your Akaun account, then choose the read permissions to approve. OAuth scopes always limit access, including for superusers, and current group permissions still apply. These OAuth credentials work only on MCP.
+
+Manage or revoke a connection under **Profile → Connected apps**. See [OAuth setup and verification](docs/OAUTH.md) for configuration, client registration and deployment checks.
+
+### Connect using an API token
 
 1. Open **Users & Groups** in Akaun and create a dedicated integration user. Assign it a group with **View** permissions for Records, Accounts, Contacts, Reports and Auto Import, or just the features the agent needs. Keep it out of superuser groups and leave Add/Change/Delete permissions disabled.
 2. **Issue an API token** for that user and copy the one-time reveal into your client's secret configuration. This token inherits the user's REST permissions too, so a restricted integration user matters even though MCP itself is read-only.
@@ -188,7 +203,7 @@ Once connected, try asking: **“Show my expenses for September 2026 by category
 
 - **401 Unauthorized:** check the bearer token and whether it has been revoked or regenerated. Browser login cookies do not authenticate MCP.
 - **403 Forbidden:** check the integration user's View permissions. If your client sends an `Origin` header, it must exactly match Akaun's public origin, including scheme and port; configure `ORIGIN` correctly behind a reverse proxy.
-- **Client asks for OAuth login:** this release supports clients that accept configured bearer-token headers; OAuth discovery is not implemented.
+- **Client asks for OAuth login:** enable `OAUTH_ENABLED=true` with the correct public HTTPS `ORIGIN`, restart, then reconnect. Discovery endpoints must be publicly reachable.
 - **GET returns 405:** the endpoint uses stateless Streamable HTTP with POST requests. Select Streamable HTTP in your client rather than a legacy SSE transport.
 
 See [MCP setup and tool reference](docs/MCP.md) for connection details, permissions, financial semantics and limits.

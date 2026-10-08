@@ -1,6 +1,7 @@
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createReadServer } from "./server.js";
 import type { ReadContext } from "./common.js";
+import { scopeChallenge } from "./oauth-challenge.js";
 
 export async function handleMcpRequest(
   request: Request,
@@ -26,6 +27,8 @@ export async function handleMcpRequest(
       headers: { ...headers, Allow: "POST" },
     });
 
+  const challenge = await scopeChallenge(request, context.locals);
+  if (challenge) return challenge;
   // Capture this request's authenticated context only. SDK v2 serves modern
   // per-request envelopes and stateless legacy traffic from the same factory.
   const handler = createMcpHandler(() => createReadServer(context), {
