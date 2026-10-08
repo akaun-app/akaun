@@ -125,8 +125,8 @@ export function rewriteBody(raw: string): string {
   const body: unknown = JSON.parse(raw);
   if (!isObject(body)) return raw;
   for (const field of REJECTED_FIELDS) delete body[field];
-  // Codex requires instructions. Preserve complex system prompts in the input
-  // rather than losing receipt extraction rules during transport normalization.
+  // Codex requires top-level instructions. Keep trusted application rules
+  // above user-provided documents when normalizing system/developer messages.
   const contexts: string[] = [];
   if (typeof body.instructions === "string" && body.instructions)
     contexts.push(body.instructions);
@@ -145,26 +145,11 @@ export function rewriteBody(raw: string): string {
       }
       return false;
     });
-    if (contexts.length)
-      input.unshift({
-        role: "user",
-        content: [{ type: "input_text", text: contexts.join("\n\n") }],
-      });
     body.input = input;
-  } else if (contexts.length) {
-    body.input = [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: contexts.join("\n\n") }],
-      },
-      {
-        role: "user",
-        content: [{ type: "input_text", text: String(body.input ?? "") }],
-      },
-    ];
   }
-  body.instructions =
-    "Follow the supplied task instructions and return the requested output.";
+  body.instructions = contexts.length
+    ? contexts.join("\n\n")
+    : "Follow the supplied task instructions and return the requested output.";
   body.stream = true;
   body.store = false;
   return JSON.stringify(body);
