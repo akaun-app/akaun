@@ -1,319 +1,246 @@
-// The Settings sign-in for a `chatgpt` provider, from "Sign in with ChatGPT"
-// to a set of tokens the next Save stores on the provider row.
-//
-// OpenAI redirects only to an IPv4 loopback address. So each sign-in opens a
-// listener on `127.0.0.1:<free port>` for as long as it waits.
-// - Akaun on the same machine as the browser (the desktop app, a local
-//   server): the redirect lands on the listener and sign-in finishes by itself.
-// - Akaun on another machine (Docker on a server): the redirect cannot reach
-//   it, and the browser shows a page that does not load. Its address still
-//   holds the code, so the person pastes that address into Settings, and it
-//   goes through `completeFromPastedUrl`. The code is useless without the PKCE
-//   verifier, which never leaves this process.
-//
-// Two kinds of state are held in memory only, each tied to the user who
-// started it:
-// - A pending sign-in, for 10 minutes.
-// - A finished connection waiting for Save, for 30 minutes. This keeps the
-//   Settings rule that nothing is written before Save. A restart drops both,
-//   and the person signs in again.
-
-import { createServer, type Server } from "node:http";
-import { EventEmitter } from "events";
+// Device sign-in state stays server-side and belongs to the initiating user.
+import { EventEmitter } from "node:events";
 import {
-  CALLBACK_PATH,
+  requestDeviceCode,
+  checkDeviceCode,
   ChatgptAuthError,
-  DYNAMIC_CLIENT_ID,
-  buildAuthorizeUrl,
-  discover,
-  exchangeCode,
-  parseCallback,
-  randomValue,
-  type CallbackParams,
+  type DeviceAuthorization,
   type ChatgptCredentials,
 } from "./chatgpt-oauth.js";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
-
-const SIGN_IN_TTL_MS = 10 * 60_000;
-const CONNECTION_TTL_MS = 30 * 60_000;
-const APP_NAME = "Akaun";
-
-interface PendingSignIn {
-  userId: number;
-  nonce: string;
-  verifier: string;
-  clientId?: string;
-  redirectUri: string;
-  timer: ReturnType<typeof setTimeout>;
-  server: Server;
-  hooks: SignInHooks;
-}
-
-interface PendingConnection {
-  userId: number;
-  credentials: ChatgptCredentials;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-const signIns = new Map<string, PendingSignIn>();
-const connections = new Map<string, PendingConnection>();
-
-/**
- * `sign-in-complete` `{ userId, state, connectionId, email }` and
- * `sign-in-failed` `{ userId, state, message }`. The listener finishes a
- * sign-in outside any request, so this is how the Settings sheet hears of it.
- */
-export const chatgptSignInEvents = new EventEmitter();
-
-export interface SignInHooks {
-  /** The client id this installation was issued by an earlier sign-in. */
-  savedClientId?: string;
-  /** Called once a client id is issued, before the code is exchanged. */
-  onClientId?: (clientId: string) => void;
-  fetchFn?: FetchLike;
-}
-
 export interface SignInResult {
   connectionId: string;
   email: string | null;
 }
+export type SignInSnapshot =
+  | { type: "sign-in-pending"; state: string }
+  | ({ type: "sign-in-complete"; state: string } & SignInResult)
+  | { type: "sign-in-failed"; state: string; message: string };
+interface Attempt {
+  userId: number;
+  state: string;
+  controller: AbortController;
+  snapshot: SignInSnapshot;
+  device?: DeviceAuthorization;
+  timer?: ReturnType<typeof setTimeout>;
+  expiry?: ReturnType<typeof setTimeout>;
+  fetchFn?: FetchLike;
+}
+interface Connection {
+  models?: Set<string>;
+  userId: number;
+  credentials: ChatgptCredentials;
+  timer: ReturnType<typeof setTimeout>;
+}
+const attempts = new Map<string, Attempt>();
+const activeByUser = new Map<number, string>();
+const connections = new Map<string, Connection>();
+const CONNECTION_TTL_MS = 30 * 60_000;
+export const chatgptSignInEvents = new EventEmitter();
 
+function publish(a: Attempt, snapshot: SignInSnapshot) {
+  a.snapshot = snapshot;
+  chatgptSignInEvents.emit(snapshot.type, { userId: a.userId, ...snapshot });
+}
+function stop(a: Attempt) {
+  a.controller.abort();
+  clearTimeout(a.timer);
+  clearTimeout(a.expiry);
+  if (activeByUser.get(a.userId) === a.state) activeByUser.delete(a.userId);
+}
+function retainTerminal(a: Attempt) {
+  a.timer = setTimeout(() => attempts.delete(a.state), CONNECTION_TTL_MS);
+  a.timer.unref?.();
+}
+function fail(a: Attempt, message: string) {
+  if (a.snapshot.type !== "sign-in-pending") return;
+  stop(a);
+  publish(a, { type: "sign-in-failed", state: a.state, message });
+  retainTerminal(a);
+}
+export function signInSnapshot(
+  userId: number,
+  state: string,
+): SignInSnapshot | null {
+  const a = attempts.get(state);
+  return a?.userId === userId ? a.snapshot : null;
+}
+export function cancelSignIn(userId: number, state: string): void {
+  const a = attempts.get(state);
+  if (a?.userId === userId) fail(a, "ChatGPT sign-in was cancelled.");
+}
 export async function startSignIn(
   userId: number,
-  hooks: SignInHooks = {},
-): Promise<{ state: string; authorizeUrl: string }> {
-  const { authorization_endpoint } = await discover(hooks.fetchFn);
-  const state = randomValue();
-  const nonce = randomValue();
-  const verifier = randomValue();
-  const { server, port } = await listen(state);
-  const redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
-  const timer = setTimeout(() => {
-    if (signIns.get(state)?.server === server) {
-      signIns.delete(state);
-      server.close();
-      // Said aloud, so a sheet still waiting stops waiting.
-      chatgptSignInEvents.emit("sign-in-failed", {
-        userId,
-        state,
-        message:
-          "The sign-in timed out. Start again with Sign in with ChatGPT.",
-      });
+  hooks: { fetchFn?: FetchLike } = {},
+) {
+  const previous = activeByUser.get(userId);
+  if (previous) cancelSignIn(userId, previous);
+  // Bound retained attempts per user; saved/staged connections have their own TTL.
+  for (const [id, old] of attempts) {
+    if (old.userId === userId) {
+      clearTimeout(old.timer);
+      attempts.delete(id);
     }
-  }, SIGN_IN_TTL_MS);
-  timer.unref?.();
-  signIns.set(state, {
+  }
+  const state = crypto.randomUUID();
+  const a: Attempt = {
     userId,
-    nonce,
-    verifier,
-    clientId: hooks.savedClientId,
-    redirectUri,
-    timer,
-    server,
-    hooks,
-  });
-  const authorizeUrl = await buildAuthorizeUrl({
-    authorizationEndpoint: authorization_endpoint,
-    clientId: hooks.savedClientId,
-    redirectUri,
     state,
-    nonce,
-    verifier,
-    appName: APP_NAME,
-  });
-  return { state, authorizeUrl };
+    controller: new AbortController(),
+    snapshot: { type: "sign-in-pending", state },
+    fetchFn: hooks.fetchFn,
+  };
+  attempts.set(state, a);
+  activeByUser.set(userId, state);
+  try {
+    const device = await requestDeviceCode(hooks.fetchFn, a.controller.signal);
+    if (a.controller.signal.aborted)
+      throw new ChatgptAuthError(
+        "cancelled",
+        "This sign-in was replaced. Start again.",
+      );
+    a.device = device;
+    a.expiry = setTimeout(
+      () => fail(a, "The sign-in code expired. Start again."),
+      Math.max(0, device.expiresAt - Date.now()),
+    );
+    a.expiry.unref?.();
+    schedule(a, device.intervalMs);
+    return {
+      state,
+      userCode: device.userCode,
+      verificationUrl: device.verificationUrl,
+      expiresAt: device.expiresAt,
+    };
+  } catch (error) {
+    fail(
+      a,
+      error instanceof ChatgptAuthError
+        ? error.message
+        : "ChatGPT sign-in could not start. Try again.",
+    );
+    throw error instanceof ChatgptAuthError
+      ? error
+      : new ChatgptAuthError(
+          "sign_in_unavailable",
+          "ChatGPT sign-in could not start. Try again.",
+        );
+  }
 }
-
-/** Finishes a sign-in from the address the browser landed on. */
-export function completeFromPastedUrl(
+function schedule(a: Attempt, delay: number) {
+  a.timer = setTimeout(() => {
+    void poll(a);
+  }, delay);
+  a.timer.unref?.();
+}
+async function poll(a: Attempt) {
+  const device = a.device;
+  if (!device || a.controller.signal.aborted) return;
+  try {
+    const credentials = await checkDeviceCode(
+      device,
+      a.fetchFn,
+      a.controller.signal,
+    );
+    if (a.controller.signal.aborted) return;
+    if (!credentials) {
+      schedule(a, device.intervalMs);
+      return;
+    }
+    stop(a);
+    const connectionId = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      connections.delete(connectionId);
+      if (a.snapshot.type === "sign-in-complete")
+        publish(a, {
+          type: "sign-in-failed",
+          state: a.state,
+          message: "The connection expired before Save. Sign in again.",
+        });
+    }, CONNECTION_TTL_MS);
+    timer.unref?.();
+    const own = [...connections.entries()].filter(
+      ([, p]) => p.userId === a.userId,
+    );
+    if (own.length >= 10) {
+      const [oldId, old] = own[0];
+      clearTimeout(old.timer);
+      connections.delete(oldId);
+    }
+    connections.set(connectionId, { userId: a.userId, credentials, timer });
+    publish(a, {
+      type: "sign-in-complete",
+      state: a.state,
+      connectionId,
+      email: credentials.email ?? null,
+    });
+    retainTerminal(a);
+  } catch (error) {
+    if (a.controller.signal.aborted) return;
+    // Transient upstream/network failures retry within the overall expiry bound.
+    if (error instanceof ChatgptAuthError && error.code === "slow_down") {
+      device.intervalMs += 5000;
+      schedule(a, device.intervalMs);
+      return;
+    }
+    if (
+      !(error instanceof ChatgptAuthError) ||
+      error.status === 429 ||
+      (error.status ?? 0) >= 500
+    ) {
+      schedule(
+        a,
+        Math.max(
+          device.intervalMs,
+          10_000,
+          error instanceof ChatgptAuthError ? (error.retryAfterMs ?? 0) : 0,
+        ),
+      );
+      return;
+    }
+    fail(a, error.message);
+  }
+}
+/** Catalog returned by OpenAI for this unsaved connection, never browser input. */
+export function setConnectionModels(
   userId: number,
-  pasted: string,
-): Promise<SignInResult> {
-  const params = parseCallback(pasted);
-  if (!params || !params.state)
-    return Promise.reject(
-      new ChatgptAuthError(
-        "invalid_callback",
-        "That address is not a ChatGPT sign-in result. Copy the whole address from the page the browser opened after you signed in.",
-      ),
-    );
-  const pending = signIns.get(params.state);
-  if (!pending || pending.userId !== userId)
-    return Promise.reject(
-      new ChatgptAuthError(
-        "unknown_sign_in",
-        "This sign-in has expired or was already used. Start again with Sign in with ChatGPT.",
-      ),
-    );
-  return finish(params.state, params);
+  connectionId: string,
+  models: string[],
+): void {
+  const p = connections.get(connectionId);
+  if (p?.userId === userId) p.models = new Set(models);
 }
-
-/** Takes a finished connection for Save. It can be taken once. */
+export function connectionModelAllowed(
+  userId: number,
+  connectionId: string,
+  model: string,
+): boolean {
+  const p = connections.get(connectionId);
+  return p?.userId === userId && p.models?.has(model) === true;
+}
 export function takeConnection(
   userId: number,
   connectionId: string,
 ): ChatgptCredentials | null {
-  const pending = connections.get(connectionId);
-  if (!pending || pending.userId !== userId) return null;
+  const p = connections.get(connectionId);
+  if (!p || p.userId !== userId) return null;
   connections.delete(connectionId);
-  clearTimeout(pending.timer);
-  return pending.credentials;
+  clearTimeout(p.timer);
+  return p.credentials;
 }
-
-/** A finished connection's tokens, left in place: for the model list before Save. */
 export function peekConnection(
   userId: number,
   connectionId: string,
 ): ChatgptCredentials | null {
-  const pending = connections.get(connectionId);
-  return pending && pending.userId === userId ? pending.credentials : null;
+  const p = connections.get(connectionId);
+  return p?.userId === userId ? p.credentials : null;
 }
-
-async function finish(
-  state: string,
-  params: CallbackParams,
-): Promise<SignInResult> {
-  // Taken out at once, so the listener and a paste cannot both use one code.
-  const pending = signIns.get(state);
-  if (!pending)
-    throw new ChatgptAuthError(
-      "unknown_sign_in",
-      "This sign-in has expired or was already used. Start again with Sign in with ChatGPT.",
-    );
-  signIns.delete(state);
-  clearTimeout(pending.timer);
-  pending.server.close();
-
-  try {
-    if (!params.ok)
-      throw new ChatgptAuthError(
-        params.error,
-        params.error === "access_denied"
-          ? "ChatGPT sign-in was cancelled."
-          : `ChatGPT sign-in failed (${params.error}).`,
-      );
-    const clientId = params.clientId ?? pending.clientId;
-    if (!clientId || clientId === DYNAMIC_CLIENT_ID)
-      throw new ChatgptAuthError(
-        "registration_incomplete",
-        "ChatGPT did not finish registering Akaun. Try signing in again.",
-      );
-    const credentials = await exchangeCode(
-      {
-        clientId,
-        code: params.code,
-        verifier: pending.verifier,
-        redirectUri: pending.redirectUri,
-        nonce: pending.nonce,
-      },
-      pending.hooks.fetchFn,
-    );
-    // Saved only now. A pasted address can carry any `client_id`, and only a
-    // successful exchange, whose ID token names it as the audience, shows the
-    // issuer really issued it. Saving it sooner would let one bad paste
-    // break sign-in for the whole installation.
-    if (clientId !== pending.clientId) pending.hooks.onClientId?.(clientId);
-    const connectionId = crypto.randomUUID();
-    const timer = setTimeout(
-      () => connections.delete(connectionId),
-      CONNECTION_TTL_MS,
-    );
-    timer.unref?.();
-    connections.set(connectionId, {
-      userId: pending.userId,
-      credentials,
-      timer,
-    });
-    const result = { connectionId, email: credentials.email ?? null };
-    chatgptSignInEvents.emit("sign-in-complete", {
-      userId: pending.userId,
-      state,
-      ...result,
-    });
-    return result;
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "ChatGPT sign-in failed.";
-    chatgptSignInEvents.emit("sign-in-failed", {
-      userId: pending.userId,
-      state,
-      message,
-    });
-    throw error;
-  }
-}
-
-/** The loopback listener for one sign-in. It answers only its own callback. */
-function listen(state: string): Promise<{ server: Server; port: number }> {
-  let port = 0;
-  const server = createServer((req, res) => {
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Referrer-Policy", "no-referrer");
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'",
-    );
-    const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
-    // The Host check stops a page that rebinds a name to 127.0.0.1 from
-    // reaching the listener.
-    if (
-      req.method !== "GET" ||
-      url.pathname !== CALLBACK_PATH ||
-      req.headers.host !== `127.0.0.1:${port}`
-    ) {
-      res.writeHead(404).end("Not found");
-      return;
-    }
-    const params = parseCallback(url.href);
-    if (!params || params.state !== state) {
-      res
-        .writeHead(400, { "Content-Type": "text/plain; charset=utf-8" })
-        .end(
-          "This is not the sign-in Akaun is waiting for. Start again from Settings.",
-        );
-      return;
-    }
-    finish(state, params).then(
-      () =>
-        page(res, "Signed in", "You can close this tab and return to Akaun."),
-      (error: unknown) =>
-        page(
-          res,
-          "Sign-in did not finish",
-          error instanceof Error ? error.message : "Try again from Settings.",
-        ),
-    );
-  });
-  return new Promise((resolve, reject) => {
-    server.once("error", () =>
-      reject(
-        new ChatgptAuthError(
-          "callback_unavailable",
-          "Akaun could not open a local port for the ChatGPT sign-in.",
-        ),
-      ),
-    );
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      port = typeof address === "object" && address ? address.port : 0;
-      resolve({ server, port });
-    });
-  });
-}
-
-function page(
-  res: import("node:http").ServerResponse,
-  title: string,
-  text: string,
-): void {
-  const escape = (s: string) =>
-    s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  res
-    .writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
-    .end(
-      `<!doctype html><html lang="en"><meta charset="utf-8"><title>${escape(title)}</title>` +
-        `<style>body{font:16px system-ui;max-width:32rem;margin:18vh auto;padding:24px}</style>` +
-        `<h1>${escape(title)}</h1><p>${escape(text)}</p></html>`,
-    );
+/** Test teardown: abort all requests and release every timer. */
+export function resetSignIns(): void {
+  for (const a of attempts.values()) stop(a);
+  for (const p of connections.values()) clearTimeout(p.timer);
+  attempts.clear();
+  activeByUser.clear();
+  connections.clear();
 }

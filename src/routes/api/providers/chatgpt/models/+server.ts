@@ -1,5 +1,8 @@
 import { json } from "@sveltejs/kit";
-import { peekConnection } from "$lib/server/llm/chatgpt-sign-in.js";
+import {
+  peekConnection,
+  setConnectionModels,
+} from "$lib/server/llm/chatgpt-sign-in.js";
 import { listChatgptModels } from "$lib/server/llm/chatgpt-oauth.js";
 import type { RequestHandler } from "./$types.js";
 
@@ -10,17 +13,24 @@ import type { RequestHandler } from "./$types.js";
  */
 export const GET: RequestHandler = async ({ locals, url, fetch }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 });
-  const credentials = peekConnection(
-    locals.user.id,
-    url.searchParams.get("connection") ?? "",
-  );
+  const connectionId = url.searchParams.get("connection") ?? "";
+  const credentials = peekConnection(locals.user.id, connectionId);
   if (!credentials)
     return json(
       { error: "The sign-in has expired. Sign in with ChatGPT again." },
       { status: 404 },
     );
   try {
-    const models = await listChatgptModels(credentials.accessToken, fetch);
+    const models = await listChatgptModels(
+      credentials.accessToken,
+      fetch,
+      credentials.accountId,
+    );
+    setConnectionModels(
+      locals.user.id,
+      connectionId,
+      models.map((m) => m.id),
+    );
     return json({
       models: models.map((m) => ({ ...m, isFree: false })),
     });

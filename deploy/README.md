@@ -3,8 +3,8 @@
 Container build and runtime files. Everything here expects the **repo root** as
 the Docker build context, not this directory.
 
-| File                      | Purpose                                                             |
-| ------------------------- | ------------------------------------------------------------------- |
+| File                      | Purpose                                                              |
+| ------------------------- | -------------------------------------------------------------------- |
 | `Dockerfile`              | Multi-stage build (deps → build → slim runtime on `oven/bun:alpine`) |
 | `entrypoint.sh`           | Creates the `PUID`/`PGID` user, chowns `/app/data`, drops privileges |
 | `docker-compose.yml`      | Local build-from-source stack                                        |
@@ -42,3 +42,14 @@ docker build -f deploy/Dockerfile -t akaun .
 - `docker-compose.prod.yml` is a standalone template meant to be copied to a
   server, so its `./data` volume is intentionally relative to wherever the user
   puts it. The self-hosting guide in the root `README.md` inlines this content.
+
+## ChatGPT subscription sign-in
+
+Remote deployments use device-code login in Settings → Intelligence. Enable
+device code login in ChatGPT Security settings or the workspace permissions,
+then open the verification link and enter the code shown in Akaun. The server
+needs outbound HTTPS to `auth.openai.com` and `chatgpt.com`. No loopback port
+exposure or callback forwarding is required. Pending sign-ins expire on a server
+restart; completed connections must be saved within 30 minutes. Existing ChatGPT
+providers from earlier releases must reconnect and choose an available model.
+See the repository README for integration and credential storage details.

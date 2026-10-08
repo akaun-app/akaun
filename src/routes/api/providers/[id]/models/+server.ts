@@ -22,8 +22,9 @@ export const GET: RequestHandler = async ({ params, locals, fetch }) => {
 		// Signed in, not keyed: the token comes from the stored sign-in, and is
 		// refreshed first if it has run out.
 		try {
-			const token = await createTokenSource(provider.id, dbCredentialStore).token();
-			const models = await listChatgptModels(token, fetch);
+			const source = createTokenSource(provider.id, dbCredentialStore);
+			const token = await source.token();
+			const models = await listChatgptModels(token, fetch, await source.accountId());
 			return json({ models: models.map((m) => ({ ...m, isFree: false })) });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : 'Failed to fetch models';

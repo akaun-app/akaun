@@ -146,6 +146,36 @@ Configure the app via environment variables (copy `.env.example` to `.env` and e
 
 Database migrations are generated with `bun run db:generate` and applied automatically on startup.
 
+## ChatGPT subscription sign-in
+
+In **Settings → Intelligence**, add or edit a **ChatGPT plan** provider and start
+sign-in. Copy the one-time code, open **Open ChatGPT**, enter the code and approve.
+Akaun connects automatically; select an available model and save the provider.
+Enable **device code login** in your ChatGPT Security settings first. Managed
+workspaces may require an administrator to enable it. Codes expire after at most
+15 minutes. A server restart cancels pending sign-ins; start again if necessary.
+Completed connections must be saved within 30 minutes.
+
+This provider uses the Codex-compatible subscription device protocol, including
+its public OAuth client, rather than the dynamic-client plan-sharing API. It
+requires an eligible ChatGPT subscription/workspace and access to the offered
+models. These compatibility endpoints can change independently of Akaun. Akaun
+fetches the model catalog from the subscription backend; credentials are stored
+server-side in the existing provider credential column. Protect database files
+and backups as credentials.
+
+After upgrading from the old ChatGPT integration, reconnect each ChatGPT provider
+and select an available model. Provider names and priorities are preserved, but
+old credentials cannot be reused with the new API. The old localhost callback
+and callback-paste flow have been removed. No callback URL, extra inbound port,
+or `ORIGIN` adjustment is needed for device login. `ORIGIN` should still match
+Akaun's public URL for normal reverse-proxy operation.
+
+The server needs outbound HTTPS access to `auth.openai.com` and `chatgpt.com`.
+Deleting a provider disconnects it in Akaun; manage upstream sessions in ChatGPT.
+See [Codex authentication](https://learn.chatgpt.com/docs/auth) for account and
+workspace device-login requirements.
+
 ## Tech Stack
 
 For the curious: Akaun is built with [SvelteKit](https://kit.svelte.dev/) (Svelte 5) and runs on the [Bun](https://bun.sh) runtime. Data is stored in **SQLite** via the [Drizzle ORM](https://orm.drizzle.team/), styling is [Tailwind CSS](https://tailwindcss.com/), and live updates are pushed to the browser over Server-Sent Events. Receipt import uses [Tesseract.js](https://github.com/naptha/tesseract.js) to OCR the raw text off a photo/PDF, then an LLM (via the [Vercel AI SDK](https://sdk.vercel.ai/), bring-your-own-key against OpenRouter, Google AI Studio, or Groq) turns that text into structured amount/date/supplier/category fields. PDFs (quotations, invoices, claim summaries) are generated with pdfkit/jsPDF from user-customizable templates.

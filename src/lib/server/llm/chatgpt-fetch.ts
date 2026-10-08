@@ -1,41 +1,17 @@
-// The `fetch` a `chatgpt` provider hands to `createOpenAI`, so the AI SDK can
-// call the Responses API with a ChatGPT plan's token.
-//
-// The SDK is not told this is a different provider. Every feature still goes
-// through `generateText` in `structured-call.ts`, with no special cases. The
-// preview's rules are met here, for this one provider:
-//
-// - `stream: true` and `store: false` are required. The SDK's `generateText`
-//   sends a plain request, so the body is changed to stream, and the events are
-//   read until `response.completed`. The response object that event carries is
-//   returned as JSON. It has the same shape as a non-streamed reply, so the SDK
-//   reads `output`, `usage` and `incomplete_details` as it always does.
-// - The preview rejects some request fields outright, among them
-//   `temperature`, `max_output_tokens` and `metadata`. `callStructured` sends
-//   the first two on every call, so they are removed.
-// - The token expires. It is attached per request, and a 401 refreshes it once
-//   and tries again.
-// - Errors come back as `{ error: { message, code } }` with a status, the shape
-//   the SDK's OpenAI error handler reads, so `APICallError` and provider
-//   failover behave as they do for any other provider.
-// - When the plan's limit is reached, the error is thrown as
-//   `ChatgptUsageLimitError` instead. As a 429 `APICallError`, the SDK would
-//   retry it twice with backoff, on every call. OpenAI's guidance for this code
-//   is to stop sending, so the provider also rests until `retry-after` (or 15
-//   minutes), and each call in that time fails over at once.
-
-import { isObject } from "./chatgpt-oauth.js";
+// Codex subscription transport: required headers, streaming replies, refresh and failover.
+import { isObject, codexHeaders } from "./chatgpt-oauth.js";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface TokenSource {
+  accountId(): Promise<string>;
   /** A token that should still be valid. */
   token(): Promise<string>;
   /** Called after `rejected` got a 401. Returns a fresh token. */
   refresh(rejected: string): Promise<string>;
 }
 
-/** Fields the preview refuses. The request fails if any of them is sent. */
+/** Fields the Codex backend refuses. The request fails if any of them is sent. */
 const REJECTED_FIELDS = [
   "background",
   "conversation",
@@ -57,13 +33,16 @@ const REJECTED_FIELDS = [
 /** Error codes in a failed response → the HTTP status reported to the SDK. */
 const STATUS_BY_CODE: Record<string, number> = {
   rate_limit_exceeded: 429,
-  subscription_sharing_usage_unavailable: 503,
   server_error: 500,
 };
 
-const USAGE_LIMIT_CODE = "subscription_sharing_usage_limit_exceeded";
+const USAGE_LIMIT_CODES = new Set([
+  "usage_limit_reached",
+  "usage_limit_exceeded",
+  "insufficient_quota",
+]);
 const USAGE_LIMIT_MESSAGE =
-  "The ChatGPT plan's usage limit for apps has been reached. Check usage in ChatGPT Settings, or add another provider.";
+  "The ChatGPT subscription usage limit has been reached. Check usage in ChatGPT, or add another provider.";
 const DEFAULT_REST_MS = 15 * 60_000;
 
 /** Thrown, not returned, so the SDK does not retry it (see the header). */
@@ -113,9 +92,13 @@ export function createChatgptFetch(
       isResponses && typeof init.body === "string"
         ? rewriteBody(init.body)
         : init.body;
+    const accountId = await tokens.accountId();
     const send = (token: string) => {
       const headers = new Headers(init.headers);
-      headers.set("authorization", `Bearer ${token}`);
+      for (const [name, value] of Object.entries(
+        codexHeaders(token, accountId),
+      ))
+        headers.set(name, value);
       if (isResponses) headers.set("accept", "text/event-stream");
       return upstream(input, { ...init, headers, body });
     };
@@ -142,6 +125,31 @@ export function rewriteBody(raw: string): string {
   const body: unknown = JSON.parse(raw);
   if (!isObject(body)) return raw;
   for (const field of REJECTED_FIELDS) delete body[field];
+  // Codex requires top-level instructions. Keep trusted application rules
+  // above user-provided documents when normalizing system/developer messages.
+  const contexts: string[] = [];
+  if (typeof body.instructions === "string" && body.instructions)
+    contexts.push(body.instructions);
+  if (Array.isArray(body.input)) {
+    const input = body.input.filter((item: unknown) => {
+      if (
+        !isObject(item) ||
+        !["system", "developer"].includes(String(item.role))
+      )
+        return true;
+      if (typeof item.content === "string") contexts.push(item.content);
+      else if (Array.isArray(item.content)) {
+        for (const part of item.content)
+          if (isObject(part) && typeof part.text === "string")
+            contexts.push(part.text);
+      }
+      return false;
+    });
+    body.input = input;
+  }
+  body.instructions = contexts.length
+    ? contexts.join("\n\n")
+    : "Follow the supplied task instructions and return the requested output.";
   body.stream = true;
   body.store = false;
   return JSON.stringify(body);
@@ -251,7 +259,7 @@ function failedResponse(
 ): Response {
   const error = isObject(source.error) ? source.error : source;
   const code = typeof error.code === "string" ? error.code : "response_failed";
-  if (code === USAGE_LIMIT_CODE)
+  if (USAGE_LIMIT_CODES.has(code))
     throw new ChatgptUsageLimitError(restUntil(retryAfter));
   const message =
     typeof error.message === "string" && error.message
@@ -264,7 +272,7 @@ function failedResponse(
 
 /**
  * A rejected request keeps its status, but its body is rewritten into the shape
- * the SDK reads. The preview can answer with `detail` text instead of
+ * the SDK reads. The backend can answer with `detail` text instead of
  * `error.message`, and then the SDK would report only "Bad Request".
  */
 async function normaliseError(res: Response): Promise<Response> {
@@ -286,7 +294,7 @@ async function normaliseError(res: Response): Promise<Response> {
           ? top.code
           : `http_${res.status}`;
   const retryAfter = res.headers.get("retry-after");
-  if (code === USAGE_LIMIT_CODE)
+  if (USAGE_LIMIT_CODES.has(code))
     throw new ChatgptUsageLimitError(restUntil(retryAfter));
   const message =
     typeof nested.message === "string"

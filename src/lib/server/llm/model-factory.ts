@@ -37,9 +37,7 @@ export function createModel(config: LLMProviderConfig): LanguageModel {
 		case 'groq':
 			return createGroq({ apiKey: config.apiKey })(config.model);
 		case 'chatgpt': {
-			// A ChatGPT plan, signed in with OAuth (Sign in with ChatGPT). Same
-			// Responses API as OpenAI's own; the fetch carries the token and the
-			// preview's request rules (chatgpt-fetch.ts).
+			// Device-auth credentials are used only with the Codex subscription API.
 			if (!config.id) throw new Error(`Provider ${config.name} has no id to read its sign-in by`);
 			const tokens = createTokenSource(config.id, dbCredentialStore);
 			return createOpenAI({
@@ -47,7 +45,7 @@ export function createModel(config: LLMProviderConfig): LanguageModel {
 				// Replaced per request by the signed-in token.
 				apiKey: 'chatgpt-plan',
 				fetch: createChatgptFetch(tokens, fetch, config.id) as typeof fetch
-			})(config.model);
+			}).responses(config.model);
 		}
 		default:
 			throw new Error(`Unknown provider type: ${config.type}`);
