@@ -12,7 +12,7 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	type Tab = 'profile' | 'security' | 'token' | 'navigation';
+	type Tab = 'profile' | 'security' | 'token' | 'navigation' | 'apps';
 	let activeTab = $state<Tab>('profile');
 
 	// Navigation tab state — local reorderable copy, synced from data
@@ -99,6 +99,8 @@
 				revealedToken = null;
 				toast.success('API token revoked');
 			}
+		} else if (form.action === 'apps' && form.success) {
+			toast.success('App access revoked');
 		} else if (form.action === 'navigation') {
 			if (form.success) toast.success('Navigation order saved');
 			else if (form.error) toast.error(form.error);
@@ -116,6 +118,7 @@
 		{ id: 'profile', label: 'Profile' },
 		{ id: 'security', label: 'Security' },
 		{ id: 'token', label: 'API Token' },
+		{ id: 'apps', label: 'Connected apps' },
 		{ id: 'navigation', label: 'Navigation' }
 	];
 </script>
@@ -146,7 +149,43 @@
 		</nav>
 
 		<div class="set-content">
-			{#if activeTab === 'profile'}
+			{#if activeTab === 'apps'}
+				<div class="set-section">
+					<div class="set-section-head">
+						<h2 class="set-section-title">Connected apps</h2>
+						<p class="set-section-sub">
+							Apps allowed to read your Akaun data. Revoking access disconnects
+							the app immediately.
+						</p>
+					</div>
+					{#if !data.connectedApps.length}<p class="p-4 text-sm">
+							No apps connected.
+						</p>{/if}
+					{#each data.connectedApps as app (app.id)}
+						<div class="set-row">
+							<div class="min-w-0">
+								<h3 class="font-medium">{app.clientName}</h3>
+								<p class="text-muted-foreground text-sm">
+									{app.scopes.join(', ')}
+								</p>
+								<p class="text-muted-foreground text-xs">
+									Connected {new Date(app.createdAt).toLocaleDateString()} · Expires
+									{new Date(app.expiresAt).toLocaleDateString()}
+								</p>
+								<p class="text-muted-foreground text-xs">
+									Last used: {app.lastUsedAt
+										? new Date(app.lastUsedAt).toLocaleString()
+										: 'Never'}
+								</p>
+							</div>
+							<form method="POST" action="?/revokeApp" use:enhance>
+								<input type="hidden" name="grantId" value={app.id} />
+								<Button type="submit" variant="outline">Revoke access</Button>
+							</form>
+						</div>
+					{/each}
+				</div>
+			{:else if activeTab === 'profile'}
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Profile</h2>

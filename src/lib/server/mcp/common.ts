@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { LedgerDb } from "../ledger/types.js";
-import { hasPermission, type ResourceName } from "../permissions.js";
+import { type ResourceName } from "../permissions.js";
+import { canMcpRead } from "../oauth/scopes.js";
 import { isValidDate } from "../date.js";
 import { mainCurrencyCode } from "../currency/form.js";
 import { createLogger } from "../logger.js";
@@ -39,9 +40,7 @@ export class ReadError extends Error {
 export function requireView(context: ReadContext, resources: ResourceName[]) {
   if (
     !context.locals.user ||
-    resources.some(
-      (resource) => !hasPermission(context.locals, resource, "view"),
-    )
+    resources.some((resource) => !canMcpRead(context.locals, resource))
   ) {
     throw new ReadError(
       "FORBIDDEN",
@@ -106,11 +105,7 @@ export function registerRead<S extends z.ZodRawShape>(
   shape: S,
   read: (input: z.output<z.ZodObject<S>>) => Record<string, unknown>,
 ) {
-  if (
-    resources.some(
-      (resource) => !hasPermission(context.locals, resource, "view"),
-    )
-  )
+  if (resources.some((resource) => !canMcpRead(context.locals, resource)))
     return;
   const schema = z.object(shape).strict();
   server.registerTool<typeof outputSchema, typeof schema>(

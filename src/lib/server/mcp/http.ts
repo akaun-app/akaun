@@ -1,6 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createReadServer } from "./server.js";
 import type { ReadContext } from "./common.js";
+import { scopeChallenge } from "./oauth-challenge.js";
 
 export async function handleMcpRequest(
   request: Request,
@@ -26,6 +27,8 @@ export async function handleMcpRequest(
       headers: { ...headers, Allow: "POST" },
     });
 
+  const challenge = await scopeChallenge(request, context.locals);
+  if (challenge) return challenge;
   const server = createReadServer(context);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

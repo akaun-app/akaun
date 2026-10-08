@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
 import { users } from '$lib/server/db/schema.js';
 import { getUserNavOrder, setUserNavOrder } from '$lib/server/navPreferences.js';
+import { oauth } from '$lib/server/oauth/runtime.js';
 import { MAX_MOBILE_NAV_ITEMS } from '$lib/nav-config.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -29,11 +30,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 		username: locals.user!.username,
 		hasBearerToken: !!token,
 		maskedToken: token ? 'akn_live_••' + token.slice(-4) : null,
-		navItems
+		navItems,
+		connectedApps: oauth?.listGrants(userId) ?? []
 	};
 };
 
 export const actions: Actions = {
+	revokeApp: async ({ locals, request }) => {
+		const data = await request.formData();
+		oauth?.revokeGrant(String(data.get('grantId') ?? ''), locals.user!.id);
+		return { action: 'apps', success: true };
+	},
 	updateProfile: async ({ locals, request }) => {
 		const userId = locals.user!.id;
 		const data = await request.formData();
@@ -85,6 +92,7 @@ export const actions: Actions = {
 
 		const passwordHash = await hash(newPassword);
 		db.update(users).set({ passwordHash }).where(eq(users.id, userId)).run();
+		oauth?.revokeUser(userId);
 
 		return { action: 'security', success: true };
 	},

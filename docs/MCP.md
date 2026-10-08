@@ -2,7 +2,15 @@
 
 Akaun serves MCP at **`https://<your-akaun-host>/mcp`**, alongside its existing REST API. Phase one exposes ten read tools, two context resources and a description-review prompt. It does not save edits, upload documents, confirm imports or change reconciliation/settlements.
 
-## Connect
+## Connect with OAuth
+
+Enable `OAUTH_ENABLED=true` and configure `ORIGIN` as Akaun's public HTTPS origin, then restart. Add `https://<your-akaun-host>/mcp` to the client with OAuth authentication. Dynamic registration supplies client credentials matching the client’s authentication method (public, Basic or form-based client secret). Akaun prompts for login and consent to read scopes; every request also checks the user's current group permissions. No OAuth token grants REST access.
+
+Revoke connections in **Profile → Connected apps**. Access tokens last 15 minutes; refresh tokens rotate, with a maximum grant lifetime of 30 days. Password changes and administrator password resets revoke OAuth grants. Browser logout alone does not disconnect apps.
+
+See [OAuth setup](OAUTH.md) for metadata endpoints, deployment configuration and verification.
+
+## Connect with an API token
 
 1. In **Users & Groups**, create a dedicated integration user and assign a group with **View** permissions for Records, Accounts, Contacts, Reports and Auto Import. Grant only the resources the agent needs. Do not make the user a superuser or grant Add/Change/Delete for read-only use.
 2. Issue the user's API token and store the one-time reveal in your MCP client's secret configuration. Revoking/regenerating it immediately affects subsequent requests.
@@ -16,7 +24,7 @@ url = "https://books.example.com/mcp"
 bearer_token_env_var = "AKAUN_MCP_TOKEN"
 ```
 
-Set `AKAUN_MCP_TOKEN` in the client's environment without committing its value. Other clients should use their own URL/header configuration. This release supports configured bearer tokens; clients that require OAuth discovery need a later auth integration. No stdio bridge is bundled.
+Set `AKAUN_MCP_TOKEN` in the client's environment without committing its value. Other clients should use their own URL/header configuration. Configured bearer tokens remain supported alongside optional OAuth. No stdio bridge is bundled.
 
 The token inherits the user's existing REST permissions. The absence of MCP write tools does not restrict a privileged token's access to REST mutations. Use the dedicated restricted user above.
 
@@ -99,7 +107,7 @@ Use `review-record-descriptions` to ask the agent for a bounded before/after tab
 
 - POST handles initialization, requests and notifications. Clients must send the protocol's JSON content type and Accept headers.
 - GET, DELETE and other methods return 405 (`Allow: POST`). No session IDs or standalone event stream are issued.
-- Cookie sessions are not accepted; missing/invalid bearer credentials return 401 with a Bearer challenge, without a login redirect.
+- Cookie sessions are not accepted; missing/invalid bearer credentials return 401 with a Bearer challenge, without a login redirect. When OAuth is enabled the challenge advertises protected-resource metadata.
 - Native clients may omit Origin. If provided, Origin must exactly match the application's public origin, including scheme and port. Configure the app's trusted public `ORIGIN` correctly behind a reverse proxy. Cross-origin browser access is not enabled.
 - Responses use `Cache-Control: no-store`. Existing `/api/*/stream` endpoints continue serving browser SSE updates independently.
 
@@ -115,6 +123,7 @@ The integration suite uses the official MCP client and exclusively in-memory SQL
 bun run check
 bun run lint
 bun run test:mcp
+bun run test:oauth
 ```
 
 `test:mcp` runs the MCP integration specs and relevant bookkeeping regressions directly with Bun. A small preload maps the shared Vitest assertion/hook imports to Bun's native test API, avoiding the current Vitest 4/Bun worker-startup failure. The specs also remain usable by the normal Vitest runner when its workers are compatible. The adapter supports only the APIs these selected fixtures use; it is not a replacement for the repository's full test suite.

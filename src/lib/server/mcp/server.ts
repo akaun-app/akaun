@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { hasPermission } from "../permissions.js";
+import { canMcpRead } from "../oauth/scopes.js";
 import { mainCurrencyCode } from "../currency/form.js";
 import { DESCRIPTION_POLICY } from "../description-policy.js";
 import { registerRecords } from "./tools/records.js";
@@ -59,7 +59,7 @@ export function createReadServer(context: ReadContext) {
               ["records", "accounts", "contacts", "reports", "import"].map(
                 (resource) => [
                   resource,
-                  hasPermission(
+                  canMcpRead(
                     context.locals,
                     resource as
                       | "records"
@@ -67,7 +67,6 @@ export function createReadServer(context: ReadContext) {
                       | "contacts"
                       | "reports"
                       | "import",
-                    "view",
                   ),
                 ],
               ),
@@ -86,8 +85,8 @@ export function createReadServer(context: ReadContext) {
   );
 
   const canReadDescriptions = () =>
-    hasPermission(context.locals, "records", "view") ||
-    hasPermission(context.locals, "import", "view");
+    canMcpRead(context.locals, "records") ||
+    canMcpRead(context.locals, "import");
   if (canReadDescriptions()) {
     server.registerResource(
       "description-policy",
