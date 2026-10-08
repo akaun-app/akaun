@@ -39,7 +39,7 @@ curl --request POST https://books.example.com/oauth/register \
   --data '{"client_name":"My MCP client","redirect_uris":["https://client.example.com/callback"],"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}'
 ```
 
-Use the returned `client_id` and the client's exact callback URL. This registration does not authorize any user data: login and consent remain required. For a client that requires a secret, request `client_secret_basic` or `client_secret_post` instead of `none`. Omitting the method defaults to `client_secret_basic` as specified by RFC 7591. Copy the returned secret into the client's secure configuration; Akaun stores only its hash and cannot reveal it again. Client credentials persist without an expiry, while user grants expire independently. Client ID Metadata Documents (CIMD) are not implemented or advertised.
+Use the returned `client_id` and the client's exact callback URL. This registration does not authorize any user data: login and consent remain required. For a client that requires a secret, request `client_secret_basic` or `client_secret_post` instead of `none`. Omitting the method defaults to `client_secret_basic` as specified by RFC 7591. Copy the returned secret into the client's secure configuration; Akaun stores only its hash and cannot reveal it again. Client credentials persist while a grant or consent flow is active. Unused registrations are reclaimed after 24 hours, or sooner when registration capacity is full; clients must register again if their credentials have been reclaimed. Client ID Metadata Documents (CIMD) are not implemented or advertised.
 
 ## Scopes and credential boundaries
 
@@ -65,7 +65,7 @@ Authorization and token requests must specify the exact MCP `resource`. Redirect
 
 Revoking access in Profile, changing a password or resetting it as an administrator invalidates OAuth grants. Deleting a user cascades to their grants/tokens. Group-permission changes take effect on the next request. Logging out of the browser does not revoke connected apps.
 
-Tokens, authorization codes and confidential-client secrets are stored as hashes. Registration/token/authorization endpoints apply rate limits; request bodies are limited to 16 KiB, registration to ten redirect URIs per client, total registrations to 1,000 and pending authorizations to 5,000. Expired pending transactions, codes and grants are pruned during registration/authorization. Registration records remain persistent; a deployment hitting the client cap needs administrator maintenance. This is a single-instance deployment, matching Akaun's current SQLite architecture.
+Tokens, authorization codes and confidential-client secrets are stored as hashes. Registration/token/authorization endpoints apply rate limits; request bodies are limited to 16 KiB, registration to ten redirect URIs per client, total registrations to 1,000 and pending authorizations to 5,000. Expired pending transactions, codes and grants are pruned during registration/authorization. Unused registrations expire after 24 hours. At capacity, the oldest registration without an active grant or pending consent is reclaimed before accepting a new registration. Clients with active grants or consent flows are preserved; 503 is returned only when all registrations are in use. This is a single-instance deployment, matching Akaun's current SQLite architecture.
 
 ## Proxy and client verification
 

@@ -158,11 +158,27 @@ export function createOAuth(db: LedgerDb, config: OAuthConfig) {
     };
   }
 
+  // Never reclaim a client while consent is in progress or a grant is usable.
+  // Pending parameters are validated before persistence and contain client_id.
+  function unusedClient(now: number) {
+    return sql`not exists (
+      select 1 from ${oauthGrants}
+      where ${oauthGrants.clientId} = ${oauthClients.id}
+        and ${oauthGrants.revokedAt} is null and ${oauthGrants.expiresAt} > ${now}
+    ) and not exists (
+      select 1 from ${oauthPending}
+      where json_extract(${oauthPending.params}, '$.client_id') = ${oauthClients.id}
+        and ${oauthPending.expiresAt} > ${now}
+    )`;
+  }
   function cleanup() {
     const now = Date.now();
     db.delete(oauthPending).where(lt(oauthPending.expiresAt, now)).run();
     db.delete(oauthCodes).where(lt(oauthCodes.expiresAt, now)).run();
     db.delete(oauthGrants).where(lt(oauthGrants.expiresAt, now)).run();
+    db.delete(oauthClients)
+      .where(and(lt(oauthClients.createdAt, now - DAY), unusedClient(now)))
+      .run();
   }
   function revokeGrant(id: string, userId?: number) {
     db.update(oauthGrants)
@@ -272,7 +288,19 @@ export function createOAuth(db: LedgerDb, config: OAuthConfig) {
       .select({ n: sql<number>`count(*)` })
       .from(oauthClients)
       .get()!.n;
-    if (count >= 1000) throw new OAuthFailure("temporarily_unavailable", 503);
+    if (count >= 1000) {
+      // Public registrations cannot permanently occupy capacity. Under pressure,
+      // reclaim one oldest unused client, even before its ordinary expiry.
+      const reclaim = db
+        .select({ id: oauthClients.id })
+        .from(oauthClients)
+        .where(unusedClient(Date.now()))
+        .orderBy(oauthClients.createdAt, oauthClients.id)
+        .limit(1)
+        .get();
+      if (!reclaim) throw new OAuthFailure("temporarily_unavailable", 503);
+      db.delete(oauthClients).where(eq(oauthClients.id, reclaim.id)).run();
+    }
     const id = `aknc_${opaque()}`;
     const name =
       typeof data.client_name === "string" && data.client_name.trim()

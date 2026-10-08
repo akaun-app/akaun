@@ -301,6 +301,116 @@ describe("OAuth authorization and persistence", () => {
       }),
     ).toThrow();
   });
+  it("expires unused registrations across service restarts while preserving consent and grants", async () => {
+    const active = await tokens();
+    const pendingClient = oauth.register({ redirect_uris: [redirectUri] });
+    const pendingId = oauth.begin(
+      params({ client_id: pendingClient.client_id }),
+      browser,
+    );
+    const unused = oauth.register({ redirect_uris: [redirectUri] });
+    db.update(schema.oauthClients)
+      .set({ createdAt: Date.now() - 2 * 86400_000 })
+      .run();
+    oauth = createOAuth(db, config);
+    oauth.register({ redirect_uris: [redirectUri] });
+    expect(
+      db
+        .select()
+        .from(schema.oauthClients)
+        .where(eq(schema.oauthClients.id, unused.client_id))
+        .get(),
+    ).toBeUndefined();
+    expect(oauth.pending(pendingId, browser).params.client_id).toBe(
+      pendingClient.client_id,
+    );
+    expect(
+      await oauth.authenticate(bearer(active.access_token)),
+    ).not.toBeNull();
+    oauth.revokeUser(1);
+    oauth.register({ redirect_uris: [redirectUri] });
+    expect(
+      db
+        .select()
+        .from(schema.oauthClients)
+        .where(eq(schema.oauthClients.id, registered.client_id))
+        .get(),
+    ).toBeUndefined();
+  });
+
+  it("reclaims unused capacity without invalidating active grants or consent", async () => {
+    const active = await tokens();
+    const consentClient = oauth.register({ redirect_uris: [redirectUri] });
+    const pendingId = oauth.begin(
+      params({ client_id: consentClient.client_id }),
+      browser,
+    );
+    const now = Date.now();
+    for (let i = 0; i < 998; i++) {
+      db.insert(schema.oauthClients)
+        .values({
+          id: `unused-${i}`,
+          name: "unused",
+          redirectUris: JSON.stringify([redirectUri]),
+          createdAt: now - 10000 + i,
+        })
+        .run();
+    }
+    oauth = createOAuth(db, config);
+    const fresh = oauth.register({ redirect_uris: [redirectUri] });
+    expect(db.select().from(schema.oauthClients).all()).toHaveLength(1000);
+    expect(
+      db
+        .select()
+        .from(schema.oauthClients)
+        .where(eq(schema.oauthClients.id, "unused-0"))
+        .get(),
+    ).toBeUndefined();
+    expect(
+      db
+        .select()
+        .from(schema.oauthClients)
+        .where(eq(schema.oauthClients.id, fresh.client_id))
+        .get(),
+    ).toBeTruthy();
+    expect(
+      await oauth.authenticate(bearer(active.access_token)),
+    ).not.toBeNull();
+    expect(oauth.pending(pendingId, browser).params.client_id).toBe(
+      consentClient.client_id,
+    );
+  });
+
+  it("retains the cap when every client has a pending authorization", () => {
+    const now = Date.now();
+    for (let i = 0; i < 999; i++) {
+      db.insert(schema.oauthClients)
+        .values({
+          id: `pending-${i}`,
+          name: "pending",
+          redirectUris: JSON.stringify([redirectUri]),
+          createdAt: now,
+        })
+        .run();
+      db.insert(schema.oauthPending)
+        .values({
+          idHash: `pending-${i}`,
+          browserHash: "fixture",
+          params: JSON.stringify({ client_id: `pending-${i}` }),
+          expiresAt: now + 60000,
+        })
+        .run();
+    }
+    const id = oauth.begin(params(), browser);
+    expect(() => oauth.register({ redirect_uris: [redirectUri] })).toThrow(
+      "temporarily_unavailable",
+    );
+    expect(db.select().from(schema.oauthClients).all()).toHaveLength(1000);
+    expect(oauth.pending(id, browser).params.client_id).toBe(
+      registered.client_id,
+    );
+  });
+
   it("validates public client registration and rejects unsupported auth/redirects", () => {
     for (const body of [
       null,
