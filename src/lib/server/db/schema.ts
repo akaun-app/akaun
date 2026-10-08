@@ -23,6 +23,71 @@ export const users = sqliteTable("users", {
     .default(sql`(datetime('now'))`),
 });
 
+// OAuth credentials are separate from legacy API tokens and browser sessions.
+export const oauthClients = sqliteTable("oauth_clients", {
+  id: text("id").primaryKey(),
+  authMethod: text("auth_method").notNull().default("none"),
+  secretHash: text("secret_hash"),
+  name: text("name").notNull(),
+  redirectUris: text("redirect_uris").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const oauthPending = sqliteTable("oauth_pending", {
+  idHash: text("id_hash").primaryKey(),
+  browserHash: text("browser_hash").notNull(),
+  params: text("params").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+});
+
+export const oauthGrants = sqliteTable(
+  "oauth_grants",
+  {
+    id: text("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oauthClients.id, { onDelete: "cascade" }),
+    issuer: text("issuer").notNull(),
+    resource: text("resource").notNull(),
+    scopes: text("scopes").notNull(),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    lastUsedAt: integer("last_used_at"),
+    revokedAt: integer("revoked_at"),
+  },
+  (t) => [index("oauth_grants_user_idx").on(t.userId)],
+);
+
+export const oauthCodes = sqliteTable("oauth_codes", {
+  hash: text("hash").primaryKey(),
+  grantId: text("grant_id")
+    .notNull()
+    .references(() => oauthGrants.id, { onDelete: "cascade" }),
+  redirectUri: text("redirect_uri").notNull(),
+  challenge: text("challenge").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  consumedAt: integer("consumed_at"),
+});
+
+export const oauthTokens = sqliteTable(
+  "oauth_tokens",
+  {
+    accessHash: text("access_hash").primaryKey(),
+    refreshHash: text("refresh_hash").notNull().unique(),
+    grantId: text("grant_id")
+      .notNull()
+      .references(() => oauthGrants.id, { onDelete: "cascade" }),
+    scopes: text("scopes").notNull(),
+    accessExpiresAt: integer("access_expires_at").notNull(),
+    refreshExpiresAt: integer("refresh_expires_at").notNull(),
+    refreshUsedAt: integer("refresh_used_at"),
+  },
+  (t) => [index("oauth_tokens_grant_idx").on(t.grantId)],
+);
+
 export const groups = sqliteTable("groups", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),

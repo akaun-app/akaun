@@ -208,8 +208,15 @@
     {
       "idx": 29,
       "version": "6",
+      "when": 1791427375153,
+      "tag": "0029_many_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
       "when": 1791438000000,
-      "tag": "0029_chatgpt_device_auth",
+      "tag": "0030_chatgpt_device_auth",
       "breakpoints": true
     }
   ]

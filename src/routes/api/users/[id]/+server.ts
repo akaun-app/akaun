@@ -4,6 +4,7 @@ import { hash } from 'argon2';
 import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db/client.js';
+import { oauth } from '$lib/server/oauth/runtime.js';
 import { users, userGroups, groups } from '$lib/server/db/schema.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -55,6 +56,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	if (Object.keys(patch).length > 0) {
 		db.update(users).set(patch).where(eq(users.id, userId)).run();
+		if (body.password) oauth?.revokeUser(userId);
 	}
 
 	// Return full token only on regenerate (one-time reveal)
