@@ -1,0 +1,9 @@
+{
+  "label": "Everyday tasks",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "slug": "/category/everyday-tasks",
+    "description": "Step-by-step procedures for the work you do each day."
+  }
+}

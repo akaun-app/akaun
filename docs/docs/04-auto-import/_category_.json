@@ -1,0 +1,9 @@
+{
+  "label": "Auto Import",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "slug": "/category/auto-import",
+    "description": "Let AI read receipts, invoices, statements and spreadsheets for you."
+  }
+}

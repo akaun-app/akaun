@@ -6,25 +6,32 @@
 
 /* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
+  /* Akaun's --primary hue (oklch 41.6) from src/routes/layout.css, darkened for link
+     contrast on white. */
+  --ifm-color-primary: #c53b00;
+  --ifm-color-primary-dark: #ba3000;
+  --ifm-color-primary-darker: #b32800;
+  --ifm-color-primary-darkest: #a21000;
+  --ifm-color-primary-light: #cf4500;
+  --ifm-color-primary-lighter: #d74c00;
+  --ifm-color-primary-lightest: #de5304;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+
+  /* Geist everywhere: it is the app's face (src/routes/layout.css). Loaded by src/fonts.ts. */
+  --ifm-font-family-base: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-heading-font-family: var(--ifm-font-family-base);
+  --ifm-font-family-monospace: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 /* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
+  --ifm-color-primary: #ef713c;
+  --ifm-color-primary-dark: #e56732;
+  --ifm-color-primary-darker: #de612a;
+  --ifm-color-primary-darkest: #d0541a;
+  --ifm-color-primary-light: #f67743;
+  --ifm-color-primary-lighter: #fe7d4a;
+  --ifm-color-primary-lightest: #ff8753;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
