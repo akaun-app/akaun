@@ -27,7 +27,7 @@ const config: Config = {
 
   organizationName: org,
   projectName: `${org}.github.io`,
-  deploymentBranch: 'gh-pages',
+  deploymentBranch: 'main',
 
   onBrokenLinks: 'throw',
 

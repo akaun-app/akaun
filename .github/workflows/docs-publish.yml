@@ -1,6 +1,6 @@
 name: Docs Publish
 
-# Builds the Docusaurus site in docs/ and pushes it to the gh-pages branch of the
+# Builds the Docusaurus site in docs/ and pushes it to the main branch of the
 # separate <org>/<org>.github.io repo, the org's root GitHub Pages site.
 #
 # Auth is an SSH deploy key: the public half is a write-enabled deploy key on the docs
@@ -41,7 +41,7 @@ jobs:
         with:
           deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
           external_repository: ${{ github.repository_owner }}/${{ github.repository_owner }}.github.io
-          publish_branch: gh-pages
+          publish_branch: main
           publish_dir: docs/build
           user_name: github-actions[bot]
           user_email: 41898282+github-actions[bot]@users.noreply.github.com

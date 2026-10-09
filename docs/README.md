@@ -16,7 +16,7 @@ Pages live in `docs/docs/`. The sidebar is generated from that folder.
 ## Deployment
 
 `.github/workflows/docs-publish.yml` builds the site on every push to `main` that touches
-`docs/` and pushes `build/` to the `gh-pages` branch of `<org>/<org>.github.io` (today
+`docs/` and pushes `build/` to the `main` branch of `<org>/<org>.github.io` (today
 `getakaun/getakaun.github.io`), which serves it at `https://<org>.github.io/`. It
 authenticates with an SSH deploy key: the public half is a write-enabled deploy key on
 the docs repo, the private half is the `DOCS_DEPLOY_KEY` Actions secret on this repo.
