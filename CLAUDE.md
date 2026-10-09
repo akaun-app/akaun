@@ -446,6 +446,11 @@ no second kind of route. `PageState.viaPush` is retired.
 
 ## Tooling
 
+**`docs/` is the public Docusaurus site, not internal notes.** It is a separate Bun package
+with its own `package.json` and `bun.lock`, the root ESLint/Prettier ignore it, and
+`.github/workflows/docs-publish.yml` deploys it to `<org>/<org>.github.io`. Internal design
+notes, plans and release notes live in `dev-notes/`.
+
 **The two Vitest projects need two different runtimes, so `bun run test` runs them one after
 the other.**
 

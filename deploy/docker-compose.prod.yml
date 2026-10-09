@@ -1,6 +1,6 @@
 services:
   akaun:
-    image: ghcr.io/akaun-app/akaun:latest
+    image: ghcr.io/getakaun/akaun:latest
     restart: unless-stopped
     ports:
       - 6969:6969

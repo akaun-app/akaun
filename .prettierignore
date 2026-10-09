@@ -20,6 +20,9 @@ src-tauri/gen/
 # A bundled copy of the whole built app, shipped as the desktop sidecar.
 src-tauri/resources/
 
+# The public Docusaurus site: its own package, formatted in its own (template) style
+docs/
+
 # The database and uploaded files
 data/
 

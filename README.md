@@ -63,7 +63,7 @@ The easiest way to run Akaun is with Docker. This is the recommended path even i
 ```yaml
 services:
   akaun:
-    image: ghcr.io/akaun-app/akaun:latest
+    image: ghcr.io/getakaun/akaun:latest
     restart: unless-stopped
     ports:
       - 6969:6969
@@ -125,7 +125,7 @@ In Nginx Proxy Manager, add both blocks via the proxy host's **Advanced** tab. D
 For developers who'd rather run Akaun directly with [Bun](https://bun.sh):
 
 ```sh
-git clone https://github.com/akaun-app/akaun.git
+git clone https://github.com/getakaun/akaun.git
 cd akaun
 bun install
 bun run build
@@ -197,7 +197,7 @@ Use your own public HTTPS address. `PUBLIC_BASE_URL` defaults to `ORIGIN`; if se
 
 Add `https://books.example.com/mcp` to your client's MCP settings and select OAuth. Clients supporting dynamic registration obtain their client ID automatically; Akaun supports public clients and clients using Basic or form-based client-secret authentication. Sign in with your Akaun account, then choose the read permissions to approve. OAuth scopes always limit access, including for superusers, and current group permissions still apply. These OAuth credentials work only on MCP.
 
-Manage or revoke a connection under **Profile → Connected apps**. See [OAuth setup and verification](docs/OAUTH.md) for configuration, client registration and deployment checks.
+Manage or revoke a connection under **Profile → Connected apps**. See [OAuth setup and verification](dev-notes/OAUTH.md) for configuration, client registration and deployment checks.
 
 ### Connect using an API token
 
@@ -236,7 +236,7 @@ Once connected, try asking: **“Show my expenses for September 2026 by category
 - **Client asks for OAuth login:** enable `OAUTH_ENABLED=true` with the correct public HTTPS `ORIGIN`, restart, then reconnect. Discovery endpoints must be publicly reachable.
 - **GET returns 405:** the endpoint uses stateless Streamable HTTP with POST requests. Select Streamable HTTP in your client rather than a legacy SSE transport.
 
-See [MCP setup and tool reference](docs/MCP.md) for connection details, permissions, financial semantics and limits.
+See [MCP setup and tool reference](dev-notes/MCP.md) for connection details, permissions, financial semantics and limits.
 
 ## Development
 

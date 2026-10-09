@@ -7,7 +7,7 @@ version = "0.1.0"
 description = "Akaun — personal bookkeeping and expense tracking, as a desktop app"
 authors = ["Akaun contributors"]
 license = "AGPL-3.0-only"
-repository = "https://github.com/akaun-app/akaun"
+repository = "https://github.com/getakaun/akaun"
 edition = "2021"
 rust-version = "1.77.2"
 

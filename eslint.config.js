@@ -22,7 +22,9 @@ export default defineConfig(
 			// A bundled copy of the whole built app, shipped as the desktop sidecar.
 			'src-tauri/resources/**',
 			'static/opencv.js',
-			'**/*.min.js'
+			'**/*.min.js',
+			// The public Docusaurus site: a separate React package with its own deps.
+			'docs/**'
 		]
 	},
 	js.configs.recommended,
