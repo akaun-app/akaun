@@ -99,6 +99,10 @@ You cannot undo a delete. Check the selected records before you confirm.
 Akaun does not delete a locked record. If the selection has locked records, the dialog tells you
 how many. Akaun deletes the other records.
 
+Akaun also does not delete an **Invoice** record. Akaun deletes the other records and shows the
+reason. To remove an **Invoice** record, cancel its invoice. See
+[Cancel an invoice](../05-sales/invoices.md#cancel-an-invoice).
+
 To select all records in the list, click the check box at the top of the list.
 
 ## Remove a payment from a record

@@ -1,8 +1,15 @@
 import PDFDocument from "pdfkit";
-import { fromMinor } from "$lib/server/ledger/money.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
 import { registerPdfFonts } from "../fonts.js";
-import { M, CW, C, cleanText, fmt, fmtDate } from "../layout.js";
+import {
+  M,
+  CW,
+  C,
+  cleanText,
+  drawStatusStamp,
+  fmt,
+  fmtDate,
+} from "../layout.js";
 
 // Column layout for the tighter table below.
 const QTY_W = 40;
@@ -23,6 +30,8 @@ export function renderCompact(
   const doc = new (PDFDocument as any)({
     size: "A4",
     margin: 0,
+    // Held until the end so the status stamp can go on every page.
+    bufferPages: true,
     info: { Title: title },
   });
   const fonts = registerPdfFonts(doc);
@@ -168,13 +177,6 @@ export function renderCompact(
     .fillColor(C.muted)
     .text("Subtotal", totalsX, y, { width: totalsW - TOTAL_W, align: "right" });
   doc.text(fmt(docu.subtotal), TOTAL_X, y, { width: TOTAL_W, align: "right" });
-  y += 12;
-  doc
-    .font(fonts.regular)
-    .fontSize(8)
-    .fillColor(C.muted)
-    .text("Tax", totalsX, y, { width: totalsW - TOTAL_W, align: "right" });
-  doc.text(fmt(docu.taxAmount), TOTAL_X, y, { width: TOTAL_W, align: "right" });
   y += 14;
   doc
     .font(fonts.bold)
@@ -187,17 +189,31 @@ export function renderCompact(
   doc.text(fmt(docu.total), TOTAL_X, y, { width: TOTAL_W, align: "right" });
   y = doc.y + 12;
 
-  if (docu.paidMinor && docu.paidMinor > 0) {
+  // Nothing is paid on, or due from, a cancelled invoice.
+  if (
+    data.statusStamp !== "VOID" &&
+    docu.amountPaid !== undefined &&
+    docu.amountPaid > 0
+  ) {
     doc
       .font(fonts.bold)
       .fontSize(8)
       .fillColor(C.green)
-      .text(
-        `Paid: ${docu.currency} ${fmt(fromMinor(docu.paidMinor))}`,
-        totalsX,
-        y,
-        { width: totalsW, align: "right" },
-      );
+      .text(`Paid: ${docu.currency} ${fmt(docu.amountPaid)}`, totalsX, y, {
+        width: totalsW,
+        align: "right",
+      });
+    y = doc.y + 2;
+    if (docu.amountDue !== undefined && docu.amountDue > 0) {
+      doc
+        .font(fonts.bold)
+        .fontSize(8)
+        .fillColor(C.dark)
+        .text(`Due: ${docu.currency} ${fmt(docu.amountDue)}`, totalsX, y, {
+          width: totalsW,
+          align: "right",
+        });
+    }
     y = doc.y + 10;
   }
 
@@ -226,6 +242,14 @@ export function renderCompact(
       .fontSize(8)
       .fillColor(C.subtle)
       .text(cleanText(docu.terms), M, doc.y + 2, { width: CW });
+  }
+
+  if (data.statusStamp) {
+    const pages = doc.bufferedPageRange();
+    for (let page = pages.start; page < pages.start + pages.count; page++) {
+      doc.switchToPage(page);
+      drawStatusStamp(doc, fonts.bold, data.statusStamp);
+    }
   }
 
   return new Promise((resolve, reject) => {

@@ -7,10 +7,11 @@ import { hasPermission } from '$lib/server/permissions.js';
 import { badRequest, forbidden, notFound, refused } from '$lib/server/api-response.js';
 
 /**
- * Sending an invoice. This is the moment it enters the books: the amount goes
+ * Mark as sent. The app does not deliver the invoice; this records that it
+ * went out, and it is the moment the invoice enters the books: the amount goes
  * into Money owed to us tagged with the customer, out of the income account it
- * earns into (FR-018a). Refusing repeats — an already-sent invoice — keeps a
- * double click from recording the same debt twice.
+ * earns into (FR-018a). Refusing repeats — an invoice already marked as sent —
+ * keeps a double click from recording the same debt twice.
  */
 
 const issueSchema = z.object({
@@ -20,7 +21,7 @@ const issueSchema = z.object({
 export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!hasPermission(locals, 'invoices', 'change')) return forbidden();
 
-	// An empty body is the ordinary case — send it into the seeded Sales account.
+	// An empty body is the ordinary case — post it into the seeded Sales account.
 	const raw = await request.json().catch(() => ({}));
 	const parsed = issueSchema.safeParse(raw ?? {});
 	if (!parsed.success) return badRequest(parsed.error);

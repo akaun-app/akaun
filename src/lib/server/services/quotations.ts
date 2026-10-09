@@ -4,6 +4,7 @@ import {
 	deleteQuotation as _delete,
 	getQuotation,
 	convertQuotationToInvoice as _convert,
+	setQuotationStatus as _setStatus,
 	type QuotationCreate,
 	type QuotationPatch
 } from '$lib/server/queries/quotations.js';
@@ -32,11 +33,23 @@ export function removeQuotation(db: Db, id: number, actingUserId: number) {
 	return result;
 }
 
-export function convertToInvoice(db: Db, quotationId: number, userId: number) {
-	const result = _convert(db, quotationId, userId);
+/** A status change by hand (Sent, Accepted, Declined, back again). Told to the list after commit. */
+export function setQuotationStatus(db: Db, id: number, actingUserId: number, to: number) {
+	const result = _setStatus(db, id, actingUserId, to);
+	if (result.ok) quotationEvents.emit('quotation-update', { item: result.value });
+	return result;
+}
+
+export function convertToInvoice(
+	db: Db,
+	quotationId: number,
+	userId: number,
+	options: { today?: string } = {}
+) {
+	const result = _convert(db, quotationId, userId, options);
 	if (result.ok) {
-		const updatedQuotation = getQuotation(db, result.quotationId!);
-		const newInvoice = getInvoice(db, result.invoiceId!);
+		const updatedQuotation = getQuotation(db, result.value.quotationId);
+		const newInvoice = getInvoice(db, result.value.invoiceId);
 		if (updatedQuotation) quotationEvents.emit('quotation-update', { item: updatedQuotation });
 		if (newInvoice) invoiceEvents.emit('invoice-update', { item: newInvoice });
 	}

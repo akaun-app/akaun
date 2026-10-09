@@ -41,8 +41,8 @@ The other three groups give these permissions:
 | **Records** | View, Add, Change | Add | View |
 | **Auto Import** | View, Add | Add | View |
 | **Contacts** | View, Add, Change | View, Add | View |
-| Quotations | View, Add, Change | Add | View |
-| Invoices | View, Add, Change | Add | View |
+| **Quotations** | View, Add, Change | Add | View |
+| **Invoices** | View, Add, Change | Add | View |
 | **Reconciliation** | View, Add, Change | none | View |
 | **Accounts** | View, Add, Change | none | View |
 | **Reports** | View | none | View |
@@ -58,8 +58,6 @@ Read these notes before you choose a group:
   **Contacts** only. Thus a Data Entry user cannot open **Records**, **Auto Import**,
   **Quotations** or **Invoices**.
 - No group except **Administrators** has **View** on **Dashboard**.
-- Quotations and Invoices have no row in the permission grid. You cannot change these two areas
-  for a group. See [Permissions explained](./permissions-explained.md).
 - The description of **Administrators** mentions backups and reset. Akaun has no backup or reset
   in the screens. See [Backups and upgrades](./backups-and-upgrades.md).
 
@@ -233,7 +231,7 @@ changes. **Reset** removes your changes.
 
 The grid has one row for each area and one column for each action: **View**, **Add**, **Change**
 and **Delete**. Select **All** to select the four actions of a row. The line above the grid shows
-the number of permissions that the group gives, for example **15 of 32 granted**.
+the number of permissions that the group gives, for example **15 of 40 granted**.
 
 **Reports** is view only. **Add**, **Change** and **Delete** have no effect on **Reports**.
 

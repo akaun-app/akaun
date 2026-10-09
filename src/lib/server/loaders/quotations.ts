@@ -2,27 +2,16 @@ import type { Actions } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client.js';
 import { getQuotation, listQuotations } from '$lib/server/queries/quotations.js';
 import { removeQuotation } from '$lib/server/services/quotations.js';
-import { QuotationStatus } from '$lib/enums.js';
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions.js';
+import { documentDefaults } from '$lib/server/sales/defaults.js';
 
 export function loadQuotationsPage(locals: App.Locals) {
 	if (!hasPermission(locals, 'quotations', 'view')) throw redirect(302, '/dashboard');
-	const allQuotations = listQuotations(db, { limit: 1000 });
-
-	const counts = { all: 0, draft: 0, sent: 0, accepted: 0, declined: 0, converted: 0 };
-	allQuotations.forEach((q) => {
-		counts.all++;
-		if (q.status === QuotationStatus.Draft) counts.draft++;
-		else if (q.status === QuotationStatus.Sent) counts.sent++;
-		else if (q.status === QuotationStatus.Accepted) counts.accepted++;
-		else if (q.status === QuotationStatus.Declined) counts.declined++;
-		else if (q.status === QuotationStatus.Converted) counts.converted++;
-	});
-
+	// The tab counts are worked out on the page, from the live list the stream
+	// keeps current.
 	return {
-		quotations: allQuotations,
-		counts,
+		quotations: listQuotations(db, { limit: 1000 }),
 		perms: { add: hasPermission(locals, 'quotations', 'add') }
 	};
 }
@@ -36,7 +25,9 @@ export function loadQuotationsPage(locals: App.Locals) {
  */
 export function loadQuotationNew(locals: App.Locals) {
 	if (!hasPermission(locals, 'quotations', 'add')) throw redirect(302, '/quotations');
-	return {};
+	// Days from the issue date to the expiry date a new quotation starts with;
+	// null when the setting is empty (no expiry).
+	return { defaultDays: documentDefaults(db).quotationValidDays };
 }
 
 /**
@@ -55,7 +46,11 @@ export function loadQuotationDetail(locals: App.Locals, id: number) {
 		quotation,
 		perms: {
 			change: hasPermission(locals, 'quotations', 'change'),
-			delete: hasPermission(locals, 'quotations', 'delete')
+			delete: hasPermission(locals, 'quotations', 'delete'),
+			// Converting changes the quotation and adds an invoice — both, the
+			// same pair the convert endpoint checks.
+			convert:
+				hasPermission(locals, 'quotations', 'change') && hasPermission(locals, 'invoices', 'add')
 		}
 	};
 }

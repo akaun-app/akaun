@@ -251,7 +251,8 @@ form into a page would only add a round trip. A create page reuses the same `Det
 the detail page it hands off to (`hero`/`main`/`rail` snippets, the built-in unsaved-changes guard),
 with `record={null}` (or the entity's equivalent) — see `records/RecordCreate.svelte` and
 `ledger/RecordForm.svelte`'s create/edit split for the reference shape, mirrored by `PaymentForm`,
-`invoices/InvoiceForm.svelte` and `quotations/QuotationForm.svelte`. Each create page's loader gates
+and `sales/SalesDocForm.svelte` (one form for invoices and quotations, `kind` prop; a sent invoice
+renders its amount fields read-only). Each create page's loader gates
 on `add`, not `view`, and redirects rather than rendering a form that would 403 on submit.
 
 Every detail page is built on `DetailPage.svelte` (`$lib/components/ui`), which supplies the frame:

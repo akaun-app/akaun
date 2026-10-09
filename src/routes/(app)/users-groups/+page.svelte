@@ -49,8 +49,6 @@
 	};
 
 	// Mirrors ALL_RESOURCES in src/lib/server/permissions.ts, which is the rule.
-	// Quotations and invoices are deliberately absent here as they were before —
-	// this screen has never offered them.
 	const RESOURCES = [
 		{ id: 'dashboard', label: 'Dashboard', description: 'The opening summary of income, expenses and outstanding balances.' },
 		{
@@ -61,6 +59,13 @@
 		},
 		{ id: 'import', label: 'Auto Import', description: 'Reading receipts and statements and turning them into records.' },
 		{ id: 'contacts', label: 'Contacts', description: 'The people and businesses records are attached to.' },
+		{ id: 'quotations', label: 'Quotations', description: 'Quotes written for customers, and turning an accepted one into an invoice.' },
+		{
+			id: 'invoices',
+			label: 'Invoices',
+			description:
+				'Invoices to customers. Changing one includes sending it, which records what the customer owes in the books.'
+		},
 		{ id: 'reconciliation', label: 'Reconciliation', description: 'Checking an account against the statement its bank sends.' },
 		{ id: 'accounts', label: 'Accounts', description: 'The chart of accounts: every asset, liability, equity, revenue and expense account.' },
 		{ id: 'reports', label: 'Reports', description: 'Profit and loss, balance sheet and partner statements. Viewing only — a report is never edited.' },

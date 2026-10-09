@@ -2,16 +2,29 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ChevronRight, FileText, Printer, Receipt, Trash2 } from '@lucide/svelte';
+	import {
+		Check,
+		ChevronRight,
+		FileText,
+		Printer,
+		Receipt,
+		RotateCcw,
+		Send,
+		Trash2,
+		Undo2,
+		X
+	} from '@lucide/svelte';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
-	import QuotationForm from './QuotationForm.svelte';
+	import SalesDocForm from '$lib/components/sales/SalesDocForm.svelte';
+	import SalesDocLines from '$lib/components/sales/SalesDocLines.svelte';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { formatCurrencyAmount } from '$lib/currency.js';
 	import { formatDate, formatMoney } from '$lib/format.js';
-	import { QuotationStatus, QuotationStatusLabels } from '$lib/enums.js';
+	import { QuotationStatus } from '$lib/enums.js';
+	import { canConvert, quotationStatusKey } from '$lib/sales/status.js';
 	import type { loadQuotationDetail } from '$lib/server/loaders/quotations.js';
 
 	/** One quotation, on its own page — its line items are a table. */
@@ -38,6 +51,8 @@
 	let saveError = $state('');
 	let converting = $state(false);
 	let convertError = $state('');
+	let statusSaving = $state(false);
+	let statusError = $state('');
 	let deleteDialogOpen = $state(false);
 	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 
@@ -49,10 +64,35 @@
 	const canEdit = $derived(data.perms.change && quotation.status !== QuotationStatus.Converted);
 	const isConverted = $derived(quotation.status === QuotationStatus.Converted);
 
-	function getStatusLabel(q: Quotation): string {
-		if (q.isExpired) return 'Expired';
-		return QuotationStatusLabels[q.status];
-	}
+	type StatusName = 'draft' | 'sent' | 'accepted' | 'declined';
+	type StatusMove = { to: StatusName; label: string; icon: typeof Send };
+
+	/**
+	 * The status moves each status offers. The server allows any move but into or
+	 * out of Converted (`canSetQuotationStatus`); these are the ones worth a
+	 * button. Expired is worked out from the date, so it offers what Draft or Sent
+	 * does.
+	 */
+	const statusMoves = $derived.by((): StatusMove[] => {
+		switch (quotation.status) {
+			case QuotationStatus.Draft:
+				return [
+					{ to: 'sent', label: 'Mark as sent', icon: Send },
+					{ to: 'accepted', label: 'Mark accepted', icon: Check }
+				];
+			case QuotationStatus.Sent:
+				return [
+					{ to: 'accepted', label: 'Mark accepted', icon: Check },
+					{ to: 'declined', label: 'Mark declined', icon: X }
+				];
+			case QuotationStatus.Accepted:
+				return [{ to: 'sent', label: 'Undo acceptance', icon: Undo2 }];
+			case QuotationStatus.Declined:
+				return [{ to: 'sent', label: 'Reopen', icon: RotateCcw }];
+			default:
+				return [];
+		}
+	});
 
 	function startEdit() {
 		saveError = '';
@@ -68,9 +108,34 @@
 		}
 	}
 
+	async function setStatus(to: StatusName) {
+		statusSaving = true;
+		statusError = '';
+		convertError = '';
+		try {
+			const res = await fetch(`/api/quotations/${quotation.id}/status`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ status: to })
+			});
+			if (!res.ok) {
+				statusError =
+					(await res.json().catch(() => ({}))).error ?? 'Could not change the status.';
+				return;
+			}
+			quotation = await res.json();
+			void auditTrailRef?.refresh();
+		} catch {
+			statusError = 'Network error — try again';
+		} finally {
+			statusSaving = false;
+		}
+	}
+
 	async function convertToInvoice() {
 		converting = true;
 		convertError = '';
+		statusError = '';
 		const res = await fetch(`/api/quotations/${quotation.id}/convert`, { method: 'POST' });
 		converting = false;
 		if (!res.ok) {
@@ -112,8 +177,23 @@
 		>
 			<Printer size={14} /> Print
 		</a>
-		{#if quotation.status === QuotationStatus.Accepted}
-			<button class="sheet-btn" onclick={convertToInvoice} disabled={converting}>
+		{#if data.perms.change && !isEditing}
+			{#each statusMoves as move (move.to)}
+				<button
+					class="sheet-btn"
+					onclick={() => setStatus(move.to)}
+					disabled={statusSaving || converting}
+				>
+					<move.icon size={14} /> {move.label}
+				</button>
+			{/each}
+		{/if}
+		{#if data.perms.convert && canConvert(quotation) && !isEditing}
+			<button
+				class="sheet-btn"
+				onclick={convertToInvoice}
+				disabled={converting || statusSaving}
+			>
 				<FileText size={14} /> {converting ? 'Converting…' : 'Convert'}
 			</button>
 		{/if}
@@ -133,7 +213,7 @@
 			<span class="detail-hero-amount">
 				{mainCurrencySymbol()}{formatMoney(quotation.mainAmount)}
 			</span>
-			<StatusBadge status={getStatusLabel(quotation)} />
+			<StatusBadge status={quotationStatusKey(quotation)} />
 			{#if quotation.currency !== mainCurrency()}
 				<span class="detail-hero-note">
 					{quotation.currency}
@@ -141,95 +221,23 @@
 				</span>
 			{/if}
 		</div>
-		{#if saveError || convertError || form?.error}
-			<p class="hero-error">{saveError || convertError || form?.error}</p>
+		{#if saveError || statusError || convertError || form?.error}
+			<p class="hero-error">{saveError || statusError || convertError || form?.error}</p>
 		{/if}
 	{/snippet}
 
 	{#snippet main()}
 		{#if isEditing}
-			<QuotationForm bind:this={formRef} bind:dirty={formDirty} bind:saving bind:error={saveError} {quotation} />
+			<SalesDocForm
+				bind:this={formRef}
+				bind:dirty={formDirty}
+				bind:saving
+				bind:error={saveError}
+				kind="quotation"
+				doc={quotation}
+			/>
 		{:else}
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Line items</span></div>
-				{#if quotation.lines.length === 0}
-					<p class="empty-note">This quotation has no line items yet.</p>
-				{:else}
-					<div class="lines-table">
-						<div class="lines-head">
-							<span>Description</span>
-							<span class="ta-right">Qty</span>
-							<span class="ta-right">Unit price</span>
-							<span class="ta-right">Total</span>
-						</div>
-						{#each quotation.lines as line, i (i)}
-							<div class="lines-row">
-								<span class="line-desc">{line.description}</span>
-								<span class="ta-right num">{line.quantity}</span>
-								<span class="ta-right num">
-									{formatCurrencyAmount(line.unitPrice, quotation.currency)}
-								</span>
-								<span class="ta-right num strong">
-									{formatCurrencyAmount(line.lineTotal, quotation.currency)}
-								</span>
-							</div>
-						{/each}
-						<div class="lines-total">
-							<span>Total</span>
-							<span class="num strong">
-								{quotation.currency}
-								{formatCurrencyAmount(quotation.total, quotation.currency)}
-							</span>
-						</div>
-					</div>
-				{/if}
-			</section>
-
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Details</span></div>
-				<div class="detail-list">
-					{#if quotation.contactName}
-						<div class="detail-row">
-							<div class="detail-key">Customer</div>
-							<div class="detail-val">{quotation.contactName}</div>
-						</div>
-					{/if}
-					<div class="detail-row">
-						<div class="detail-key">Issue date</div>
-						<div class="detail-val num">{formatDate(quotation.issueDate)}</div>
-					</div>
-					{#if quotation.expiryDate}
-						<div class="detail-row">
-							<div class="detail-key">Expiry date</div>
-							<div class="detail-val num">{formatDate(quotation.expiryDate)}</div>
-						</div>
-					{/if}
-					{#if quotation.reference}
-						<div class="detail-row">
-							<div class="detail-key">Reference</div>
-							<div class="detail-val num">{quotation.reference}</div>
-						</div>
-					{/if}
-					{#if quotation.currency !== mainCurrency()}
-						<div class="detail-row">
-							<div class="detail-key">Currency</div>
-							<div class="detail-val">{quotation.currency} (rate: {quotation.exchangeRate})</div>
-						</div>
-					{/if}
-					{#if quotation.notes}
-						<div class="detail-row">
-							<div class="detail-key">Notes</div>
-							<div class="detail-val prewrap">{quotation.notes}</div>
-						</div>
-					{/if}
-					{#if quotation.terms}
-						<div class="detail-row">
-							<div class="detail-key">Terms</div>
-							<div class="detail-val prewrap">{quotation.terms}</div>
-						</div>
-					{/if}
-				</div>
-			</section>
+			<SalesDocLines kind="quotation" doc={quotation} />
 		{/if}
 	{/snippet}
 
@@ -283,68 +291,5 @@
 	}
 	.print-btn {
 		text-decoration: none;
-	}
-	.empty-note {
-		font-size: 12.5px;
-		color: var(--muted-foreground);
-		margin: 0;
-	}
-	.lines-table {
-		display: flex;
-		flex-direction: column;
-	}
-	.lines-head,
-	.lines-row,
-	.lines-total {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) 70px 120px 130px;
-		gap: 12px;
-		align-items: baseline;
-	}
-	.lines-head {
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--muted-foreground);
-		padding-bottom: 8px;
-		border-bottom: 1px solid var(--border);
-	}
-	.lines-row {
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border);
-		font-size: 13.5px;
-	}
-	.line-desc {
-		min-width: 0;
-	}
-	.lines-total {
-		grid-template-columns: minmax(0, 1fr) auto;
-		padding-top: 12px;
-		font-size: 13.5px;
-		font-weight: 600;
-	}
-	.ta-right {
-		text-align: right;
-	}
-	.strong {
-		font-weight: 600;
-	}
-	.prewrap {
-		white-space: pre-wrap;
-	}
-
-	@media (max-width: 767px) {
-		.lines-head {
-			display: none;
-		}
-		.lines-row {
-			grid-template-columns: minmax(0, 1fr) auto;
-			gap: 2px 12px;
-		}
-		.line-desc {
-			grid-column: 1 / -1;
-			font-weight: 500;
-		}
 	}
 </style>

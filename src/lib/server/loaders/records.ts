@@ -13,6 +13,11 @@ import {
   listRecords,
 } from "$lib/server/queries/ledger.js";
 import { settlementsForRecord } from "$lib/server/queries/settlements.js";
+import {
+  getInvoice,
+  invoiceIdsForLedgerRecords,
+} from "$lib/server/queries/invoices.js";
+import { LedgerRecordKind } from "$lib/enums.js";
 import { removeRecord } from "$lib/server/services/ledger.js";
 import {
   getUserPreference,
@@ -85,6 +90,12 @@ export function loadRecordDetail(locals: App.Locals, id: number) {
     record,
     attachments: listAttachments(db, id),
     settlements: settlementsForRecord(db, id),
+    // The invoice an issue posting belongs to, for the link back to it. Kept
+    // beside the record rather than on `RecordView`, which is frozen.
+    invoiceId:
+      record.kind === LedgerRecordKind.InvoiceIssue
+        ? (invoiceIdsForLedgerRecords(db, [id])[0] ?? null)
+        : null,
     ...recordFormOptions(locals),
   };
 }
@@ -102,32 +113,66 @@ export function loadRecordNew(locals: App.Locals) {
   return recordFormOptions(locals);
 }
 
+/** A query-string id, or null for anything that is not a positive integer. */
+function positiveIdParam(url: URL, name: string): number | null {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 /**
  * The blank payment/receipt form, for `/records/new/payment`.
  *
  * Opens scoped to one contact, the way the drawer it replaces always did —
  * carried as a query param rather than a route segment, since it is prefilled
  * context for a create form and not a link to another feature's record.
+ *
+ * `?invoice=<id>` is the invoice page's "Record payment": a receipt from that
+ * invoice's customer, with its owed side already ticked, and back to the
+ * invoice once saved. Only for a user who may see invoices — anyone else gets
+ * the ordinary blank form, as if the param were not there. The way back is
+ * built here from the invoice's own id, never echoed from the address bar.
  */
 export function loadPaymentNew(locals: App.Locals, url: URL) {
   if (!hasPermission(locals, "records", "add")) throw redirect(302, LIST_PATH);
 
-  const rawContactId = url.searchParams.get("contactId");
-  const contactId =
-    rawContactId !== null &&
-    Number.isInteger(Number(rawContactId)) &&
-    Number(rawContactId) > 0
-      ? Number(rawContactId)
-      : null;
-  const direction: "we-pay" | "we-receive" =
+  let contactId = positiveIdParam(url, "contactId");
+  let direction: "we-pay" | "we-receive" =
     url.searchParams.get("direction") === "we-receive"
       ? "we-receive"
       : "we-pay";
   // Lands the form open to every contact's outstanding items at once, ticked
   // by default — the "pay all outstanding" entry point on the Records screen.
-  const batch = url.searchParams.get("batch") === "1";
+  let batch = url.searchParams.get("batch") === "1";
+  /** The owed movement to tick once the contact's items have loaded. */
+  let preselectMovementId: number | null = null;
+  let returnTo: { href: string; label: string } | null = null;
 
-  return { contactId, direction, batch, ...recordFormOptions(locals) };
+  const invoiceId = positiveIdParam(url, "invoice");
+  const invoice =
+    invoiceId !== null && hasPermission(locals, "invoices", "view")
+      ? getInvoice(db, invoiceId)
+      : null;
+  if (invoice) {
+    contactId = invoice.contactId;
+    direction = "we-receive";
+    batch = false;
+    preselectMovementId = invoice.owedMovementId;
+    returnTo = {
+      href: `/invoices/${invoice.id}`,
+      label: invoice.invoiceNumber,
+    };
+  }
+
+  return {
+    contactId,
+    direction,
+    batch,
+    preselectMovementId,
+    returnTo,
+    ...recordFormOptions(locals),
+  };
 }
 
 /**
@@ -200,7 +245,9 @@ export const recordsActions: Actions = {
    * One at a time through the service, so each carries its own audit entry and
    * its own event, and so a record a settlement or a bank line still points at
    * refuses on its own rather than taking the whole selection down with it
-   * (FR-017a). The first refusal is handed back to be shown; the rest still go.
+   * (FR-017a). An invoice's issue posting refuses the same way — it goes when
+   * the invoice is cancelled. The first refusal is handed back to be shown; the
+   * rest still go.
    */
   delete: async ({ locals, request }) => {
     const data = await request.formData();

@@ -534,6 +534,12 @@
 	// only the accent color is user-editable.
 	// svelte-ignore state_referenced_locally
 	let pdfThemeColor = $state(data.pdfThemeColor);
+	// Days to the due date / expiry date a new document starts with, as typed:
+	// strings, so blank ("none") stays blank. The server checks the range.
+	// svelte-ignore state_referenced_locally
+	let invoiceDueDays = $state(data.invoiceDueDays);
+	// svelte-ignore state_referenced_locally
+	let quotationValidDays = $state(data.quotationValidDays);
 	const standardLayoutDescription =
 		LAYOUT_CATALOG.find((l) => l.key === DEFAULT_LAYOUT_KEY)?.description ?? '';
 
@@ -1154,6 +1160,12 @@
 				logoChange = 'none';
 				if (logoFileInput) logoFileInput.value = '';
 			}
+			if (action === 'savePdfTemplate') {
+				pdfThemeColor = data.pdfThemeColor;
+				// The server stores "007" as "7"; take its spelling back.
+				invoiceDueDays = data.invoiceDueDays;
+				quotationValidDays = data.quotationValidDays;
+			}
 			if (action === 'saveSequenceTemplate') {
 				seqTemplate = data.sequenceTemplate;
 				if (seqFieldRef) seqHydrate(seqFieldRef, data.sequenceTemplate);
@@ -1195,7 +1207,9 @@
 		aiCategoryHints !== data.autoImportCategoryHints ||
 		aiRateLimitSec !== Math.round(data.autoImportRateLimitMs / 1000) ||
 		aiCustomInstructions !== data.autoImportCustomInstructions ||
-		pdfThemeColor !== data.pdfThemeColor
+		pdfThemeColor !== data.pdfThemeColor ||
+		invoiceDueDays !== data.invoiceDueDays ||
+		quotationValidDays !== data.quotationValidDays
 	);
 
 	function resetAllUnsaved() {
@@ -1217,6 +1231,8 @@
 		aiRateLimitSec = Math.round(data.autoImportRateLimitMs / 1000);
 		aiCustomInstructions = data.autoImportCustomInstructions;
 		pdfThemeColor = data.pdfThemeColor;
+		invoiceDueDays = data.invoiceDueDays;
+		quotationValidDays = data.quotationValidDays;
 		closeSheet();
 	}
 
@@ -1986,12 +2002,13 @@
 				<div class="set-section">
 					<div class="set-section-head">
 						<h2 class="set-section-title">Templates</h2>
-						<p class="set-section-sub">Set an accent color for printed quotations and invoices</p>
+						<p class="set-section-sub">Set an accent color for printed quotations and invoices, and the terms new ones start with</p>
 					</div>
 					<form method="POST" action="?/savePdfTemplate" use:enhance={() => ({ update }) => update({ reset: false })}>
 						{#if form?.error}
 							<div style="background:var(--red-soft); color:var(--red); border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:16px;">{form.error}</div>
 						{/if}
+						<p class="set-subsection-label">Printed documents</p>
 						<div class="set-rows">
 							<div class="set-row set-row-col">
 								<div class="set-row-label">Layout</div>
@@ -2008,6 +2025,39 @@
 									presets={PDF_THEME_PRESETS}
 								/>
 								<input type="hidden" name="themeColor" value={pdfThemeColor} />
+							</div>
+						</div>
+						<p class="set-subsection-label">Default terms</p>
+						<div class="set-rows">
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Invoice due in (days)</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">A new invoice is due this many days after its issue date. 0 is due on receipt; leave blank for no due date.</div>
+								</div>
+								<Input
+									name="invoiceDueDays"
+									type="text"
+									inputmode="numeric"
+									placeholder="None"
+									bind:value={invoiceDueDays}
+									class="set-input-right"
+									style="width:120px;"
+								/>
+							</div>
+							<div class="set-row">
+								<div>
+									<div class="set-row-label">Quotation valid for (days)</div>
+									<div class="set-row-value" style="font-size:12px; margin-top:2px;">A new quotation expires this many days after its issue date. Leave blank for no expiry date.</div>
+								</div>
+								<Input
+									name="quotationValidDays"
+									type="text"
+									inputmode="numeric"
+									placeholder="None"
+									bind:value={quotationValidDays}
+									class="set-input-right"
+									style="width:120px;"
+								/>
 							</div>
 						</div>
 						<input type="hidden" name="invoiceLayoutKey" value={DEFAULT_LAYOUT_KEY} />

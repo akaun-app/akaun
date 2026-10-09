@@ -60,3 +60,35 @@ export function fmtDate(iso: string | null | undefined): string {
   ];
   return `${parseInt(d)} ${months[parseInt(m) - 1]} ${y}`;
 }
+
+/**
+ * VOID or DRAFT, large, faint and on the diagonal across the current page —
+ * the way a paper invoice is stamped, so a printed copy of a cancelled or
+ * unsent invoice cannot be mistaken for a live demand for payment.
+ *
+ * Drawn with no `width`, so PDFKit's line wrapper never runs: a wrapped run
+ * near the bottom margin would otherwise start a page of its own. The caller
+ * calls this once per page, after the page's content, and the graphics state
+ * (rotation, opacity) is restored before anything else is drawn.
+ */
+export function drawStatusStamp(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  doc: any,
+  boldFont: string,
+  stamp: "VOID" | "DRAFT",
+): void {
+  const { width, height } = doc.page;
+  const size = 110;
+  doc.save();
+  doc.font(boldFont).fontSize(size);
+  const textW = doc.widthOfString(stamp);
+  const textH = doc.currentLineHeight();
+  doc.rotate(-30, { origin: [width / 2, height / 2] });
+  doc
+    .fillColor(stamp === "VOID" ? C.red : C.muted)
+    .fillOpacity(0.12)
+    .text(stamp, (width - textW) / 2, (height - textH) / 2, {
+      lineBreak: false,
+    });
+  doc.restore();
+}

@@ -1,19 +1,23 @@
 import { and, asc, desc, eq, gte, lte, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../db/schema.js';
-import {
-	quotations,
-	quotationLines,
-	quotationSearchText,
-	invoices,
-	invoiceLines,
-	contacts
-} from '../db/schema.js';
+import { quotations, quotationLines, quotationSearchText, contacts } from '../db/schema.js';
 import { nextNumber } from '../running-number.js';
-import { QuotationStatus, InvoiceStatus } from '$lib/enums.js';
+import { QuotationStatus, QuotationStatusLabels } from '$lib/enums.js';
+import { addDaysISO, localToday } from '$lib/local-date.js';
+import { canConvert, canSetQuotationStatus } from '$lib/sales/status.js';
 import { upsertSearchText, searchTextExists, joinSearchText } from '../search-text.js';
-import { reindexInvoice } from './invoices.js';
+import { createInvoice } from './invoices.js';
 import { recordAudit, diffRecords } from '../audit.js';
+import { documentDefaults } from '../sales/defaults.js';
+import type { Refusable } from '../ledger/types.js';
+import {
+	computeTotals,
+	contactNameFor,
+	lineRows,
+	type SalesLineInput,
+	type SalesTotals
+} from './sales-doc-shared.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
@@ -22,12 +26,7 @@ type Db = BunSQLiteDatabase<typeof schema> | BunSQLiteDatabase<any>;
 // Input types
 // ---------------------------------------------------------------------------
 
-export type QuotationLineInput = {
-	description: string;
-	quantity: number;
-	unitPrice: number;
-	sortOrder?: number; // defaults to array index if omitted
-};
+export type QuotationLineInput = SalesLineInput;
 
 export type QuotationCreate = {
 	contactId?: number | null;
@@ -59,18 +58,12 @@ export type QuotationFilters = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function computeTotals(lines: QuotationLineInput[]): {
-	subtotal: number;
-	taxAmount: 0;
-	total: number;
-} {
-	const subtotal = lines.reduce((sum, l) => sum + l.quantity * l.unitPrice, 0);
-	return { subtotal, taxAmount: 0, total: subtotal };
-}
-
-export function deriveExpired(q: { expiryDate: string | null; status: number }): boolean {
+/** Past its expiry date while still open (Draft or Sent). "Today" is the local day. */
+export function deriveExpired(
+	q: { expiryDate: string | null; status: number },
+	today: string = localToday()
+): boolean {
 	if (!q.expiryDate) return false;
-	const today = new Date().toISOString().slice(0, 10);
 	return (
 		q.expiryDate < today &&
 		(q.status === QuotationStatus.Draft || q.status === QuotationStatus.Sent)
@@ -80,16 +73,6 @@ export function deriveExpired(q: { expiryDate: string | null; status: number }):
 // ---------------------------------------------------------------------------
 // Search text
 // ---------------------------------------------------------------------------
-
-function contactNameFor(db: Db, contactId: number | null | undefined): string {
-	if (!contactId) return '';
-	const row = db
-		.select({ legalName: contacts.legalName })
-		.from(contacts)
-		.where(eq(contacts.id, contactId))
-		.get();
-	return row?.legalName ?? '';
-}
 
 /** Recomputes and upserts quotation_search_text for one quotation. Also used by the search-rebuild worker. */
 export function reindexQuotation(db: Db, quotationId: number) {
@@ -121,7 +104,7 @@ const quotationWithContact = {
 	contactAddress:       contacts.address,
 	contactRegistrationNo: contacts.registrationNo,
 	contactPhone:         contacts.phone,
-	mainAmount: sql<number>`${quotations.subtotal} * ${quotations.exchangeRate}`
+	mainAmount: sql<number>`${quotations.total} * ${quotations.exchangeRate}`
 };
 
 // ---------------------------------------------------------------------------
@@ -215,16 +198,7 @@ export function createQuotation(db: Db, userId: number, data: QuotationCreate) {
 			.get()!;
 
 		tx.insert(quotationLines)
-			.values(
-				data.lines.map((line, i) => ({
-					quotationId: newId,
-					description: line.description,
-					quantity: line.quantity,
-					unitPrice: line.unitPrice,
-					lineTotal: line.quantity * line.unitPrice,
-					sortOrder: line.sortOrder ?? i
-				}))
-			)
+			.values(lineRows(data.lines).map((row) => ({ ...row, quotationId: newId })))
 			.run();
 
 		reindexQuotation(tx, newId);
@@ -242,21 +216,12 @@ export function updateQuotation(db: Db, id: number, userId: number, patch: Quota
 		const existing = tx.select().from(quotations).where(eq(quotations.id, id)).get();
 		if (!existing) return null;
 
-		let totalsUpdate: { subtotal: number; taxAmount: 0; total: number } | null = null;
+		let totalsUpdate: SalesTotals | null = null;
 		if (patch.lines) {
 			totalsUpdate = computeTotals(patch.lines);
 			tx.delete(quotationLines).where(eq(quotationLines.quotationId, id)).run();
 			tx.insert(quotationLines)
-				.values(
-					patch.lines.map((line, i) => ({
-						quotationId: id,
-						description: line.description,
-						quantity: line.quantity,
-						unitPrice: line.unitPrice,
-						lineTotal: line.quantity * line.unitPrice,
-						sortOrder: line.sortOrder ?? i
-					}))
-				)
+				.values(lineRows(patch.lines).map((row) => ({ ...row, quotationId: id })))
 				.run();
 		}
 
@@ -310,67 +275,130 @@ export function deleteQuotation(
 }
 
 // ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/**
+ * Moves a quotation along by hand: sent to the customer, accepted, declined,
+ * or back again. Converted is never a choice here on either side — it is
+ * reached by converting and left only by deleting the invoice it became
+ * (`canSetQuotationStatus`). Expired is worked out from the date, never set.
+ */
+export function setQuotationStatus(
+	db: Db,
+	id: number,
+	userId: number,
+	to: number
+): Refusable<NonNullable<ReturnType<typeof getQuotation>>> {
+	return db.transaction((tx) => {
+		const existing = tx.select().from(quotations).where(eq(quotations.id, id)).get();
+		if (!existing) return { ok: false, reason: 'That quotation no longer exists.' };
+
+		if (existing.status === QuotationStatus.Converted) {
+			return {
+				ok: false,
+				reason:
+					'This quotation has become an invoice, so its status no longer changes. Delete the draft invoice to put it back to Accepted.'
+			};
+		}
+		if (to === QuotationStatus.Converted) {
+			return { ok: false, reason: 'Use Convert to turn this quotation into an invoice.' };
+		}
+		if (existing.status === to) {
+			return {
+				ok: false,
+				reason: `This quotation is already ${QuotationStatusLabels[to] ?? 'in that status'}.`
+			};
+		}
+		if (!canSetQuotationStatus(existing.status, to)) {
+			return { ok: false, reason: 'A quotation cannot be given that status.' };
+		}
+
+		tx.update(quotations)
+			.set({ status: to, updatedBy: userId, updatedAt: new Date().toISOString() })
+			.where(eq(quotations.id, id))
+			.run();
+		const updatedRow = tx.select().from(quotations).where(eq(quotations.id, id)).get();
+		recordAudit(tx, {
+			recordType: 'quotation',
+			recordId: id,
+			userId,
+			action: 'update',
+			changes: diffRecords(existing, updatedRow)
+		});
+		return { ok: true, value: getQuotation(tx, id)! };
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Convert to Invoice
 // ---------------------------------------------------------------------------
 
+/** Why a quotation in this status cannot be converted — the sentence the screen shows. */
+function convertRefusal(status: number): string {
+	switch (status) {
+		case QuotationStatus.Converted:
+			return 'This quotation has already been converted to an invoice.';
+		case QuotationStatus.Draft:
+			return 'Mark this quotation as sent before converting it. An invoice follows a quote the customer has seen.';
+		case QuotationStatus.Declined:
+			return 'This quotation was declined. Reopen it before converting it.';
+		default:
+			return 'This quotation cannot be converted.';
+	}
+}
+
+/**
+ * Turns a sent or accepted quotation into a draft invoice, and marks the
+ * quotation Converted with a link to it — one transaction, so neither half can
+ * exist without the other.
+ *
+ * The invoice is built by `createInvoice`, the same path as one typed in by
+ * hand (its numbering, search text and audit entry). It carries the
+ * quotation's customer, currency, rate, lines, reference, notes and terms, but
+ * is dated the day it is made: the invoice is issued now, not when the quote
+ * was. Its due date is that day plus the invoice term setting, or none when the
+ * setting is empty (`documentDefaults`).
+ *
+ * `today` is a parameter only so a test can pin it.
+ */
 export function convertQuotationToInvoice(
 	db: Db,
 	quotationId: number,
-	userId: number
-): {
-	ok: boolean;
-	reason?: 'not_found' | 'already_converted';
-	quotationId?: number;
-	invoiceId?: number;
-} {
+	userId: number,
+	options: { today?: string } = {}
+): Refusable<{ quotationId: number; invoiceId: number }> {
 	return db.transaction((tx) => {
 		const quotation = getQuotation(tx, quotationId);
-		if (!quotation) return { ok: false, reason: 'not_found' };
-		if (quotation.status === QuotationStatus.Converted) {
-			return { ok: false, reason: 'already_converted' };
-		}
+		if (!quotation) return { ok: false, reason: 'That quotation no longer exists.' };
+		if (!canConvert(quotation)) return { ok: false, reason: convertRefusal(quotation.status) };
 
-		const invoiceNumber = nextNumber(tx, 'invoice', quotation.issueDate);
+		const today = options.today ?? localToday();
+		const { invoiceDueDays } = documentDefaults(tx);
 
-		const { id: newInvoiceId } = tx
-			.insert(invoices)
-			.values({
-				invoiceNumber,
-				contactId: quotation.contactId ?? null,
-				status: InvoiceStatus.Draft,
-				issueDate: quotation.issueDate,
-				currency: quotation.currency,
-				exchangeRate: quotation.exchangeRate,
-				subtotal: quotation.subtotal,
-				taxAmount: quotation.taxAmount,
-				total: quotation.total,
-				sourceQuotationId: quotationId,
-				createdBy: userId,
-				updatedBy: userId
-			})
-			.returning({ id: invoices.id })
-			.get()!;
-
-		tx.insert(invoiceLines)
-			.values(
-				quotation.lines.map((line) => ({
-					invoiceId: newInvoiceId,
-					description: line.description,
-					quantity: line.quantity,
-					unitPrice: line.unitPrice,
-					lineTotal: line.lineTotal,
-					sortOrder: line.sortOrder
-				}))
-			)
-			.run();
-
-		reindexInvoice(tx, newInvoiceId);
-		recordAudit(tx, { recordType: 'invoice', recordId: newInvoiceId, userId, action: 'create' });
+		// A nested transaction: drizzle runs it as a savepoint inside this one.
+		const invoice = createInvoice(tx, userId, {
+			contactId: quotation.contactId ?? null,
+			reference: quotation.reference,
+			issueDate: today,
+			dueDate: invoiceDueDays === null ? null : addDaysISO(today, invoiceDueDays),
+			currency: quotation.currency,
+			exchangeRate: quotation.exchangeRate,
+			notes: quotation.notes,
+			terms: quotation.terms,
+			sourceQuotationId: quotationId,
+			lines: quotation.lines.map((line) => ({
+				description: line.description,
+				quantity: line.quantity,
+				unitPrice: line.unitPrice,
+				sortOrder: line.sortOrder
+			}))
+		});
 
 		tx.update(quotations)
 			.set({
 				status: QuotationStatus.Converted,
-				convertedInvoiceId: newInvoiceId,
+				convertedInvoiceId: invoice.id,
 				updatedBy: userId,
 				updatedAt: new Date().toISOString()
 			})
@@ -383,10 +411,10 @@ export function convertQuotationToInvoice(
 			action: 'update',
 			changes: [
 				{ field: 'status', before: quotation.status, after: QuotationStatus.Converted },
-				{ field: 'convertedInvoiceId', before: quotation.convertedInvoiceId, after: newInvoiceId }
+				{ field: 'convertedInvoiceId', before: quotation.convertedInvoiceId, after: invoice.id }
 			]
 		});
 
-		return { ok: true, quotationId, invoiceId: newInvoiceId };
+		return { ok: true, value: { quotationId, invoiceId: invoice.id } };
 	});
 }

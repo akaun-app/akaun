@@ -5,12 +5,14 @@ sidebar_position: 1
 # Quotations
 
 A quotation offers a price to a customer before you do the work. A quotation does not change the
-books. Use it when a customer asks for a price in writing.
+books. Use it when a customer asks for a price in writing. When the customer agrees, make an
+invoice from the quotation.
 
 :::info
 
-To make a quotation, you need the **Add** permission on quotations. To change one, you need
-**Change**. To delete one, you need **Delete**.
+To make a quotation, you need the **Add** permission on quotations. To change one or its status,
+you need **Change**. To delete one, you need **Delete**. To make an invoice from a quotation, you
+need **Change** on quotations and **Add** on invoices.
 
 :::
 
@@ -29,14 +31,15 @@ The tabs above the list filter it by status:
 - **Converted**
 - **Expired**
 
-Each tab shows the number of quotations in it.
+Each tab shows the number of quotations in it. An expired quotation shows only on the **Expired**
+tab. It does not show on the **Draft** tab or the **Sent** tab.
 
 To find a quotation, use these controls:
 
 - **Date**: choose a **From date** and a **To date**. The list shows quotations with an issue date
   in that range.
-- The search box (**Search QT#, customer, ref…**): type a part of the quotation number, the
-  customer name or the reference.
+- The search box (**Search QT#, customer, ref…**): type a word. Akaun finds it in the quotation
+  number, the customer name, the reference, the notes, the terms and the line items.
 - **Clear**: removes the date filter and the search, and shows the **All** tab again. It shows only
   when a filter is on.
 
@@ -48,9 +51,14 @@ rows on the list.
 
 1. On the **Quotations** screen, click **New quotation**.
 
-   The **New quotation** page opens. **Issue date** shows today.
+   The **New quotation** page opens. **Issue date** shows today. **Expiry date** shows a date
+   that comes from **Settings**. See [Default terms](#default-terms).
 
-2. Optional: in **Expiry date**, choose the last day that the price is valid.
+2. Optional: to change the expiry date, click a button below **Expiry date**: **None**, **15d**,
+   **30d** or **60d**. Or choose a date in **Expiry date**.
+
+   **None** removes the expiry date. **30d** sets the expiry date to 30 days after the issue date.
+
 3. In **Customer**, type a part of the name of the customer.
 4. Choose the customer from the list.
 
@@ -76,9 +84,14 @@ rows on the list.
 13. In the bar at the bottom of the page, click **Create quotation**.
 
 A quotation must have a customer and at least one line with a description. If one is missing, the
-bar at the bottom tells you what to add.
+bar at the bottom tells you what to add. A line with a price must have a description. The
+quantity must be more than zero, and the price cannot be less than zero.
 
 To remove a line, click the bin icon at the end of the line. A quotation always keeps one line.
+When you save, Akaun removes each empty line.
+
+If you click a button below **Expiry date** and then change the issue date, the expiry date
+moves with the issue date.
 
 ## Result
 
@@ -97,6 +110,62 @@ change, and when.
 
 To cancel your changes, click **Discard**. A change of the issue date does not change the exchange
 rate. If necessary, type a new rate.
+
+You cannot change a converted quotation. On a converted quotation, **Edit** does not show.
+
+## Change the status of a quotation
+
+The status tells where the quotation is with the customer. The buttons at the top of the
+quotation page change the status. Each status shows different buttons:
+
+| Status | Buttons |
+|---|---|
+| **Draft** | **Mark as sent**, **Mark accepted** |
+| **Sent** | **Mark accepted**, **Mark declined**, **Convert** |
+| **Accepted** | **Undo acceptance**, **Convert** |
+| **Declined** | **Reopen** |
+| **Converted** | none |
+
+1. Open the quotation.
+2. Click the button for the new status.
+
+Akaun saves the new status at once. **History** shows the change.
+
+**Mark as sent** does not send an email. It records that the customer has the quotation. Give the
+PDF to the customer yourself. See [Print a quotation](#print-a-quotation).
+
+**Undo acceptance** and **Reopen** put the quotation back to **Sent**.
+
+## Make an invoice from a quotation
+
+**Convert** shows on a quotation with the status **Sent** or **Accepted**. It makes a draft
+invoice from the quotation.
+
+1. Open the quotation.
+2. Click **Convert**.
+
+Akaun makes a draft invoice and opens its page. The invoice gets these values from the quotation:
+
+- The customer.
+- The currency and the exchange rate.
+- The line items.
+- The reference, the notes and the terms and conditions.
+
+The issue date of the invoice is today. The due date comes from **Invoice due in (days)** in
+**Settings**. See [Default terms](#default-terms).
+
+The status of the quotation is then **Converted**. On the quotation page, the **Became** card in
+the rail opens the invoice. On the invoice page, the **Came from** card opens the quotation.
+
+A draft invoice does not change the books. Check it, and then mark it as sent. See
+[Invoices](./invoices.md).
+
+### Undo a conversion
+
+You cannot change, delete or change the status of a converted quotation. To undo a conversion,
+delete the draft invoice. The quotation then goes back to **Accepted**, and you can convert it
+again. You cannot delete the invoice after you mark it as sent. See
+[Delete a draft invoice](./invoices.md#delete-a-draft-invoice).
 
 ## Print a quotation
 
@@ -135,20 +204,25 @@ Akaun removes the quotation from the list.
 ## When a quotation expires
 
 **Expired** shows that the expiry date is in the past. Only a quotation with the status **Draft**
-or **Sent** can expire. Akaun calculates this from the date. You do not mark a quotation as expired.
+or **Sent** can expire. Akaun calculates this from today's date. You do not mark a quotation as
+expired.
 
-An expired quotation also stays on the tab of its status. For example, an expired draft shows on
-the **Draft** tab and on the **Expired** tab.
+An expired quotation shows only on the **Expired** tab. Its page shows the buttons of its status.
+For example, you can still click **Mark accepted** or **Convert** on an expired quotation that was
+sent.
 
 A quotation without an expiry date never expires.
 
+## Default terms
+
+A new quotation gets an expiry date from **Quotation valid for (days)** in **Settings**, on the
+**Templates** tab. The default is 30 days. If the setting is empty, a new quotation has no expiry
+date. You can change the expiry date on each quotation.
+
+See [Settings reference](../09-administration/settings-reference.md#templates).
+
 ## Notes and limits
 
-- At this time, the screen cannot change the status of a quotation. A new quotation stays
-  **Draft**, so the screen cannot make an invoice from it. Make the invoice on the **Invoices**
-  screen. See [Invoices](./invoices.md).
-- For this reason, the **Sent**, **Accepted**, **Declined** and **Converted** tabs show no
-  quotations that you make on the screen. The **Sent** and **Accepted** cards do not count them.
 - A quotation does not change any account or any contact balance.
 
 ## Related

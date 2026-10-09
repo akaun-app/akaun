@@ -191,7 +191,8 @@ const SEED_GROUPS = [
         canChange: true,
         canDelete: false,
       },
-      // quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+      // quotations/invoices: seeded only when this group is first created. An
+      // existing group's are set on Users & Groups.
       quotations: {
         canView: true,
         canAdd: true,
@@ -254,7 +255,8 @@ const SEED_GROUPS = [
         canChange: false,
         canDelete: false,
       },
-      // quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+      // quotations/invoices: seeded only when this group is first created. An
+      // existing group's are set on Users & Groups.
       quotations: {
         canView: false,
         canAdd: true,
@@ -313,7 +315,8 @@ const SEED_GROUPS = [
         canChange: false,
         canDelete: false,
       },
-      // quotations/invoices added Phase 7 — existing deployments: add perms manually in Settings → Users & Groups
+      // quotations/invoices: seeded only when this group is first created. An
+      // existing group's are set on Users & Groups.
       quotations: {
         canView: true,
         canAdd: false,

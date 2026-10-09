@@ -166,7 +166,10 @@ conditions.
 | **Users & Groups** | Only a superuser sees it. |
 | **Reconcile** on an account page | You have no **View** permission on **Reconciliation**, or the account is inactive. |
 | The **Books** tab in **Settings** | You have no **View** permission on **Reports**. |
-| **Quotations** and **Invoices** | Your groups do not give these permissions. A group that you make has none, and the permission grid cannot add them. |
+| **Quotations** and **Invoices** | You have no **View** permission on these areas. A group that you make has none until you select them in the permission grid. |
+| **Convert** on a quotation | The status is not **Sent** or **Accepted**. Or you do not have **Change** on **Quotations** and **Add** on **Invoices**. |
+| **Cancel invoice** | The invoice is a draft, or a payment is recorded against it. Or you have no **Change** permission on **Invoices**. |
+| **Record payment** on an invoice | The invoice is a draft, is cancelled or is fully paid. Or you have no **Add** permission on **Records**. |
 | The **Partners' Equity** tab | No contact has the **Partner** role. |
 | **Pay all outstanding** | The business owes money to one contact only, or to none. Or you have no **Add** permission on **Records**. |
 | **Payment account** on a payment | The book has only one money account. Akaun uses that account. |
@@ -222,23 +225,43 @@ See [Locked records](../02-concepts/locked-records.md) and
 
 ### Cause
 
-The record is an **Invoice** record. Akaun made it when you clicked **Send** on an
-invoice. Some fields on the record page look editable, but Akaun refuses each change. If you
-delete the record, the page shows "This record was created by issuing an invoice. Cancel the invoice instead."
+The record is an **Invoice** record. Akaun made it when you clicked **Mark as sent** on an
+invoice. The record belongs to the invoice, so its record page is read only. If you try to delete
+it, Akaun shows "This record was created by issuing an invoice. Cancel the invoice instead."
 
 ### What to do
 
-At this time, no screen can correct a sent invoice. You cannot change it, cancel
-it or delete it. Check each invoice carefully before you click **Send**.
+1. In the rail of the record page, click the **Invoice** card.
 
-:::caution
+   The invoice opens.
 
-The **Delete** button in the bar of the **Records** list does not refuse an **Invoice** record.
-Do not select an **Invoice** record for a bulk delete.
+2. To change the due date, the reference, the notes or the terms, click **Edit**.
+3. If the customer, the date, the currency or a line is wrong, click **Cancel invoice**. Then make
+   a new invoice.
 
-:::
+See [Change a sent invoice](../05-sales/invoices.md#change-a-sent-invoice) and
+[Cancel an invoice](../05-sales/invoices.md#cancel-an-invoice).
 
-See [Invoices](../05-sales/invoices.md) and [Locked records](../02-concepts/locked-records.md).
+## A payment has been recorded against this invoice
+
+The full message is "A payment has been recorded against this invoice. Remove that payment first,
+then cancel the invoice."
+
+### Cause
+
+A payment settles the invoice, in full or in part. While a payment settles an invoice,
+**Cancel invoice** does not show. The message shows when someone recorded the payment after you
+opened the invoice page.
+
+### What to do
+
+1. On the invoice page, in the **Payments** card, click the payment.
+2. Beside the allocation to the invoice, click **Take this back**.
+3. Open the invoice again, and click **Cancel invoice**.
+
+**Take this back** needs the **Delete** permission on **Records**.
+
+See [Cancel an invoice](../05-sales/invoices.md#cancel-an-invoice).
 
 ## You cannot choose Accounts Payable on a new record
 

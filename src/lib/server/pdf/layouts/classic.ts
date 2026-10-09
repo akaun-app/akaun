@@ -2,10 +2,9 @@ import PDFDocument from "pdfkit";
 import { existsSync } from "fs";
 import { join } from "path";
 import { STORAGE_PATH } from "$lib/server/env.js";
-import { fromMinor } from "$lib/server/ledger/money.js";
 import type { LayoutRenderData, ThemeData } from "$lib/pdf/render-types.js";
 import { registerPdfFonts } from "../fonts.js";
-import { C, cleanText, fmt, fmtDate } from "../layout.js";
+import { C, cleanText, drawStatusStamp, fmt, fmtDate } from "../layout.js";
 
 // Page geometry — US Letter, matching the reference invoice this layout is
 // modeled on (measured from its /MediaBox: 612x792pt, 30pt margins). This is
@@ -226,13 +225,17 @@ export function renderClassic(
   y = Math.max(leftY, rightY) + 26;
 
   // ── BOLD HEADLINE ────────────────────────────────────────────────────────
+  // A cancelled invoice asks for nothing, so it never says what is "due".
+  const isVoid = data.statusStamp === "VOID";
   let headline: string;
-  if (isInvoice) {
+  if (isInvoice && isVoid) {
+    headline = `${fmt(docu.total)} ${docu.currency} · cancelled`;
+  } else if (isInvoice) {
     if (docu.paid) {
       const paidDate = latestSettlementDate(docu.settlements) ?? docu.issueDate;
       headline = `${fmt(docu.total)} ${docu.currency} paid on ${fmtDate(paidDate)}`;
     } else {
-      const due = fmt(fromMinor(docu.outstandingMinor ?? 0) || docu.total);
+      const due = fmt(docu.amountDue ?? docu.total);
       headline =
         `${due} ${docu.currency} due` +
         (docu.dueDate ? ` ${fmtDate(docu.dueDate)}` : "");
@@ -372,23 +375,6 @@ export function renderClassic(
     .text(fmt(docu.subtotal), AMOUNT_X, y, { width: AMOUNT_W, align: "right" });
   y += 14.25;
 
-  if (docu.taxAmount) {
-    doc
-      .font(fonts.regular)
-      .fontSize(9)
-      .fillColor(C.dark)
-      .text("Tax", totalsX, y, { width: totalsLabelW });
-    doc
-      .font(fonts.regular)
-      .fontSize(9)
-      .fillColor(C.dark)
-      .text(fmt(docu.taxAmount), AMOUNT_X, y, {
-        width: AMOUNT_W,
-        align: "right",
-      });
-    y += 14.25;
-  }
-
   doc
     .font(fonts.bold)
     .fontSize(9)
@@ -401,11 +387,11 @@ export function renderClassic(
     .text(fmt(docu.total), AMOUNT_X, y, { width: AMOUNT_W, align: "right" });
   y += 14.25;
 
-  if (isInvoice) {
+  if (isInvoice && !isVoid) {
     const label = docu.paid ? "Amount paid" : "Amount due";
     const amount = docu.paid
-      ? fmt(docu.paidMinor ? fromMinor(docu.paidMinor) : docu.total)
-      : fmt(fromMinor(docu.outstandingMinor ?? 0) || docu.total);
+      ? fmt(docu.amountPaid ?? docu.total)
+      : fmt(docu.amountDue ?? docu.total);
     doc
       .font(fonts.bold)
       .fontSize(9)
@@ -458,6 +444,7 @@ export function renderClassic(
   const pages = doc.bufferedPageRange();
   for (let page = pages.start; page < pages.start + pages.count; page++) {
     doc.switchToPage(page);
+    if (data.statusStamp) drawStatusStamp(doc, fonts.bold, data.statusStamp);
     const footerRuleY = doc.page.height - 53.75;
     doc
       .moveTo(M, footerRuleY)

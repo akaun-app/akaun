@@ -1,30 +1,18 @@
 import type { Actions } from "@sveltejs/kit";
 import { db } from "$lib/server/db/client.js";
 import { getInvoice, listInvoices } from "$lib/server/queries/invoices.js";
-import { removeInvoice, issueInvoice } from "$lib/server/services/invoices.js";
-import { InvoiceStatus } from "$lib/enums.js";
+import { removeInvoice } from "$lib/server/services/invoices.js";
 import { fail, redirect } from "@sveltejs/kit";
 import { hasPermission } from "$lib/server/permissions.js";
+import { documentDefaults } from "$lib/server/sales/defaults.js";
 
 export function loadInvoicesPage(locals: App.Locals) {
   if (!hasPermission(locals, "invoices", "view"))
     throw redirect(302, "/dashboard");
-  const allInvoices = listInvoices(db, { limit: 1000 });
-
-  // "Paid" is derived from what has been settled, never stored (D-10), so it is
-  // counted off the invoice's payment state rather than off its status column.
-  const counts = { all: 0, draft: 0, sent: 0, paid: 0, cancelled: 0 };
-  allInvoices.forEach((inv) => {
-    counts.all++;
-    if (inv.status === InvoiceStatus.Cancelled) counts.cancelled++;
-    else if (inv.status === InvoiceStatus.Draft) counts.draft++;
-    else if (inv.paid) counts.paid++;
-    else counts.sent++;
-  });
-
+  // The tab counts are worked out on the page, from the live list the stream
+  // keeps current.
   return {
-    invoices: allInvoices,
-    counts,
+    invoices: listInvoices(db, { limit: 1000 }),
     perms: { add: hasPermission(locals, "invoices", "add") },
   };
 }
@@ -39,7 +27,9 @@ export function loadInvoicesPage(locals: App.Locals) {
 export function loadInvoiceNew(locals: App.Locals) {
   if (!hasPermission(locals, "invoices", "add"))
     throw redirect(302, "/invoices");
-  return {};
+  // Days from the issue date to the due date a new invoice starts with; null
+  // when the setting is empty (no due date).
+  return { defaultDays: documentDefaults(db).invoiceDueDays };
 }
 
 /**
@@ -61,21 +51,14 @@ export function loadInvoiceDetail(locals: App.Locals, id: number) {
     perms: {
       change: hasPermission(locals, "invoices", "change"),
       delete: hasPermission(locals, "invoices", "delete"),
+      // A customer's payment is a record, so recording one from the invoice
+      // needs what recording it from the Records screen needs.
+      recordPayment: hasPermission(locals, "records", "add"),
     },
   };
 }
 
 export const invoicesActions: Actions = {
-  issue: async ({ locals, request }) => {
-    if (!hasPermission(locals, "invoices", "change"))
-      return fail(403, { error: "Forbidden" });
-    const data = await request.formData();
-    const id = parseInt(String(data.get("id") ?? "0"));
-    if (!id) return fail(400, { error: "Invalid invoice" });
-    const result = issueInvoice(db, id, locals.user!.id);
-    if (!result.ok) return fail(409, { error: result.reason });
-    return { success: true };
-  },
   delete: async ({ locals, request }) => {
     if (!hasPermission(locals, "invoices", "delete"))
       return fail(403, { error: "Forbidden" });
@@ -89,6 +72,12 @@ export const invoicesActions: Actions = {
         return fail(409, {
           error:
             "This invoice has been sent, so it cannot be deleted. Cancel it instead.",
+        });
+      }
+      if (result.reason === "cancelled") {
+        return fail(409, {
+          error:
+            "A cancelled invoice keeps its number, so it cannot be deleted.",
         });
       }
       return fail(404, { error: "Invoice not found" });

@@ -19,6 +19,11 @@ import {
   isLayoutKey,
 } from "$lib/pdf/layout-catalog.js";
 import { DEFAULT_PDF_THEME_COLOR } from "$lib/pdf/theme-presets.js";
+import {
+  documentDefaults,
+  MAX_TERM_DAYS,
+  termDaysInput,
+} from "$lib/server/sales/defaults.js";
 import { isMoneyPotAccount } from "$lib/server/ledger/account-type.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import {
@@ -182,6 +187,15 @@ export const load: PageServerLoad = async ({ locals }) => {
   const pdfThemeColor =
     getSetting(db, SETTING_KEYS.pdfThemeColor) ?? DEFAULT_PDF_THEME_COLOR;
 
+  // The terms new documents start with, as the inputs show them: what
+  // `documentDefaults` reads, so a never-saved setting shows the 30 it means,
+  // and "none" shows blank.
+  const terms = documentDefaults(db);
+  const invoiceDueDays =
+    terms.invoiceDueDays === null ? "" : String(terms.invoiceDueDays);
+  const quotationValidDays =
+    terms.quotationValidDays === null ? "" : String(terms.quotationValidDays);
+
   return {
     canManageAccounts,
     moneyAccounts,
@@ -209,6 +223,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     pdfInvoiceLayoutKey,
     pdfQuotationLayoutKey,
     pdfThemeColor,
+    invoiceDueDays,
+    quotationValidDays,
   };
 };
 
@@ -302,6 +318,13 @@ export const actions: Actions = {
     const invoiceLayoutKey = String(data.get("invoiceLayoutKey") ?? "");
     const quotationLayoutKey = String(data.get("quotationLayoutKey") ?? "");
     const themeColor = String(data.get("themeColor") ?? "").trim();
+    // Blank is a choice ("none"); a missing field is not, so it fails too.
+    const invoiceDueDays = termDaysInput(
+      String(data.get("invoiceDueDays") ?? "x"),
+    );
+    const quotationValidDays = termDaysInput(
+      String(data.get("quotationValidDays") ?? "x"),
+    );
 
     if (!isLayoutKey(invoiceLayoutKey) || !isLayoutKey(quotationLayoutKey)) {
       return fail(400, { error: "Choose a valid layout." });
@@ -309,10 +332,17 @@ export const actions: Actions = {
     if (!/^#[0-9a-fA-F]{6}$/.test(themeColor)) {
       return fail(400, { error: "Choose a valid accent color." });
     }
+    if (invoiceDueDays === null || quotationValidDays === null) {
+      return fail(400, {
+        error: `Enter the days as a whole number from 0 to ${MAX_TERM_DAYS}, or leave it blank for none.`,
+      });
+    }
 
     setSetting(db, SETTING_KEYS.pdfInvoiceLayoutKey, invoiceLayoutKey);
     setSetting(db, SETTING_KEYS.pdfQuotationLayoutKey, quotationLayoutKey);
     setSetting(db, SETTING_KEYS.pdfThemeColor, themeColor);
+    setSetting(db, SETTING_KEYS.invoiceDueDays, invoiceDueDays);
+    setSetting(db, SETTING_KEYS.quotationValidDays, quotationValidDays);
 
     return { success: true, action: "savePdfTemplate" };
   },

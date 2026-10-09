@@ -66,6 +66,18 @@
 	};
 
 	const kindLabel = $derived(KIND_TITLES[record.kind] ?? 'Record');
+	/**
+	 * An invoice's issue posting belongs to the invoice: it is changed there and
+	 * removed by cancelling it. The server refuses both here too.
+	 */
+	const fromInvoice = $derived(record.kind === LedgerRecordKind.InvoiceIssue);
+	const deleteBlockedReason = $derived(
+		fromInvoice
+			? 'Cancel the invoice instead'
+			: record.locked
+				? (record.lockedReason ?? '')
+				: null
+	);
 	const settlementsLabel = $derived(
 		record.kind === LedgerRecordKind.Payment ? 'Allocated to' : 'Payments applied'
 	);
@@ -161,8 +173,8 @@
 		{#if data.perms.delete}
 			<button
 				class="sheet-btn sheet-btn-delete"
-				disabled={record.locked}
-				title={record.locked ? (record.lockedReason ?? '') : undefined}
+				disabled={deleteBlockedReason !== null}
+				title={deleteBlockedReason ?? undefined}
 				onclick={() => (deleteDialogOpen = true)}
 			>
 				<Trash2 size={14} /> Delete
@@ -209,7 +221,7 @@
 			defaultAccountId={data.defaultAccountId}
 			lastForeignCurrencyExpense={data.lastForeignCurrencyExpense}
 			lastForeignCurrencyIncome={data.lastForeignCurrencyIncome}
-			canChange={data.perms.change}
+			canChange={data.perms.change && !fromInvoice}
 			canAdjust={data.perms.adjustments}
 		/>
 	{/snippet}
@@ -283,12 +295,14 @@
 			</div>
 		</section>
 
-		{#if record.kind === LedgerRecordKind.InvoiceIssue}
+		{#if fromInvoice && data.invoiceId !== null}
+			{@const invoiceId = data.invoiceId}
 			<section class="detail-card">
 				<div class="detail-card-head"><span class="detail-card-title">Invoice</span></div>
 				<button
+					type="button"
 					class="related-link ob-card"
-					onclick={() => goto(resolve('/(app)/invoices'))}
+					onclick={() => goto(resolve('/(app)/invoices/[id]', { id: String(invoiceId) }))}
 				>
 					<span class="ob-icon"><FileText size={15} /></span>
 					<span class="ob-main">

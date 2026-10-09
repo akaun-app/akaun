@@ -117,6 +117,13 @@ Click **Save defaults** to save. Akaun shows **Default accounts updated**. To ch
 you need the **Change** permission on **Accounts**. Without it, the lists and the button are
 not available.
 
+:::caution
+
+Do not change **Accounts receivable** after you send invoices. A payment from a customer then
+cannot settle an invoice that you sent before the change.
+
+:::
+
 See [Prepare your book](../01-getting-started/set-up-your-book.md#6-check-the-default-accounts).
 
 ### Ledger integrity check
@@ -155,14 +162,28 @@ See [Connect an AI provider](../04-auto-import/connect-an-ai-provider.md) and
 
 ## Templates
 
-The **Templates** tab controls printed quotations and invoices.
+The **Templates** tab controls printed quotations and invoices, and the terms that new ones start
+with.
+
+Under **Printed documents**:
 
 - **Layout**: shows **Standard**. At this time, Akaun has one layout only, and you cannot change
   it.
 - **Accent color**: the color of the printed documents. Choose a preset color, or choose a
   different color.
 
-Click **Save** to save the color.
+Under **Default terms**:
+
+- **Invoice due in (days)**: a new invoice is due this number of days after its issue date. Type
+  0 for due on receipt. Leave it empty for no due date.
+- **Quotation valid for (days)**: a new quotation expires this number of days after its issue
+  date. Leave it empty for no expiry date.
+
+Type a whole number from 0 to 365. The default for each setting is 30. A change applies only to new
+invoices and quotations. The due date of an invoice that you make from a quotation also comes from
+**Invoice due in (days)**.
+
+Click **Save** to save the color and the terms.
 
 ## Advanced
 

@@ -30,6 +30,8 @@ lets a user do. "No effect" shows that Akaun does not use the action in that are
 | **Records** | Open the **Records** list, the record pages and the account statements. | Make a new record. Record a payment. | Change a record. | Delete a record. Click **Take this back** on a settlement. |
 | **Auto Import** | Open **Auto Import** and see the import profiles. | Upload files. | Confirm, skip or edit the items. Add, change, enable, disable or delete an import profile. | Click **Discard** on a file. Click **Clear history**. |
 | **Contacts** | Open **Contacts** and the contact pages. | Add a contact. | Change a contact and its roles. | Delete a contact. |
+| **Quotations** | Open **Quotations** and the quotation pages. Print a quotation. | Make a quotation. | Change a quotation and its status. | Delete a quotation. |
+| **Invoices** | Open **Invoices** and the invoice pages. Print an invoice. | Make an invoice. | Change an invoice. Mark it as sent. Cancel it. | Delete a draft invoice. |
 | **Reconciliation** | Open the reconciliation screen of an account. | Upload a statement. Make a transfer from a statement line. | Match statement lines to records. Edit a statement line. | Remove a statement or a statement line. |
 | **Accounts** | Open **Accounts** and the account pages. | Add an account. | Change an account, deactivate it, or enter its starting balance. Choose the default accounts. | Delete an account. |
 | **Reports** | Open **Reports**. See the **Books** tab in **Settings**. | No effect. | No effect. | No effect. |
@@ -39,6 +41,10 @@ Some tasks need two permissions:
 
 - To merge two contacts, a user needs **Change** and **Delete** on **Contacts**.
 - To read a file again on **Auto Import**, a user needs **Add** and **Change** on **Auto Import**.
+- To make an invoice from a quotation, a user needs **Change** on **Quotations** and **Add** on
+  **Invoices**.
+- To record a payment from an invoice page, a user needs **View** on **Invoices** and **Add** on
+  **Records**.
 
 ## Records
 
@@ -81,13 +87,13 @@ See [How a record moves money](../02-concepts/how-an-entry-works.md).
 
 ## Quotations and invoices
 
-The permission grid has no rows for Quotations and Invoices. Akaun still checks these two
-permissions. The four groups that Akaun makes have them, as the table in
-[Users and groups](./users-and-groups.md#the-groups-that-akaun-makes) shows.
+**Change** on **Invoices** also lets a user mark an invoice as sent and cancel it. These two
+actions change the books: they add or remove an **Invoice** record. A user does not need a
+permission on **Records** for them.
 
-You cannot change these two permissions on the screen. A new group that you make has no
-permission on Quotations or Invoices. Its members cannot open these two screens. Only a
-superuser can then work with quotations and invoices.
+The four groups that Akaun makes have permissions on Quotations and Invoices, as the table in
+[Users and groups](./users-and-groups.md#the-groups-that-akaun-makes) shows. A new group that you
+make has none. Select them in the permission grid.
 
 ## Settings
 

@@ -35,6 +35,11 @@ export const SETTING_KEYS = {
   pdfQuotationLayoutKey: "pdf.quotationLayoutKey",
   pdfThemeColor: "pdf.themeColor",
   sequenceTemplate: "documentNumbers.template",
+  // Days from issue to due (invoices) and to expiry (quotations) that a new
+  // document starts with. Read through `documentDefaults` in
+  // sales/defaults.ts, which owns the parsing: unset means 30, empty means none.
+  invoiceDueDays: "documents.invoiceDueDays",
+  quotationValidDays: "documents.quotationValidDays",
 } as const;
 
 export function getSetting(

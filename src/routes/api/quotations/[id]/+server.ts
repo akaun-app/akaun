@@ -6,6 +6,7 @@ import { patchQuotation, removeQuotation } from '$lib/server/services/quotations
 import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { Role } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
+import { salesLinesSchema, salesRateSchema, invalidLines } from '$lib/server/sales/schema.js';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!hasPermission(locals, 'quotations', 'view')) return new Response('Forbidden', { status: 403 });
@@ -29,9 +30,20 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json();
 	const patch: Record<string, unknown> = {};
-	const fields = ['contactId', 'reference', 'issueDate', 'expiryDate', 'currency', 'exchangeRate', 'notes', 'terms', 'status', 'lines'];
+	// No `status`: a quotation's status changes through its own actions, which
+	// check the move is allowed, never as a side effect of an edit.
+	const fields = ['contactId', 'reference', 'issueDate', 'expiryDate', 'currency', 'exchangeRate', 'notes', 'terms'];
 	for (const f of fields) {
 		if (body[f] !== undefined) patch[f] = body[f];
+	}
+	if (body.lines !== undefined) {
+		const lines = salesLinesSchema.safeParse(body.lines);
+		if (!lines.success) return invalidLines(lines.error);
+		patch.lines = lines.data;
+	}
+	if (patch.exchangeRate !== undefined) {
+		const rate = salesRateSchema.safeParse(patch.exchangeRate);
+		if (!rate.success) return invalidLines(rate.error);
 	}
 	if (!patch.contactId && body.newContactName) {
 		patch.contactId = resolveOrCreateContact(db, body.newContactName, Role.Customer, user.id);

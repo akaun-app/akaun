@@ -1,17 +1,20 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ChevronRight, FileText, Printer, Send, Trash2 } from '@lucide/svelte';
+	import { Ban, ChevronRight, FileText, HandCoins, Printer, Send, Trash2 } from '@lucide/svelte';
 	import DetailPage from '$lib/components/ui/DetailPage.svelte';
 	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import StatusBadge from '$lib/components/ui/StatusBadge.svelte';
 	import AuditTrail from '$lib/components/ui/AuditTrail.svelte';
-	import InvoiceForm from './InvoiceForm.svelte';
+	import SalesDocForm from '$lib/components/sales/SalesDocForm.svelte';
+	import SalesDocLines from '$lib/components/sales/SalesDocLines.svelte';
 	import SettlementList from '$lib/components/ledger/SettlementList.svelte';
 	import { mainCurrency, mainCurrencySymbol } from '$lib/currency-state.svelte.js';
 	import { formatCurrencyAmount } from '$lib/currency.js';
 	import { formatDate, formatMinor, formatMoney } from '$lib/format.js';
 	import { InvoiceStatus } from '$lib/enums.js';
+	import { canCancelInvoice, invoiceStatusKey } from '$lib/sales/status.js';
 	import type { loadInvoiceDetail } from '$lib/server/loaders/invoices.js';
 
 	/**
@@ -47,8 +50,11 @@
 	let saveError = $state('');
 	let issuing = $state(false);
 	let issueError = $state('');
+	let cancelling = $state(false);
+	let cancelError = $state('');
 	let deleteDialogOpen = $state(false);
 	let issueConfirmOpen = $state(false);
+	let cancelConfirmOpen = $state(false);
 	let auditTrailRef = $state<{ refresh: () => Promise<void> } | null>(null);
 
 	// Only actually dirty while the form is mounted: leaving edit mode discards
@@ -58,21 +64,32 @@
 	const isDraft = $derived(invoice.status === InvoiceStatus.Draft);
 	const canEdit = $derived(data.perms.change && invoice.status !== InvoiceStatus.Cancelled);
 	/** Only a draft can be sent, and only once — sending it twice would owe it twice. */
-	const canIssue = $derived(isDraft && invoice.ledgerRecordId === null);
-	/** A sent invoice is cancelled, never deleted — its amount is already in the books. */
+	const canIssue = $derived(data.perms.change && isDraft && invoice.ledgerRecordId === null);
+	/**
+	 * Only a draft can be deleted. A sent invoice is cancelled instead — its
+	 * amount is already in the books — and a cancelled one keeps its number.
+	 */
 	const deleteBlockedReason = $derived(
-		invoice.ledgerRecordId === null
-			? null
-			: 'This invoice has been sent, so it cannot be deleted. Cancel it instead.'
+		invoice.status === InvoiceStatus.Cancelled
+			? 'A cancelled invoice keeps its number, so it cannot be deleted.'
+			: invoice.ledgerRecordId !== null || !isDraft
+				? 'This invoice has been sent, so it cannot be deleted. Cancel it instead.'
+				: null
 	);
-
-	function getStatusLabel(inv: Invoice): string {
-		if (inv.status === InvoiceStatus.Cancelled) return 'Cancelled';
-		if (inv.status === InvoiceStatus.Draft) return 'Draft';
-		if (inv.paid) return 'Paid';
-		if (inv.isOverdue) return 'Overdue';
-		return 'Sent';
-	}
+	/** Sent and nothing paid yet — the same rule the server applies (`$lib/sales/status.ts`). */
+	const canCancel = $derived(data.perms.change && canCancelInvoice(invoice));
+	/**
+	 * Cancelled before cancelling took the amount out of the books: the status
+	 * already says Cancelled, so all that is left to do is the books.
+	 */
+	const cancelOnlyBooks = $derived(invoice.status === InvoiceStatus.Cancelled);
+	/** Sent, still owed, and the user may record a payment. */
+	const canRecordPayment = $derived(
+		data.perms.recordPayment &&
+			invoice.ledgerRecordId !== null &&
+			invoice.status !== InvoiceStatus.Cancelled &&
+			!invoice.paid
+	);
 
 	function startEdit() {
 		saveError = '';
@@ -88,15 +105,17 @@
 		}
 	}
 
-	// Send the invoice: from here on the customer owes this amount, and any
-	// payment they make settles it like any other debt (FR-018a).
+	// Mark the invoice as sent: from here on the customer owes this amount, and
+	// any payment they make settles it like any other debt (FR-018a).
 	async function issue() {
 		issuing = true;
 		issueError = '';
+		cancelError = '';
 		try {
 			const res = await fetch(`/api/invoices/${invoice.id}/issue`, { method: 'POST' });
 			if (!res.ok) {
-				issueError = (await res.json().catch(() => ({}))).error ?? 'Could not send the invoice.';
+				issueError =
+					(await res.json().catch(() => ({}))).error ?? 'Could not mark the invoice as sent.';
 				return;
 			}
 			invoice = await fetch(`/api/invoices/${invoice.id}`).then((r) => r.json());
@@ -107,6 +126,36 @@
 		} finally {
 			issuing = false;
 		}
+	}
+
+	// Void it: the number stays, the status says Cancelled, and the amount
+	// leaves the books. The server refuses once anything has been paid, and its
+	// sentence is what shows.
+	async function cancelInvoice() {
+		cancelling = true;
+		cancelError = '';
+		issueError = '';
+		try {
+			const res = await fetch(`/api/invoices/${invoice.id}/cancel`, { method: 'POST' });
+			if (!res.ok) {
+				cancelError =
+					(await res.json().catch(() => ({}))).error ?? 'Could not cancel the invoice.';
+				return;
+			}
+			invoice = await res.json();
+			void auditTrailRef?.refresh();
+		} catch {
+			cancelError = 'Network error — try again';
+		} finally {
+			cancelling = false;
+		}
+	}
+
+	// The payment page opens as a receipt from this customer with this invoice
+	// ticked, and comes back here once saved (`loadPaymentNew`).
+	function recordPayment() {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the path is resolved; only the query is appended.
+		void goto(`${resolve('/(app)/records/new/payment')}?invoice=${invoice.id}`);
 	}
 </script>
 
@@ -140,9 +189,24 @@
 		>
 			<Printer size={14} /> Print
 		</a>
-		{#if canIssue}
+		{#if canCancel && !isEditing}
+			<button
+				class="sheet-btn"
+				onclick={() => (cancelConfirmOpen = true)}
+				disabled={cancelling}
+			>
+				<Ban size={14} />
+				{cancelling ? 'Cancelling…' : cancelOnlyBooks ? 'Remove from the books' : 'Cancel invoice'}
+			</button>
+		{/if}
+		{#if canIssue && !isEditing}
 			<button class="sheet-btn" onclick={() => (issueConfirmOpen = true)} disabled={issuing}>
-				<Send size={14} /> {issuing ? 'Sending…' : 'Send'}
+				<Send size={14} /> {issuing ? 'Marking…' : 'Mark as sent'}
+			</button>
+		{/if}
+		{#if canRecordPayment && !isEditing}
+			<button class="sheet-btn" onclick={recordPayment}>
+				<HandCoins size={14} /> Record payment
 			</button>
 		{/if}
 		{#if canEdit && !isEditing}
@@ -161,7 +225,7 @@
 			<span class="detail-hero-amount">
 				{mainCurrencySymbol()}{formatMoney(invoice.mainAmount)}
 			</span>
-			<StatusBadge status={getStatusLabel(invoice)} />
+			<StatusBadge status={invoiceStatusKey(invoice)} />
 			{#if invoice.currency !== mainCurrency()}
 				<span class="detail-hero-note">
 					{invoice.currency}
@@ -169,98 +233,23 @@
 				</span>
 			{/if}
 		</div>
-		{#if issueError || saveError || form?.error}
-			<p class="hero-error">{issueError || saveError || form?.error}</p>
+		{#if issueError || cancelError || saveError || form?.error}
+			<p class="hero-error">{issueError || cancelError || saveError || form?.error}</p>
 		{/if}
 	{/snippet}
 
 	{#snippet main()}
 		{#if isEditing}
-			<InvoiceForm bind:this={formRef} bind:dirty={formDirty} bind:saving bind:error={saveError} {invoice} />
+			<SalesDocForm
+				bind:this={formRef}
+				bind:dirty={formDirty}
+				bind:saving
+				bind:error={saveError}
+				kind="invoice"
+				doc={invoice}
+			/>
 		{:else}
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Line items</span></div>
-				{#if invoice.lines.length === 0}
-					<p class="empty-note">This invoice has no line items yet.</p>
-				{:else}
-					<div class="lines-table">
-						<div class="lines-head">
-							<span>Description</span>
-							<span class="ta-right">Qty</span>
-							<span class="ta-right">Unit price</span>
-							<span class="ta-right">Total</span>
-						</div>
-						{#each invoice.lines as line, i (i)}
-							<div class="lines-row">
-								<span class="line-desc">{line.description}</span>
-								<span class="ta-right num">{line.quantity}</span>
-								<span class="ta-right num">
-									{formatCurrencyAmount(line.unitPrice, invoice.currency)}
-								</span>
-								<span class="ta-right num strong">
-									{formatCurrencyAmount(line.lineTotal, invoice.currency)}
-								</span>
-							</div>
-						{/each}
-						<div class="lines-total">
-							<span>Total</span>
-							<span class="num strong">
-								{invoice.currency}
-								{formatCurrencyAmount(invoice.total, invoice.currency)}
-							</span>
-						</div>
-					</div>
-				{/if}
-			</section>
-
-			<section class="detail-card">
-				<div class="detail-card-head"><span class="detail-card-title">Details</span></div>
-				<div class="detail-list">
-					{#if invoice.contactName}
-						<div class="detail-row">
-							<div class="detail-key">Customer</div>
-							<div class="detail-val">{invoice.contactName}</div>
-						</div>
-					{/if}
-					<div class="detail-row">
-						<div class="detail-key">Issue date</div>
-						<div class="detail-val num">{formatDate(invoice.issueDate)}</div>
-					</div>
-					{#if invoice.dueDate}
-						<div class="detail-row">
-							<div class="detail-key">Due date</div>
-							<div class="detail-val num" class:overdue={invoice.isOverdue}>
-								{formatDate(invoice.dueDate)}
-								{#if invoice.isOverdue}<span class="overdue-flag">OVERDUE</span>{/if}
-							</div>
-						</div>
-					{/if}
-					{#if invoice.reference}
-						<div class="detail-row">
-							<div class="detail-key">Reference</div>
-							<div class="detail-val num">{invoice.reference}</div>
-						</div>
-					{/if}
-					{#if invoice.currency !== mainCurrency()}
-						<div class="detail-row">
-							<div class="detail-key">Currency</div>
-							<div class="detail-val">{invoice.currency} (rate: {invoice.exchangeRate})</div>
-						</div>
-					{/if}
-					{#if invoice.notes}
-						<div class="detail-row">
-							<div class="detail-key">Notes</div>
-							<div class="detail-val prewrap">{invoice.notes}</div>
-						</div>
-					{/if}
-					{#if invoice.terms}
-						<div class="detail-row">
-							<div class="detail-key">Terms</div>
-							<div class="detail-val prewrap">{invoice.terms}</div>
-						</div>
-					{/if}
-				</div>
-			</section>
+			<SalesDocLines kind="invoice" doc={invoice} />
 		{/if}
 	{/snippet}
 
@@ -323,7 +312,9 @@
 <ConfirmDialog
 	bind:open={deleteDialogOpen}
 	title="Delete invoice {invoice.invoiceNumber}?"
-	description="This removes the invoice. It is only possible while it has not been sent."
+	description={invoice.sourceQuotationId
+		? 'This removes the invoice. It is only possible while it has not been sent. The quotation it was converted from goes back to Accepted, so it can be converted again.'
+		: 'This removes the invoice. It is only possible while it has not been sent.'}
 	confirmLabel="Delete"
 	danger
 	onConfirm={() =>
@@ -332,10 +323,24 @@
 
 <ConfirmDialog
 	bind:open={issueConfirmOpen}
-	title="Send invoice {invoice.invoiceNumber}?"
-	description="From here on the customer owes this amount, and it appears in the books. A sent invoice can be cancelled but not deleted."
-	confirmLabel="Send"
+	title="Mark invoice {invoice.invoiceNumber} as sent?"
+	description="This records the amount in the books as owed to you by the customer, from the issue date. After this its customer, date, currency and line items are fixed, and it can be cancelled but not deleted."
+	confirmLabel="Mark as sent"
 	onConfirm={issue}
+/>
+
+<ConfirmDialog
+	bind:open={cancelConfirmOpen}
+	title={cancelOnlyBooks
+		? `Remove invoice ${invoice.invoiceNumber} from the books?`
+		: `Cancel invoice ${invoice.invoiceNumber}?`}
+	description={cancelOnlyBooks
+		? 'This invoice is already marked Cancelled, but its amount is still in the books. This takes it out of them — out of money owed to you and out of income, including the reports for the period it was issued in. The invoice keeps its number.'
+		: 'The invoice keeps its number and is marked Cancelled. Its amount is taken out of the books — out of money owed to you and out of income, including the reports for the period it was issued in. This cannot be undone.'}
+	confirmLabel={cancelOnlyBooks ? 'Remove from the books' : 'Cancel invoice'}
+	cancelLabel="Keep it"
+	danger
+	onConfirm={cancelInvoice}
 />
 
 <style>
@@ -350,78 +355,7 @@
 	.print-btn {
 		text-decoration: none;
 	}
-	.empty-note {
-		font-size: 12.5px;
-		color: var(--muted-foreground);
-		margin: 0;
-	}
-	/* The line items, as the table they are. This is what the drawer could not
-	   hold: four columns in 456px meant the description was the only one that
-	   could be read. */
-	.lines-table {
-		display: flex;
-		flex-direction: column;
-	}
-	.lines-head,
-	.lines-row,
-	.lines-total {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) 70px 120px 130px;
-		gap: 12px;
-		align-items: baseline;
-	}
-	.lines-head {
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--muted-foreground);
-		padding-bottom: 8px;
-		border-bottom: 1px solid var(--border);
-	}
-	.lines-row {
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border);
-		font-size: 13.5px;
-	}
-	.line-desc {
-		min-width: 0;
-	}
-	.lines-total {
-		grid-template-columns: minmax(0, 1fr) auto;
-		padding-top: 12px;
-		font-size: 13.5px;
-		font-weight: 600;
-	}
-	.ta-right {
-		text-align: right;
-	}
 	.strong {
 		font-weight: 600;
-	}
-	.prewrap {
-		white-space: pre-wrap;
-	}
-	.overdue {
-		color: var(--red);
-		font-weight: 600;
-	}
-	.overdue-flag {
-		font-size: 11px;
-		margin-left: 4px;
-	}
-
-	@media (max-width: 767px) {
-		.lines-head {
-			display: none;
-		}
-		.lines-row {
-			grid-template-columns: minmax(0, 1fr) auto;
-			gap: 2px 12px;
-		}
-		.line-desc {
-			grid-column: 1 / -1;
-			font-weight: 500;
-		}
 	}
 </style>

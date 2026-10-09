@@ -6,6 +6,7 @@ import { resolveOrCreateContact } from '$lib/server/queries/contacts.js';
 import { Role } from '$lib/enums.js';
 import { hasPermission } from '$lib/server/permissions.js';
 import { isValidDate } from '$lib/server/date.js';
+import { salesLinesSchema, salesRateSchema, invalidLines } from '$lib/server/sales/schema.js';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	if (!hasPermission(locals, 'quotations', 'view')) return new Response('Forbidden', { status: 403 });
@@ -35,8 +36,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!body.issueDate || !isValidDate(body.issueDate)) {
 		return Response.json({ error: 'issueDate is required (YYYY-MM-DD)' }, { status: 400 });
 	}
-	if (!Array.isArray(body.lines) || body.lines.length === 0) {
-		return Response.json({ error: 'lines must be a non-empty array' }, { status: 400 });
+	const lines = salesLinesSchema.safeParse(body.lines);
+	if (!lines.success) return invalidLines(lines.error);
+	if (body.exchangeRate !== undefined) {
+		const rate = salesRateSchema.safeParse(body.exchangeRate);
+		if (!rate.success) return invalidLines(rate.error);
 	}
 
 	let contactId: number | null = body.contactId ?? null;
@@ -53,7 +57,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		exchangeRate: body.exchangeRate,
 		notes: body.notes ?? null,
 		terms: body.terms ?? null,
-		lines: body.lines
+		lines: lines.data
 	});
 	return Response.json(quotation, { status: 201 });
 };

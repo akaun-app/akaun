@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { getDocumentProxy, extractTextItems } from "unpdf";
 import type { LayoutRenderData } from "$lib/pdf/render-types.js";
+import { InvoiceStatus } from "$lib/enums.js";
 import { renderClassic } from "./classic.js";
 import { renderCompact } from "./compact.js";
+import { invoicePdfAmounts, statusStampFor } from "../sales-pdf.js";
 
 const base: LayoutRenderData = {
   document: {
@@ -11,7 +13,6 @@ const base: LayoutRenderData = {
     currency: "MYR",
     lines: [{ description: "Item", quantity: 1, unitPrice: 20, lineTotal: 20 }],
     subtotal: 20,
-    taxAmount: 0,
     total: 20,
   },
   settings: { companyName: "Company" },
@@ -125,5 +126,166 @@ describe("PDF review regressions", () => {
         page.filter((i) => !i.str.startsWith("Page ")).every((i) => i.y > 70),
       ).toBe(true);
     }
+  });
+});
+
+describe("status stamps", () => {
+  const text = (pagesOf: { str: string }[][]) =>
+    pagesOf
+      .flat()
+      .map((i) => i.str)
+      .join(" ");
+
+  for (const [name, render] of [
+    ["classic", renderClassic],
+    ["compact", renderCompact],
+  ] as const) {
+    it(`${name}: a cancelled invoice is stamped VOID and asks for nothing`, async () => {
+      const data: LayoutRenderData = {
+        ...base,
+        document: { ...base.document, amountDue: 0, amountPaid: 0 },
+        statusStamp: "VOID",
+      };
+      const result = await pages(await render(data, theme, "Invoice"));
+      // The stamp never pushes the page over onto a second one.
+      expect(result).toHaveLength(1);
+      const all = text(result);
+      expect(result[0].some((i) => i.str === "VOID")).toBe(true);
+      expect(all).not.toMatch(/\bdue\b/i);
+      expect(all).not.toContain("Paid:");
+    });
+
+    it(`${name}: a draft invoice is stamped DRAFT`, async () => {
+      const data: LayoutRenderData = {
+        ...base,
+        document: { ...base.document, amountDue: 20, amountPaid: 0 },
+        statusStamp: "DRAFT",
+      };
+      const result = await pages(await render(data, theme, "Invoice"));
+      expect(result).toHaveLength(1);
+      expect(result[0].some((i) => i.str === "DRAFT")).toBe(true);
+    });
+
+    it(`${name}: a sent invoice carries no stamp`, async () => {
+      const result = await pages(await render(base, theme, "Invoice"));
+      expect(result[0].some((i) => i.str === "VOID" || i.str === "DRAFT")).toBe(
+        false,
+      );
+    });
+  }
+
+  it("is stamped on every page of a long invoice", async () => {
+    const data: LayoutRenderData = {
+      ...base,
+      document: {
+        ...base.document,
+        lines: Array.from({ length: 100 }, (_, i) => ({
+          ...base.document.lines[0],
+          description: `ITEM-${i}`,
+        })),
+      },
+      statusStamp: "DRAFT",
+    };
+    const result = await pages(await renderClassic(data, theme, "Invoice"));
+    expect(result.length).toBeGreaterThan(1);
+    for (const page of result) {
+      expect(page.some((i) => i.str === "DRAFT")).toBe(true);
+    }
+  });
+
+  it("only an invoice that is a draft or cancelled gets one", () => {
+    expect(statusStampFor("invoice", { status: InvoiceStatus.Cancelled })).toBe(
+      "VOID",
+    );
+    expect(statusStampFor("invoice", { status: InvoiceStatus.Draft })).toBe(
+      "DRAFT",
+    );
+    expect(
+      statusStampFor("invoice", { status: InvoiceStatus.Sent }),
+    ).toBeNull();
+    expect(
+      statusStampFor("quotation", { status: InvoiceStatus.Draft }),
+    ).toBeNull();
+  });
+});
+
+describe("amount due on the printed invoice", () => {
+  // USD 123.45 at 4.4567 is 550.18 in the main currency: 55018 cents.
+  const usd = {
+    status: InvoiceStatus.Sent,
+    total: 123.45,
+    exchangeRate: 4.4567,
+    totalMinor: 55018,
+  };
+
+  it("is the invoice's own total while nothing is paid, with no trip through the rate", () => {
+    expect(invoicePdfAmounts({ ...usd, outstandingMinor: 55018 })).toEqual({
+      amountDue: 123.45,
+      amountPaid: 0,
+    });
+  });
+
+  it("is in the invoice's currency once part is paid, never the main currency's cents", () => {
+    // MYR 300.00 received: 25018 cents still owed, which is USD 56.14.
+    const amounts = invoicePdfAmounts({ ...usd, outstandingMinor: 25018 });
+    expect(amounts).toEqual({ amountDue: 56.14, amountPaid: 67.31 });
+    // The two always add back up to the total.
+    expect(
+      Math.round(amounts.amountDue * 100) +
+        Math.round(amounts.amountPaid * 100),
+    ).toBe(12345);
+  });
+
+  it("is exact at rate 1, and nothing once fully paid", () => {
+    const myr = {
+      status: InvoiceStatus.Sent,
+      total: 100.1,
+      exchangeRate: 1,
+      totalMinor: 10010,
+    };
+    expect(invoicePdfAmounts({ ...myr, outstandingMinor: 4007 })).toEqual({
+      amountDue: 40.07,
+      amountPaid: 60.03,
+    });
+    expect(invoicePdfAmounts({ ...myr, outstandingMinor: 0 })).toEqual({
+      amountDue: 0,
+      amountPaid: 100.1,
+    });
+  });
+
+  it("is the whole total on a draft, and nothing on a cancelled invoice", () => {
+    expect(
+      invoicePdfAmounts({
+        ...usd,
+        status: InvoiceStatus.Draft,
+        outstandingMinor: 0,
+      }),
+    ).toEqual({ amountDue: 123.45, amountPaid: 0 });
+    expect(
+      invoicePdfAmounts({
+        ...usd,
+        status: InvoiceStatus.Cancelled,
+        outstandingMinor: 0,
+      }),
+    ).toEqual({ amountDue: 0, amountPaid: 0 });
+  });
+
+  it("prints the part-paid figure in the invoice's currency", async () => {
+    const data: LayoutRenderData = {
+      ...base,
+      document: {
+        ...base.document,
+        currency: "USD",
+        total: 123.45,
+        subtotal: 123.45,
+        ...invoicePdfAmounts({ ...usd, outstandingMinor: 25018 }),
+      },
+    };
+    const all = (await pages(await renderClassic(data, theme, "Invoice")))
+      .flat()
+      .map((i) => i.str)
+      .join(" ");
+    expect(all).toContain("56.14 USD due");
+    expect(all).not.toContain("250.18");
   });
 });

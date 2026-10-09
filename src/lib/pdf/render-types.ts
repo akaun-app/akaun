@@ -25,7 +25,6 @@ export type LayoutRenderData = {
     currency: string;
     lines: LayoutLineItem[];
     subtotal: number;
-    taxAmount: number;
     total: number;
     notes?: string | null;
     terms?: string | null;
@@ -33,8 +32,13 @@ export type LayoutRenderData = {
     contactAddress?: string | null;
     contactRegistrationNo?: string | null;
     contactPhone?: string | null;
-    paidMinor?: number;
-    outstandingMinor?: number;
+    /**
+     * How much has been paid and how much is still due, in the document's own
+     * currency — the one every other figure on it is in. Worked out by
+     * `server/pdf/sales-pdf.ts` from the ledger's main-currency cents.
+     */
+    amountPaid?: number;
+    amountDue?: number;
     paid?: boolean;
     isOverdue?: boolean;
     settlements?: {
@@ -50,4 +54,11 @@ export type LayoutRenderData = {
     companyLogoPath?: string;
   };
   docTypeLabel: string;
+  /**
+   * Large faint text across every page: VOID on a cancelled invoice, DRAFT on
+   * one not yet sent, so a printed copy cannot pass for a live demand.
+   */
+  statusStamp?: StatusStamp | null;
 };
+
+export type StatusStamp = "VOID" | "DRAFT";

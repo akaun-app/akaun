@@ -338,8 +338,9 @@ See [Record an expense or income](../03-everyday-tasks/record-expense-or-income.
 
 ### Invoice
 
-An invoice is a document that asks a customer to pay. When you click **Send**, the customer owes
-the amount and Akaun adds an **Invoice** record to the books. A sent invoice cannot be deleted.
+An invoice is a document that asks a customer to pay. When you click **Mark as sent**, the
+customer owes the amount and Akaun adds an **Invoice** record to the books. A sent invoice cannot
+be deleted, but you can cancel it.
 
 See [Invoices](../05-sales/invoices.md).
 
@@ -351,9 +352,10 @@ An invoice shows one of these statuses:
 - **Sent**: the customer owes the amount.
 - **Part paid**: payments cover some of the amount, but not all of it.
 - **Paid**: payments cover the full amount. Akaun calculates this from the payments.
-- **Cancelled**: the invoice does not count. At this time, the screen cannot cancel an invoice.
-- **Overdue**: the due date is in the past, and the invoice is not paid or cancelled. The
-  **Overdue** filter also counts a draft with a past due date.
+- **Cancelled**: the invoice does not count. It keeps its number, and its amount is not in the
+  books.
+- **Overdue**: the invoice is sent, the due date is in the past, and the invoice is not fully
+  paid.
 
 See [Invoices](../05-sales/invoices.md).
 
@@ -525,16 +527,16 @@ See [Profit & Loss](../08-reports/profit-and-loss.md).
 ### Quotation
 
 A quotation is a document that offers a price to a customer before the work. A quotation does not
-change the books. At this time, the screen cannot make an invoice from a quotation, because it
-cannot change the status of a quotation.
+change the books. Click **Convert** on a sent or accepted quotation to make a draft invoice from it.
 
 See [Quotations](../05-sales/quotations.md).
 
 ### Quotation status
 
 A quotation shows one of these statuses: **Draft**, **Sent**, **Accepted**, **Declined**,
-**Converted** or **Expired**. **Expired** shows that the expiry date is in the past. At this time,
-a new quotation stays **Draft**, because the screen cannot change its status.
+**Converted** or **Expired**. You change the status with the buttons on the quotation page.
+**Converted** shows that you made an invoice from the quotation. **Expired** shows that the expiry
+date of a draft or sent quotation is in the past.
 
 See [Quotations](../05-sales/quotations.md).
 

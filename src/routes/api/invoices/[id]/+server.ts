@@ -6,6 +6,11 @@ import { resolveOrCreateContact } from "$lib/server/queries/contacts.js";
 import { InvoiceStatus, Role } from "$lib/enums.js";
 import { hasPermission } from "$lib/server/permissions.js";
 import { notFound, refused } from "$lib/server/api-response.js";
+import {
+  salesLinesSchema,
+  salesRateSchema,
+  invalidLines,
+} from "$lib/server/sales/schema.js";
 
 export const GET: RequestHandler = async ({ locals, params }) => {
   if (!hasPermission(locals, "invoices", "view"))
@@ -33,6 +38,8 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
   const body = await request.json();
   const patch: Record<string, unknown> = {};
+  // No `status`: sending and cancelling are their own actions, because each
+  // changes the books. Setting it here skipped both.
   const fields = [
     "contactId",
     "reference",
@@ -42,11 +49,40 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
     "exchangeRate",
     "notes",
     "terms",
-    "status",
-    "lines",
   ];
   for (const f of fields) {
     if (body[f] !== undefined) patch[f] = body[f];
+  }
+  if (body.lines !== undefined) {
+    const lines = salesLinesSchema.safeParse(body.lines);
+    if (!lines.success) return invalidLines(lines.error);
+    patch.lines = lines.data;
+  }
+  if (patch.exchangeRate !== undefined) {
+    const rate = salesRateSchema.safeParse(patch.exchangeRate);
+    if (!rate.success) return invalidLines(rate.error);
+  }
+
+  // Once it has been sent, its amount is in the books and the customer has a
+  // copy, so what the money says is fixed. The wording around it can still be
+  // corrected (FR-018a). Checked before a new customer name is resolved, so a
+  // refused edit cannot leave a contact behind.
+  if (invoice.ledgerRecordId !== null) {
+    const sealed = [
+      "contactId",
+      "issueDate",
+      "currency",
+      "exchangeRate",
+      "lines",
+    ];
+    if (
+      sealed.some((f) => patch[f] !== undefined) ||
+      Boolean(body.newContactName)
+    ) {
+      return refused(
+        "This invoice has been sent. Its amount, date and customer are fixed — cancel it and write a new one if they are wrong.",
+      );
+    }
   }
 
   if (!patch.contactId && body.newContactName) {
@@ -56,24 +92,6 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
       Role.Customer,
       user.id,
     );
-  }
-
-  // Once it has been sent, its amount is in the books and the customer has a
-  // copy, so what the money says is fixed. The wording around it can still be
-  // corrected (FR-018a).
-  if (invoice.ledgerRecordId !== null) {
-    const sealed = [
-      "contactId",
-      "issueDate",
-      "currency",
-      "exchangeRate",
-      "lines",
-    ];
-    if (sealed.some((f) => patch[f] !== undefined)) {
-      return refused(
-        "This invoice has been sent. Its amount, date and customer are fixed — cancel it and write a new one if they are wrong.",
-      );
-    }
   }
 
   const updated = patchInvoice(db, id, user.id, patch);
@@ -89,6 +107,10 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
   if (!result.ok) {
     if (result.reason === "not_found")
       return notFound("That invoice no longer exists.");
+    if (result.reason === "cancelled")
+      return refused(
+        "A cancelled invoice keeps its number, so it cannot be deleted.",
+      );
     return refused(
       "This invoice has been sent, so it cannot be deleted. Cancel it instead.",
     );
