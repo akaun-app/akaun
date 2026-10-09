@@ -1,0 +1,47 @@
+name: Docs Publish
+
+# Builds the Docusaurus site in docs/ and pushes it to the gh-pages branch of the
+# separate <org>/<org>.github.io repo, the org's root GitHub Pages site.
+#
+# Auth is an SSH deploy key: the public half is a write-enabled deploy key on the docs
+# repo, the private half is this repo's DOCS_DEPLOY_KEY secret. The org is read from
+# github.repository_owner, so renaming the organization (and the docs repo to match)
+# needs no edit here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-publish.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+        env:
+          DOCS_ORG: ${{ github.repository_owner }}
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          external_repository: ${{ github.repository_owner }}/${{ github.repository_owner }}.github.io
+          publish_branch: gh-pages
+          publish_dir: docs/build
+          user_name: github-actions[bot]
+          user_email: 41898282+github-actions[bot]@users.noreply.github.com

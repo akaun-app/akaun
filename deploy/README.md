@@ -8,7 +8,7 @@ the Docker build context, not this directory.
 | `Dockerfile`              | Multi-stage build (deps → build → slim runtime on `oven/bun:alpine`) |
 | `entrypoint.sh`           | Creates the `PUID`/`PGID` user, chowns `/app/data`, drops privileges |
 | `docker-compose.yml`      | Local build-from-source stack                                        |
-| `docker-compose.prod.yml` | Runs the published `ghcr.io/akaun-app/akaun:latest` image            |
+| `docker-compose.prod.yml` | Runs the published `ghcr.io/getakaun/akaun:latest` image            |
 
 ## Local build
 
