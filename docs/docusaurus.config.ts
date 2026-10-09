@@ -13,7 +13,7 @@ const org = process.env.DOCS_ORG ?? 'getakaun';
 
 const config: Config = {
   title: 'Akaun',
-  tagline: 'A self-hosted expense, income, and reimbursement tracker for small teams and freelancers.',
+  tagline: 'Self-hosted bookkeeping for small teams and freelancers.',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -27,7 +27,7 @@ const config: Config = {
 
   organizationName: org,
   projectName: `${org}.github.io`,
-  deploymentBranch: 'gh-pages',
+  deploymentBranch: 'main',
 
   onBrokenLinks: 'throw',
 
@@ -54,6 +54,23 @@ const config: Config = {
     ],
   ],
 
+  // Offline search: the index is built at build time, so the static Pages site needs no
+  // search service. `docsRouteBasePath` must match the docs preset's `routeBasePath`.
+  // Geist is self-hosted from @fontsource packages, so the site makes no Google Fonts request.
+  clientModules: ['./src/fonts.ts'],
+
+  themes: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        hashed: true,
+        indexBlog: false,
+        docsRouteBasePath: '/',
+        highlightSearchTermsOnTargetPage: true,
+      },
+    ],
+  ],
+
   themeConfig: {
     colorMode: {
       respectPrefersColorScheme: true,
@@ -69,7 +86,7 @@ const config: Config = {
           type: 'docSidebar',
           sidebarId: 'docsSidebar',
           position: 'left',
-          label: 'Docs',
+          label: 'Guide',
         },
         {
           href: `https://github.com/${org}/akaun`,
@@ -82,8 +99,19 @@ const config: Config = {
       style: 'dark',
       links: [
         {
-          title: 'Docs',
-          items: [{label: 'Introduction', to: '/'}],
+          title: 'Start here',
+          items: [
+            {label: 'Introduction', to: '/'},
+            {label: 'Getting started', to: '/category/getting-started'},
+            {label: 'How Akaun works', to: '/category/how-akaun-works'},
+          ],
+        },
+        {
+          title: 'Help',
+          items: [
+            {label: 'Troubleshooting', to: '/help/troubleshooting'},
+            {label: 'Glossary', to: '/help/glossary'},
+          ],
         },
         {
           title: 'More',
